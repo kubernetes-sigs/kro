@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/aws/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 const symphonyFinalizer = v1alpha1.SymphonyDomainName + "/finalizer"

@@ -20,7 +20,7 @@ import (
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/aws/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 const (

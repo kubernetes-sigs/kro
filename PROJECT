@@ -6,7 +6,7 @@ domain: symphony.k8s.aws
 layout:
 - go.kubebuilder.io/v4
 projectName: symphony
-repo: github.com/aws/symphony
+repo: github.com/aws-controllers-k8s/symphony
 resources:
 - api:
     crdVersion: v1
@@ -15,6 +15,6 @@ resources:
   domain: symphony.k8s.aws
   group: x
   kind: ResourceGroup
-  path: github.com/aws/symphony/api/v1alpha1
+  path: github.com/aws-controllers-k8s/symphony/api/v1alpha1
   version: v1alpha1
 version: "3"

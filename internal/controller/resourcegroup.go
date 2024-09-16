@@ -16,15 +16,15 @@ package controller
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/crd"
-	"github.com/aws/symphony/internal/dynamiccontroller"
-	"github.com/go-logr/logr"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 )
 
 func NewResourceGroupReconciler(

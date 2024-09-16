@@ -29,11 +29,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	xv1alpha1 "github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/controller"
-	"github.com/aws/symphony/internal/crd"
-	"github.com/aws/symphony/internal/dynamiccontroller"
-	"github.com/aws/symphony/internal/kubernetes"
+	xv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/controller"
+	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
+	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
 	//+kubebuilder:scaffold:imports
 )
 

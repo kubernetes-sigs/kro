@@ -17,11 +17,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/condition"
-	"github.com/aws/symphony/internal/crd"
-	serr "github.com/aws/symphony/internal/errors"
-	"github.com/aws/symphony/internal/requeue"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -29,6 +24,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/condition"
+	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	serr "github.com/aws-controllers-k8s/symphony/internal/errors"
+	"github.com/aws-controllers-k8s/symphony/internal/requeue"
 )
 
 // handleReconcileError will handle errors from reconcile handlers, which

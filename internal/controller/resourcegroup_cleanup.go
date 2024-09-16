@@ -16,14 +16,15 @@ package controller
 import (
 	"context"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/crd"
-	"github.com/aws/symphony/internal/k8smetadata"
-	"github.com/aws/symphony/internal/kubernetes"
-	"github.com/aws/symphony/internal/resourcegroup"
-	"github.com/aws/symphony/internal/typesystem/celextractor"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rgResource *v1alpha1.ResourceGroup) error {

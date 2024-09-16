@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aws/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 )
 
 // ResolutionResult represents the result of resolving a single expression.

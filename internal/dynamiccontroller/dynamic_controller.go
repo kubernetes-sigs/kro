@@ -39,13 +39,13 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/graphexec"
-	"github.com/aws/symphony/internal/k8smetadata"
-	"github.com/aws/symphony/internal/kubernetes"
-	"github.com/aws/symphony/internal/requeue"
-	"github.com/aws/symphony/internal/resourcegroup"
-	"github.com/aws/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/graphexec"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
+	"github.com/aws-controllers-k8s/symphony/internal/requeue"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 )
 
 // DynamicController is a controller that can be used to create and manage "micro" controllers

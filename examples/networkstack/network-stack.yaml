@@ -1,0 +1,71 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: networkingstack.x.symphony.k8s.aws
+spec:
+  # CRD Definition
+  apiVersion: v1alpha1
+  kind: NetworkingStack
+  definition:
+    spec:
+      name: string
+    status:
+      networkingInfo:
+        vpcID: ${vpc.status.vpcID}
+        subnetAZA: ${subnetAZA.status.subnetID}
+        subnetAZB: ${subnetAZB.status.subnetID}
+        subnetAZC: ${subnetAZC.status.subnetID}
+        securityGroup: ${securityGroup.status.id}
+  # resources
+  resources:
+  - name: vpc
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: VPC
+      metadata:
+        name: vpc-${spec.name}
+      spec:
+        cidrBlocks:
+        - 192.168.0.0/16
+        enableDNSHostnames: false
+        enableDNSSupport: true
+  - name: subnetAZA
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: subnet-a-${spec.name}
+      spec:
+        availabilityZone: us-west-2a
+        cidrBlock: 192.168.0.0/18
+        vpcID: ${vpc.status.vpcID}
+  - name: subnetAZB
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: subnet-b-${spec.name}
+      spec:
+        availabilityZone: us-west-2b
+        cidrBlock: 192.168.64.0/18
+        vpcID: ${vpc.status.vpcID}
+  - name: subnetAZC
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: subnet-c-${spec.name}
+      spec:
+        availabilityZone: us-west-2c
+        cidrBlock: 192.168.128.0/18
+        vpcID: ${vpc.status.vpcID}
+  - name: securityGroup
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: SecurityGroup
+      metadata:
+        name: cluster-security-group-${spec.name}
+      spec:
+        vpcID: ${vpc.status.vpcID}
+        name: my-sg-${spec.name}
+        description: something something

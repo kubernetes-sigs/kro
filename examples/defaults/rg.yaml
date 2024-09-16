@@ -1,0 +1,20 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: somethings.x.symphony.k8s.aws
+spec:
+  apiVersion: v1alpha1
+  kind: Something
+  definition:
+    spec:
+      name: string
+      elements: '[]string | default=["a","b","c","d"]'
+      required: 'integer | required=true'
+      element: 'string | default="e"'
+      enabled: 'boolean | default=true'
+      number: 'integer | default=100'
+      config:
+        field: string
+        field2: integer | default=200
+        field3: integer | default=2002
+  resources: []

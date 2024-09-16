@@ -1,0 +1,27 @@
+# permissions for end users to view resourcegroups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: resourcegroup-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: symphony
+    app.kubernetes.io/part-of: symphony
+    app.kubernetes.io/managed-by: kustomize
+  name: resourcegroup-viewer-role
+rules:
+- apiGroups:
+  - x.symphony.k8s.aws
+  resources:
+  - resourcegroups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - x.symphony.k8s.aws
+  resources:
+  - resourcegroups/status
+  verbs:
+  - get

@@ -1,0 +1,7 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: Something
+metadata:
+  name: my-instance-will-cel-functions
+spec:
+  name: app3
+  # fullDNSName: "abc.def.agb.example.com"

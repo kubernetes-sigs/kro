@@ -1,0 +1,35 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: ekscluster.x.symphony.k8s.aws
+spec:
+  # CRD Definition
+  apiVersion: v1alpha1
+  kind: EKSCluster
+  definition:
+    spec:
+      name: string
+      version: string
+    status:
+      clusterARN1: ${cluster1.status.clusterARN}
+      clusterARN2: ${cluster2.status.clusterARN}
+  # resources
+  resources:
+  - name: cluster1
+    definition:
+      apiVersion: eks.services.k8s.aws/v1alpha1
+      kind: EKSCluster
+      metadata:
+        name: cluster1-${spec.name}
+      spec:
+        name: cluster1-${spec.name}
+        version: ${spc.version}
+  - name: cluster2
+    definition:
+      apiVersion: eks.services.k8s.aws/v1alpha1
+      kind: EKSCluster
+      metadata:
+        name: cluster2-${spec.name}
+      spec:
+        name: cluster2-${spec.name}
+        version: ${spc.version}

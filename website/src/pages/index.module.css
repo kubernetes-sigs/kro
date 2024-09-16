@@ -1,0 +1,157 @@
+/**
+ * CSS files with the .module.css suffix will be treated as CSS modules
+ * and scoped locally.
+ */
+
+.heroBanner {
+  padding: 4rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  background-image: url('@site/static/img/bg-large.png');
+  height: 420px;
+  opacity: 0.1;
+}
+
+.heroA {
+  background-image: linear-gradient(rgb(241, 245, 255), rgb(255, 255, 255));
+  padding: 48px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+  opacity: 1;
+}
+
+.heroInner {
+  margin: 0 auto;
+  max-width: var(--ifm-container-width);
+  padding: 0 var(--ifm-spacing-horizontal);
+  width: 100%;
+}
+
+.heroProjectTagline {
+  padding-top: 30px;
+  color: #3c3c3c;
+  font-size: 100px;
+  margin: 0;
+}
+
+.heroProjectTaglineSubtitle {
+  color: #3c3c3c;
+  font-size: 40px;
+  margin: 0;
+  padding: 20px;
+}
+
+.heroTitleTextHtml b {
+  color: var(--ifm-color-primary);
+}
+
+.indexCtasGitHubButtonWrapper {
+  display: flex;
+}
+
+.indexCtasGitHubButton {
+  overflow: hidden;
+}
+
+.indexCtas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  --ifm-button-size-multiplier: 1.6;
+}
+
+.indexCtas a {
+  background-color: var(--main-color);
+  border-color: var(--main-color);
+}
+
+.indexCtas a:hover {
+  border: 2px solid rgb(35, 80, 168);
+  background-color: rgb(35, 80, 168);
+  color: white;
+  border-color: rgb(35, 80, 168);
+  text-decoration: none;
+}
+
+[data-theme='dark'] {
+  .indexCtas a {
+    background-color: var(--main-color-dark);
+    border-color: var(--main-color-dark);
+  }
+
+  .indexCtas a:hover {
+    background-color: #fb8422;
+    border-color: #fb8422;
+    ;
+    text-decoration: none;
+  }
+
+  .heroA {
+    background-image: linear-gradient(rgb(54, 54, 54), rgb(27, 27, 29));
+  }
+
+  .heroProjectTagline {
+    color: #fff;
+  }
+
+  .heroProjectTaglineSubtitle {
+    color: #fff;
+  }
+}
+
+.indexCtas a:last-of-type {
+  margin: 12px 30px;
+}
+
+.indexCtasGitHubButtonWrapper {
+  display: flex;
+}
+
+.indexCtasGitHubButton {
+  overflow: hidden;
+}
+
+.indexCtaTryNowButton:hover {
+  color: var(--ifm-color-primary);
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+
+  .heroA {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .heroInner {
+    padding: 0;
+  }
+
+  .heroProjectTagline {
+    font-size: 60px;
+    text-align: center;
+  }
+
+  .heroLogo {
+    display: block;
+    float: none;
+    margin: 0 auto;
+  }
+
+  .indexCtas {
+    justify-content: center;
+  }
+
+  .indexCtas a {
+    margin: 20px 12px;
+  }
+
+  .indexCtasGitHubButton {
+    display: none;
+  }
+}

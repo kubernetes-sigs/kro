@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- x_v1alpha1_resourcegroup.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "symphony.fullname" . }}-docs
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: symphony-docs
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: symphony-docs
+        release: {{ .Release.Name }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}-docs
+          image: "{{ .Values.image.repository }}-docs:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            limits:
+              memory: 1024Mi
+            requests:
+              cpu: 1000m
+              memory: 1024Mi
+          ports:
+          - containerPort: 3000
+          command: ["npm", "run", "start", "--build", "--watch=false"]

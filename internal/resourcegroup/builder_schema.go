@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/aws/symphony/internal/celutil"
+	"github.com/aws-controllers-k8s/symphony/internal/celutil"
 )
 
 // newCombinedResolver creates a new schema resolver that can resolve both core and client types.

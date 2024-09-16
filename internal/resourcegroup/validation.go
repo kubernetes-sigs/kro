@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/aws/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 var (

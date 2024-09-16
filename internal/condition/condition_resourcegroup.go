@@ -14,8 +14,9 @@
 package condition
 
 import (
-	v1alpha1 "github.com/aws/symphony/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+
+	v1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 func NewReconcilerReadyCondition(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {

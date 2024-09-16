@@ -16,7 +16,7 @@ package resourcegroup
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/aws/symphony/internal/dag"
+	"github.com/aws-controllers-k8s/symphony/internal/dag"
 )
 
 type ResourceGroup struct {

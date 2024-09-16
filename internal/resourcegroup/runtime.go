@@ -19,9 +19,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/aws/symphony/internal/celutil"
-	"github.com/aws/symphony/internal/typesystem/celextractor"
-	"github.com/aws/symphony/internal/typesystem/resolver"
+	"github.com/aws-controllers-k8s/symphony/internal/celutil"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/resolver"
 )
 
 type RuntimeResourceGroup struct {

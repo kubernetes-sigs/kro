@@ -14,9 +14,10 @@
 package condition
 
 import (
-	v1alpha1 "github.com/aws/symphony/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 // NewCondition returns a new Condition instance.

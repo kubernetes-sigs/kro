@@ -18,12 +18,13 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/k8smetadata"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
 )
 
 func (c *Controller) setManaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {

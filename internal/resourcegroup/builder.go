@@ -24,14 +24,14 @@ import (
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/celutil"
-	"github.com/aws/symphony/internal/dag"
-	"github.com/aws/symphony/internal/k8smetadata"
-	"github.com/aws/symphony/internal/typesystem/celextractor"
-	"github.com/aws/symphony/internal/typesystem/celinspector"
-	"github.com/aws/symphony/internal/typesystem/emulator"
-	"github.com/aws/symphony/internal/typesystem/simpleschema"
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/celutil"
+	"github.com/aws-controllers-k8s/symphony/internal/dag"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celinspector"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/emulator"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/simpleschema"
 )
 
 func NewResourceGroupBuilder(

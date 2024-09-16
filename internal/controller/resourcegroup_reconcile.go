@@ -16,14 +16,15 @@ package controller
 import (
 	"context"
 
-	"github.com/aws/symphony/api/v1alpha1"
-	"github.com/aws/symphony/internal/crd"
-	"github.com/aws/symphony/internal/errors"
-	"github.com/aws/symphony/internal/k8smetadata"
-	"github.com/aws/symphony/internal/resourcegroup"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	"github.com/aws-controllers-k8s/symphony/internal/errors"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
 )
 
 func (r *ResourceGroupReconciler) reconcile(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup) error {

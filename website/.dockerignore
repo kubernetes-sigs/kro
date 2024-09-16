@@ -1,0 +1,6 @@
+# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
+# Ignore build and test binaries.
+bin/
+node_modules/
+.docusaurus/
+build/

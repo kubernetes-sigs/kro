@@ -1,0 +1,6 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: NetworkingStack
+metadata:
+  name: my-networking-stack
+spec:
+  name: my-networking-stack

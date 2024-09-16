@@ -1,0 +1,84 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: application.x.symphony.k8s.aws
+spec:
+  apiVersion: v1alpha1
+  kind: Application
+  definition:
+    spec:
+      name: string
+      image: string | default="nginx"
+      replicas: integer | default=3
+      port: integer | default=8080
+      namespace: string | default="default"
+
+  resources:
+  - name: deployment
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${spec.name}
+        namespace: ${spec.namespace}
+        labels:
+          app: ${spec.name}
+      spec:
+        replicas: 3
+        selector:
+          matchLabels:
+            app: ${spec.name}
+        template:
+          metadata:
+            labels:
+              app: ${spec.name}
+          spec:
+            containers:
+            - name: ${spec.name}
+              image: ${spec.image}
+              imagePullPolicy: IfNotPresent
+              ports:
+              - containerPort: ${spec.port}
+
+  - name: service
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${spec.name}
+        namespace: ${spec.namespace}
+        labels:
+          app: ${spec.name}
+      spec:
+        type: NodePort
+        selector:
+          app: ${spec.name}
+        ports:
+        - port: ${spec.port}
+          targetPort: ${spec.port}
+          protocol: TCP
+
+  - name: ingress
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ${spec.name}
+        namespace: ${spec.namespace}
+        annotations:
+          kubernetes.io/ingress.class: alb
+          alb.ingress.kubernetes.io/scheme: internet-facing
+        labels:
+          app: ${spec.name}
+      spec:
+      spec:
+        rules:
+          - http:
+              paths:
+                - path: "/"
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${spec.name}
+                      port:
+                        number: ${spec.port}

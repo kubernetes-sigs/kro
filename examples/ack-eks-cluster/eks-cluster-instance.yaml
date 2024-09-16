@@ -1,0 +1,7 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: EKSCluster
+metadata:
+  name: testcluster29
+spec:
+  name: testcluster29
+  version: "1.29"

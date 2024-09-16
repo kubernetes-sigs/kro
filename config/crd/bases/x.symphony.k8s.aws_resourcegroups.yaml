@@ -1,0 +1,180 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.2
+  name: resourcegroups.x.symphony.k8s.aws
+spec:
+  group: x.symphony.k8s.aws
+  names:
+    kind: ResourceGroup
+    listKind: ResourceGroupList
+    plural: resourcegroups
+    shortNames:
+    - rg
+    singular: resourcegroup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.apiVersion
+      name: APIVERSION
+      type: string
+    - jsonPath: .spec.kind
+      name: KIND
+      type: string
+    - jsonPath: .status.state
+      name: STATE
+      type: string
+    - jsonPath: .status.topologicalOrder
+      name: TOPOLOGICALORDER
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ResourceGroup is the Schema for the resourcegroups API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ResourceGroupSpec defines the desired state of ResourceGroup
+            properties:
+              apiVersion:
+                description: |-
+                  The APIVersion of the resourcegroup. This is used to generate
+                  and create the CRD for the resourcegroup.
+                type: string
+              definition:
+                description: |-
+                  The definition of the resourcegroup, which includes the spec, status,
+                  types, and some validation rules.
+                properties:
+                  spec:
+                    description: |-
+                      The spec of the resourcegroup. Typically, this is the spec of
+                      the CRD that the resourcegroup is managing. This is adhering
+                      to the SimpleSchema spec
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  status:
+                    description: |-
+                      The status of the resourcegroup. This is the status of the CRD
+                      that the resourcegroup is managing. This is adhering to the
+                      SimpleSchema spec.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  types:
+                    description: |-
+                      Types are custom types that are used to simplify the spec and
+                      status.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  validation:
+                    description: |-
+                      Validation is a list of validation rules that are applied to the
+                      resourcegroup.
+                      Not implemented yet.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              kind:
+                description: |-
+                  The kind of the resourcegroup. This is used to generate
+                  and create the CRD for the resourcegroup.
+                type: string
+              resources:
+                description: The resources that are part of the resourcegroup.
+                items:
+                  properties:
+                    definition:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    name:
+                      type: string
+                  required:
+                  - definition
+                  - name
+                  type: object
+                type: array
+            required:
+            - apiVersion
+            - definition
+            - kind
+            type: object
+          status:
+            description: ResourceGroupStatus defines the observed state of ResourceGroup
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              state:
+                description: State is the state of the resourcegroup
+                type: string
+              topologicalOrder:
+                description: TopologicalOrder is the topological order of the resourcegroup
+                  graph
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,7 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: DeploymentService
+metadata:
+  name: my-deployment-and-service3
+spec:
+  name: app3
+  namespace: test1

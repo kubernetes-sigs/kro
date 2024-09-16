@@ -1,11 +1,12 @@
-## My Project
+# Symphony
 
-TODO: Fill this README out!
+<p align="center">
+  <img src="./logo/final-blue.svg" />
+</p>
 
-Be sure to:
-
-* Change the title in this README
-* Edit your repository description on GitHub
+Symphony is a Kubernetes controller that simplifies application management and
+deployment. It provides a powerful abstraction layer, allowing you to define
+complex, multi-resource applications as single reusable units.
 
 ## Security
 

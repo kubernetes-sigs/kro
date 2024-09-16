@@ -1,0 +1,30 @@
+.awsFooter {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: var(--main-color);
+  color: white;
+}
+
+[data-theme='dark'] {
+  .awsFooter {
+    background-color: var(--main-color-dark);
+  }
+}
+
+.awsFooterText {
+  padding: 2.5px;
+  font-size: 1.1rem;
+  font-weight: bold;
+  margin: auto;
+}
+
+.awsFooterTextHeart {
+  content: url("@site/static/img/heart.svg");
+  margin-left: 6px;
+  margin-right: 6px;
+  height: 16px;
+  max-height: 16px;
+  margin: auto;
+  padding: 0;
+}

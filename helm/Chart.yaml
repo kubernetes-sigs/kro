@@ -1,0 +1,6 @@
+apiVersion: v2
+name: symphony-chart
+description: A Helm chart for Symphony
+type: application
+version: 0.1.0-rc.3
+appVersion: "0.1.0-rc.3"

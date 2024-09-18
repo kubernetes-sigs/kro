@@ -17,6 +17,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -127,7 +128,13 @@ func main() {
 
 	crdManager := crd.NewManager(crdClient, rootLogger)
 
-	dc := dynamiccontroller.NewDynamicController(rootLogger, "dc-system", dynamicClient, nil)
+	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
+		Workers: dynamicControllerConcurrentReconciles,
+		// TODO(a-hilaly): expose these as flags
+		ShutdownTimeout: 60 * time.Second,
+		ResyncPeriod:    10 * time.Hour,
+		QueueMaxRetries: 20,
+	}, dynamicClient)
 
 	reconciler := controller.NewResourceGroupReconciler(
 		rootLogger,
@@ -152,7 +159,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	go dc.Run(context.Background(), dynamicControllerConcurrentReconciles)
+	go dc.Run(context.Background())
 
 	//+kubebuilder:scaffold:builder
 

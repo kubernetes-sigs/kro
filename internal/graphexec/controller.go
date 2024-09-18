@@ -44,7 +44,7 @@ func New(
 	log logr.Logger,
 	target schema.GroupVersionResource,
 	rg *resourcegroup.ResourceGroup,
-	client *dynamic.DynamicClient,
+	client dynamic.Interface,
 	instanceLabeler k8smetadata.Labeler,
 ) *Controller {
 	id := fmt.Sprintf("%s/%s/%s", target.Group, target.Version, target.Resource)
@@ -66,7 +66,7 @@ type Controller struct {
 	id                          string
 	log                         logr.Logger
 	target                      schema.GroupVersionResource
-	client                      *dynamic.DynamicClient
+	client                      dynamic.Interface
 	rg                          *resourcegroup.ResourceGroup
 	runtime                     *resourcegroup.RuntimeResourceGroup
 	instanceLabeler             k8smetadata.Labeler

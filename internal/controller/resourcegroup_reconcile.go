@@ -134,6 +134,6 @@ func (r *ResourceGroupReconciler) reconcileResourceGroupCRD(ctx context.Context,
 }
 
 func (r *ResourceGroupReconciler) reconcileResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {
-	r.DynamicController.SafeRegisterGVK(*gvr)
+	r.DynamicController.SafeRegisterGVK(context.Background(), *gvr)
 	return nil
 }

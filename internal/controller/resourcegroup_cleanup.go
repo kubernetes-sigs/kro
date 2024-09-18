@@ -77,7 +77,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rgRe
 }
 
 func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(_ context.Context, gvr *schema.GroupVersionResource) error {
-	r.DynamicController.UnregisterGVK(*gvr)
+	r.DynamicController.UnregisterGVK(context.Background(), *gvr)
 	return nil
 }
 
@@ -94,6 +94,6 @@ func (r *ResourceGroupReconciler) cleanupResourceGroupCRD(ctx context.Context, c
 }
 
 func (r *ResourceGroupReconciler) cleanupResourceGroupGraph(_ context.Context, gvr *schema.GroupVersionResource) error {
-	r.DynamicController.UnregisterWorkflowOperator(*gvr)
+	r.DynamicController.UnregisterWorkflowOperator(context.Background(), *gvr)
 	return nil
 }

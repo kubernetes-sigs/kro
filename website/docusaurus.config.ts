@@ -14,15 +14,15 @@ const config: Config = {
     require.resolve('docusaurus-lunr-search'),
   ],
   // Set the production url of your site here
-  url: 'https://get-symphony.com',
+  url: 'https://aws-controllers-k8s.github.io',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'aws', // Usually your GitHub org/user name.
-  projectName: 'symphony', // Usually your repo name.
+  organizationName: 'aws-controllers-k8s', // Usually your GitHub org/user name.
+  projectName: 'private-symphony', // Usually your repo name.
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
@@ -64,7 +64,7 @@ const config: Config = {
     image: 'img/symphony.svg',
     docs: {
       sidebar: {
-        hideable: true,
+        hideable: false,
         autoCollapseCategories: true,
       },
     },
@@ -111,7 +111,7 @@ const config: Config = {
           ],
         },
         {
-          href: 'https://github.com/aws',
+          href: 'https://github.com/aws-controllers-k8s/private-symphony',
           position: 'right',
           className: 'header-github-link',
           'aria-label': 'GitHub repository',
@@ -135,7 +135,7 @@ const config: Config = {
           items: [
             {
               label: 'Slack',
-              href: 'https://github.com/aws',
+              href: 'https://github.com/aws-controllers-k8s/private-symphony',
             },
           ],
         },
@@ -144,7 +144,7 @@ const config: Config = {
           items: [
             {
               label: 'GitHub',
-              href: 'https://github.com/aws',
+              href: 'https://github.com/aws-controllers-k8s/private-symphony',
             },
           ],
         },
@@ -160,8 +160,8 @@ const config: Config = {
       textColor: "white",
     },
     prism: {
-      //theme: prismThemes.github,
-      //darkTheme: prismThemes.github,
+      theme: prismThemes.github,
+      darkTheme: prismThemes.github,
     },
   } satisfies Preset.ThemeConfig,
 };

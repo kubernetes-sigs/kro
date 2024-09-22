@@ -24,7 +24,7 @@ function HomepageHeader() {
           </Link>
           <Link
             className="button button--secondary button--lg"
-            to="https://github.com/aws">
+            to="https://github.com/aws-controllers-k8s/private-symphony">
             Go to Github
           </Link>
         </div>

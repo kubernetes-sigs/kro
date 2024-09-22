@@ -27,6 +27,8 @@ type ResourceGroup struct {
 	Resources map[string]*Resource
 
 	RuntimeVariables map[string][]*RuntimeVariable
+
+	TopologicalOrder []string
 }
 
 func (rg *ResourceGroup) DeepCopyRuntimeVariables() map[string][]*RuntimeVariable {
@@ -54,11 +56,6 @@ func (rg *ResourceGroup) NewRuntime(instance *unstructured.Unstructured) (*Runti
 		unstructuredResources[name] = u.DeepCopy()
 	}
 
-	order, err := rg.Dag.TopologicalSort()
-	if err != nil {
-		return nil, err
-	}
-
 	runtimeVariables := rg.DeepCopyRuntimeVariables()
 
 	expressionsCache := make(map[string]*RuntimeVariable)
@@ -82,7 +79,6 @@ func (rg *ResourceGroup) NewRuntime(instance *unstructured.Unstructured) (*Runti
 		}
 	}
 	return &RuntimeResourceGroup{
-		TopologicalOrder:  order,
 		Instance:          instance.DeepCopy(),
 		Resources:         unstructuredResources,
 		ResourceGroup:     rg,

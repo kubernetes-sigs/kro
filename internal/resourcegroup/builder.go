@@ -19,6 +19,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -173,9 +174,11 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	// 3. Validate them against the resources defined in the resource group.
 	// 4. Infer the status schema based on the CEL expressions.
 
+	ownerReference := k8smetadata.NewResourceGroupOwnerReference(rg.Name, rg.UID)
 	instance, err := b.buildInstanceResource(
 		resourceGroupCR.Spec.APIVersion,
 		resourceGroupCR.Spec.Kind,
+		ownerReference,
 		resourceGroupCR.Spec.Definition,
 		resources,
 	)
@@ -228,11 +231,16 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	}
 	runtimeVariables["instance"] = instanceRuntimeVariables
 
+	topologicalOrder, err := dag.TopologicalSort()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get topological order: %w", err)
+	}
 	resourceGroup := &ResourceGroup{
 		Dag:              dag,
 		Instance:         instance,
 		Resources:        resources,
 		RuntimeVariables: runtimeVariables,
+		TopologicalOrder: topologicalOrder,
 	}
 	return resourceGroup, nil
 }
@@ -399,6 +407,7 @@ func (b *GraphBuilder) extractDependencies(env *cel.Env, expression string, reso
 
 func (b *GraphBuilder) buildInstanceResource(
 	apiVersion, kind string,
+	ownerReference metav1.OwnerReference,
 	rgDefinition *v1alpha1.Definition,
 	resources map[string]*Resource,
 ) (*Resource, error) {
@@ -456,11 +465,13 @@ func (b *GraphBuilder) buildInstanceResource(
 			ExpressionField: statusVariable,
 		})
 	}
+
 	instance := &Resource{
 		ID:               "instance",
 		GroupVersionKind: gvk,
 		Schema:           instanceSchema,
 		SchemaExt:        instanceSchemaExt,
+		CRD:              newCRD(apiVersion, kind, instanceSchemaExt, ownerReference),
 		EmulatedObject:   emulatedInstance,
 		Variables:        instanceVariables,
 	}

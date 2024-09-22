@@ -1,102 +1,51 @@
-// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
-//
-//	http://aws.amazon.com/apache2.0/
-//
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
-
 package errors
 
-type ReconcileGraphError struct {
-	err error
+import "fmt"
+
+// BaseError is a common structure for all custom errors
+type BaseError struct {
+	ErrType string
+	Err     error
 }
 
-func (e *ReconcileGraphError) Error() string {
-	if e == nil || e.err == nil {
+func (e *BaseError) Error() string {
+	if e == nil {
 		return ""
 	}
-	return e.err.Error()
+	return fmt.Sprintf("%s: %v", e.ErrType, e.Err)
 }
 
-func (e *ReconcileGraphError) Unwrap() error {
+func (e *BaseError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	return e.err
+	return e.Err
 }
 
-type ReconcileMicroControllerError struct {
-	err error
-}
-
-func (e *ReconcileMicroControllerError) Error() string {
-	if e == nil || e.err == nil {
-		return ""
+// Custom error types
+type (
+	ReconcileGraphError struct {
+		BaseError
 	}
-	return e.err.Error()
-}
 
-func (e *ReconcileMicroControllerError) Unwrap() error {
-	if e == nil {
-		return nil
+	ReconcileMicroControllerError struct {
+		BaseError
 	}
-	return e.err
-}
 
-type ReconcileCRDError struct {
-	err error
-}
-
-func (e *ReconcileCRDError) Error() string {
-	if e == nil || e.err == nil {
-		return ""
+	ReconcileCRDError struct {
+		BaseError
 	}
-	return e.err.Error()
-}
+)
 
-func (e *ReconcileCRDError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.err
-}
-
-type ProcessCRDError struct {
-	err error
-}
-
-func (e *ProcessCRDError) Error() string {
-	if e == nil || e.err == nil {
-		return ""
-	}
-	return e.err.Error()
-}
-
-func (e *ProcessCRDError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.err
-}
-
+// Constructor functions
 func NewReconcileGraphError(err error) *ReconcileGraphError {
-	return &ReconcileGraphError{err: err}
+	return &ReconcileGraphError{BaseError{ErrType: "ReconcileGraphError", Err: err}}
 }
 
 func NewReconcileMicroControllerError(err error) *ReconcileMicroControllerError {
-	return &ReconcileMicroControllerError{err: err}
+	return &ReconcileMicroControllerError{BaseError{ErrType: "ReconcileMicroControllerError", Err: err}}
 }
 
 func NewReconcileCRDError(err error) *ReconcileCRDError {
-	return &ReconcileCRDError{err: err}
-}
-
-func NewProcessCRDError(err error) *ProcessCRDError {
-	return &ProcessCRDError{err: err}
+	return &ReconcileCRDError{BaseError{ErrType: "ReconcileCRDError", Err: err}}
 }

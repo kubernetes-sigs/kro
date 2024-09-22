@@ -39,49 +39,22 @@ func init() {
 	}
 }
 
-func NewRestConfig() (*rest.Config, error) {
+func NewClients() (*rest.Config, *kubernetes.Clientset, dynamic.Interface, *apiextensionsv1.ApiextensionsV1Client, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		return nil, err
-	}
-	return config, nil
-}
-
-func NewDynamicClient() (*dynamic.DynamicClient, error) {
-
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		return nil, err
-	}
-	client, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
-func NewAPIExtensionsClientSet() (*apiextensionsv1.ApiextensionsV1Client, error) {
-
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		return nil, err
-
-	}
-	clientset, err := apiextensionsv1.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	return clientset, nil
-}
-
-func NewClientSet() (*kubernetes.Clientset, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		return nil, err
+		return nil, nil, nil, nil, err
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, nil, err
 	}
-	return clientset, nil
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	apiExtensionsClient, err := apiextensionsv1.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return config, clientset, dynamicClient, apiExtensionsClient, nil
 }

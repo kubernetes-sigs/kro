@@ -33,8 +33,6 @@ type RuntimeResourceGroup struct {
 	// This will be used as a read-only reference to the original resource group
 	ResourceGroup *ResourceGroup
 
-	TopologicalOrder []string
-
 	RuntimeVariables map[string][]*RuntimeVariable
 
 	ExpressionsCache map[string]*RuntimeVariable

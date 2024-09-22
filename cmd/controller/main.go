@@ -31,10 +31,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	xv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/controller"
-	"github.com/aws-controllers-k8s/symphony/internal/crd"
+	resourcegroupctrl "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -91,8 +92,10 @@ func main() {
 	ctrl.SetLogger(rootLogger)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: metricsAddr,
+		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "6f0f64a5.symphony.k8s.aws",
@@ -112,21 +115,13 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
-	// d := mgr.GetCache().WaitForCacheSync(context.Background())
 
-	crdClient, err := kubernetes.NewAPIExtensionsClientSet()
+	kConfig, _, dynamicClient, crdClient, err := kubernetes.NewClients()
 	if err != nil {
-		setupLog.Error(err, "unable to create crd client")
+		setupLog.Error(err, "unable to create clients")
 		os.Exit(1)
 	}
-
-	dynamicClient, err := kubernetes.NewDynamicClient()
-	if err != nil {
-		setupLog.Error(err, "unable to create dynamic client")
-		os.Exit(1)
-	}
-
-	crdManager := crd.NewManager(crdClient, rootLogger)
+	crdManager := kubernetes.NewCRDClient(crdClient, rootLogger)
 
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers: dynamicControllerConcurrentReconciles,
@@ -136,12 +131,23 @@ func main() {
 		QueueMaxRetries: 20,
 	}, dynamicClient)
 
-	reconciler := controller.NewResourceGroupReconciler(
+	resourceGroupGraphBuilder, err := resourcegroup.NewResourceGroupBuilder(
+		kConfig,
+		celextractor.NewCELExpressionParser(),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to create resource group graph builder")
+		os.Exit(1)
+	}
+
+	reconciler := resourcegroupctrl.NewResourceGroupReconciler(
 		rootLogger,
 		mgr,
+		dynamicClient,
 		allowCRDDeletion,
 		crdManager,
 		dc,
+		resourceGroupGraphBuilder,
 	)
 	err = ctrl.NewControllerManagedBy(
 		mgr,
@@ -172,8 +178,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "problem running manager")
-		os.Exit(1)
-	}
+	ctx := ctrl.SetupSignalHandler()
+	go func() {
+		if err := mgr.Start(ctx); err != nil {
+			setupLog.Error(err, "problem running manager")
+			os.Exit(1)
+		}
+	}()
+
+	<-ctx.Done()
+
 }

@@ -11,7 +11,7 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package controller
+package resourcegroup
 
 import (
 	"context"
@@ -20,30 +20,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/crd"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
-	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 )
 
-func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rgResource *v1alpha1.ResourceGroup) error {
+func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
 	log, _ := logr.FromContext(ctx)
 
 	log.V(1).Info("Cleaning up resource group")
-
-	log.V(1).Info("Processing open api schema")
-	restConfig, err := kubernetes.NewRestConfig()
-	if err != nil {
-		return err
-	}
-
-	builder, err := resourcegroup.NewResourceGroupBuilder(restConfig, celextractor.NewCELExpressionParser())
-	if err != nil {
-		return err
-	}
-
-	processedRG, err := builder.NewResourceGroup(rgResource)
+	processedRG, err := r.rgBuilder.NewResourceGroup(rg)
 	if err != nil {
 		return err
 	}
@@ -55,45 +39,28 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rgRe
 		return err
 	}
 
-	crdResource := crd.NewCRD(
-		processedRG.Instance.GroupVersionKind.Version,
-		processedRG.Instance.GroupVersionKind.Kind,
-		processedRG.Instance.SchemaExt,
-	)
-
+	crdResource := processedRG.Instance.CRD
 	log.V(1).Info("Cleaning up resource group CRD", "crd", crdResource.Name)
 	err = r.cleanupResourceGroupCRD(ctx, crdResource.Name)
 	if err != nil {
 		return err
 	}
 
-	log.V(1).Info("Cleaning up resource group graph")
-	err = r.cleanupResourceGroupGraph(ctx, &gvr)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(_ context.Context, gvr *schema.GroupVersionResource) error {
-	r.DynamicController.UnregisterGVK(context.Background(), *gvr)
-	return nil
+func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {
+	return r.dynamicController.StopServiceGVK(ctx, *gvr)
 }
 
 func (r *ResourceGroupReconciler) cleanupResourceGroupCRD(ctx context.Context, crdName string) error {
-	if r.AllowCRDDeletion {
-		err := r.CRDManager.Delete(ctx, crdName)
+	if r.allowCRDDeletion {
+		err := r.crdManager.Delete(ctx, crdName)
 		if err != nil {
 			return err
 		}
 	} else {
 		r.log.Info("CRD deletion is disabled, skipping CRD deletion", "crd", crdName)
 	}
-	return nil
-}
-
-func (r *ResourceGroupReconciler) cleanupResourceGroupGraph(_ context.Context, gvr *schema.GroupVersionResource) error {
-	r.DynamicController.UnregisterWorkflowOperator(context.Background(), *gvr)
 	return nil
 }

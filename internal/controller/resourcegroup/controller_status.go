@@ -11,7 +11,7 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package controller
+package resourcegroup
 
 import (
 	"context"
@@ -27,7 +27,6 @@ import (
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 	"github.com/aws-controllers-k8s/symphony/internal/condition"
-	"github.com/aws-controllers-k8s/symphony/internal/crd"
 	serr "github.com/aws-controllers-k8s/symphony/internal/errors"
 	"github.com/aws-controllers-k8s/symphony/internal/requeue"
 )
@@ -87,22 +86,6 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 
 	if reconcileErr != nil {
 		log.V(1).Info("Error occurred during reconcile", "error", reconcileErr)
-
-		var processCRDErr *serr.ProcessCRDError
-		if errors.As(reconcileErr, &processCRDErr) {
-			log.V(1).Info("Handling CRD (open-simple-schema) error", "error", reconcileErr)
-			// set all conditions to unknown and crd condition to false
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(corev1.ConditionUnknown, "error parsing schema: "+reconcileErr.Error(), "Directed Acyclic Graph is synced"),
-			)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(corev1.ConditionFalse, "error parsing schema: "+reconcileErr.Error(), "Custom Resource Definition is synced"),
-			)
-			reason := "Faulty Graph"
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(corev1.ConditionUnknown, reason, "micro controller is ready"),
-			)
-		}
 
 		// if the error is graph error, graph condition should be false and the rest should be unknown
 		var reconcielGraphErr *serr.ReconcileGraphError
@@ -193,13 +176,4 @@ func getGVR(customRD *v1.CustomResourceDefinition) *schema.GroupVersionResource 
 		Version:  customRD.Spec.Versions[0].Name,
 		Resource: customRD.Spec.Names.Plural,
 	}
-}
-
-func processCRD(ctx context.Context, resourceGroup *v1alpha1.ResourceGroup) (*v1.CustomResourceDefinition, *schema.GroupVersionResource, error) {
-	customCRD, err := crd.BuildCRDObjectFromRawNeoCRDSchema(resourceGroup.Spec.APIVersion, resourceGroup.Spec.Kind, resourceGroup.Spec.Definition)
-	if err != nil {
-		return nil, nil, serr.NewProcessCRDError(err)
-	}
-	gvr := getGVR(customCRD)
-	return customCRD, gvr, nil
 }

@@ -17,12 +17,15 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
+	"github.com/gobuffalo/flect"
 	"github.com/google/cel-go/common/types/ref"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/generated/openapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -297,6 +300,9 @@ func newInstanceSchema(spec, status extv1.JSONSchemaProps) *extv1.JSONSchemaProp
 	if _, ok := status.Properties["conditions"]; !ok {
 		status.Properties["conditions"] = defaultConditionsType
 	}
+	if _, ok := status.Properties["observedGeneration"]; !ok {
+		status.Properties["observedGeneration"] = defaultObservedGenerationType
+	}
 
 	return &extv1.JSONSchemaProps{
 		Type:     "object",
@@ -321,6 +327,9 @@ var (
 	defaultStateType = extv1.JSONSchemaProps{
 		Type: "string",
 	}
+	defaultObservedGenerationType = extv1.JSONSchemaProps{
+		Type: "integer",
+	}
 	defaultConditionsType = extv1.JSONSchemaProps{
 		Type: "array",
 		Items: &extv1.JSONSchemaPropsOrArray{
@@ -341,6 +350,9 @@ var (
 					},
 					"lastTransitionTime": {
 						Type: "string",
+					},
+					"observedGeneration": {
+						Type: "integer",
 					},
 				},
 			},
@@ -498,4 +510,39 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 	}
 
 	return schema, nil
+}
+
+func newCRD(apiVersion, kind string, schema *extv1.JSONSchemaProps, ownerReference metav1.OwnerReference) *extv1.CustomResourceDefinition {
+	pluralKind := flect.Pluralize(strings.ToLower(kind))
+	return &extv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: pluralKind + ".x.symphony.k8s.aws",
+			OwnerReferences: []metav1.OwnerReference{
+				ownerReference,
+			},
+		},
+		Spec: extv1.CustomResourceDefinitionSpec{
+			Group: "x.symphony.k8s.aws",
+			Names: extv1.CustomResourceDefinitionNames{
+				Kind:     kind,
+				ListKind: kind + "List",
+				Plural:   pluralKind,
+				Singular: strings.ToLower(kind),
+			},
+			Scope: extv1.NamespaceScoped,
+			Versions: []extv1.CustomResourceDefinitionVersion{
+				{
+					Name:    apiVersion,
+					Served:  true,
+					Storage: true,
+					Schema: &extv1.CustomResourceValidation{
+						OpenAPIV3Schema: schema,
+					},
+					Subresources: &extv1.CustomResourceSubresources{
+						Status: &extv1.CustomResourceSubresourceStatus{},
+					},
+				},
+			},
+		},
+	}
 }

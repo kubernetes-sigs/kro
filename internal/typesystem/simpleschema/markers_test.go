@@ -14,7 +14,6 @@
 package simpleschema
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -117,11 +116,6 @@ func TestParseMarkers(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				fmt.Println("GOT: ")
-				for _, marker := range got {
-					fmt.Println(marker.MarkerType, marker.Key, marker.Value)
-				}
-
 				t.Errorf("parseMarkers() = %v, want %v", got, tt.want)
 			}
 		})

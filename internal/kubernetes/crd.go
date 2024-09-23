@@ -11,49 +11,51 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package crd
+package kubernetes
 
 import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
-var (
-	defaultOwnerReference = metav1.OwnerReference{
-		Name:       "symphony-controller",
-		Kind:       "ResourceGroup",
-		APIVersion: "x.symphony.k8s.aws/v1alpha1",
-		Controller: &[]bool{false}[0],
-		UID:        "00000000-0000-0000-0000-000000000000",
-	}
-)
+type CRDManager interface {
+	Create(ctx context.Context, crd v1.CustomResourceDefinition) error
+	Update(ctx context.Context, crd v1.CustomResourceDefinition) error
+	Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error
+	Describe(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
+	Delete(ctx context.Context, name string) error
+	Patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error
+	WaitUntilReady(ctx context.Context, name string, delay time.Duration, maxAttempts int) error
+}
 
-// Manager is an object that allows for the management of CRDs
+var _ CRDManager = &CRDClient{}
+
+// CRDClient is an object that allows for the management of CRDs
 // It is mainly responsible for creating and deleting CRDs
-type Manager struct {
+type CRDClient struct {
 	Client *apiextensionsv1.ApiextensionsV1Client
 	log    logr.Logger
 }
 
-func NewManager(Client *apiextensionsv1.ApiextensionsV1Client, log logr.Logger) *Manager {
+func NewCRDClient(Client *apiextensionsv1.ApiextensionsV1Client, log logr.Logger) *CRDClient {
 	crdLogger := log.WithName("crd-manager")
 
-	return &Manager{
+	return &CRDClient{
 		log:    crdLogger,
 		Client: Client,
 	}
 }
 
-func (m *Manager) Create(ctx context.Context, crd v1.CustomResourceDefinition) error {
-	crd.OwnerReferences = []metav1.OwnerReference{defaultOwnerReference}
-
+func (m *CRDClient) Create(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	m.log.V(1).Info("Creating CRD", "name", crd.Name)
 	_, err := m.Client.CustomResourceDefinitions().Create(
 		ctx,
@@ -63,7 +65,7 @@ func (m *Manager) Create(ctx context.Context, crd v1.CustomResourceDefinition) e
 	return err
 }
 
-func (m *Manager) Update(ctx context.Context, crd v1.CustomResourceDefinition) error {
+func (m *CRDClient) Update(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	m.log.V(1).Info("Updating CRD", "name", crd.Name)
 	_, err := m.Client.CustomResourceDefinitions().Update(
 		ctx,
@@ -73,12 +75,19 @@ func (m *Manager) Update(ctx context.Context, crd v1.CustomResourceDefinition) e
 	return err
 }
 
-func (m *Manager) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
+func (m *CRDClient) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	m.log.V(1).Info("Ensuring CRD exists", "name", crd.Name)
 	_, err := m.Describe(ctx, crd.Name)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return m.Create(ctx, crd)
+			err := m.Create(ctx, crd)
+			if err != nil {
+				return err
+			}
+			if err := m.WaitUntilReady(ctx, crd.Name, 150*time.Millisecond, 10); err != nil {
+				return err
+			}
+			return nil
 		}
 		return err
 	}
@@ -87,7 +96,34 @@ func (m *Manager) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) e
 	return m.Patch(ctx, crd)
 }
 
-func (m *Manager) Describe(ctx context.Context, name string) (*v1.CustomResourceDefinition, error) {
+func (m *CRDClient) WaitUntilReady(ctx context.Context, name string, delay time.Duration, maxAttempts int) error {
+	attempts := 0
+
+	m.log.V(1).Info("Waiting for CRD to be ready", "name", name)
+	for {
+		attempts++
+		crd, err := m.Describe(ctx, name)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+
+		if crd.Status.Conditions != nil {
+			for _, condition := range crd.Status.Conditions {
+				if condition.Type == v1.Established && condition.Status == v1.ConditionTrue {
+					m.log.V(1).Info("CRD is ready", "name", name)
+					return nil
+				}
+			}
+		}
+
+		if attempts >= maxAttempts {
+			return apierrors.NewTimeoutError("CRD is not ready", -1)
+		}
+		time.Sleep(delay)
+	}
+}
+
+func (m *CRDClient) Describe(ctx context.Context, name string) (*v1.CustomResourceDefinition, error) {
 	m.log.V(1).Info("Describing CRD", "name", name)
 	return m.Client.CustomResourceDefinitions().Get(
 		ctx,
@@ -96,7 +132,7 @@ func (m *Manager) Describe(ctx context.Context, name string) (*v1.CustomResource
 	)
 }
 
-func (m *Manager) Delete(ctx context.Context, name string) error {
+func (m *CRDClient) Delete(ctx context.Context, name string) error {
 	m.log.V(1).Info("Deleting CRD", "name", name)
 	err := m.Client.CustomResourceDefinitions().Delete(
 		ctx,
@@ -112,7 +148,7 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	return err
 }
 
-func (m *Manager) Patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error {
+func (m *CRDClient) Patch(ctx context.Context, newCRD v1.CustomResourceDefinition) error {
 	m.log.V(1).Info("Patching CRD", "name", newCRD.Name)
 	b, err := json.Marshal(newCRD)
 	if err != nil {

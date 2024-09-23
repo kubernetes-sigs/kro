@@ -30,6 +30,7 @@ type Resource struct {
 	GroupVersionKind schema.GroupVersionKind
 	Schema           *spec.Schema
 	SchemaExt        *extv1.JSONSchemaProps
+	CRD              *extv1.CustomResourceDefinition
 
 	OriginalObject map[string]interface{}
 	EmulatedObject *unstructured.Unstructured

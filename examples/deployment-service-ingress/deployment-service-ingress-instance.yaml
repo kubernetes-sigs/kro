@@ -1,6 +1,8 @@
 apiVersion: x.symphony.k8s.aws/v1alpha1
 kind: Application
 metadata:
-  name: my-deployment-and-service3
+  name: my-deployment-and-service6
+  namespace: test
 spec:
-  name: app3
+  name: app7
+  image: terraform6

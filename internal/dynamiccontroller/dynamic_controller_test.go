@@ -9,15 +9,11 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/graphexec"
 )
 
 // NOTE(a-hilaly): I'm just playing around with the dynamic controller code here
@@ -91,55 +87,23 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Register GVK
-	err := dc.SafeRegisterGVK(context.Background(), gvr)
+	err := dc.StartServingGVK(context.Background(), gvr, nil)
 	require.NoError(t, err)
 
 	_, exists := dc.informers.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should fail)
-	err = dc.SafeRegisterGVK(context.Background(), gvr)
+	err = dc.StartServingGVK(context.Background(), gvr, nil)
 	assert.Error(t, err)
 
 	// Unregister GVK
-	shutdownContext, _ := context.WithTimeout(context.Background(), 5*time.Second)
-	err = dc.UnregisterGVK(shutdownContext, gvr)
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = dc.StopServiceGVK(shutdownContext, gvr)
 	require.NoError(t, err)
 
 	_, exists = dc.informers.Load(gvr)
-	assert.False(t, exists)
-}
-
-func TestRegisterAndUnregisterWorkflowOperator(t *testing.T) {
-	t.Skip("Need some work on the kubeclients for this to work")
-
-	logger := noopLogger()
-	client := setupFakeClient()
-	dc := NewDynamicController(logger, Config{}, client)
-
-	rgResource := &v1alpha1.ResourceGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-resource-group",
-		},
-		Spec: v1alpha1.ResourceGroupSpec{
-			Resources: []*v1alpha1.Resource{},
-		},
-	}
-
-	// Register workflow operator
-	processedRG, err := dc.RegisterWorkflowOperator(context.Background(), rgResource)
-	require.NoError(t, err)
-	assert.NotNil(t, processedRG)
-
-	gvr := schema.GroupVersionResource{Group: "symphony.aws.dev", Version: "v1alpha1", Resource: "testresources"}
-	_, exists := dc.workflowOperators.Load(gvr)
-	assert.True(t, exists)
-
-	// Unregister workflow operator
-	err = dc.UnregisterWorkflowOperator(context.Background(), gvr)
-	require.NoError(t, err)
-
-	_, exists = dc.workflowOperators.Load(gvr)
 	assert.False(t, exists)
 }
 
@@ -156,27 +120,4 @@ func TestEnqueueObject(t *testing.T) {
 	dc.enqueueObject(obj, "add")
 
 	assert.Equal(t, 1, dc.queue.Len())
-}
-
-func TestSyncFunc(t *testing.T) {
-	t.Skip("Need to rework the syncFunc to take generic handlers instead of *graphexec.Controller")
-
-	logger := noopLogger()
-	client := setupFakeClient()
-	dc := NewDynamicController(logger, Config{}, client)
-
-	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-	err := dc.SafeRegisterGVK(context.Background(), gvr)
-	require.NoError(t, err)
-
-	dc.workflowOperators.Store(gvr, &graphexec.Controller{})
-
-	oi := ObjectIdentifiers{
-		NamespacedKey: "default/test-object",
-		GVR:           gvr,
-	}
-
-	// Test with no workflow operator registered
-	err = dc.syncFunc(context.Background(), oi)
-	assert.Error(t, err)
 }

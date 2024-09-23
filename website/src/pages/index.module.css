@@ -14,7 +14,7 @@
 }
 
 .heroA {
-  background-image: linear-gradient(rgb(241, 245, 255), rgb(255, 255, 255));
+  background-image: linear-gradient(rgb(246, 248, 254), rgb(255, 255, 255));
   padding: 48px;
   text-align: center;
   position: relative;
@@ -76,30 +76,27 @@
   text-decoration: none;
 }
 
-[data-theme='dark'] {
-  .indexCtas a {
-    background-color: var(--main-color-dark);
-    border-color: var(--main-color-dark);
-  }
+[data-theme='dark'] .indexCtas a {
+  background-color: var(--main-color-dark);
+  border-color: var(--main-color-dark);
+}
 
-  .indexCtas a:hover {
-    background-color: #fb8422;
-    border-color: #fb8422;
-    ;
-    text-decoration: none;
-  }
+[data-theme='dark'] .indexCtas a:hover {
+  background-color: #fb8422;
+  border-color: #fb8422;
+  text-decoration: none;
+}
 
-  .heroA {
-    background-image: linear-gradient(rgb(54, 54, 54), rgb(27, 27, 29));
-  }
+[data-theme='dark'] .heroA {
+  background-image: linear-gradient(rgb(54, 54, 54), rgb(27, 27, 29));
+}
 
-  .heroProjectTagline {
-    color: #fff;
-  }
+[data-theme='dark'] .heroProjectTagline {
+  color: #fff;
+}
 
-  .heroProjectTaglineSubtitle {
-    color: #fff;
-  }
+[data-theme='dark'] .heroProjectTaglineSubtitle {
+  color: #fff;
 }
 
 .indexCtas a:last-of-type {

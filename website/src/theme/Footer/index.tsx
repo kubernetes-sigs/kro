@@ -1,7 +1,7 @@
 import React from 'react';
 import Footer from '@theme-original/Footer';
 import type FooterType from '@theme/Footer';
-import type {WrapperProps} from '@docusaurus/types';
+import type { WrapperProps } from '@docusaurus/types';
 
 import styles from './footer.module.css';
 
@@ -12,9 +12,9 @@ export default function FooterWrapper(props) {
   return (
     <>
       <section className={styles.awsFooter} >
-        <p className={styles.awsFooterText}>Built with
-        <img alt="heart" className={styles.awsFooterTextHeart}/>
-        at AWS</p>
+        <p className={styles.awsFooterText}>Built with&ensp;
+          <img alt="heart" className={styles.awsFooterTextHeart} />
+          &ensp;at AWS</p>
       </section>
       <Footer {...props} />
     </>

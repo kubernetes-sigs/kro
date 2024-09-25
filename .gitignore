@@ -33,4 +33,4 @@ symphony-chart*
 .design
 .DS_Store
 TODO.*
-package-lock.json
+# package-lock.json

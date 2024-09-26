@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
+	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -86,15 +87,19 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	// Give the controller time to start
 	time.Sleep(1 * time.Second)
 
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
 	// Register GVK
-	err := dc.StartServingGVK(context.Background(), gvr, nil)
+	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
 	require.NoError(t, err)
 
 	_, exists := dc.informers.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should fail)
-	err = dc.StartServingGVK(context.Background(), gvr, nil)
+	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
 	assert.Error(t, err)
 
 	// Unregister GVK

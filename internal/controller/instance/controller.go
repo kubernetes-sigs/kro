@@ -16,6 +16,8 @@ package instance
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,18 +30,65 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
 )
 
-// Controller structure
-type Controller struct {
-	log             logr.Logger
-	gvr             schema.GroupVersionResource
-	client          dynamic.Interface
-	rg              *resourcegroup.ResourceGroup
-	instanceLabeler k8smetadata.Labeler
+// ReconcileConfig holds configuration parameters for the recnociliation process.
+// It allows the customization of various aspects of the controller's behavior.
+type ReconcileConfig struct {
+	// DefaultRequeueDuration is the default duration to wait before requeueing a
+	// a reconciliation if no specific requeue time is set.
+	DefaultRequeueDuration time.Duration
+	// DeletionGraceTimeDuration is the duration to wait after initializing a resource
+	// deletion before considering it failed
+	// Not implemented.
+	DeletionGraceTimeDuration time.Duration
+	// DeletionPolicy is the deletion policy to use when deleting resources in the graph
+	// TODO(a-hilaly): need to define think the different deletion policies we need to
+	// support.
+	DeletionPolicy string
 }
 
-// NewController creates a new Controller instance
+// Controller manages the reconciliation of a single instance of a ResourceGroup,
+// / it is responsible for reconciling the instance and its sub-resources.
+//
+// The controller is responsible for the following:
+// - Reconciling the instance
+// - Reconciling the sub-resources of the instance
+// - Updating the status of the instance
+// - Managing finalizers, owner references and labels
+// - Handling errors and retries
+// - Performing cleanup operations (garbage collection)
+//
+// For each instance of a ResourceGroup, the controller creates a new instance of
+// the InstanceGraphReconciler to manage the reconciliation of the instance and its
+// sub-resources.
+//
+// It is important to state that when the controller is reconciling an instance, it
+// creates and uses a new instance of the ResourceGroupRuntime to uniquely manage
+// the state of the instance and its sub-resources. This ensure that at each
+// reconciliation loop, the controller is working with a fresh state of the instance
+// and its sub-resources.
+type Controller struct {
+	log logr.Logger
+	// gvr represents the Group, Version, and Resource of the custom resource
+	// this controller is responsible for.
+	gvr schema.GroupVersionResource
+	// client is a dynamic client for interacting with the Kubernetes API server.
+	client dynamic.Interface
+	// rg is a read-only reference to the ResourceGroup that the controller is
+	// managing instances for.
+	// TODO: use a read-only interface for the ResourceGroup
+	rg *resourcegroup.ResourceGroup
+	// instanceLabeler is responsible for applying consistent labels
+	// to resources managed by this controller.
+	instanceLabeler k8smetadata.Labeler
+	// reconcileConfig holds the configuration parameters for the reconciliation
+	// process.
+	reconcileConfig ReconcileConfig
+}
+
+// NewController creates a new Controller instance.
 func NewController(
 	log logr.Logger,
+	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
 	rg *resourcegroup.ResourceGroup,
 	client dynamic.Interface,
@@ -51,6 +100,7 @@ func NewController(
 		client:          client,
 		rg:              rg,
 		instanceLabeler: instanceLabeler,
+		reconcileConfig: reconcileConfig,
 	}
 }
 
@@ -86,9 +136,18 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		client:                      c.client,
 		rg:                          c.rg,
 		runtime:                     rgRuntime,
-		originalRequest:             req,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
 	}
 	return graphExecReconciler.Reconcile(ctx)
+}
+
+func getNamespaceName(req ctrl.Request) (string, string) {
+	parts := strings.Split(req.Name, "/")
+	name := parts[len(parts)-1]
+	namespace := parts[0]
+	if namespace == "" {
+		namespace = metav1.NamespaceDefault
+	}
+	return namespace, name
 }

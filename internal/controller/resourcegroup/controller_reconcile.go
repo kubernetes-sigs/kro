@@ -16,6 +16,7 @@ package resourcegroup
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -58,6 +59,11 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 
 	graphexecController := instancectrl.NewController(
 		instanceLogger,
+		instancectrl.ReconcileConfig{
+			DefaultRequeueDuration:    3 * time.Second,
+			DeletionGraceTimeDuration: 30 * time.Second,
+			DeletionPolicy:            "Delete",
+		},
 		gvr,
 		processedRG,
 		r.dynamicClient,

@@ -80,14 +80,46 @@ func isSliceType(s string) bool {
 
 // parseMapType parses a map type string and returns the key and value types.
 func parseMapType(s string) (string, string, error) {
-	// Remove the "map[" prefix and "]" suffix.
-	s = strings.TrimPrefix(s, "map[")
-	s = strings.TrimSuffix(s, "]")
-	parts := strings.Split(s, "]")
-	if len(parts) != 2 {
+	if !strings.HasPrefix(s, "map[") {
 		return "", "", fmt.Errorf("invalid map type: %s", s)
 	}
-	return parts[0], parts[1], nil
+
+	// remove the "map[" prefix
+	s = s[4:]
+
+	keyEndIndex := findMatchingBracket(s)
+	if keyEndIndex == -1 {
+		return "", "", fmt.Errorf("invalid map key type: %s", s)
+	}
+
+	keyType := s[:keyEndIndex]
+	valueType := s[keyEndIndex+1:]
+
+	valueType = strings.TrimSuffix(valueType, "]")
+	if keyType == "" {
+		return "", "", fmt.Errorf("empty map key type")
+	}
+	if valueType == "" {
+		return "", "", fmt.Errorf("empty map value type")
+	}
+
+	return keyType, valueType, nil
+}
+func findMatchingBracket(s string) int {
+	depth := 1
+	for i, char := range s {
+		switch char {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	// no matching bracket found
+	return -1
 }
 
 // parseSliceType parses a slice type string and returns the element type.
@@ -95,6 +127,7 @@ func parseSliceType(s string) (string, error) {
 	if !strings.HasPrefix(s, "[]") {
 		return "", fmt.Errorf("invalid slice type: %s", s)
 	}
+
 	// Remove the "[]" prefix.
 	s = strings.TrimPrefix(s, "[]")
 	if s == "" {

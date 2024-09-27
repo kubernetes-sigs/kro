@@ -112,8 +112,9 @@ func TestParseMapType(t *testing.T) {
 		wantErr       bool
 	}{
 		{"valid map", "map[string]integer", "string", "integer", false},
-		// not supported yet... do we need to support this?
-		// {"Valid Complex Map", "map[string]map[int]bool", "string", "map[int]bool", false},
+		{"Valid Complex Map", "map[string]map[int]bool", "string", "map[int]bool", false},
+		{"Nested Map", "map[string]map[string]map[string]integer", "string", "map[string]map[string]integer", false},
+		{"invalid map", "map[]", "", "", true},
 		{"invalid map", "map[string]", "", "", true},
 		{"not a map", "something", "", "", true},
 	}
@@ -143,8 +144,8 @@ func TestParseSliceType(t *testing.T) {
 		wantErr      bool
 	}{
 		{"valid slice", "[]string", "string", false},
-		// not supported yet
-		// {"Valid Complex Slice", "[]map[string]int", "map[string]int", false},
+		{"Valid Complex Slice", "[]map[string]int", "map[string]int", false},
+		{"Nested Slice", "[][][]int", "[][]int", false},
 		{"invalid slice", "[]", "", true},
 		{"Not a slice", "string", "", true},
 	}

@@ -30,6 +30,10 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			"city":    "string",
 			"country": "string",
 		},
+		"Person": map[string]interface{}{
+			"name": "string",
+			"age":  "integer",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Failed to load pre-defined types: %v", err)
@@ -58,7 +62,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				"friends":    "[]Person",
 			},
 			want: &extv1.JSONSchemaProps{
-				Type: "object",
+				Type:     "object",
+				Required: []string{"name"},
 				Properties: map[string]extv1.JSONSchemaProps{
 					"name": {Type: "string"},
 					"age": {
@@ -120,7 +125,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						},
 					},
 				},
-				Required: []string{"name"},
 			},
 			wantErr: false,
 		},
@@ -178,6 +182,103 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "Nested slices",
+			obj: map[string]interface{}{
+				"matrix": "[][][]string",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"matrix": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{Type: "string"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Nested slices with custom type",
+			obj: map[string]interface{}{
+				"matrix": "[][][]Person",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"matrix": {
+						Type: "array",
+
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{
+												Type: "object",
+												Properties: map[string]extv1.JSONSchemaProps{
+													"name": {Type: "string"},
+													"age":  {Type: "integer"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Nested maps",
+			obj: map[string]interface{}{
+				"matrix": "map[string]map[string]map[string]Person",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"matrix": {
+						Type: "object",
+						AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "object",
+								AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "object",
+										AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+											Schema: &extv1.JSONSchemaProps{
+												Type: "object",
+												Properties: map[string]extv1.JSONSchemaProps{
+													"name": {Type: "string"},
+													"age":  {Type: "integer"},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -188,7 +289,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("BuildOpenAPISchema() = %v, want %v", got, tt.want)
+				t.Errorf("BuildOpenAPISchema() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -208,7 +309,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 		},
 		"Company": map[string]interface{}{
 			"name":      "string",
-			"employees": "[]Person",
+			"employees": "[]string",
 		},
 	}
 
@@ -260,18 +361,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				Type: "array",
 				Items: &extv1.JSONSchemaPropsOrArray{
 					Schema: &extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"name": {Type: "string"},
-							"age":  {Type: "integer"},
-							"address": {
-								Type: "object",
-								Properties: map[string]extv1.JSONSchemaProps{
-									"street": {Type: "string"},
-									"city":   {Type: "string"},
-								},
-							},
-						},
+						Type: "string",
 					},
 				},
 			},

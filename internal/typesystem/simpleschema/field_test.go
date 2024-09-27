@@ -32,7 +32,8 @@ func TestParseFieldSchema(t *testing.T) {
 			wantType:    "string",
 			wantMarkers: []*Marker{
 				{MarkerType: MarkerTypeRequired, Key: "required", Value: "true"},
-				{MarkerType: MarkerTypeDescription, Key: "description", Value: "A test field"},
+				{MarkerType: MarkerTypeDescription, Key: "description", Value: "A-test-field"},
+				{MarkerType: MarkerTypeDefault, Key: "default", Value: "kubernetes-is-very-nice!"},
 			},
 			wantErr: false,
 		},

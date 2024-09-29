@@ -35,7 +35,6 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
 	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -133,7 +132,6 @@ func main() {
 
 	resourceGroupGraphBuilder, err := resourcegroup.NewResourceGroupBuilder(
 		kConfig,
-		celextractor.NewCELExpressionParser(),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource group graph builder")

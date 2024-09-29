@@ -29,15 +29,14 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/celutil"
 	"github.com/aws-controllers-k8s/symphony/internal/dag"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celinspector"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/emulator"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/simpleschema"
 )
 
 func NewResourceGroupBuilder(
 	clientConfig *rest.Config,
-	celExpressionsExtractor *celextractor.CELExpressionsExtractor,
 ) (*GraphBuilder, error) {
 	schemaResolver, err := newCombinedResolver(clientConfig)
 	if err != nil {
@@ -49,7 +48,6 @@ func NewResourceGroupBuilder(
 	rgBuilder := &GraphBuilder{
 		resourceEmulator: resourceEmulator,
 		schemaResolver:   schemaResolver,
-		celParser:        celExpressionsExtractor,
 	}
 	return rgBuilder, nil
 }
@@ -57,7 +55,6 @@ func NewResourceGroupBuilder(
 type GraphBuilder struct {
 	schemaResolver   resolver.SchemaResolver
 	resourceEmulator *emulator.Emulator
-	celParser        *celextractor.CELExpressionsExtractor
 }
 
 func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGroup, error) {
@@ -125,7 +122,7 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 		}
 
 		// 5. Extract CEL celExpressions from the schema.
-		celExpressions, err := b.celParser.ExtractExpressions(unstructuredResource, resourceSchema)
+		celExpressions, err := parser.ParseResource(unstructuredResource, resourceSchema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.Name, err)
 		}
@@ -501,7 +498,7 @@ func (b *GraphBuilder) buildInstanceSpecSchema(definition *v1alpha1.Definition) 
 	return instanceSchema, nil
 }
 
-func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resources map[string]*Resource) (*extv1.JSONSchemaProps, []celextractor.ExpressionField, error) {
+func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resources map[string]*Resource) (*extv1.JSONSchemaProps, []parser.ExpressionField, error) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	unstructuredStatus := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(definition.Status.Raw, &unstructuredStatus)
@@ -511,7 +508,7 @@ func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resour
 
 	// different from the instance spec, the status schema is inferred from the
 	// CEL expressions in the status field.
-	extracted, err := celextractor.NewCELExpressionParser().ExtractExpressionsUnstructured(unstructuredStatus)
+	extracted, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}

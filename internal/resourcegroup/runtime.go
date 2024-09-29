@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/aws-controllers-k8s/symphony/internal/celutil"
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/resolver"
 )
 
@@ -236,7 +236,7 @@ func (rt *RuntimeResourceGroup) ResolveResource(resource string) error {
 	}
 
 	rs := resolver.NewResolver(rt.Resources[resource].Object, exprValues)
-	exprFields := make([]celextractor.ExpressionField, len(rt.ResourceGroup.Resources[resource].Variables))
+	exprFields := make([]parser.ExpressionField, len(rt.ResourceGroup.Resources[resource].Variables))
 	for i, v := range rt.ResourceGroup.Resources[resource].Variables {
 		exprFields[i] = v.ExpressionField
 	}

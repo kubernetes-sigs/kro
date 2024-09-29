@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: karpenter
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          argocd.argoproj.io/secret-type: cluster
+  goTemplate: true
+  goTemplateOptions:
+  - missingkey=error
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  template:
+    metadata:
+      name: '{{.name}}-karpenter' # 'name' field of the Secret
+    spec:
+      project: default
+      source:
+        chart: karpenter
+        repoURL: public.ecr.aws/karpenter
+        targetRevision: '0.36.1'
+        helm:
+          valuesObject:
+            settings:
+              clusterName: '{{.name}}'
+            serviceAccount:
+              annotations:
+                eks.amazonaws.com/role-arn: 'arn:aws:iam::{{.metadata.annotations.accountId}}:role/{{.name}}-karpenter-role'
+      destination:
+        server: '{{.server}}'
+        namespace: kube-system
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

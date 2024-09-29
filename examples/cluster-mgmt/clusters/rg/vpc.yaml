@@ -1,0 +1,208 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: vpc.x.symphony.k8s.aws
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  apiVersion: v1alpha1
+  kind: Vpc
+  definition:
+    spec:
+      name: string
+      region: string
+      cidr:
+        vpcCidr: string | default="10.0.0.0/16"
+        publicSubnet1Cidr: string | default="10.0.1.0/24"
+        publicSubnet2Cidr: string | default="10.0.2.0/24"
+        privateSubnet1Cidr: string | default="10.0.11.0/24"
+        privateSubnet2Cidr: string | default="10.0.12.0/24"
+    status:
+      vpcID: ${vpc.status.vpcID}
+      publicSubnet1ID: ${publicSubnet1.status.subnetID}
+      publicSubnet2ID: ${publicSubnet2.status.subnetID}
+      privateSubnet1ID: ${privateSubnet1.status.subnetID}
+      privateSubnet2ID: ${privateSubnet2.status.subnetID}
+  resources: # how to publish a field in the RG claim e.g. vpcID
+  - name: vpc
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: VPC
+      metadata:
+        name: ${spec.name}-vpc
+      spec:
+        cidrBlocks: 
+        - ${spec.cidr.vpcCidr}
+        enableDNSSupport: true
+        enableDNSHostnames: true
+        tags:
+          - key: "Name"
+            value: ${spec.name}-vpc
+  - name: internetGateway
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: InternetGateway
+      metadata:
+        name: ${spec.name}-igw
+      spec:
+        vpc: ${vpc.status.vpcID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-igw
+  - name: natGateway1
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: NATGateway
+      metadata:
+        name: ${spec.name}-nat-gateway1
+      spec:
+        subnetID: ${publicSubnet1.status.subnetID}
+        allocationID: ${eip1.status.allocationID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-nat-gateway1
+  - name: natGateway2
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: NATGateway
+      metadata:
+        name: ${spec.name}-nat-gateway2
+      spec:
+        subnetID: ${publicSubnet2.status.subnetID}
+        allocationID: ${eip2.status.allocationID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-nat-gateway2
+  - name: eip1
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: ElasticIPAddress
+      metadata:
+        name: ${spec.name}-eip1
+      spec:
+        tags:
+          - key: "Name"
+            value: ${spec.name}-eip1
+  - name: eip2
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: ElasticIPAddress
+      metadata:
+        name: ${spec.name}-eip2
+      spec:
+        tags:
+          - key: "Name"
+            value: ${spec.name}-eip2
+  - name: publicRoutetable
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: RouteTable
+      metadata:
+        name: ${spec.name}-public-routetable
+      spec:
+        vpcID: ${vpc.status.vpcID}
+        routes:
+        - destinationCIDRBlock: 0.0.0.0/0
+          gatewayID: ${internetGateway.status.internetGatewayID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-public-routetable
+  - name: privateRoutetable1
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: RouteTable
+      metadata:
+        name: ${spec.name}-private-routetable1
+      spec:
+        vpcID: ${vpc.status.vpcID}
+        routes:
+        - destinationCIDRBlock: 0.0.0.0/0
+          natGatewayID: ${natGateway1.status.natGatewayID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-private-routetable1
+  - name: privateRoutetable2
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: RouteTable
+      metadata:
+        name: ${spec.name}-private-routetable2
+      spec:
+        vpcID: ${vpc.status.vpcID}
+        routes:
+        - destinationCIDRBlock: 0.0.0.0/0
+          natGatewayID: ${natGateway2.status.natGatewayID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-private-routetable2
+  - name: publicSubnet1
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: ${spec.name}-public-subnet1
+      spec:
+        availabilityZone: ${spec.region}a
+        cidrBlock: ${spec.cidr.publicSubnet1Cidr}
+        mapPublicIPOnLaunch: true
+        vpcID: ${vpc.status.vpcID}
+        routeTables:
+        - ${publicRoutetable.status.routeTableID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-public-subnet1
+          - key: kubernetes.io/role/elb
+            value: '1'
+  - name: publicSubnet2
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: ${spec.name}-public-subnet2
+      spec:
+        availabilityZone: ${spec.region}b
+        cidrBlock: ${spec.cidr.publicSubnet2Cidr}
+        mapPublicIPOnLaunch: true
+        vpcID: ${vpc.status.vpcID}
+        routeTables:
+        - ${publicRoutetable.status.routeTableID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-public-subnet2
+          - key: kubernetes.io/role/elb
+            value: '1'
+  - name: privateSubnet1
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: ${spec.name}-private-subnet1
+      spec:
+        availabilityZone: ${spec.region}a
+        cidrBlock: ${spec.cidr.privateSubnet1Cidr}
+        vpcID: ${vpc.status.vpcID}
+        routeTables:
+        - ${privateRoutetable1.status.routeTableID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-private-subnet1
+          - key: kubernetes.io/role/internal-elb
+            value: '1'
+  - name: privateSubnet2
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: Subnet
+      metadata:
+        name: ${spec.name}-private-subnet2
+      spec:
+        availabilityZone: ${spec.region}b
+        cidrBlock: ${spec.cidr.privateSubnet2Cidr}
+        vpcID: ${vpc.status.vpcID}
+        routeTables:
+        - ${privateRoutetable2.status.routeTableID}
+        tags:
+          - key: "Name"
+            value: ${spec.name}-private-subnet2
+          - key: kubernetes.io/role/internal-elb
+            value: '1'

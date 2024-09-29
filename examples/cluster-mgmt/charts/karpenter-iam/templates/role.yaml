@@ -1,0 +1,28 @@
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Role
+metadata:
+  name: {{ .Values.clusterName}}-karpenter-role
+spec:
+  name: {{ .Values.clusterName}}-karpenter-role
+  policyRefs:
+    - from:
+        name: {{ .Values.clusterName}}-karpenter-iam-policy
+  assumeRolePolicyDocument: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Federated": "arn:aws:iam::{{ .Values.accountId}}:oidc-provider/{{ .Values.oidcProvider}}"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+              "StringEquals": {
+                "{{ .Values.oidcProvider}}:aud": "sts.amazonaws.com",
+                "{{ .Values.oidcProvider}}:sub": "system:serviceaccount:kube-system:{{ .Values.clusterName}}-karpenter"
+              }
+            }
+          }
+        ]
+      }

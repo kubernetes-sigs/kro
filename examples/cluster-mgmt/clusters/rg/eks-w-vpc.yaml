@@ -1,0 +1,56 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: eksclusterwithvpc.x.symphony.k8s.aws
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  apiVersion: v1alpha1
+  kind: EksclusterWithVpc
+  definition:
+    spec:
+      name: string
+      region: string
+      cidr:
+        vpcCidr: string | default="10.0.0.0/16"
+        publicSubnet1Cidr: string | default="10.0.1.0/24"
+        publicSubnet2Cidr: string | default="10.0.2.0/24"
+        privateSubnet1Cidr: string | default="10.0.11.0/24"
+        privateSubnet2Cidr: string | default="10.0.12.0/24"
+      k8sVersion: string
+      nodesCount: integer
+  resources:
+  - name: vpc
+    definition:
+      apiVersion: x.symphony.k8s.aws/v1alpha1
+      kind: Vpc
+      metadata:
+        name: ${spec.name}
+      spec:
+        name: ${spec.name}
+        region: ${spec.region}
+        cidr:
+          vpcCidr: ${spec.cidr.vpcCidr}
+          publicSubnet1Cidr: ${spec.cidr.publicSubnet1Cidr}
+          publicSubnet2Cidr: ${spec.cidr.publicSubnet2Cidr}
+          privateSubnet1Cidr: ${spec.cidr.privateSubnet1Cidr}
+          privateSubnet2Cidr: ${spec.cidr.privateSubnet2Cidr}
+  - name: eks
+    definition:
+      apiVersion: x.symphony.k8s.aws/v1alpha1
+      kind: EksCluster
+      metadata:
+        name: ${spec.name}
+      spec:
+          name: ${spec.name}
+          region: ${spec.region}
+          subnets:
+            controlplane:
+              subnet1ID: ${vpc.status.privateSubnet1ID}
+              subnet2ID: ${vpc.status.privateSubnet2ID}
+            workers:
+              subnet1ID: ${vpc.status.privateSubnet1ID}
+              subnet2ID: ${vpc.status.privateSubnet2ID}
+          k8sVersion: ${spec.k8sVersion}
+          nodesCount: ${spec.nodesCount}

@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
 )
 
 // ResolutionResult represents the result of resolving a single expression.
@@ -59,7 +59,7 @@ func NewResolver(resource map[string]interface{}, data map[string]interface{}) *
 
 // Resolve processes all the given ExpressionFields and resolves their CEL expressions.
 // It returns a ResolutionSummary containing information about the resolution process.
-func (r *Resolver) Resolve(expressions []celextractor.ExpressionField) ResolutionSummary {
+func (r *Resolver) Resolve(expressions []parser.ExpressionField) ResolutionSummary {
 	summary := ResolutionSummary{
 		TotalExpressions: len(expressions),
 		Results:          make([]ResolutionResult, 0, len(expressions)),
@@ -82,7 +82,7 @@ func (r *Resolver) Resolve(expressions []celextractor.ExpressionField) Resolutio
 // resolveField handles the resolution of a single ExpressionField (one field) in
 // the resource. It returns a ResolutionResult containing information about the
 // resolution process
-func (r *Resolver) resolveField(field celextractor.ExpressionField) ResolutionResult {
+func (r *Resolver) resolveField(field parser.ExpressionField) ResolutionResult {
 	result := ResolutionResult{
 		Path:     field.Path,
 		Original: fmt.Sprintf("%v", field.Expressions),

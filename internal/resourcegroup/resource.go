@@ -14,12 +14,11 @@
 package resourcegroup
 
 import (
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
-
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celextractor"
 )
 
 // Resource represents a resource in a resource group, it hholds
@@ -48,7 +47,7 @@ const (
 )
 
 type ResourceVariable struct {
-	celextractor.ExpressionField
+	parser.ExpressionField
 	Kind ResourceVariableKind
 }
 

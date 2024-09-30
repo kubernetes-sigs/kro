@@ -1,7 +1,7 @@
-# Cluster management using Symphony & ACK
-This example demonstrate how to manage a fleet of EKS clusters using Symphony, ACK, and ArgoCD -- it creates EKS clusters, and bootstraps them with the required add-ons
+# Amazon EKS cluster management using Symphony & ACK
+This example demonstrates how to manage a fleet of EKS clusters using Symphony, ACK, and ArgoCD -- it creates EKS clusters, and bootstraps them with the required add-ons
 
-A hub-spoke model is used in this example; a management cluster (hub) is created as part of the initial setup and the controllers needed for provisining and bootstrapping workload clusters (spokes) are installed on top.
+A hub-spoke model is used in this example; a management cluster (hub) is created as part of the initial setup and the controllers needed for provisioning and bootstrapping workload clusters (spokes) are installed on top.
 
 
 **NOTE:** As this example evolves, some of the instructions below will be detailed further (e.g. the creation of the management cluster), others (e.g. controllers installation) will be automated via the GitOps flow.
@@ -9,7 +9,7 @@ A hub-spoke model is used in this example; a management cluster (hub) is created
 ## Instructions
 ### Environment variables
 
-1. Use the snippet below to set environmenet variables. Replace the placeholders first (surrounded with`<>`):
+1. Use the snippet below to set environment variables. Replace the placeholders first (surrounded with`<>`):
 ```sh
 export SYMPHONY_REPO_URL="https://github.com/aws-controllers-k8s/private-symphony.git"
 export WORKSPACE_PATH=<workspace-path> #the directory where repos will be cloned e.g. ~/environment/
@@ -46,7 +46,7 @@ git clone $SYMPHONY_REPO_URL $WORKSPACE_PATH/symphony
 
 9. Create the GitHub repo `cluster-mgmt` in your organization; it will contain the clusters definition, and it will be reconciled to the management cluster via the GitOps flow
 
-**NOTE:** Until Symphone is released, make sure the repo you create is private.
+**NOTE:** Until Symphony is released, make sure the repo you create is private.
 
 10. Save the URL of the created repo in an environment variable:
 ```sh

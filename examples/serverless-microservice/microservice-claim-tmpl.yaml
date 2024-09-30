@@ -4,11 +4,12 @@ metadata:
   name: $CLAIM_NAME
 spec:
   region: $AWS_REGION
-  namePrefix: test
-  apiName: my-api
-  apiDescription: Microservice that uses Amazon API Gateway and AWS Lambda
-  codeBucketName: $S3_BUCKET
-  logicLambdaCodeBucketKey: microservice-business-logic.zip
-  authorizerLambdaCodeBucketKey: microservice-authorizer.zip
-  authorizerPasswordParameterARN: $SECRET_ARN
-  lambdaRunTime: python3.10
+  namePrefix: api-example
+  api:
+    apiName: my-api
+    apiDescription: Microservice that uses Amazon API Gateway and AWS Lambda
+  lambda:
+    codeBucketName: $S3_BUCKET
+    logicLambdaCode: microservice-business-logic.zip
+    authorizerLambdaCode: microservice-authorizer.zip
+    authorizerPasswordParameterARN: $SECRET_ARN

@@ -14,6 +14,7 @@
 package parser
 
 import (
+	"reflect"
 	"testing"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -326,6 +327,281 @@ func TestTypeMismatches(t *testing.T) {
 			_, err := ParseResource(tc.resource, tc.schema)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ParseResource() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+func TestParseWithExpectedSchema(t *testing.T) {
+	resource := map[string]interface{}{
+		"stringField": "${string.value}",
+		"objectField": "${object.value}", // Entire object as a CEL expression
+		"nestedObjectField": map[string]interface{}{
+			"nestedString": "${nested.string}",
+			"nestedObject": map[string]interface{}{
+				"deepNested": "${deep.nested}",
+			},
+		},
+		"arrayField": []interface{}{
+			"${array[0]}",
+			map[string]interface{}{
+				"objectInArray": "${object.in.array}",
+			},
+		},
+	}
+
+	stringFieldSchema := spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"string"}}}
+	objectFieldSchema := spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"key1": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"key2": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+			},
+		},
+	}
+	nestedObjectFieldSchema := spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"nestedString": {
+					SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+				},
+				"nestedObject": {
+					SchemaProps: spec.SchemaProps{
+						Type: []string{"object"},
+						Properties: map[string]spec.Schema{
+							"deepNested": {
+								SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	arrayFieldSchema := spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"array"},
+			Items: &spec.SchemaOrArray{
+				Schema: &spec.Schema{
+					SchemaProps: spec.SchemaProps{
+						Type: []string{"object"},
+						Properties: map[string]spec.Schema{
+							"objectInArray": {
+								SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+							},
+						},
+						AdditionalProperties: &spec.SchemaOrBool{Allows: true},
+					},
+				},
+			},
+		},
+	}
+	nestedObjectNestedStringSchema := nestedObjectFieldSchema.Properties["nestedString"]
+	deepNestedSchema := nestedObjectFieldSchema.Properties["nestedObject"].Properties["deepNested"]
+	objectInArraySchema := arrayFieldSchema.Items.Schema.Properties["objectInArray"]
+
+	schema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"stringField":       stringFieldSchema,
+				"objectField":       objectFieldSchema,
+				"nestedObjectField": nestedObjectFieldSchema,
+				"arrayField":        arrayFieldSchema,
+			},
+		},
+	}
+
+	expressions, err := ParseResource(resource, schema)
+	if err != nil {
+		t.Fatalf("ParseResource() error = %v", err)
+	}
+
+	expectedExpressions := map[string]ExpressionField{
+		".stringField":                               {Path: ".stringField", Expressions: []string{"string.value"}, ExpectedType: "string", ExpectedSchema: &stringFieldSchema, OneShotCEL: true},
+		".objectField":                               {Path: ".objectField", Expressions: []string{"object.value"}, ExpectedType: "object", ExpectedSchema: &objectFieldSchema, OneShotCEL: true},
+		".nestedObjectField.nestedString":            {Path: ".nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", ExpectedSchema: &nestedObjectNestedStringSchema, OneShotCEL: true},
+		".nestedObjectField.nestedObject.deepNested": {Path: ".nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedType: "string", ExpectedSchema: &deepNestedSchema, OneShotCEL: true},
+		".arrayField[0]":                             {Path: ".arrayField[0]", Expressions: []string{"array[0]"}, ExpectedType: "object", ExpectedSchema: arrayFieldSchema.Items.Schema, OneShotCEL: true},
+		".arrayField[1].objectInArray":               {Path: ".arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedType: "string", ExpectedSchema: &objectInArraySchema, OneShotCEL: true},
+	}
+
+	if len(expressions) != len(expectedExpressions) {
+		t.Fatalf("Expected %d expressions, got %d", len(expectedExpressions), len(expressions))
+	}
+
+	for _, expr := range expressions {
+		expected, ok := expectedExpressions[expr.Path]
+		if !ok {
+			t.Errorf("Unexpected expression path: %s", expr.Path)
+			continue
+		}
+
+		if !reflect.DeepEqual(expr.Expressions, expected.Expressions) {
+			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, expected.Expressions, expr.Expressions)
+		}
+		if expr.ExpectedType != expected.ExpectedType {
+			t.Errorf("Path %s: expected type %s, got %s", expr.Path, expected.ExpectedType, expr.ExpectedType)
+		}
+		if expr.OneShotCEL != expected.OneShotCEL {
+			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.OneShotCEL, expr.OneShotCEL)
+		}
+		if !reflect.DeepEqual(expr.ExpectedSchema, expected.ExpectedSchema) {
+			t.Errorf("Path %s: schema mismatch", expr.Path)
+			t.Errorf("Expected schema: %+v", expected.ExpectedSchema)
+			t.Errorf("Got schema: %+v", expr.ExpectedSchema)
+		}
+
+		// remove the matched expression from the map
+		// NOTE(a-hilaly): since the object is a map, the order of the expressions is not guaranteed
+		// so we need to check if all the expected expressions are found.
+		delete(expectedExpressions, expr.Path)
+	}
+
+	// check if there are any expected expressions that weren't found
+	if len(expectedExpressions) > 0 {
+		for path := range expectedExpressions {
+			t.Errorf("expected expression not found: %s", path)
+		}
+	}
+}
+
+func TestParserEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name          string
+		schema        *spec.Schema
+		resource      interface{}
+		expectedError string
+	}{
+		{
+			name: "array missing Items.Schema and Properties",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type:  []string{"array"},
+					Items: &spec.SchemaOrArray{},
+				},
+			},
+			resource:      []interface{}{"test"},
+			expectedError: "invalid array schema for path : neither Items.Schema nor Properties are defined",
+		},
+		{
+			name: "Type mismatch: string/number",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"string"},
+				},
+			},
+			resource:      42,
+			expectedError: "unexpected type for path : int",
+		},
+		{
+			name: "Type mismatch: object/array",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+				},
+			},
+			resource:      []interface{}{"test"},
+			expectedError: "expected array type for path , got [test]",
+		},
+		{
+			name: "Type mismatch: bool/string",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"boolean"},
+				},
+			},
+			resource:      "true",
+			expectedError: "expected string type or AdditionalProperties allowed for path , got true",
+		},
+		{
+			name: "Type mismatch integer/float",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"integer"},
+				},
+			},
+			resource:      3.14,
+			expectedError: "expected integer type for path , got float64",
+		},
+		{
+			name: "Type mismatch: number/bool",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"number"},
+				},
+			},
+			resource:      true,
+			expectedError: "expected number type for path , got bool",
+		},
+		{
+			name: "Type mismatch: array/object",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"array"},
+					Items: &spec.SchemaOrArray{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"string"},
+							},
+						},
+					},
+				},
+			},
+			resource:      map[string]interface{}{"key": "value"},
+			expectedError: "expected object type or AdditionalProperties allowed for path , got map[key:value]",
+		},
+		{
+			name: "unknown property for object ..",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+					},
+				},
+			},
+			resource: map[string]interface{}{
+				"name":    "random parrot",
+				"surname": "the parrot",
+			},
+			expectedError: "error getting field schema for path .surname: schema not found for field surname",
+		},
+		{
+			name: "valid schema and resource - no error expected",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						"age":  {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+					},
+				},
+			},
+			resource: map[string]interface{}{
+				"name": "John",
+				"age":  30,
+			},
+			expectedError: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseResource(tc.resource, tc.schema, "")
+
+			if tc.expectedError == "" {
+				if err != nil {
+					t.Errorf("Expected no error, but got: %s", err.Error())
+				}
+			} else {
+				if err == nil {
+					t.Errorf("Expected error: %s, but got nil", tc.expectedError)
+				} else if err.Error() != tc.expectedError {
+					t.Errorf("Expected error: %s, but got: %s", tc.expectedError, err.Error())
+				}
 			}
 		})
 	}

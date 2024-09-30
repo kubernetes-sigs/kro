@@ -27,6 +27,7 @@ Dockerfile.cross
 
 symphony-controller
 symphony-chart*
+cover.htlm
 .read
 .snapshots
 .alpackages

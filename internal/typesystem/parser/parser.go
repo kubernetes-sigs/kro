@@ -57,129 +57,150 @@ func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema)
 // from a resource. It uses a depthh first search to traverse the resource and
 // extract expressions from string fields
 func parseResource(resource interface{}, schema *spec.Schema, path string) ([]ExpressionField, error) {
-	var expressionsFields []ExpressionField
-	if schema == nil {
-		return expressionsFields, fmt.Errorf("schema is nil for path %s", path)
+	if err := validateSchema(schema, path); err != nil {
+		return nil, err
 	}
 
-	if len(schema.Type) != 1 {
-		if len(schema.OneOf) > 0 {
-			// TODO: Handle oneOf
-			schema.Type = []string{schema.OneOf[0].Type[0]}
-		} else {
-			return nil, fmt.Errorf("found schema type that is not a single type: %v", schema.Type)
-		}
-	}
-
-	// Determine the expected type
-	expectedType := schema.Type[0]
-	if expectedType == "" && schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
-		expectedType = "any"
-	}
+	expectedType := getExpectedType(schema)
 
 	switch field := resource.(type) {
 	case map[string]interface{}:
-		if expectedType != "object" && (schema.AdditionalProperties == nil || !schema.AdditionalProperties.Allows) {
-			return nil, fmt.Errorf("expected object type or AdditionalProperties allowed for path %s, got %v", path, field)
-		}
-
-		for field, value := range field {
-			fieldSchema, err := getFieldSchema(schema, field)
-			if err != nil {
-				return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+field, err)
-			}
-			fieldPath := path + "." + field
-			fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
-			if err != nil {
-				return nil, err
-			}
-			expressionsFields = append(expressionsFields, fieldExpressions...)
-		}
+		return parseObject(field, schema, path, expectedType)
 	case []interface{}:
-		if expectedType != "array" {
-			return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
-		}
-		var itemSchema *spec.Schema
-
-		if schema.Items != nil && schema.Items.Schema != nil {
-			// case 1 - schema defined in Items.Schema
-			itemSchema = schema.Items.Schema
-		} else if schema.Items != nil && schema.Items.Schema != nil && len(schema.Items.Schema.Properties) > 0 {
-			// Case 2: schema defined in Properties
-			itemSchema = &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type:       []string{"object"},
-					Properties: schema.Properties,
-				},
-			}
-		} else {
-			// If neither Items.Schema nor Properties are defined, we can't proceed
-			return nil, fmt.Errorf("invalid array schema for path %s: neither Items.Schema nor Properties are defined", path)
-		}
-		for i, item := range field {
-			itemPath := fmt.Sprintf("%s[%d]", path, i)
-			itemExpressions, err := parseResource(item, itemSchema, itemPath)
-			if err != nil {
-				return nil, err
-			}
-			expressionsFields = append(expressionsFields, itemExpressions...)
-		}
+		return parseArray(field, schema, path, expectedType)
 	case string:
-		ok, err := isOneShotExpression(field)
+		return parseString(field, schema, path, expectedType)
+	default:
+		return parseScalarTypes(field, schema, path, expectedType)
+	}
+}
+
+func validateSchema(schema *spec.Schema, path string) error {
+	if schema == nil {
+		return fmt.Errorf("schema is nil for path %s", path)
+	}
+	if len(schema.Type) != 1 {
+		if len(schema.OneOf) > 0 {
+			schema.Type = []string{schema.OneOf[0].Type[0]}
+		} else {
+			return fmt.Errorf("found schema type that is not a single type: %v", schema.Type)
+		}
+	}
+	return nil
+}
+
+func getExpectedType(schema *spec.Schema) string {
+	if schema.Type[0] != "" {
+		return schema.Type[0]
+	}
+	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
+		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
+		// in the future; just haven't really thought about it yet.
+		// Basically "any" means that the field can be of any type, and we have to check
+		// the ExpectedSchema field.
+		return "any"
+	}
+	return ""
+}
+
+func parseObject(field map[string]interface{}, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+	if expectedType != "object" && (schema.AdditionalProperties == nil || !schema.AdditionalProperties.Allows) {
+		return nil, fmt.Errorf("expected object type or AdditionalProperties allowed for path %s, got %v", path, field)
+	}
+
+	var expressionsFields []ExpressionField
+	for fieldName, value := range field {
+		fieldSchema, err := getFieldSchema(schema, fieldName)
+		if err != nil {
+			return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+fieldName, err)
+		}
+		fieldPath := path + "." + fieldName
+		fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			expressionsFields = append(expressionsFields, ExpressionField{
-				Expressions:    []string{strings.Trim(field, "${}")},
-				ExpectedType:   expectedType,
-				ExpectedSchema: schema,
-				Path:           path,
-				OneShotCEL:     true,
-			})
-		} else {
-			if expectedType != "string" && expectedType != "any" {
-				return nil, fmt.Errorf("expected string type or AdditionalProperties allowed for path %s, got %v", path, field)
-			}
-			expressions, err := extractExpressions(field)
-			if err != nil {
-				return nil, err
-			}
-			if len(expressions) > 0 {
-				expressionsFields = append(expressionsFields, ExpressionField{
-					Expressions:  expressions,
-					ExpectedType: expectedType,
-					Path:         path,
-				})
-			}
-		}
-	default:
-		if expectedType == "any" {
-			return expressionsFields, nil
-		}
-		switch expectedType {
-		case "number":
-			if _, ok := field.(float64); !ok {
-				return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
-			}
-		case "integer":
-			_, isInt := field.(int)
-			_, isInt64 := field.(int64)
-			_, isInt32 := field.(int32)
+		expressionsFields = append(expressionsFields, fieldExpressions...)
+	}
+	return expressionsFields, nil
+}
 
-			if !isInt && !isInt64 && !isInt32 {
-				return nil, fmt.Errorf("expected integer type for path %s, got %T", path, field)
-			}
-		case "boolean":
-			if _, ok := field.(bool); !ok {
-				return nil, fmt.Errorf("expected boolean type for path %s, got %T", path, field)
-			}
-		default:
-			return nil, fmt.Errorf("unexpected type for path %s: %T", path, field)
-		}
+func parseArray(field []interface{}, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+	if expectedType != "array" {
+		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
 	}
 
+	itemSchema, err := getArrayItemSchema(schema, path)
+	if err != nil {
+		return nil, err
+	}
+
+	var expressionsFields []ExpressionField
+	for i, item := range field {
+		itemPath := fmt.Sprintf("%s[%d]", path, i)
+		itemExpressions, err := parseResource(item, itemSchema, itemPath)
+		if err != nil {
+			return nil, err
+		}
+		expressionsFields = append(expressionsFields, itemExpressions...)
+	}
 	return expressionsFields, nil
+}
+
+func parseString(field string, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+	ok, err := isOneShotExpression(field)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return []ExpressionField{{
+			Expressions:    []string{strings.Trim(field, "${}")},
+			ExpectedType:   expectedType,
+			ExpectedSchema: schema,
+			Path:           path,
+			OneShotCEL:     true,
+		}}, nil
+	}
+
+	if expectedType != "string" && expectedType != "any" {
+		return nil, fmt.Errorf("expected string type or AdditionalProperties allowed for path %s, got %v", path, field)
+	}
+
+	expressions, err := extractExpressions(field)
+	if err != nil {
+		return nil, err
+	}
+	if len(expressions) > 0 {
+		return []ExpressionField{{
+			Expressions:  expressions,
+			ExpectedType: expectedType,
+			Path:         path,
+		}}, nil
+	}
+	return nil, nil
+}
+
+func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+	if expectedType == "any" {
+		return nil, nil
+	}
+	// perform type checks for scalar types
+	switch expectedType {
+	case "number":
+		if _, ok := field.(float64); !ok {
+			return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
+		}
+	case "integer":
+		if !isInteger(field) {
+			return nil, fmt.Errorf("expected integer type for path %s, got %T", path, field)
+		}
+	case "boolean":
+		if _, ok := field.(bool); !ok {
+			return nil, fmt.Errorf("expected boolean type for path %s, got %T", path, field)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected type for path %s: %T", path, field)
+	}
+	return nil, nil
 }
 
 func getFieldSchema(schema *spec.Schema, field string) (*spec.Schema, error) {
@@ -191,13 +212,35 @@ func getFieldSchema(schema *spec.Schema, field string) (*spec.Schema, error) {
 
 	if schema.AdditionalProperties != nil {
 		if schema.AdditionalProperties.Schema != nil {
-			// If AdditionalProperties is defined with a schema, use that for all fields
 			return schema.AdditionalProperties.Schema, nil
 		} else if schema.AdditionalProperties.Allows {
-			// Need to handle this properly
 			return &spec.Schema{}, nil
 		}
 	}
 
 	return nil, fmt.Errorf("schema not found for field %s", field)
+}
+
+func getArrayItemSchema(schema *spec.Schema, path string) (*spec.Schema, error) {
+	if schema.Items != nil && schema.Items.Schema != nil {
+		return schema.Items.Schema, nil
+	}
+	if schema.Items != nil && schema.Items.Schema != nil && len(schema.Items.Schema.Properties) > 0 {
+		return &spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type:       []string{"object"},
+				Properties: schema.Properties,
+			},
+		}, nil
+	}
+	return nil, fmt.Errorf("invalid array schema for path %s: neither Items.Schema nor Properties are defined", path)
+}
+
+func isInteger(v interface{}) bool {
+	switch v.(type) {
+	case int, int64, int32:
+		return true
+	default:
+		return false
+	}
 }

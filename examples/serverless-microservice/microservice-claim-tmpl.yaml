@@ -1,0 +1,14 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: Microservice
+metadata:
+  name: $CLAIM_NAME
+spec:
+  region: $AWS_REGION
+  namePrefix: test
+  apiName: my-api
+  apiDescription: Microservice that uses Amazon API Gateway and AWS Lambda
+  codeBucketName: $S3_BUCKET
+  logicLambdaCodeBucketKey: microservice-business-logic.zip
+  authorizerLambdaCodeBucketKey: microservice-authorizer.zip
+  authorizerPasswordParameterARN: $SECRET_ARN
+  lambdaRunTime: python3.10

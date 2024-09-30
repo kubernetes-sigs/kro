@@ -358,6 +358,38 @@ var (
 			},
 		},
 	}
+	// additionalPrinterColumns specifies additional columns returned in Table output.
+	// See https://kubernetes.io/docs/reference/using-api/api-concepts/#receiving-resources-as-tables for details.
+	// Sample output for `kubectl get clusters`
+	//
+	// NAME            STATE    SYNCED   AGE
+	// testcluster29   ACTIVE   True     22d
+	defaultAdditionalPrinterColumns = []extv1.CustomResourceColumnDefinition{
+		// ResourceGroup instance state
+		{
+			Name:        "State",
+			Description: "The state of a ResourceGroup instance",
+			Priority:    0,
+			Type:        "string",
+			JSONPath:    ".status.state",
+		},
+		// ResourceGroup instance AllResourcesReady condition
+		{
+			Name:        "Synced",
+			Description: "Whether a ResourceGroup instance have all it's subresources ready",
+			Priority:    0,
+			Type:        "string",
+			JSONPath:    ".status.conditions[?(@.type==\"InstanceSynced\")].status",
+		},
+		// ResourceGroup instance age
+		{
+			Name:        "Age",
+			Description: "Age of the resource",
+			Priority:    0,
+			Type:        "date",
+			JSONPath:    ".metadata.creationTimestamp",
+		},
+	}
 )
 
 func JSONSchemaPropsToSpecSchema(jsonSchemaProps *apiextensions.JSONSchemaProps) (*spec.Schema, error) {
@@ -541,6 +573,7 @@ func newCRD(apiVersion, kind string, schema *extv1.JSONSchemaProps, ownerReferen
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
+					AdditionalPrinterColumns: defaultAdditionalPrinterColumns,
 				},
 			},
 		},

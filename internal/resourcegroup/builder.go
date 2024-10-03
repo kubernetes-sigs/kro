@@ -29,6 +29,8 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/celutil"
 	"github.com/aws-controllers-k8s/symphony/internal/dag"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/crd"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/schema"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/celinspector"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/emulator"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
@@ -38,7 +40,7 @@ import (
 func NewResourceGroupBuilder(
 	clientConfig *rest.Config,
 ) (*GraphBuilder, error) {
-	schemaResolver, err := newCombinedResolver(clientConfig)
+	schemaResolver, err := schema.NewCombinedResolver(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
 	}
@@ -72,6 +74,11 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	err := validateRGResourceNames(resourceGroupCR)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resourcegroup.spec.resources names: %w", err)
+	}
+
+	resourceNames := make([]string, 0, len(resourceGroupCR.Spec.Resources))
+	for _, rgResource := range resourceGroupCR.Spec.Resources {
+		resourceNames = append(resourceNames, rgResource.Name)
 	}
 
 	// Now that did a basic validation of the resource group, we can start understanding
@@ -205,7 +212,7 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	// express relationships between resources, and Symphony uses this information
 	// to build the dependency graph.
 
-	dag, resourceDependencies, runtimeVariables, err := b.buildDependencyGraph(resources, instance)
+	dag, resourceDependencies, runtimeVariables, err := b.buildDependencyGraph(resources)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
@@ -238,15 +245,21 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 		Resources:        resources,
 		RuntimeVariables: runtimeVariables,
 		TopologicalOrder: topologicalOrder,
+		ResourceNames:    resourceNames,
 	}
 	return resourceGroup, nil
 }
 
-func (b *GraphBuilder) validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
-	resourceNames := make([]string, 0, len(resources))
-	for resourceName := range resources {
-		resourceNames = append(resourceNames, resourceName)
+func getMapKeys[T comparable, K any](m map[T]K) []T {
+	keys := make([]T, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
+	return keys
+}
+
+func (b *GraphBuilder) validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
+	resourceNames := getMapKeys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "spec")
 
@@ -294,7 +307,6 @@ func (b *GraphBuilder) validateResourceCELExpressions(resources map[string]*Reso
 
 func (b *GraphBuilder) buildDependencyGraph(
 	resources map[string]*Resource,
-	_ *Resource,
 ) (
 	*dag.DirectedAcyclicGraph,
 	map[string][]string,
@@ -303,10 +315,7 @@ func (b *GraphBuilder) buildDependencyGraph(
 ) {
 	dependencyMap := make(map[string][]string)
 
-	resourceNames := make([]string, 0, len(resources))
-	for resourceName := range resources {
-		resourceNames = append(resourceNames, resourceName)
-	}
+	resourceNames := getMapKeys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "spec")
 
@@ -352,7 +361,7 @@ func (b *GraphBuilder) buildDependencyGraph(
 					if err := directedAcyclicGraph.AddEdge(resourceName, dependency); err != nil {
 						return nil, nil, nil, err
 					}
-					if !inStrings(dependency, dependencyMap[resourceName]) {
+					if !inSlice(dependency, dependencyMap[resourceName]) {
 						dependencyMap[resourceName] = append(dependencyMap[resourceName], dependency)
 					}
 				}
@@ -371,10 +380,7 @@ func (b *GraphBuilder) buildDependencyGraph(
 }
 
 func (b *GraphBuilder) extractDependencies(env *cel.Env, expression string, resources map[string]*Resource) ([]string, bool, error) {
-	resourceNames := make([]string, 0, len(resources))
-	for resourceName := range resources {
-		resourceNames = append(resourceNames, resourceName)
-	}
+	resourceNames := getMapKeys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "spec")
 
@@ -390,7 +396,7 @@ func (b *GraphBuilder) extractDependencies(env *cel.Env, expression string, reso
 	isStatic := true
 	dependencies := make([]string, 0)
 	for _, resource := range inspectionResult.ResourceDependencies {
-		if resource.Name != "spec" && !inStrings(resource.Name, dependencies) {
+		if resource.Name != "spec" && !inSlice(resource.Name, dependencies) {
 			isStatic = false
 			dependencies = append(dependencies, resource.Name)
 		}
@@ -438,12 +444,16 @@ func (b *GraphBuilder) buildInstanceResource(
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance status: %w", err)
 	}
 
-	instanceSchemaExt := newInstanceSchema(*instanceSpecSchema, *instanceStatusSchema)
-	instanceSchema, err := ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)
+	// Synthesize the CRD for the instance resource.
+	overrideStatusFields := true
+	instanceCRD := crd.SynthesizeCRD(apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields)
+
+	// Emulate the CRD
+	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
+	instanceSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert JSON schema to spec schema: %w", err)
 	}
-
 	emulatedInstance, err := b.resourceEmulator.GenerateDummyCR(gvk, instanceSchema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate dummy CR for instance: %w", err)
@@ -468,7 +478,7 @@ func (b *GraphBuilder) buildInstanceResource(
 		GroupVersionKind: gvk,
 		Schema:           instanceSchema,
 		SchemaExt:        instanceSchemaExt,
-		CRD:              newCRD(apiVersion, kind, instanceSchemaExt, ownerReference),
+		CRD:              instanceCRD,
 		EmulatedObject:   emulatedInstance,
 		Variables:        instanceVariables,
 	}
@@ -514,18 +524,19 @@ func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resour
 	}
 
 	// Inspection of the CEL expressions to infer the types of the status fields.
-	resourceNames := make([]string, 0, len(resources))
-	for resourceName := range resources {
-		resourceNames = append(resourceNames, resourceName)
-	}
+	resourceNames := getMapKeys(resources)
 
 	env, err := celutil.NewEnvironement(celutil.WithResourceNames(resourceNames))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
-	statusStructureParts := make([]StatusStructurePart, 0, len(extracted))
+	// statusStructureParts := make([]schema.FieldDescriptor, 0, len(extracted))
+	statusDryRunResults := make(map[string][]ref.Val, len(extracted))
 	for _, found := range extracted {
+		// For each expression in the extracted ExpressionField we need to dry-run
+		// the expression to infer the type of the status field.
+		evals := []ref.Val{}
 		for _, expr := range found.Expressions {
 			// we need to inspect the expression to understand how it relates to the
 			// resources defined in the resource group.
@@ -539,19 +550,12 @@ func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resour
 				return nil, nil, fmt.Errorf("failed to dry-run expression: %w", err)
 			}
 
-			schema, err := inferSchemaTypeFromValue(value)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to infer schema type: %w", err)
-			}
-
-			statusStructureParts = append(statusStructureParts, StatusStructurePart{
-				Path:   found.Path,
-				Schema: schema,
-			})
+			evals = append(evals, value)
 		}
+		statusDryRunResults[found.Path] = evals
 	}
 
-	statusSchema, err := buildJSONSchemaFromStatusStructure(statusStructureParts)
+	statusSchema, err := schema.GenerateSchemaFromEvals(statusDryRunResults)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build JSON schema from status structure: %w", err)
 	}
@@ -569,7 +573,7 @@ func (b *GraphBuilder) validateCELExpressionContext(env *cel.Env, expression str
 	}
 	// make sure that the expression refers to the resources defined in the resource group.
 	for _, resource := range inspectionResult.ResourceDependencies {
-		if !inStrings(resource.Name, resources) {
+		if !inSlice(resource.Name, resources) {
 			return fmt.Errorf("expression refers to unknown resource: %s", resource.Name)
 		}
 	}
@@ -577,7 +581,6 @@ func (b *GraphBuilder) validateCELExpressionContext(env *cel.Env, expression str
 }
 
 func (b *GraphBuilder) dryRunExpression(env *cel.Env, expression string, resources map[string]*Resource) (ref.Val, error) {
-
 	// The status schema is inferred from the CEL expressions in the status field.
 	ast, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
@@ -598,13 +601,4 @@ func (b *GraphBuilder) dryRunExpression(env *cel.Env, expression string, resourc
 		return nil, fmt.Errorf("failed to evaluate expression: %w", err)
 	}
 	return output, nil
-}
-
-func inStrings(s string, ss []string) bool {
-	for _, str := range ss {
-		if s == str {
-			return true
-		}
-	}
-	return false
 }

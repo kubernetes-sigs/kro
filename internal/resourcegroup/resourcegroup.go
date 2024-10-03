@@ -24,6 +24,8 @@ type ResourceGroup struct {
 
 	Instance *Resource
 
+	ResourceNames []string
+
 	Resources map[string]*Resource
 
 	RuntimeVariables map[string][]*RuntimeVariable
@@ -32,15 +34,19 @@ type ResourceGroup struct {
 }
 
 func (rg *ResourceGroup) DeepCopyRuntimeVariables() map[string][]*RuntimeVariable {
-	newMap := make(map[string][]*RuntimeVariable)
+	newMap := make(map[string][]*RuntimeVariable, len(rg.RuntimeVariables))
 	for k, v := range rg.RuntimeVariables {
 		newMap[k] = make([]*RuntimeVariable, len(v))
 		for i, variable := range v {
+			dependencies := make([]string, len(variable.Dependencies))
+			copy(dependencies, variable.Dependencies)
+
 			newMap[k][i] = &RuntimeVariable{
-				Expression:   variable.Expression,
-				Dependencies: variable.Dependencies,
-				Kind:         variable.Kind,
-				Resolved:     variable.Resolved,
+				Expression:    variable.Expression,
+				Dependencies:  dependencies,
+				Kind:          variable.Kind,
+				Resolved:      variable.Resolved,
+				ResolvedValue: nil,
 			}
 		}
 	}

@@ -129,10 +129,7 @@ func (rt *RuntimeResourceGroup) ResolveDynamicVariables() error {
 	// let's iterate over any resolved resource and try to resolve
 	// the dynamic variables that depend on it.
 
-	resolvedResources := make([]string, 0, len(rt.ResolvedResources))
-	for name := range rt.ResolvedResources {
-		resolvedResources = append(resolvedResources, name)
-	}
+	resolvedResources := getMapKeys(rt.ResolvedResources)
 	env, err := celutil.NewEnvironement(&celutil.EnvironementOptions{
 		ResourceNames: resolvedResources,
 	})
@@ -187,24 +184,6 @@ func (rt *RuntimeResourceGroup) ResolveDynamicVariables() error {
 	return nil
 }
 
-func inSlice(element string, slice []string) bool {
-	for _, e := range slice {
-		if e == element {
-			return true
-		}
-	}
-	return false
-}
-
-func elementsInSlice(elements []string, slice []string) bool {
-	for _, element := range elements {
-		if !inSlice(element, slice) {
-			return false
-		}
-	}
-	return true
-}
-
 func (rt *RuntimeResourceGroup) ResolveInstanceStatus() error {
 	rs := resolver.NewResolver(rt.Instance.Object, map[string]interface{}{})
 	for _, v := range rt.ResourceGroup.Instance.Variables {
@@ -245,4 +224,22 @@ func (rt *RuntimeResourceGroup) ResolveResource(resource string) error {
 		return fmt.Errorf("failed to resolve resource %s: %v", resource, summary.Errors)
 	}
 	return nil
+}
+
+func inSlice[K comparable](element K, slice []K) bool {
+	for _, e := range slice {
+		if e == element {
+			return true
+		}
+	}
+	return false
+}
+
+func elementsInSlice[K comparable](elements []K, slice []K) bool {
+	for _, element := range elements {
+		if !inSlice(element, slice) {
+			return false
+		}
+	}
+	return true
 }

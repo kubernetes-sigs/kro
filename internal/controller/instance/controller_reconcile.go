@@ -102,11 +102,6 @@ func (igr *InstanceGraphReconciler) Reconcile(ctx context.Context) error {
 	if isDeleteEvent {
 		igr.log.V(1).Info("Handling instance deletion", "deletionTimestamp", instance.GetDeletionTimestamp())
 		reconcileErr = igr.handleInstanceDeletion(ctx, resourceStates)
-		if reconcileErr == nil {
-			instanceState = "DELETED"
-		} else {
-			instanceState = "ERROR"
-		}
 		return reconcileErr
 	}
 

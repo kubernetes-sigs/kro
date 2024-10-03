@@ -24,19 +24,27 @@ var (
 	regex = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
 	// reservedKeyWords is a list of reserved words in Symphony.
 	reservedKeyWords = []string{
-		"resourcegroup",
-		"instance",
-		"resource",
-		"resources",
-		"metadata",
-		"spec",
-		"status",
-		"kind",
 		"apiVersion",
+		"externalRef",
+		"externalReference",
+		"externalRefs",
+		"externalReferences",
+		"dependency",
+		"dependencies",
+		"graph",
+		"instance",
+		"kind",
+		"metadata",
 		"namespace",
 		"object",
+		"resource",
+		"resourcegroup",
+		"resources",
 		"runtime",
 		"serviceAccountName",
+		"spec",
+		"status",
+		"variables",
 	}
 )
 

@@ -73,7 +73,7 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&allowCRDDeletion, "delete-crds", true, "allow symphony to delete CRDs")
+	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow symphony to delete CRDs")
 	flag.IntVar(&resourceGroupConcurrentReconciles, "resource-group-concurrent-reconciles", 1, "The number of resource group reconciles to run in parallel")
 	flag.IntVar(&dynamicControllerConcurrentReconciles, "dynamic-controller-concurrent-reconciles", 1, "The number of dynamic controller reconciles to run in parallel")
 	// log level flags

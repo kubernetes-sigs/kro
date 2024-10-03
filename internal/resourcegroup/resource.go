@@ -14,7 +14,6 @@
 package resourcegroup
 
 import (
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,18 +36,6 @@ type Resource struct {
 	Variables []*ResourceVariable
 
 	Dependencies []string
-}
-
-type ResourceVariableKind string
-
-const (
-	ResourceVariableKindStatic  ResourceVariableKind = "static"
-	ResourceVariableKindDynamic ResourceVariableKind = "dynamic"
-)
-
-type ResourceVariable struct {
-	parser.ExpressionField
-	Kind ResourceVariableKind
 }
 
 func (r *Resource) HasDependency(dep string) bool {

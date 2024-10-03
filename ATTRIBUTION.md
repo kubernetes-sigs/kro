@@ -28,14 +28,12 @@ License version 2.0, we include the full text of the package's License below.
 * `go.uber.org/zap`
 * `golang.org/x/time`
 * `google.golang.org/genproto/googleapis/api`
-* `gopkg.in/yaml.v2`
 * `k8s.io/api`
 * `k8s.io/apiextensions-apiserver`
 * `k8s.io/apimachinery`
 * `k8s.io/apiserver`
 * `k8s.io/client-go`
 * `k8s.io/kube-openapi`
-* `k8s.io/utils`
 * `sigs.k8s.io/controller-runtime`
 
 ### github.com/go-logr/logr
@@ -1056,8 +1054,6 @@ Subdependencies:
 #### google.golang.org/grpc
 
 Apache License version 2.0
-
-
 
 ### k8s.io/api
 
@@ -3005,8 +3001,6 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
 
 ### sigs.k8s.io/controller-runtime
 

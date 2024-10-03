@@ -138,6 +138,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		runtime:                     rgRuntime,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
+		reconcileConfig:             c.reconcileConfig,
 	}
 	return graphExecReconciler.Reconcile(ctx)
 }

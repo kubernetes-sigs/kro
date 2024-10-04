@@ -23,6 +23,6 @@ const (
 )
 
 type ResourceVariable struct {
-	parser.ExpressionField
+	parser.CELField
 	Kind ResourceVariableKind
 }

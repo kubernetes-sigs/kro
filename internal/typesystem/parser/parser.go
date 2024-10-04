@@ -20,28 +20,6 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// ExpressionField represents a field that contains CEL expressions
-// and the expected type of the field. The field may contain multiple
-// expressions.
-type ExpressionField struct {
-	// Path is the path of the field in the resource (JSONPath-like)
-	// example: spec.template.spec.containers[0].env[0].value
-	// Since the object's we're dealing with are mainly made up of maps,
-	// arrays and native types, we can use a string to represent the path.
-	Path string
-	// Expressions is a list of CEL expressions in the field.
-	Expressions []string
-	// ExpectedType is the expected type of the field.
-	ExpectedType string
-	// ExpectedSchema is the expected schema of the field if it is a complex type.
-	// This is only set if the field is a OneShotCEL expression, and the schema
-	// is expected to be a complex type (object or array).
-	ExpectedSchema *spec.Schema
-	// OneShotCEL is true if the field contains a single CEL expression
-	// that is not part of a larger string. example: "${foo}" vs "hello-${foo}"
-	OneShotCEL bool
-}
-
 // ParseResource extracts CEL expressions from a resource based on
 // the schema. The resource is expected to be a map[string]interface{}.
 //
@@ -49,14 +27,14 @@ type ExpressionField struct {
 // and return an error if the resource does not match the schema. When CEL
 // expressions are found, they are extracted and returned with the expected
 // type of the field (inferred from the schema).
-func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]ExpressionField, error) {
+func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]CELField, error) {
 	return parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depthh first search to traverse the resource and
 // extract expressions from string fields
-func parseResource(resource interface{}, schema *spec.Schema, path string) ([]ExpressionField, error) {
+func parseResource(resource interface{}, schema *spec.Schema, path string) ([]CELField, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -103,12 +81,12 @@ func getExpectedType(schema *spec.Schema) string {
 	return ""
 }
 
-func parseObject(field map[string]interface{}, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+func parseObject(field map[string]interface{}, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
 	if expectedType != "object" && (schema.AdditionalProperties == nil || !schema.AdditionalProperties.Allows) {
 		return nil, fmt.Errorf("expected object type or AdditionalProperties allowed for path %s, got %v", path, field)
 	}
 
-	var expressionsFields []ExpressionField
+	var expressionsFields []CELField
 	for fieldName, value := range field {
 		fieldSchema, err := getFieldSchema(schema, fieldName)
 		if err != nil {
@@ -124,7 +102,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path, expect
 	return expressionsFields, nil
 }
 
-func parseArray(field []interface{}, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+func parseArray(field []interface{}, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
 	if expectedType != "array" {
 		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
 	}
@@ -134,7 +112,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path, expectedType str
 		return nil, err
 	}
 
-	var expressionsFields []ExpressionField
+	var expressionsFields []CELField
 	for i, item := range field {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
 		itemExpressions, err := parseResource(item, itemSchema, itemPath)
@@ -146,18 +124,18 @@ func parseArray(field []interface{}, schema *spec.Schema, path, expectedType str
 	return expressionsFields, nil
 }
 
-func parseString(field string, schema *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+func parseString(field string, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
 	ok, err := isOneShotExpression(field)
 	if err != nil {
 		return nil, err
 	}
 	if ok {
-		return []ExpressionField{{
-			Expressions:    []string{strings.Trim(field, "${}")},
-			ExpectedType:   expectedType,
-			ExpectedSchema: schema,
-			Path:           path,
-			OneShotCEL:     true,
+		return []CELField{{
+			Expressions:          []string{strings.Trim(field, "${}")},
+			ExpectedType:         expectedType,
+			ExpectedSchema:       schema,
+			Path:                 path,
+			StandaloneExpression: true,
 		}}, nil
 	}
 
@@ -170,7 +148,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		return []ExpressionField{{
+		return []CELField{{
 			Expressions:  expressions,
 			ExpectedType: expectedType,
 			Path:         path,
@@ -179,7 +157,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 	return nil, nil
 }
 
-func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]ExpressionField, error) {
+func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]CELField, error) {
 	if expectedType == "any" {
 		return nil, nil
 	}

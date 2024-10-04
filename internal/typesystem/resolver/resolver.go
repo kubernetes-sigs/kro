@@ -59,7 +59,7 @@ func NewResolver(resource map[string]interface{}, data map[string]interface{}) *
 
 // Resolve processes all the given ExpressionFields and resolves their CEL expressions.
 // It returns a ResolutionSummary containing information about the resolution process.
-func (r *Resolver) Resolve(expressions []parser.ExpressionField) ResolutionSummary {
+func (r *Resolver) Resolve(expressions []parser.CELField) ResolutionSummary {
 	summary := ResolutionSummary{
 		TotalExpressions: len(expressions),
 		Results:          make([]ResolutionResult, 0, len(expressions)),
@@ -82,7 +82,7 @@ func (r *Resolver) Resolve(expressions []parser.ExpressionField) ResolutionSumma
 // resolveField handles the resolution of a single ExpressionField (one field) in
 // the resource. It returns a ResolutionResult containing information about the
 // resolution process
-func (r *Resolver) resolveField(field parser.ExpressionField) ResolutionResult {
+func (r *Resolver) resolveField(field parser.CELField) ResolutionResult {
 	result := ResolutionResult{
 		Path:     field.Path,
 		Original: fmt.Sprintf("%v", field.Expressions),
@@ -96,7 +96,7 @@ func (r *Resolver) resolveField(field parser.ExpressionField) ResolutionResult {
 		return result
 	}
 
-	if field.OneShotCEL {
+	if field.StandaloneExpression {
 		resolvedValue, ok := r.data[strings.Trim(field.Expressions[0], "${}")]
 		if !ok {
 			result.Error = fmt.Errorf("no data provided for expression: %s", field.Expressions[0])

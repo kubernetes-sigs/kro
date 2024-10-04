@@ -20,15 +20,15 @@ import (
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful
 // when the schema is not available. e.g RGI statuses
-func ParseSchemalessResource(resource map[string]interface{}) ([]ExpressionField, error) {
+func ParseSchemalessResource(resource map[string]interface{}) ([]CELField, error) {
 	return parseSchemalessResource(resource, "")
 }
 
 // parseSchemalessResource is a helper function that recursively
 // extracts expressions from a resource. It uses a depth first search to traverse
 // the resource and extract expressions from string fields
-func parseSchemalessResource(resource interface{}, path string) ([]ExpressionField, error) {
-	var expressionsFields []ExpressionField
+func parseSchemalessResource(resource interface{}, path string) ([]CELField, error) {
+	var expressionsFields []CELField
 	switch field := resource.(type) {
 	case map[string]interface{}:
 		for field, value := range field {
@@ -54,11 +54,11 @@ func parseSchemalessResource(resource interface{}, path string) ([]ExpressionFie
 			return nil, err
 		}
 		if ok {
-			expressionsFields = append(expressionsFields, ExpressionField{
-				Expressions:  []string{strings.Trim(field, "${}")},
-				ExpectedType: "any",
-				Path:         path,
-				OneShotCEL:   true,
+			expressionsFields = append(expressionsFields, CELField{
+				Expressions:          []string{strings.Trim(field, "${}")},
+				ExpectedType:         "any",
+				Path:                 path,
+				StandaloneExpression: true,
 			})
 		} else {
 			expressions, err := extractExpressions(field)
@@ -66,7 +66,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]ExpressionFie
 				return nil, err
 			}
 			if len(expressions) > 0 {
-				expressionsFields = append(expressionsFields, ExpressionField{
+				expressionsFields = append(expressionsFields, CELField{
 					Expressions:  expressions,
 					ExpectedType: "any",
 					Path:         path,

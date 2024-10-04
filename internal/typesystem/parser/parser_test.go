@@ -81,16 +81,16 @@ func TestParseResource(t *testing.T) {
 			},
 		}
 
-		expectedExpressions := []ExpressionField{
-			{Path: ".stringField", Expressions: []string{"string.value"}, ExpectedType: "string", OneShotCEL: true},
-			{Path: ".intField", Expressions: []string{"int.value"}, ExpectedType: "integer", OneShotCEL: true},
-			{Path: ".boolField", Expressions: []string{"bool.value"}, ExpectedType: "boolean", OneShotCEL: true},
-			{Path: ".nestedObject.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", OneShotCEL: true},
-			{Path: ".nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, ExpectedType: "string", OneShotCEL: false},
-			{Path: ".simpleArray[0]", Expressions: []string{"array[0]"}, ExpectedType: "string", OneShotCEL: true},
-			{Path: ".simpleArray[1]", Expressions: []string{"array[1]"}, ExpectedType: "string", OneShotCEL: true},
-			{Path: ".mapField.key1", Expressions: []string{"map.key1"}, ExpectedType: "string", OneShotCEL: true},
-			{Path: ".mapField.key2", Expressions: []string{"map.key2"}, ExpectedType: "string", OneShotCEL: true},
+		expectedExpressions := []CELField{
+			{Path: ".stringField", Expressions: []string{"string.value"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: ".intField", Expressions: []string{"int.value"}, ExpectedType: "integer", StandaloneExpression: true},
+			{Path: ".boolField", Expressions: []string{"bool.value"}, ExpectedType: "boolean", StandaloneExpression: true},
+			{Path: ".nestedObject.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: ".nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, ExpectedType: "string", StandaloneExpression: false},
+			{Path: ".simpleArray[0]", Expressions: []string{"array[0]"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: ".simpleArray[1]", Expressions: []string{"array[1]"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: ".mapField.key1", Expressions: []string{"map.key1"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: ".mapField.key2", Expressions: []string{"map.key2"}, ExpectedType: "string", StandaloneExpression: true},
 		}
 
 		expressions, err := ParseResource(resource, schema)
@@ -418,13 +418,13 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		t.Fatalf("ParseResource() error = %v", err)
 	}
 
-	expectedExpressions := map[string]ExpressionField{
-		".stringField":                               {Path: ".stringField", Expressions: []string{"string.value"}, ExpectedType: "string", ExpectedSchema: &stringFieldSchema, OneShotCEL: true},
-		".objectField":                               {Path: ".objectField", Expressions: []string{"object.value"}, ExpectedType: "object", ExpectedSchema: &objectFieldSchema, OneShotCEL: true},
-		".nestedObjectField.nestedString":            {Path: ".nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", ExpectedSchema: &nestedObjectNestedStringSchema, OneShotCEL: true},
-		".nestedObjectField.nestedObject.deepNested": {Path: ".nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedType: "string", ExpectedSchema: &deepNestedSchema, OneShotCEL: true},
-		".arrayField[0]":                             {Path: ".arrayField[0]", Expressions: []string{"array[0]"}, ExpectedType: "object", ExpectedSchema: arrayFieldSchema.Items.Schema, OneShotCEL: true},
-		".arrayField[1].objectInArray":               {Path: ".arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedType: "string", ExpectedSchema: &objectInArraySchema, OneShotCEL: true},
+	expectedExpressions := map[string]CELField{
+		".stringField":                               {Path: ".stringField", Expressions: []string{"string.value"}, ExpectedType: "string", ExpectedSchema: &stringFieldSchema, StandaloneExpression: true},
+		".objectField":                               {Path: ".objectField", Expressions: []string{"object.value"}, ExpectedType: "object", ExpectedSchema: &objectFieldSchema, StandaloneExpression: true},
+		".nestedObjectField.nestedString":            {Path: ".nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", ExpectedSchema: &nestedObjectNestedStringSchema, StandaloneExpression: true},
+		".nestedObjectField.nestedObject.deepNested": {Path: ".nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedType: "string", ExpectedSchema: &deepNestedSchema, StandaloneExpression: true},
+		".arrayField[0]":                             {Path: ".arrayField[0]", Expressions: []string{"array[0]"}, ExpectedType: "object", ExpectedSchema: arrayFieldSchema.Items.Schema, StandaloneExpression: true},
+		".arrayField[1].objectInArray":               {Path: ".arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedType: "string", ExpectedSchema: &objectInArraySchema, StandaloneExpression: true},
 	}
 
 	if len(expressions) != len(expectedExpressions) {
@@ -444,8 +444,8 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		if expr.ExpectedType != expected.ExpectedType {
 			t.Errorf("Path %s: expected type %s, got %s", expr.Path, expected.ExpectedType, expr.ExpectedType)
 		}
-		if expr.OneShotCEL != expected.OneShotCEL {
-			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.OneShotCEL, expr.OneShotCEL)
+		if expr.StandaloneExpression != expected.StandaloneExpression {
+			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.StandaloneExpression, expr.StandaloneExpression)
 		}
 		if !reflect.DeepEqual(expr.ExpectedSchema, expected.ExpectedSchema) {
 			t.Errorf("Path %s: schema mismatch", expr.Path)

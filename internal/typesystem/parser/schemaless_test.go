@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-func compareExpressionFields(a, b []ExpressionField) bool {
+func compareExpressionFields(a, b []CELField) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -30,7 +30,7 @@ func compareExpressionFields(a, b []ExpressionField) bool {
 		if !equalStrings(a[i].Expressions, b[i].Expressions) ||
 			a[i].ExpectedType != b[i].ExpectedType ||
 			a[i].Path != b[i].Path ||
-			a[i].OneShotCEL != b[i].OneShotCEL {
+			a[i].StandaloneExpression != b[i].StandaloneExpression {
 			return false
 		}
 	}
@@ -41,7 +41,7 @@ func TestParseSchemalessResource(t *testing.T) {
 	tests := []struct {
 		name     string
 		resource map[string]interface{}
-		want     []ExpressionField
+		want     []CELField
 		wantErr  bool
 	}{
 		{
@@ -49,12 +49,12 @@ func TestParseSchemalessResource(t *testing.T) {
 			resource: map[string]interface{}{
 				"field": "${resource.value}",
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"resource.value"},
-					ExpectedType: "any",
-					Path:         ".field",
-					OneShotCEL:   true,
+					Expressions:          []string{"resource.value"},
+					ExpectedType:         "any",
+					Path:                 ".field",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -66,12 +66,12 @@ func TestParseSchemalessResource(t *testing.T) {
 					"inner": "${nested.value}",
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"nested.value"},
-					ExpectedType: "any",
-					Path:         ".outer.inner",
-					OneShotCEL:   true,
+					Expressions:          []string{"nested.value"},
+					ExpectedType:         "any",
+					Path:                 ".outer.inner",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -84,18 +84,18 @@ func TestParseSchemalessResource(t *testing.T) {
 					"${array[1]}",
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"array[0]"},
-					ExpectedType: "any",
-					Path:         ".array[0]",
-					OneShotCEL:   true,
+					Expressions:          []string{"array[0]"},
+					ExpectedType:         "any",
+					Path:                 ".array[0]",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"array[1]"},
-					ExpectedType: "any",
-					Path:         ".array[1]",
-					OneShotCEL:   true,
+					Expressions:          []string{"array[1]"},
+					ExpectedType:         "any",
+					Path:                 ".array[1]",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -105,7 +105,7 @@ func TestParseSchemalessResource(t *testing.T) {
 			resource: map[string]interface{}{
 				"field": "Start ${expr1} middle ${expr2} end",
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
 					Expressions:  []string{"expr1", "expr2"},
 					ExpectedType: "any",
@@ -127,18 +127,18 @@ func TestParseSchemalessResource(t *testing.T) {
 					},
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"string.value"},
-					ExpectedType: "any",
-					Path:         ".string",
-					OneShotCEL:   true,
+					Expressions:          []string{"string.value"},
+					ExpectedType:         "any",
+					Path:                 ".string",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"array.value"},
-					ExpectedType: "any",
-					Path:         ".nested.array[0]",
-					OneShotCEL:   true,
+					Expressions:          []string{"array.value"},
+					ExpectedType:         "any",
+					Path:                 ".nested.array[0]",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -146,7 +146,7 @@ func TestParseSchemalessResource(t *testing.T) {
 		{
 			name:     "Empty resource",
 			resource: map[string]interface{}{},
-			want:     []ExpressionField{},
+			want:     []CELField{},
 			wantErr:  false,
 		},
 		{
@@ -177,7 +177,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		resource map[string]interface{}
-		want     []ExpressionField
+		want     []CELField
 		wantErr  bool
 	}{
 		{
@@ -191,12 +191,12 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"deeply.nested.value"},
-					ExpectedType: "any",
-					Path:         ".level1.level2.level3.level4",
-					OneShotCEL:   true,
+					Expressions:          []string{"deeply.nested.value"},
+					ExpectedType:         "any",
+					Path:                 ".level1.level2.level3.level4",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -213,18 +213,18 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"expr1"},
-					ExpectedType: "any",
-					Path:         ".array[0]",
-					OneShotCEL:   true,
+					Expressions:          []string{"expr1"},
+					ExpectedType:         "any",
+					Path:                 ".array[0]",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"expr2"},
-					ExpectedType: "any",
-					Path:         ".array[3].nested",
-					OneShotCEL:   true,
+					Expressions:          []string{"expr2"},
+					ExpectedType:         "any",
+					Path:                 ".array[3].nested",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -235,18 +235,18 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"empty1": "${}",
 				"empty2": "${    }",
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{""},
-					ExpectedType: "any",
-					Path:         ".empty1",
-					OneShotCEL:   true,
+					Expressions:          []string{""},
+					ExpectedType:         "any",
+					Path:                 ".empty1",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"    "},
-					ExpectedType: "any",
-					Path:         ".empty2",
-					OneShotCEL:   true,
+					Expressions:          []string{"    "},
+					ExpectedType:         "any",
+					Path:                 ".empty2",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -258,7 +258,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"incomplete2": "incomplete}",
 				"incomplete3": "$not_an_expression",
 			},
-			want:    []ExpressionField{},
+			want:    []CELField{},
 			wantErr: false,
 		},
 		{
@@ -285,18 +285,18 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []ExpressionField{
+			want: []CELField{
 				{
-					Expressions:  []string{"string.value"},
-					ExpectedType: "any",
-					Path:         ".string",
-					OneShotCEL:   true,
+					Expressions:          []string{"string.value"},
+					ExpectedType:         "any",
+					Path:                 ".string",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"array.value"},
-					ExpectedType: "any",
-					Path:         ".nested.array[0]",
-					OneShotCEL:   true,
+					Expressions:          []string{"array.value"},
+					ExpectedType:         "any",
+					Path:                 ".nested.array[0]",
+					StandaloneExpression: true,
 				},
 				{
 					Expressions:  []string{"expr1", "expr2"},
@@ -304,22 +304,22 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					Path:         ".complex.field",
 				},
 				{
-					Expressions:  []string{"nested.value"},
-					ExpectedType: "any",
-					Path:         ".complex.nested.inner",
-					OneShotCEL:   true,
+					Expressions:          []string{"nested.value"},
+					ExpectedType:         "any",
+					Path:                 ".complex.nested.inner",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"expr4"},
-					ExpectedType: "any",
-					Path:         ".complex.array[1]",
-					OneShotCEL:   true,
+					Expressions:          []string{"expr4"},
+					ExpectedType:         "any",
+					Path:                 ".complex.array[1]",
+					StandaloneExpression: true,
 				},
 				{
-					Expressions:  []string{"expr5"},
-					ExpectedType: "any",
-					Path:         ".complex.array[2]",
-					OneShotCEL:   true,
+					Expressions:          []string{"expr5"},
+					ExpectedType:         "any",
+					Path:                 ".complex.array[2]",
+					StandaloneExpression: true,
 				},
 			},
 		},

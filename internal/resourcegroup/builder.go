@@ -137,8 +137,8 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 		for _, celExpression := range celExpressions {
 			resourceVariables = append(resourceVariables, &ResourceVariable{
 				// Assume variables are static, we'll validate them later
-				Kind:            ResourceVariableKindStatic,
-				ExpressionField: celExpression,
+				Kind:     ResourceVariableKindStatic,
+				CELField: celExpression,
 			})
 		}
 
@@ -227,7 +227,7 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	instanceRuntimeVariables := []*RuntimeVariable{}
 	for _, variable := range instance.Variables {
 		instanceRuntimeVariables = append(instanceRuntimeVariables, &RuntimeVariable{
-			Expression:   variable.ExpressionField.Expressions[0],
+			Expression:   variable.CELField.Expressions[0],
 			Kind:         variable.Kind,
 			Dependencies: allResources,
 			Resolved:     false,
@@ -468,8 +468,8 @@ func (b *GraphBuilder) buildInstanceResource(
 		path := ".status" + statusVariable.Path
 		statusVariable.Path = path
 		instanceVariables = append(instanceVariables, &ResourceVariable{
-			Kind:            ResourceVariableKindDynamic,
-			ExpressionField: statusVariable,
+			Kind:     ResourceVariableKindDynamic,
+			CELField: statusVariable,
 		})
 	}
 
@@ -508,7 +508,7 @@ func (b *GraphBuilder) buildInstanceSpecSchema(definition *v1alpha1.Definition) 
 	return instanceSchema, nil
 }
 
-func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resources map[string]*Resource) (*extv1.JSONSchemaProps, []parser.ExpressionField, error) {
+func (b *GraphBuilder) buildStatusSchema(definition *v1alpha1.Definition, resources map[string]*Resource) (*extv1.JSONSchemaProps, []parser.CELField, error) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	unstructuredStatus := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(definition.Status.Raw, &unstructuredStatus)

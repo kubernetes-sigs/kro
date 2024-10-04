@@ -215,9 +215,9 @@ func (rt *RuntimeResourceGroup) ResolveResource(resource string) error {
 	}
 
 	rs := resolver.NewResolver(rt.Resources[resource].Object, exprValues)
-	exprFields := make([]parser.ExpressionField, len(rt.ResourceGroup.Resources[resource].Variables))
+	exprFields := make([]parser.CELField, len(rt.ResourceGroup.Resources[resource].Variables))
 	for i, v := range rt.ResourceGroup.Resources[resource].Variables {
-		exprFields[i] = v.ExpressionField
+		exprFields[i] = v.CELField
 	}
 	summary := rs.Resolve(exprFields)
 	if summary.Errors != nil {

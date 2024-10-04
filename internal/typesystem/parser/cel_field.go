@@ -12,29 +12,3 @@
 // permissions and limitations under the License.
 
 package parser
-
-import "k8s.io/kube-openapi/pkg/validation/spec"
-
-// CELField represents a field that contains CEL expressions in it. It
-// contains the path of the field in the resource, the CEL expressions
-// and the expected type of the field. The field may contain multiple
-// expressions.
-type CELField struct {
-	// Path is the path of the field in the resource (JSONPath-like)
-	// example: spec.template.spec.containers[0].env[0].value
-	// Since the object's we're dealing with are mainly made up of maps,
-	// arrays and native types, we can use a string to represent the path.
-	Path string
-	// Expressions is a list of CEL expressions in the field.
-	Expressions []string
-	// ExpectedType is the expected type of the field.
-	ExpectedType string
-	// ExpectedSchema is the expected schema of the field if it is a complex type.
-	// This is only set if the field is a OneShotCEL expression, and the schema
-	// is expected to be a complex type (object or array).
-	ExpectedSchema *spec.Schema
-	// StandaloneExpression is true if the field contains a single CEL expression
-	// that is not part of a larger string. example: "${foo}" is a standalone expression
-	// but not "hello-${foo}" or "${foo}${bar}"
-	StandaloneExpression bool
-}

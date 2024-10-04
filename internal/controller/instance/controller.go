@@ -27,7 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 )
 
 // ReconcileConfig holds configuration parameters for the recnociliation process.
@@ -76,7 +76,7 @@ type Controller struct {
 	// rg is a read-only reference to the ResourceGroup that the controller is
 	// managing instances for.
 	// TODO: use a read-only interface for the ResourceGroup
-	rg *resourcegroup.ResourceGroup
+	rg *graph.Graph
 	// instanceLabeler is responsible for applying consistent labels
 	// to resources managed by this controller.
 	instanceLabeler k8smetadata.Labeler
@@ -90,7 +90,7 @@ func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	rg *resourcegroup.ResourceGroup,
+	rg *graph.Graph,
 	client dynamic.Interface,
 	instanceLabeler k8smetadata.Labeler,
 ) *Controller {
@@ -104,7 +104,7 @@ func NewController(
 	}
 }
 
-// NewGraphExecReconciler is the main reconciliation loop for the Controller
+// Reconcile is a handler function that reconciles the instance and its sub-resources.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 	namespace, name := getNamespaceName(req)
 
@@ -120,7 +120,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		return nil
 	}
 
-	rgRuntime, err := c.rg.NewRuntime(instance)
+	// This is one of the main reasons why we're splitting the controller into
+	// two parts. The instanciator is responsible for creating a new runtime
+	// instance of the resource group. The instance graph reconciler is responsible
+	// for reconciling the instance and its sub-resources, while keeping the same
+	// runtime object in it's fields.
+	rgRuntime, err := c.rg.NewGraphRuntime(instance)
 	if err != nil {
 		return fmt.Errorf("failed to create runtime resource group: %w", err)
 	}
@@ -130,17 +135,16 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
 	}
 
-	graphExecReconciler := &InstanceGraphReconciler{
+	instanceGraphReconciler := &instanceGraphReconciler{
 		log:                         log,
 		gvr:                         c.gvr,
 		client:                      c.client,
-		rg:                          c.rg,
 		runtime:                     rgRuntime,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
 		reconcileConfig:             c.reconcileConfig,
 	}
-	return graphExecReconciler.Reconcile(ctx)
+	return instanceGraphReconciler.reconcile(ctx)
 }
 
 func getNamespaceName(req ctrl.Request) (string, string) {

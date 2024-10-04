@@ -28,26 +28,23 @@ import (
 
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
 	"github.com/aws-controllers-k8s/symphony/internal/requeue"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/runtime"
 )
 
-// InstanceGraphReconciler is responsible for reconciling a single instance and
+// instanceGraphReconciler is responsible for reconciling a single instance and
 // and its associated sub-resources. It executes the reconciliation logic based
 // on the graph inferred from the ResourceGroup analysis.
-type InstanceGraphReconciler struct {
+type instanceGraphReconciler struct {
 	log logr.Logger
 	// gvr represents the Group, Version, and Resource of the custom resource
 	// this controller is responsible for.
 	gvr schema.GroupVersionResource
 	// client is a dynamic client for interacting with the Kubernetes API server
 	client dynamic.Interface
-	// rg is a read-only representation of the ResourceGroup. TODO: should use
-	// a read-only interface instead..
-	rg *resourcegroup.ResourceGroup
 	// runtime is the runtime representation of the ResourceGroup. It holds the
 	// information about the instance and its sub-resources, the CEL expressions
 	// their dependencies, and the resolved values... etc
-	runtime *resourcegroup.RuntimeResourceGroup
+	runtime runtime.Interface
 	// instanceLabeler is responsible for applying labels to the instance object
 	instanceLabeler k8smetadata.Labeler
 	// instanceSubResourcesLabeler is responsible for applying labels to the
@@ -58,9 +55,9 @@ type InstanceGraphReconciler struct {
 	reconcileConfig ReconcileConfig
 }
 
-// Reconcile performs the reconciliation of the instance and its sub-resources.
-func (igr *InstanceGraphReconciler) Reconcile(ctx context.Context) error {
-	instance := igr.runtime.Instance
+// reconcile performs the reconciliation of the instance and its sub-resources.
+func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
+	instance := igr.runtime.GetInstance()
 	var reconcileErr error
 	isDeleteEvent := !instance.GetDeletionTimestamp().IsZero()
 	instanceState := "IN_PROGRESS"
@@ -91,13 +88,6 @@ func (igr *InstanceGraphReconciler) Reconcile(ctx context.Context) error {
 		}
 	}()
 
-	// Resolve static variables e.g all the ${spec.xxx} variables
-	igr.log.Info("Resolving static variables (instance spec fields)")
-	if err := igr.runtime.ResolveStaticVariables(); err != nil {
-		reconcileErr = fmt.Errorf("failed to resolve static variables: %w", err)
-		return reconcileErr
-	}
-
 	// handle deletion case
 	if isDeleteEvent {
 		igr.log.V(1).Info("Handling instance deletion", "deletionTimestamp", instance.GetDeletionTimestamp())
@@ -106,15 +96,15 @@ func (igr *InstanceGraphReconciler) Reconcile(ctx context.Context) error {
 	}
 
 	igr.log.V(1).Info("Reconciling instance", "instance", instance)
-	reconcileErr = igr.reconcile(ctx, resourceStates)
+	reconcileErr = igr.reconcileInstance(ctx, resourceStates)
 	if reconcileErr == nil {
 		instanceState = "ACTIVE"
 	}
 	return reconcileErr
 }
 
-func (igr *InstanceGraphReconciler) reconcile(ctx context.Context, resourceStates map[string]*ResourceState) error {
-	instance := igr.runtime.Instance
+func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context, resourceStates map[string]*ResourceState) error {
+	instance := igr.runtime.GetInstance()
 
 	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
 	if err != nil {
@@ -122,81 +112,74 @@ func (igr *InstanceGraphReconciler) reconcile(ctx context.Context, resourceState
 	}
 
 	if patched != nil {
-		igr.runtime.Instance.Object = patched.Object
+		instance.Object = patched.Object
 	}
 
 	igr.log.V(1).Info("Reconciling individual resources [following topological order]")
 
 	// Set all resources to PENDING state
-	for _, resourceID := range igr.rg.TopologicalOrder {
+	for _, resourceID := range igr.runtime.TopologicalOrder() {
 		resourceStates[resourceID] = &ResourceState{State: "PENDING"}
 	}
 
-	for _, resourceID := range igr.rg.TopologicalOrder {
+	for _, resourceID := range igr.runtime.TopologicalOrder() {
 		if err := igr.reconcileResource(ctx, resourceID, resourceStates); err != nil {
 			return err
 		}
 		// If the resource reconciled successfully, we can now resolve dynamic variables
 		// for the next resources.
-		if err := igr.runtime.ResolveDynamicVariables(); err != nil {
-			return err
+		_, err := igr.runtime.Synchronize()
+		if err != nil {
+			return fmt.Errorf("failed to synchronize resources: %w", err)
 		}
 	}
-
 	return nil
 }
 
-func (igr *InstanceGraphReconciler) getResourceNamespace(resourceID string) string {
-	rUnstructured := igr.runtime.Resources[resourceID]
-	namespace := rUnstructured.GetNamespace()
+func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) string {
+	instance := igr.runtime.GetInstance()
+	resource, _ := igr.runtime.GetResource(resourceID)
+
+	// Use the resource namespace if it is set
+	namespace := resource.GetNamespace()
 	if namespace == "" {
-		namespace = igr.runtime.Instance.GetNamespace()
+		// Use the instance namespace if the resource namespace is not set
+		namespace = instance.GetNamespace()
 	}
 	if namespace == "" {
+		// Use the default namespace if the instance namespace is not set
 		namespace = metav1.NamespaceDefault
 	}
 	return namespace
 }
 
-func (igr *InstanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
+func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
 	log := igr.log.WithValues("resourceID", resourceID)
 	log.V(1).Info("Reconciling resource")
 
 	resourceState := &ResourceState{State: "IN_PROGRESS"}
 	resourceStates[resourceID] = resourceState
 
-	if !igr.runtime.CanResolveResource(resourceID) {
-		log.V(1).Info("Resource dependencies not ready", "resource", resourceID)
-		resourceState.State = "PENDING"
-		resourceState.Err = fmt.Errorf("resource dependencies not ready")
-		return igr.delayedRequeue(resourceState.Err)
+	rUnstructured, state := igr.runtime.GetResource(resourceID)
+	if state != runtime.ResourceStateResolved {
+		return igr.delayedRequeue(fmt.Errorf("resource %s is not resolved: %v", resourceID, state))
 	}
 
-	if err := igr.runtime.ResolveResource(resourceID); err != nil {
-		resourceState.State = "ERROR"
-		resourceState.Err = fmt.Errorf("failed to resolve resource: %w", err)
-		return resourceState.Err
-	}
-
-	resourceMeta := igr.rg.Resources[resourceID]
-	rUnstructured := igr.runtime.Resources[resourceID]
-
-	gvr := k8smetadata.GVKtoGVR(resourceMeta.GroupVersionKind)
+	descriptor := igr.runtime.ResourceDescriptor(resourceID)
+	gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
 
 	var rc dynamic.ResourceInterface
 	var namespace string
-	if igr.rg.Resources[resourceID].Namespaced {
+	if descriptor.IsNamespaced() {
 		namespace = igr.getResourceNamespace(resourceID)
 		rc = igr.client.Resource(gvr).Namespace(namespace)
 	} else {
 		rc = igr.client.Resource(gvr)
-		namespace = ""
 	}
 
 	log.V(1).Info("Checking resource existence", "namespace", namespace, "name", rUnstructured.GetName())
 	observed, err := rc.Get(ctx, rUnstructured.GetName(), metav1.GetOptions{})
 	if err != nil {
-
 		if apierrors.IsNotFound(err) || strings.Contains(err.Error(), "the server could not find the requested resource") {
 			log.V(1).Info("Resource not found", "resource", resourceID, "err", err, "namespace", namespace, "name", rUnstructured.GetName())
 
@@ -212,7 +195,7 @@ func (igr *InstanceGraphReconciler) reconcileResource(ctx context.Context, resou
 		return resourceState.Err
 	}
 
-	igr.runtime.SetLatestResource(resourceID, observed)
+	igr.runtime.SetResource(resourceID, observed)
 
 	log.V(1).Info("Checking if resource is Ready", "resource", resourceID)
 	if ready, err := igr.runtime.IsResourceReady(resourceID); err != nil {
@@ -230,15 +213,15 @@ func (igr *InstanceGraphReconciler) reconcileResource(ctx context.Context, resou
 	return igr.updateResource(ctx, rc, rUnstructured, observed, resourceID, resourceState)
 }
 
-func (igr *InstanceGraphReconciler) createResource(ctx context.Context, rc dynamic.ResourceInterface, resource *unstructured.Unstructured, resourceID string, resourceState *ResourceState) error {
+func (igr *instanceGraphReconciler) createResource(ctx context.Context, rc dynamic.ResourceInterface, resource *unstructured.Unstructured, resourceID string, resourceState *ResourceState) error {
 	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
-	resource.SetOwnerReferences([]metav1.OwnerReference{
+	/* 	resource.SetOwnerReferences([]metav1.OwnerReference{
 		k8smetadata.NewInstanceOwnerReference(
 			igr.runtime.Instance.GroupVersionKind(),
 			igr.runtime.Instance.GetName(),
 			igr.runtime.Instance.GetUID(),
 		),
-	})
+	}) */
 
 	igr.log.V(1).Info("Creating resource", "resource", resourceID)
 
@@ -254,7 +237,13 @@ func (igr *InstanceGraphReconciler) createResource(ctx context.Context, rc dynam
 	return nil
 }
 
-func (igr *InstanceGraphReconciler) updateResource(ctx context.Context, rc dynamic.ResourceInterface, desired, observed *unstructured.Unstructured, resourceID string, resourceState *ResourceState) error {
+func (igr *instanceGraphReconciler) updateResource(
+	_ context.Context,
+	_ dynamic.ResourceInterface,
+	_, _ *unstructured.Unstructured,
+	resourceID string,
+	resourceState *ResourceState,
+) error {
 	igr.log.V(1).Info("Updating resource", "resource", resourceID)
 
 	// TODO: Implement some kind of diffing mechanism to determine if the resource needs to be updated
@@ -267,37 +256,28 @@ func (igr *InstanceGraphReconciler) updateResource(ctx context.Context, rc dynam
 	return nil
 }
 
-func (igr *InstanceGraphReconciler) handleInstanceDeletion(ctx context.Context, resourceStates map[string]*ResourceState) error {
-	igr.log.V(1).Info("Handling instance deletion")
-
-	instanceUnstructured := igr.runtime.Instance
+func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context, resourceStates map[string]*ResourceState) error {
+	instanceUnstructured := igr.runtime.GetInstance()
 
 	igr.log.V(1).Info("Getting all resources created by Symphony")
-	for _, resourceID := range igr.runtime.ResourceGroup.TopologicalOrder {
-		_ = igr.runtime.ResolveDynamicVariables()
-
-		resourceMeta := igr.rg.Resources[resourceID]
-		if !igr.runtime.CanResolveResource(resourceID) {
-			break
+	for _, resourceID := range igr.runtime.TopologicalOrder() {
+		_, err := igr.runtime.Synchronize()
+		if err != nil {
+			return fmt.Errorf("failed to synchronize resources: %w", err)
 		}
 
-		gvk := resourceMeta.GroupVersionKind
-		gvr := k8smetadata.GVKtoGVR(gvk)
-		if err := igr.runtime.ResolveResource(resourceID); err != nil {
-			resourceStates[resourceID] = &ResourceState{
-				State: "ERROR",
-				Err:   fmt.Errorf("failed to resolve resource %s: %w", resourceID, err),
-			}
-			return resourceStates[resourceID].Err
+		resource, state := igr.runtime.GetResource(resourceID)
+		if state != runtime.ResourceStateResolved {
+			continue
 		}
 
-		rUnstructured := igr.runtime.Resources[resourceID]
+		gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
 
-		rname := rUnstructured.GetName()
+		rname := resource.GetName()
 
 		rc := igr.client.Resource(gvr).Namespace(igr.getResourceNamespace(resourceID))
 		igr.log.V(1).Info("Checking if resource exists", "resource", resourceID)
-		latest, err := rc.Get(ctx, rname, metav1.GetOptions{})
+		observed, err := rc.Get(ctx, rname, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				igr.log.V(1).Info("Resource not found", "resource", resourceID)
@@ -315,8 +295,7 @@ func (igr *InstanceGraphReconciler) handleInstanceDeletion(ctx context.Context, 
 			return resourceStates[resourceID].Err
 		}
 
-		igr.runtime.SetLatestResource(resourceID, latest)
-		_ = igr.runtime.ResolveDynamicVariables()
+		igr.runtime.SetResource(resourceID, observed)
 		resourceStates[resourceID] = &ResourceState{
 			State: "PENDING_DELETION",
 			Err:   nil,
@@ -324,8 +303,8 @@ func (igr *InstanceGraphReconciler) handleInstanceDeletion(ctx context.Context, 
 	}
 
 	// Delete resources in reverse order
-	for i := len(igr.rg.TopologicalOrder) - 1; i >= 0; i-- {
-		resourceID := igr.rg.TopologicalOrder[i]
+	for i := len(igr.runtime.TopologicalOrder()) - 1; i >= 0; i-- {
+		resourceID := igr.runtime.TopologicalOrder()[i]
 		if resourceStates[resourceID] == nil {
 			continue
 		}
@@ -351,7 +330,7 @@ func (igr *InstanceGraphReconciler) handleInstanceDeletion(ctx context.Context, 
 		if err != nil {
 			return err
 		}
-		igr.runtime.Instance.Object = patched.Object
+		igr.runtime.SetInstance(patched)
 		return nil
 	} else {
 		// Requeue for continued deletion
@@ -359,12 +338,11 @@ func (igr *InstanceGraphReconciler) handleInstanceDeletion(ctx context.Context, 
 	}
 }
 
-func (igr *InstanceGraphReconciler) deleteResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
+func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
 	igr.log.V(1).Info("Deleting resource", "resource", resourceID)
 
-	resourceMeta := igr.rg.Resources[resourceID]
-	gvr := k8smetadata.GVKtoGVR(resourceMeta.GroupVersionKind)
-	rUnstructured := igr.runtime.Resources[resourceID]
+	gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
+	rUnstructured, _ := igr.runtime.GetResource(resourceID)
 
 	err := igr.client.Resource(gvr).Namespace(igr.getResourceNamespace(resourceID)).Delete(ctx, rUnstructured.GetName(), metav1.DeleteOptions{})
 	if err != nil {
@@ -386,10 +364,10 @@ func (igr *InstanceGraphReconciler) deleteResource(ctx context.Context, resource
 		State: "DELETING",
 		Err:   nil,
 	}
-	return nil
+	return igr.delayedRequeue(fmt.Errorf("deletion in progress"))
 }
 
-func (igr *InstanceGraphReconciler) setManaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
+func (igr *instanceGraphReconciler) setManaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
 	// if the instance is already managed, do nothing
 	if exist, _ := k8smetadata.HasInstanceFinalizerUnstructured(uObj, uid); exist {
 		return uObj, nil
@@ -412,7 +390,7 @@ func (igr *InstanceGraphReconciler) setManaged(ctx context.Context, uObj *unstru
 	return patched, nil
 }
 
-func (igr *InstanceGraphReconciler) setUnmanaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
+func (igr *instanceGraphReconciler) setUnmanaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
 	// if the instance is already unmanaged, do nothing
 	if exist, _ := k8smetadata.HasInstanceFinalizerUnstructured(uObj, uid); !exist {
 		return uObj, nil
@@ -433,6 +411,6 @@ func (igr *InstanceGraphReconciler) setUnmanaged(ctx context.Context, uObj *unst
 	return patched, nil
 }
 
-func (igr *InstanceGraphReconciler) delayedRequeue(err error) error {
+func (igr *instanceGraphReconciler) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, igr.reconcileConfig.DefaultRequeueDuration)
 }

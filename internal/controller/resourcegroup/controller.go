@@ -26,7 +26,7 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 )
 
 //+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups,verbs=get;list;watch;create;update;patch;delete
@@ -42,7 +42,7 @@ type ResourceGroupReconciler struct {
 	allowCRDDeletion  bool
 	crdManager        kubernetes.CRDManager
 	dynamicController *dynamiccontroller.DynamicController
-	rgBuilder         *resourcegroup.GraphBuilder
+	rgBuilder         *graph.Builder
 	metadataLabeler   k8smetadata.Labeler
 }
 
@@ -53,7 +53,7 @@ func NewResourceGroupReconciler(
 	allowCRDDeletion bool,
 	crdManager kubernetes.CRDManager,
 	dynamicController *dynamiccontroller.DynamicController,
-	builder *resourcegroup.GraphBuilder,
+	builder *graph.Builder,
 ) *ResourceGroupReconciler {
 	rgLogger := log.WithName("controller.resourceGroup")
 

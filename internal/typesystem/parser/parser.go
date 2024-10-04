@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
@@ -27,14 +28,14 @@ import (
 // and return an error if the resource does not match the schema. When CEL
 // expressions are found, they are extracted and returned with the expected
 // type of the field (inferred from the schema).
-func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]CELField, error) {
+func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
 	return parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depthh first search to traverse the resource and
 // extract expressions from string fields
-func parseResource(resource interface{}, schema *spec.Schema, path string) ([]CELField, error) {
+func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -81,12 +82,12 @@ func getExpectedType(schema *spec.Schema) string {
 	return ""
 }
 
-func parseObject(field map[string]interface{}, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
+func parseObject(field map[string]interface{}, schema *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
 	if expectedType != "object" && (schema.AdditionalProperties == nil || !schema.AdditionalProperties.Allows) {
 		return nil, fmt.Errorf("expected object type or AdditionalProperties allowed for path %s, got %v", path, field)
 	}
 
-	var expressionsFields []CELField
+	var expressionsFields []variable.FieldDescriptor
 	for fieldName, value := range field {
 		fieldSchema, err := getFieldSchema(schema, fieldName)
 		if err != nil {
@@ -102,7 +103,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path, expect
 	return expressionsFields, nil
 }
 
-func parseArray(field []interface{}, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
+func parseArray(field []interface{}, schema *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
 	if expectedType != "array" {
 		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
 	}
@@ -112,7 +113,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path, expectedType str
 		return nil, err
 	}
 
-	var expressionsFields []CELField
+	var expressionsFields []variable.FieldDescriptor
 	for i, item := range field {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
 		itemExpressions, err := parseResource(item, itemSchema, itemPath)
@@ -124,13 +125,13 @@ func parseArray(field []interface{}, schema *spec.Schema, path, expectedType str
 	return expressionsFields, nil
 }
 
-func parseString(field string, schema *spec.Schema, path, expectedType string) ([]CELField, error) {
+func parseString(field string, schema *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
 	ok, err := isOneShotExpression(field)
 	if err != nil {
 		return nil, err
 	}
 	if ok {
-		return []CELField{{
+		return []variable.FieldDescriptor{{
 			Expressions:          []string{strings.Trim(field, "${}")},
 			ExpectedType:         expectedType,
 			ExpectedSchema:       schema,
@@ -148,7 +149,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		return []CELField{{
+		return []variable.FieldDescriptor{{
 			Expressions:  expressions,
 			ExpectedType: expectedType,
 			Path:         path,
@@ -157,7 +158,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 	return nil, nil
 }
 
-func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]CELField, error) {
+func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
 	if expectedType == "any" {
 		return nil, nil
 	}

@@ -11,7 +11,7 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package resourcegroup
+package graph
 
 import (
 	"fmt"
@@ -21,16 +21,26 @@ import (
 )
 
 var (
-	regex = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
+	// ErrNamingConvention is the base error message for naming convention violations
+	ErrNamingConvention = "naming convention violation"
+)
+
+var (
+	// lowerCamelCaseRegex
+	lowerCamelCaseRegex = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
+	// UpperCamelCaseRegex
+	upperCamelCaseRegex = regexp.MustCompile(`^[A-Z][a-zA-Z0-9]*$`)
+
 	// reservedKeyWords is a list of reserved words in Symphony.
 	reservedKeyWords = []string{
 		"apiVersion",
+		"context",
+		"dependency",
+		"dependencies",
 		"externalRef",
 		"externalReference",
 		"externalRefs",
 		"externalReferences",
-		"dependency",
-		"dependencies",
 		"graph",
 		"instance",
 		"kind",
@@ -44,14 +54,24 @@ var (
 		"serviceAccountName",
 		"spec",
 		"status",
+		"symphony",
 		"variables",
+		"vars",
+		"version",
 	}
 )
 
+// isValidResourceName checks if the given name is a valid Symphony resource name (loawercase)
 func isValidResourceName(name string) bool {
-	return regex.MatchString(name)
+	return lowerCamelCaseRegex.MatchString(name)
 }
 
+// isValidKindName checks if the given name is a valid Symphony kind name (uppercase)
+func isValidKindName(name string) bool {
+	return upperCamelCaseRegex.MatchString(name)
+}
+
+// isSymphonyReservedWord checks if the given word is a reserved word in Symphony.
 func isSymphonyReservedWord(word string) bool {
 	for _, w := range reservedKeyWords {
 		if w == word {
@@ -59,6 +79,19 @@ func isSymphonyReservedWord(word string) bool {
 		}
 	}
 	return false
+}
+
+// validateResourceGroupNamingConventions validates the naming conventions of
+// the given resource group.
+func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
+	if !isValidKindName(rg.Spec.Kind) {
+		return fmt.Errorf("%s: kind '%s' is not a valid Symphony kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Kind)
+	}
+	err := validateResourceNames(rg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
+	}
+	return nil
 }
 
 // validateResource performs basic validation on a given resourcegroup.
@@ -69,9 +102,8 @@ func isSymphonyReservedWord(word string) bool {
 // - The name should start with a lowercase letter.
 // - The name should only contain alphanumeric characters.
 // - does not contain any special characters, underscores, or hyphens.
-func validateRGResourceNames(rg *v1alpha1.ResourceGroup) error {
+func validateResourceNames(rg *v1alpha1.ResourceGroup) error {
 	seen := make(map[string]struct{})
-
 	for _, res := range rg.Spec.Resources {
 		if isSymphonyReservedWord(res.Name) {
 			return fmt.Errorf("name %s is a reserved keyword in Symphony", res.Name)
@@ -86,7 +118,6 @@ func validateRGResourceNames(rg *v1alpha1.ResourceGroup) error {
 		}
 		seen[res.Name] = struct{}{}
 	}
-
 	return nil
 }
 
@@ -96,8 +127,8 @@ func validateRGResourceNames(rg *v1alpha1.ResourceGroup) error {
 // - kind
 // - metadata
 func validateKubernetesObjectStructure(obj map[string]interface{}) error {
-	apiVersion, apiVersionExists := obj["apiVersion"]
-	if !apiVersionExists {
+	apiVersion, exists := obj["apiVersion"]
+	if !exists {
 		return fmt.Errorf("apiVersion field not found")
 	}
 	_, isString := apiVersion.(string)
@@ -105,8 +136,8 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("apiVersion field is not a string")
 	}
 
-	kind, kindExists := obj["kind"]
-	if !kindExists {
+	kind, exists := obj["kind"]
+	if !exists {
 		return fmt.Errorf("kind field not found")
 	}
 	_, isString = kind.(string)
@@ -114,8 +145,8 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("kind field is not a string")
 	}
 
-	metadata, metadataExists := obj["metadata"]
-	if !metadataExists {
+	metadata, exists := obj["metadata"]
+	if !exists {
 		return fmt.Errorf("metadata field not found")
 	}
 	_, isMap := metadata.(map[string]interface{})

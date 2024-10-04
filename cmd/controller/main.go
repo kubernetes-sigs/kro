@@ -34,7 +34,7 @@ import (
 	resourcegroupctrl "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -130,7 +130,7 @@ func main() {
 		QueueMaxRetries: 20,
 	}, dynamicClient)
 
-	resourceGroupGraphBuilder, err := resourcegroup.NewResourceGroupBuilder(
+	resourceGroupGraphBuilder, err := graph.NewBuilder(
 		kConfig,
 	)
 	if err != nil {

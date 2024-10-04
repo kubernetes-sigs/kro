@@ -16,9 +16,11 @@ package parser
 import (
 	"sort"
 	"testing"
+
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
-func compareExpressionFields(a, b []CELField) bool {
+func compareExpressionFields(a, b []variable.FieldDescriptor) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -41,7 +43,7 @@ func TestParseSchemalessResource(t *testing.T) {
 	tests := []struct {
 		name     string
 		resource map[string]interface{}
-		want     []CELField
+		want     []variable.FieldDescriptor
 		wantErr  bool
 	}{
 		{
@@ -49,7 +51,7 @@ func TestParseSchemalessResource(t *testing.T) {
 			resource: map[string]interface{}{
 				"field": "${resource.value}",
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"resource.value"},
 					ExpectedType:         "any",
@@ -66,7 +68,7 @@ func TestParseSchemalessResource(t *testing.T) {
 					"inner": "${nested.value}",
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"nested.value"},
 					ExpectedType:         "any",
@@ -84,7 +86,7 @@ func TestParseSchemalessResource(t *testing.T) {
 					"${array[1]}",
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"array[0]"},
 					ExpectedType:         "any",
@@ -105,7 +107,7 @@ func TestParseSchemalessResource(t *testing.T) {
 			resource: map[string]interface{}{
 				"field": "Start ${expr1} middle ${expr2} end",
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:  []string{"expr1", "expr2"},
 					ExpectedType: "any",
@@ -127,7 +129,7 @@ func TestParseSchemalessResource(t *testing.T) {
 					},
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"string.value"},
 					ExpectedType:         "any",
@@ -146,7 +148,7 @@ func TestParseSchemalessResource(t *testing.T) {
 		{
 			name:     "Empty resource",
 			resource: map[string]interface{}{},
-			want:     []CELField{},
+			want:     []variable.FieldDescriptor{},
 			wantErr:  false,
 		},
 		{
@@ -177,7 +179,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
 		resource map[string]interface{}
-		want     []CELField
+		want     []variable.FieldDescriptor
 		wantErr  bool
 	}{
 		{
@@ -191,7 +193,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"deeply.nested.value"},
 					ExpectedType:         "any",
@@ -213,7 +215,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"expr1"},
 					ExpectedType:         "any",
@@ -235,7 +237,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"empty1": "${}",
 				"empty2": "${    }",
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{""},
 					ExpectedType:         "any",
@@ -258,7 +260,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"incomplete2": "incomplete}",
 				"incomplete3": "$not_an_expression",
 			},
-			want:    []CELField{},
+			want:    []variable.FieldDescriptor{},
 			wantErr: false,
 		},
 		{
@@ -285,7 +287,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []CELField{
+			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"string.value"},
 					ExpectedType:         "any",

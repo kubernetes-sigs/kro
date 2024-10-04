@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
@@ -81,7 +82,7 @@ func TestParseResource(t *testing.T) {
 			},
 		}
 
-		expectedExpressions := []CELField{
+		expectedExpressions := []variable.FieldDescriptor{
 			{Path: ">stringField", Expressions: []string{"string.value"}, ExpectedType: "string", StandaloneExpression: true},
 			{Path: ">intField", Expressions: []string{"int.value"}, ExpectedType: "integer", StandaloneExpression: true},
 			{Path: ">boolField", Expressions: []string{"bool.value"}, ExpectedType: "boolean", StandaloneExpression: true},
@@ -418,7 +419,7 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		t.Fatalf("ParseResource() error = %v", err)
 	}
 
-	expectedExpressions := map[string]CELField{
+	expectedExpressions := map[string]variable.FieldDescriptor{
 		">stringField":                               {Path: ">stringField", Expressions: []string{"string.value"}, ExpectedType: "string", ExpectedSchema: &stringFieldSchema, StandaloneExpression: true},
 		">objectField":                               {Path: ">objectField", Expressions: []string{"object.value"}, ExpectedType: "object", ExpectedSchema: &objectFieldSchema, StandaloneExpression: true},
 		">nestedObjectField>nestedString":            {Path: ">nestedObjectField>nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", ExpectedSchema: &nestedObjectNestedStringSchema, StandaloneExpression: true},

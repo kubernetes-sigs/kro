@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/parser"
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
 // ResolutionResult represents the result of resolving a single expression.
@@ -59,7 +59,7 @@ func NewResolver(resource map[string]interface{}, data map[string]interface{}) *
 
 // Resolve processes all the given ExpressionFields and resolves their CEL expressions.
 // It returns a ResolutionSummary containing information about the resolution process.
-func (r *Resolver) Resolve(expressions []parser.CELField) ResolutionSummary {
+func (r *Resolver) Resolve(expressions []variable.FieldDescriptor) ResolutionSummary {
 	summary := ResolutionSummary{
 		TotalExpressions: len(expressions),
 		Results:          make([]ResolutionResult, 0, len(expressions)),
@@ -82,7 +82,7 @@ func (r *Resolver) Resolve(expressions []parser.CELField) ResolutionSummary {
 // resolveField handles the resolution of a single ExpressionField (one field) in
 // the resource. It returns a ResolutionResult containing information about the
 // resolution process
-func (r *Resolver) resolveField(field parser.CELField) ResolutionResult {
+func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult {
 	result := ResolutionResult{
 		Path:     field.Path,
 		Original: fmt.Sprintf("%v", field.Expressions),
@@ -280,8 +280,8 @@ func (r *Resolver) BlindSetValueAtPath(path string, value interface{}) error {
 // setExpressionToPath sets a value in the resource using a dot-separated path.
 // It constructs the path data structure if it doesn't exist.
 func (r *Resolver) setExpressionToPath(path string, value interface{}) error {
-	path = strings.TrimPrefix(path, ".")
-	parts := strings.Split(path, ".")
+	path = strings.TrimPrefix(path, ">")
+	parts := strings.Split(path, ">")
 	current := r.resource
 
 	for i, part := range parts {

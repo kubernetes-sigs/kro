@@ -121,25 +121,40 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 			return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.Name, err)
 		}
 
-		// 4. Emulate the resource, this is later used to verify the validity of the
-		//    CEL expressions.
-		emulatedResource, err := b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.Name, err)
-		}
+		var emulatedResource *unstructured.Unstructured
+		var resourceVariables []*ResourceVariable
 
-		// 5. Extract CEL celExpressions from the schema.
-		celExpressions, err := parser.ParseResource(unstructuredResource, resourceSchema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.Name, err)
-		}
-		resourceVariables := []*ResourceVariable{}
-		for _, celExpression := range celExpressions {
-			resourceVariables = append(resourceVariables, &ResourceVariable{
-				// Assume variables are static, we'll validate them later
-				Kind:     ResourceVariableKindStatic,
-				CELField: celExpression,
-			})
+		// TODO(michaelhtm): CRDs are not supported for extraction currently
+		// implement new logic specific to CRDs
+		if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+			celExpressions, err := parser.ParseSchemalessResource(unstructuredResource)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.Name, err)
+			}
+			if len(celExpressions) > 0 {
+				return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.Name)
+			}
+		} else {
+
+			// 4. Emulate the resource, this is later used to verify the validity of the
+			//    CEL expressions.
+			emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.Name, err)
+			}
+
+			// 5. Extract CEL celExpressions from the schema.
+			celExpressions, err := parser.ParseResource(unstructuredResource, resourceSchema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.Name, err)
+			}
+			for _, celExpression := range celExpressions {
+				resourceVariables = append(resourceVariables, &ResourceVariable{
+					// Assume variables are static, we'll validate them later
+					Kind:     ResourceVariableKindStatic,
+					CELField: celExpression,
+				})
+			}
 		}
 
 		resources[rgResource.Name] = &Resource{

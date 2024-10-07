@@ -36,6 +36,7 @@ type Resource struct {
 	Variables []*ResourceVariable
 
 	Dependencies []string
+	Namespaced   bool
 }
 
 func (r *Resource) HasDependency(dep string) bool {

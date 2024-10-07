@@ -22,10 +22,10 @@ import (
 )
 
 // NewCombinedResolver creates a new schema resolver that can resolve both core and client types.
-func NewCombinedResolver(clientConfig *rest.Config) (resolver.SchemaResolver, error) {
+func NewCombinedResolver(clientConfig *rest.Config) (resolver.SchemaResolver, *discovery.DiscoveryClient, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(clientConfig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// ClientResolver is a resolver that uses the discovery client to resolve
@@ -46,5 +46,5 @@ func NewCombinedResolver(clientConfig *rest.Config) (resolver.SchemaResolver, er
 	// Combine the two resolvers to create a single resolver that can resolve
 	// both core and client types.
 	combinedResolver := coreResolver.Combine(clientResolver)
-	return combinedResolver, nil
+	return combinedResolver, discoveryClient, nil
 }

@@ -182,8 +182,16 @@ func (igr *InstanceGraphReconciler) reconcileResource(ctx context.Context, resou
 	rUnstructured := igr.runtime.Resources[resourceID]
 
 	gvr := k8smetadata.GVKtoGVR(resourceMeta.GroupVersionKind)
-	namespace := igr.getResourceNamespace(resourceID)
-	rc := igr.client.Resource(gvr).Namespace(namespace)
+
+	var rc dynamic.ResourceInterface
+	var namespace string
+	if igr.rg.Resources[resourceID].Namespaced {
+		namespace = igr.getResourceNamespace(resourceID)
+		rc = igr.client.Resource(gvr).Namespace(namespace)
+	} else {
+		rc = igr.client.Resource(gvr)
+		namespace = ""
+	}
 
 	log.V(1).Info("Checking resource existence", "namespace", namespace, "name", rUnstructured.GetName())
 	observed, err := rc.Get(ctx, rUnstructured.GetName(), metav1.GetOptions{})

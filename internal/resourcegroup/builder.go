@@ -21,8 +21,10 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8sSchema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
@@ -40,7 +42,7 @@ import (
 func NewResourceGroupBuilder(
 	clientConfig *rest.Config,
 ) (*GraphBuilder, error) {
-	schemaResolver, err := schema.NewCombinedResolver(clientConfig)
+	schemaResolver, dc, err := schema.NewCombinedResolver(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
 	}
@@ -50,6 +52,7 @@ func NewResourceGroupBuilder(
 	rgBuilder := &GraphBuilder{
 		resourceEmulator: resourceEmulator,
 		schemaResolver:   schemaResolver,
+		discoveryClient:  dc,
 	}
 	return rgBuilder, nil
 }
@@ -57,6 +60,7 @@ func NewResourceGroupBuilder(
 type GraphBuilder struct {
 	schemaResolver   resolver.SchemaResolver
 	resourceEmulator *emulator.Emulator
+	discoveryClient  *discovery.DiscoveryClient
 }
 
 func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGroup, error) {
@@ -90,6 +94,20 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 	// 2. Based the GVK, we need to load the OpenAPI schema for the resource.
 	// 3. Extract CEL expressions from the schema.
 	// 4. Build the resource object.
+
+	namespacedResources := map[k8sSchema.GroupVersionKind]bool{}
+
+	apiResourceList, err := b.discoveryClient.ServerPreferredNamespacedResources()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve Kubernetes namespaced resources: %w", err)
+	}
+
+	for _, resourceList := range apiResourceList {
+		for _, r := range resourceList.APIResources {
+			gvk := k8sSchema.FromAPIVersionAndKind(resourceList.GroupVersion, r.Kind)
+			namespacedResources[gvk] = r.Namespaced
+		}
+	}
 
 	// we'll also store the resources in a map for easy access later.
 	resources := make(map[string]*Resource)
@@ -157,6 +175,8 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 			}
 		}
 
+		_, isNamespaced := namespacedResources[gvk]
+
 		resources[rgResource.Name] = &Resource{
 			ID:               rgResource.Name,
 			GroupVersionKind: gvk,
@@ -164,6 +184,7 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 			EmulatedObject:   emulatedResource,
 			OriginalObject:   unstructuredResource,
 			Variables:        resourceVariables,
+			Namespaced:       isNamespaced,
 		}
 	}
 

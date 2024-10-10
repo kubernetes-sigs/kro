@@ -47,15 +47,15 @@ func parsePath(path string) ([]pathPart, error) {
 		return nil, fmt.Errorf("path cannot start with a dot")
 	} */
 	// TODO(a-hilaly): Do not allow paths to start with a dot
-	path = strings.TrimPrefix(path, ".")
+	path = strings.TrimPrefix(path, ">")
 
-	if strings.HasSuffix(path, ".") {
+	if strings.HasSuffix(path, ">") {
 		return nil, fmt.Errorf("path cannot end with a dot")
 	}
 
 	for i := 0; i < len(path); i++ {
 		switch path[i] {
-		case '.':
+		case '>':
 			if currentPart == "" {
 				// do not allow trailing dots like ".." in the path
 				return nil, fmt.Errorf("empty field name at position %d", i)
@@ -83,7 +83,7 @@ func parsePath(path string) ([]pathPart, error) {
 			parts = append(parts, pathPart{name: "", isArray: true, index: index})
 			i += closeBracket
 			// Skip the next dot if it exists
-			if i+1 < len(path) && path[i+1] == '.' {
+			if i+1 < len(path) && path[i+1] == '>' {
 				i++
 			}
 		default:

@@ -32,7 +32,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]CELField, err
 	switch field := resource.(type) {
 	case map[string]interface{}:
 		for field, value := range field {
-			fieldPath := path + "." + field
+			fieldPath := path + ">" + field
 			fieldExpressions, err := parseSchemalessResource(value, fieldPath)
 			if err != nil {
 				return nil, err

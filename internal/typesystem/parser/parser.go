@@ -92,7 +92,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path, expect
 		if err != nil {
 			return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+fieldName, err)
 		}
-		fieldPath := path + "." + fieldName
+		fieldPath := path + ">" + fieldName
 		fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
 		if err != nil {
 			return nil, err

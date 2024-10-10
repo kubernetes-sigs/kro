@@ -144,8 +144,8 @@ func (r *Resolver) resolveField(field parser.CELField) ResolutionResult {
 // we can refactor something here.
 // getValueFromPath retrieves a value from the resource using a dot-separated path.
 func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
-	path = strings.TrimPrefix(path, ".") // Remove leading dot if present
-	parts := strings.Split(path, ".")
+	path = strings.TrimPrefix(path, ">") // Remove leading dot if present
+	parts := strings.Split(path, ">")
 	current := interface{}(r.resource)
 
 	for _, part := range parts {
@@ -195,8 +195,8 @@ func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
 
 // setValueAtPath sets a value in the resource using a dot-separated path.
 func (r *Resolver) setValueAtPath(path string, value interface{}) error {
-	path = strings.TrimPrefix(path, ".")
-	parts := strings.Split(path, ".")
+	path = strings.TrimPrefix(path, ">")
+	parts := strings.Split(path, ">")
 	current := r.resource
 
 	for i, part := range parts {

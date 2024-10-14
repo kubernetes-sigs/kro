@@ -27,7 +27,7 @@ func TestParsePath(t *testing.T) {
 	}{
 		{
 			name: "simple access",
-			path: "metadata.name",
+			path: "metadata>name",
 			want: []pathPart{
 				{name: "metadata", isArray: false},
 				{name: "name", isArray: false},
@@ -36,7 +36,7 @@ func TestParsePath(t *testing.T) {
 		},
 		{
 			name: "path with array",
-			path: "spec.containers[0].name",
+			path: "spec>containers[0]>name",
 			want: []pathPart{
 				{name: "spec", isArray: false},
 				{name: "containers", isArray: false},
@@ -47,7 +47,7 @@ func TestParsePath(t *testing.T) {
 		},
 		{
 			name: "path with multiple arrays",
-			path: "spec.containers[0].ports[1].containerPort",
+			path: "spec>containers[0]>ports[1]>containerPort",
 			want: []pathPart{
 				{name: "spec", isArray: false},
 				{name: "containers", isArray: false},
@@ -73,37 +73,37 @@ func TestParsePath(t *testing.T) {
 		}, */
 		{
 			name:    "Path ending with dot",
-			path:    "metadata.name.",
+			path:    "metadata>name>",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "Path with consecutive dots",
-			path:    "metadata..name",
+			path:    "metadata>>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "Path with unclosed bracket",
-			path:    "spec.containers[0.name",
+			path:    "spec>containers[0>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "Path with invalid array index",
-			path:    "spec.containers[a].name",
+			path:    "spec>containers[a]>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "Path with negative array index",
-			path:    "spec.containers[-15].name",
+			path:    "spec>containers[-15]>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name: "path with large array index",
-			path: "spec.containers[20200406].name",
+			path: "spec>containers[20200406]>name",
 			want: []pathPart{
 				{name: "spec", isArray: false},
 				{name: "containers", isArray: false},
@@ -114,19 +114,19 @@ func TestParsePath(t *testing.T) {
 		},
 		{
 			name:    "Path with empty array brackets",
-			path:    "spec.containers[].name",
+			path:    "spec>containers[]>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "Path with string array brackets",
-			path:    "spec.containers[holla].name",
+			path:    "spec>containers[holla]>name",
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name: "path with underscore and camel case",
-			path: "metadata.labels.my_label.myNestedField",
+			path: "metadata>labels>my_label>myNestedField",
 			want: []pathPart{
 				{name: "metadata", isArray: false},
 				{name: "labels", isArray: false},
@@ -137,7 +137,7 @@ func TestParsePath(t *testing.T) {
 		},
 		{
 			name: "Path with numbers in field names",
-			path: "spec.container1.port2",
+			path: "spec>container1>port2",
 			want: []pathPart{
 				{name: "spec", isArray: false},
 				{name: "container1", isArray: false},

@@ -1,0 +1,23 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: EKScontroller
+metadata:
+  name: my-symphony-eks-controller
+  namespace: default
+spec:
+  name: ack-eks-controller
+  namespace: default
+  values: 
+    aws:
+      accountID: "399481058530"
+    deployment: {}
+    iamRole:
+      oidcProvider: oidc.eks.us-west-2.amazonaws.com/id/50B8942190FBD3A2EF2BF6AB7D27B06B
+    iamRolePolicy: {}
+    image:
+      resources:
+        requests: {}
+        limits: {}
+    log:
+      enabled: true
+      level: debug
+    serviceAccount: {}

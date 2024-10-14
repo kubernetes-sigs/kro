@@ -13,8 +13,8 @@ spec:
     status:
       networkingInfo:
         vpcID: ${clusterVPC.status.vpcID}
-        subnetAZA: ${subnetAZA.status.subnetID}
-        subnetAZB: ${subnetAZB.status.subnetID}
+        subnetAZA: ${clusterSubnetA.status.subnetID}
+        subnetAZB: ${clusterSubnetB.status.subnetID}
       clusterARN: ${cluster.status.ackResourceMetadata.arn}
   # resources
   resources:
@@ -23,52 +23,84 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
-        name: cluster-vpc-${spec.name}
+        name: symphony-cluster-vpc
       spec:
         cidrBlocks:
         - 192.168.0.0/16
-        enableDNSHostnames: false
         enableDNSSupport: true
-  - name: subnetAZA
+        enableDNSHostnames: true
+  - name: clusterElasticIPAddress
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: ElasticIPAddress
+      metadata:
+        name: symphony-cluster-eip
+      spec: {}
+  - name: clusterInternetGateway
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: InternetGateway
+      metadata:
+        name: symphony-cluster-igw
+      spec:
+        vpc: ${clusterVPC.status.vpcID}
+  - name: clusterRouteTable
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: RouteTable
+      metadata:
+        name: symphony-cluster-public-route-table
+      spec:
+        vpcID: ${clusterVPC.status.vpcID}
+        routes:
+          - destinationCIDRBlock: 0.0.0.0/0
+            gatewayID: ${clusterInternetGateway.status.internetGatewayID}
+  - name: clusterSubnetA
     definition:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: cluster-subnet-a-${spec.name}
+        name: symphony-cluster-public-subnet1
       spec:
         availabilityZone: us-west-2a
         cidrBlock: 192.168.0.0/18
         vpcID: ${clusterVPC.status.vpcID}
-  - name: securityGroup
-    definition:
-      apiVersion: ec2.services.k8s.aws/v1alpha1
-      kind: SecurityGroup
-      metadata:
-        name: cluster-security-group-${spec.name}
-      spec:
-        vpcID: ${clusterVPC.status.vpcID}
-        name: my-eks-cluster-sg-${spec.name}
-        description: something something
-  - name: subnetAZB
+        routeTables: 
+        - ${clusterRouteTable.status.routeTableID}
+        mapPublicIPOnLaunch: true
+  - name: clusterSubnetB
     definition:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: cluster-subnet-b-${spec.name}
+        name: symphony-cluster-public-subnet2
       spec:
         availabilityZone: us-west-2b
         cidrBlock: 192.168.64.0/18
         vpcID: ${clusterVPC.status.vpcID}
+        routeTables:
+        - ${clusterRouteTable.status.routeTableID}
+        mapPublicIPOnLaunch: true
+  - name: clusterNATGateway
+    definition:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: NATGateway
+      metadata:
+        name: symphony-cluster-natgateway1
+      spec:
+        subnetID: ${clusterSubnetB.status.subnetID}
+        allocationID: ${clusterElasticIPAddress.status.allocationID}
   - name: clusterRole
     definition:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: cluster-role-${spec.name}
+        name: symphony-cluster-role
       spec:
-        name: cluster-role-${spec.name}
+        name: symphony-cluster-role
+        description: "Symphony created cluster cluster role"
         policies:
-        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+          - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -82,18 +114,19 @@ spec:
               }
             ]
           }
-  - name: nodeRole
+  - name: clusterNodeRole
     definition:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: cluster-node-role-${spec.name}
+        name: symphony-cluster-node-role
       spec:
-        name: cluster-node-role-${spec.name}
+        name: symphony-cluster-node-role
+        description: "Symphony created cluster node role"
         policies:
-        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
-        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
-        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+          - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+          - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+          - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -107,17 +140,69 @@ spec:
               }
             ]
           }
+  - name: clusterAdminRole
+    definition:
+      apiVersion: iam.services.k8s.aws/v1alpha1
+      kind: Role
+      metadata:
+        name: symphony-cluster-pia-role
+      spec:
+        name: symphony-cluster-pia-role
+        description: "Symphony created cluster admin pia role"
+        policies:
+          - arn:aws:iam::aws:policy/AdministratorAccess
+        assumeRolePolicyDocument: |
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Sid": "AllowEksAuthToAssumeRoleForPodIdentity",
+                      "Effect": "Allow",
+                      "Principal": {
+                          "Service": "pods.eks.amazonaws.com"
+                      },
+                      "Action": [
+                          "sts:AssumeRole",
+                          "sts:TagSession"
+                      ]
+                  }
+              ]
+          }
   - name: cluster
     definition:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
-        name: cluster-${spec.name}
+        name: ${spec.name}
       spec:
-        name: cluster-${spec.name}
+        name: ${spec.name}
+        accessConfig:
+          authenticationMode: API_AND_CONFIG_MAP
         roleARN: ${clusterRole.status.ackResourceMetadata.arn}
         version: ${spec.version}
         resourcesVPCConfig:
+          endpointPrivateAccess: false
+          endpointPublicAccess: true
           subnetIDs:
-            - ${subnetAZA.status.subnetID}
-            - ${subnetAZB.status.subnetID}
+          - ${clusterSubnetA.status.subnetID}
+          - ${clusterSubnetB.status.subnetID}
+  - name: clusterNodeGroup
+    definition:
+      apiVersion: eks.services.k8s.aws/v1alpha1
+      kind: Nodegroup
+      metadata:
+        name: symphony-cluster-nodegroup
+      spec:
+        name: symphony-cluster-ng
+        diskSize: 100
+        clusterName: ${cluster.spec.name}
+        subnets:
+        - ${clusterSubnetA.status.subnetID}
+        - ${clusterSubnetB.status.subnetID}
+        nodeRole: ${clusterNodeRole.status.ackResourceMetadata.arn}
+        updateConfig:
+          maxUnavailable: 1
+        scalingConfig:
+          minSize: 1
+          maxSize: 1
+          desiredSize: 1 

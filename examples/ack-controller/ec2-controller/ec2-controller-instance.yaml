@@ -1,0 +1,22 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: EC2controller
+metadata:
+  name: my-symphony-ec2-controller
+  namespace: default
+spec:
+  name: ec2-controller
+  namespace: default
+  values:
+    aws:
+      accountID: "399481058530"
+    deployment: {}
+    iamRole:
+      oidcProvider: oidc.eks.us-west-2.amazonaws.com/id/50B8942190FBD3A2EF2BF6AB7D27B06B
+    image:
+      resources:
+        requests: {}
+        limits: {}
+    log:
+      enabled: true
+      level: debug
+    serviceAccount: {}

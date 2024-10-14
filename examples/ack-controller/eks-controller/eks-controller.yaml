@@ -1,0 +1,289 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: ekscontrollers.x.symphony.k8s.aws
+spec:
+  apiVersion: v1alpha1
+  kind: EKSController
+  definition:
+    spec:
+      name: string | default=eks-controller
+      namespace: string | default=default
+      values:
+        aws:
+          accountID: string | required=true
+          region: string | default=us-west-2
+        deployment:
+          containerPort: integer | default=8080
+          replicas: integer | default=1
+        iamRole:
+          maxSessionDuration: integer | default=3600
+          oidcProvider: string | required=true
+          roleDescription: string | default=IRSA role for ACK EKS controller deployement on EKS cluster using Symphony Resource group
+        iamPolicy:
+          # would prefer to add a policyDocument here, need to support multiline string here
+          description: string | default="policy for eks controller"
+        image:
+          deletePolicy: string | default=delete
+          repository: string | default=public.ecr.aws/aws-controllers-k8s/eks-controller
+          tag: string | default=1.4.7
+          resources:
+            requests:
+              memory: string | default=64Mi
+              cpu: string | default=50m
+            limits:
+              memory: string | default=128Mi
+              cpu: string | default=100m
+        log:
+          enabled: boolean | default=false
+          level: string | default=info
+        serviceAccount:
+          name: string | default=eks-controller-sa
+  resources:
+  - name: eksCRDGroup
+    definition:
+      apiVersion: x.symphony.k8s.aws/v1alpha1
+      kind: EKSCRDGroup
+      metadata:
+        name: ${spec.name}-crd-group
+      spec:
+        name: ${spec.name}-crd-group
+  - name: eksControllerIamPolicy
+    definition:
+      apiVersion: iam.services.k8s.aws/v1alpha1
+      kind: Policy
+      metadata:
+        name: ${spec.name}-iam-policy
+      spec:
+        name: ${spec.name}-iam-policy
+        description: ${spec.values.iamPolicy.description}
+        policyDocument: >
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "VisualEditor0",
+                "Effect": "Allow",
+                "Action": [
+                  "eks:*",
+                  "iam:GetRole",
+                  "iam:PassRole",
+                  "iam:ListAttachedRolePolicies",
+                  "ec2:DescribeSubnets"
+                ],
+                "Resource": "*"
+              }
+            ]
+          }
+  - name: eksControllerIamRole
+    definition:
+      apiVersion: iam.services.k8s.aws/v1alpha1
+      kind: Role
+      metadata:
+        name: ${spec.name}-iam-role
+        namespace: ${spec.namespace}
+      spec:
+        name: ${spec.name}-iam-role
+        description: ${spec.values.iamRole.roleDescription}
+        maxSessionDuration: ${spec.values.iamRole.maxSessionDuration}
+        policies:
+        - ${eksControllerIamPolicy.status.ackResourceMetadata.arn}
+        assumeRolePolicyDocument: >
+          {
+            "Version":"2012-10-17",
+            "Statement": [{
+              "Effect":"Allow",
+              "Principal": {"Federated": "arn:aws:iam::${spec.values.aws.accountID}:oidc-provider/${spec.values.iamRole.oidcProvider}"},
+              "Action": ["sts:AssumeRoleWithWebIdentity"],
+              "Condition": {
+                "StringEquals": {"${spec.values.iamRole.oidcProvider}:sub": "system:serviceaccount:${spec.namespace}:${spec.values.serviceAccount.name}"}
+              }
+            }]
+          }
+  - name: serviceAccount
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: ${spec.values.serviceAccount.name}
+        namespace: ${spec.namespace}
+        annotations:
+          eks.amazonaws.com/role-arn : ${eksControllerIamRole.status.ackResourceMetadata.arn}
+  - name: deployment
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${spec.name}-deployment
+        namespace: ${spec.namespace}
+        labels:
+          app.kubernetes.io.name: ${spec.name}-deployment
+          app.kubernetes.io.instance: ${spec.name}
+      spec:
+        replicas: ${spec.values.deployment.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io.name: ${spec.name}-deployment
+            app.kubernetes.io.instance: ${spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io.name: ${spec.name}-deployment
+              app.kubernetes.io.instance: ${spec.name}
+          spec:
+            serviceAccountName: ${serviceAccount.metadata.name}
+            containers:
+            - command:
+              - ./bin/controller
+              args:
+              - --aws-region
+              - ${spec.values.aws.region}
+              - --enable-development-logging=${spec.values.log.enabled}
+              - --log-level
+              - ${spec.values.log.level}
+              - --deletion-policy
+              - ${spec.values.image.deletePolicy}
+              - --watch-namespace
+              - ${spec.namespace}
+              image: ${spec.values.image.repository}:${spec.values.image.tag}
+              name: controller
+              ports:
+                - name: http
+                  containerPort: ${spec.values.deployment.containerPort}
+              resources:
+                requests:
+                  memory: ${spec.values.image.resources.requests.memory}
+                  cpu: ${spec.values.image.resources.requests.cpu}
+                limits:
+                    memory: ${spec.values.image.resources.limits.memory}
+                    cpu: ${spec.values.image.resources.limits.cpu}
+              env:
+              - name: ACK_SYSTEM_NAMESPACE
+                value: ${spec.namespace}
+              - name: AWS_REGION
+                value: ${spec.values.aws.region}
+              - name: DELETE_POLICY
+                value: ${spec.values.image.deletePolicy}
+              - name: ACK_LOG_LEVEL
+                value: ${spec.values.log.level}              
+              ports:
+              - containerPort: 80
+  - name: clusterRoleBinding
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ${spec.name}-clusterrolebinding
+      roleRef:
+        kind: ClusterRole
+        apiGroup: rbac.authorization.k8s.io
+        name: ${clusterRole.metadata.name}
+      subjects:
+      - kind: ServiceAccount
+        name: ${serviceAccount.metadata.name}
+        namespace: ${serviceAccount.metadata.namespace}
+  - name: clusterRole
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: ${spec.name}-clusterrole
+      rules:
+      - apiGroups:
+        - ""
+        resources:
+        - configmaps
+        - secrets
+        verbs:
+        - get
+        - list
+        - patch
+        - watch
+      - apiGroups:
+        - ""
+        resources:
+        - namespaces
+        verbs:
+        - get
+        - list
+        - watch
+      - apiGroups:
+        - ec2.services.k8s.aws
+        resources:
+        - securitygroups
+        - securitygroups/status
+        - subnets
+        - subnets/status
+        verbs:
+        - get
+        - list
+      - apiGroups:
+        - eks.services.k8s.aws
+        resources:
+        - accessentries
+        - addons
+        - clusters
+        - fargateprofiles
+        - identityproviderconfigs
+        - nodegroups
+        - podidentityassociations
+        verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+      - apiGroups:
+        - eks.services.k8s.aws
+        resources:
+        - accessentries/status
+        - addons/status
+        - clusters/status
+        - fargateprofiles/status
+        - identityproviderconfigs/status
+        - nodegroups/status
+        - podidentityassociations/status
+        verbs:
+        - get
+        - patch
+        - update
+      - apiGroups:
+        - iam.services.k8s.aws
+        resources:
+        - roles
+        - roles/status
+        verbs:
+        - get
+        - list
+      - apiGroups:
+        - kms.services.k8s.aws
+        resources:
+        - keys
+        - keys/status
+        verbs:
+        - get
+        - list
+      - apiGroups:
+        - services.k8s.aws
+        resources:
+        - adoptedresources
+        - fieldexports
+        verbs:
+        - create
+        - delete
+        - get
+        - list
+        - patch
+        - update
+        - watch
+      - apiGroups:
+        - services.k8s.aws
+        resources:
+        - adoptedresources/status
+        - fieldexports/status
+        verbs:
+        - get
+        - patch
+        - update

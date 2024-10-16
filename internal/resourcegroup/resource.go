@@ -35,6 +35,8 @@ type Resource struct {
 
 	Variables []*ResourceVariable
 
+	ReadyOnExpressions []ReadyOnExpression
+
 	Dependencies []string
 	Namespaced   bool
 }

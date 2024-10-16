@@ -72,6 +72,8 @@ type Resource struct {
 	Name string `json:"name,omitempty"`
 	// +kubebuilder:validation:Required
 	Definition runtime.RawExtension `json:"definition,omitempty"`
+	// +kubebuilder:validation:Optional
+	ReadyOn []string `json:"readyOn,omitempty"`
 }
 
 // ResourceGroupStatus defines the observed state of ResourceGroup

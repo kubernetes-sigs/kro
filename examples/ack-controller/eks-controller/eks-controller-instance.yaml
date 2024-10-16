@@ -1,5 +1,5 @@
 apiVersion: x.symphony.k8s.aws/v1alpha1
-kind: EKScontroller
+kind: EKSController
 metadata:
   name: my-symphony-eks-controller
   namespace: default
@@ -12,7 +12,7 @@ spec:
     deployment: {}
     iamRole:
       oidcProvider: oidc.eks.us-west-2.amazonaws.com/id/50B8942190FBD3A2EF2BF6AB7D27B06B
-    iamRolePolicy: {}
+    iamPolicy: {}
     image:
       resources:
         requests: {}

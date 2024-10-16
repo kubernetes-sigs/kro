@@ -174,17 +174,28 @@ func (b *GraphBuilder) NewResourceGroup(rg *v1alpha1.ResourceGroup) (*ResourceGr
 				})
 			}
 		}
+		// 6. Parse ReadyOn expressions
+		readyOn, err := parser.ParseConditionExpressions(rgResource.ReadyOn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse readyOn expressions: %v", err)
+		}
+
+		readyOnExpressions := []ReadyOnExpression{}
+		for _, e := range readyOn {
+			readyOnExpressions = append(readyOnExpressions, ReadyOnExpression{Resolved: false, Expression: e})
+		}
 
 		_, isNamespaced := namespacedResources[gvk]
 
 		resources[rgResource.Name] = &Resource{
-			ID:               rgResource.Name,
-			GroupVersionKind: gvk,
-			Schema:           resourceSchema,
-			EmulatedObject:   emulatedResource,
-			OriginalObject:   unstructuredResource,
-			Variables:        resourceVariables,
-			Namespaced:       isNamespaced,
+			ID:                 rgResource.Name,
+			GroupVersionKind:   gvk,
+			Schema:             resourceSchema,
+			EmulatedObject:     emulatedResource,
+			OriginalObject:     unstructuredResource,
+			Variables:          resourceVariables,
+			ReadyOnExpressions: readyOnExpressions,
+			Namespaced:         isNamespaced,
 		}
 	}
 
@@ -333,6 +344,48 @@ func (b *GraphBuilder) validateResourceCELExpressions(resources map[string]*Reso
 				_, err = b.dryRunExpression(env, expression, context)
 				if err != nil {
 					return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+				}
+			}
+			// validate readyOn Expressions for resource
+			// Only accepting expressions accessing the status and spec for now
+			// and need to evaluate to a boolean type
+			//
+			// TODO(michaelhtm) It shares some of the logic with the loop from above..maybe
+			// we can refactor them or put it in one function.
+			// I would also suggest separating the dryRuns of readyOnExpressions
+			// and the resourceExpressions.
+			for _, expression := range resource.ReadyOnExpressions {
+				fieldNames := getResourceTopLevelFieldNames(resource.Schema)
+				fieldEnv, err := celutil.NewEnvironement(celutil.WithResourceNames(fieldNames))
+				if err != nil {
+					return fmt.Errorf("failed to create CEL environment: %w", err)
+				}
+
+				err = b.validateCELExpressionContext(fieldEnv, expression.Expression, fieldNames)
+				if err != nil {
+					return fmt.Errorf("failed to validate expression context: '%s' %w", expression.Expression, err)
+				}
+				// create context
+				// add resource fields to the context
+				context := map[string]*Resource{}
+				for _, n := range fieldNames {
+					context[n] = &Resource{
+						ID:               n,
+						GroupVersionKind: resource.GroupVersionKind,
+						Schema:           resource.Schema,
+						EmulatedObject: &unstructured.Unstructured{
+							Object: resource.EmulatedObject.Object[n].(map[string]interface{}),
+						},
+					}
+				}
+
+				output, err := b.dryRunExpression(fieldEnv, expression.Expression, context)
+
+				if err != nil {
+					return fmt.Errorf("failed to dry-run expression %s: %w", expression.Expression, err)
+				}
+				if !celutil.IsBoolType(output) {
+					return fmt.Errorf("output of readyOn expression %s can only be of type bool", expression.Expression)
 				}
 			}
 		}
@@ -501,7 +554,7 @@ func (b *GraphBuilder) buildInstanceResource(
 	instanceVariables := []*ResourceVariable{}
 	for _, statusVariable := range statusVariables {
 		// These variables needs to be injected into the status field of the instance.
-		path := ".status" + statusVariable.Path
+		path := ">status" + statusVariable.Path
 		statusVariable.Path = path
 		instanceVariables = append(instanceVariables, &ResourceVariable{
 			Kind:     ResourceVariableKindDynamic,

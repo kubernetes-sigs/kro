@@ -48,3 +48,7 @@ func ConvertCELtoGo(v ref.Val) (interface{}, error) {
 		return v.Value(), fmt.Errorf("unsupported type: %v", v.Type())
 	}
 }
+
+func IsBoolType(v ref.Val) bool {
+	return v.Type() == types.BoolType
+}

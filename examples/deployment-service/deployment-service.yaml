@@ -14,13 +14,15 @@ spec:
       availableReplicas: ${deployment.status.availableReplicas}
   resources:
   - name: deployment
+    readyOn:
+      - ${spec.replicas == status.availableReplicas}
     definition:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
         name: ${spec.name}
       spec:
-        replicas: 1
+        replicas: 50
         selector:
           matchLabels:
             app: deployment

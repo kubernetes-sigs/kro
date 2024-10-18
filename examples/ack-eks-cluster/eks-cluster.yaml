@@ -19,6 +19,8 @@ spec:
   # resources
   resources:
   - name: clusterVPC
+    readyOn:
+    - ${status.state == "available"}
     definition:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
@@ -56,6 +58,8 @@ spec:
           - destinationCIDRBlock: 0.0.0.0/0
             gatewayID: ${clusterInternetGateway.status.internetGatewayID}
   - name: clusterSubnetA
+    readyOn:
+    - ${status.state == "available"}
     definition:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
@@ -169,6 +173,8 @@ spec:
               ]
           }
   - name: cluster
+    readyOn:
+    - ${status.status == "ACTIVE"}
     definition:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster

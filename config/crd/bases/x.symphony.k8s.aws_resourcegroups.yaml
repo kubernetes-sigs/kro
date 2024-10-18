@@ -110,6 +110,11 @@ spec:
                       x-kubernetes-preserve-unknown-fields: true
                     name:
                       type: string
+                    readyOn:
+                      items:
+                        type: string
+                        x-kubernetes-preserve-unknown-fields: true
+                      type: array
                   required:
                   - definition
                   - name

@@ -213,6 +213,20 @@ func (igr *InstanceGraphReconciler) reconcileResource(ctx context.Context, resou
 	}
 
 	igr.runtime.SetLatestResource(resourceID, observed)
+
+	log.V(1).Info("Checking if resource is Ready", "resource", resourceID)
+	if ready, err := igr.runtime.IsResourceReady(resourceID); err != nil {
+		log.V(1).Info("Resource not ready", "resource", resourceID)
+		resourceState.State = "WaitingForReadiness"
+		resourceState.Err = fmt.Errorf("resource not ready: %w", err)
+		return igr.delayedRequeue(resourceState.Err)
+	} else if !ready {
+		log.V(1).Info("Resource not ready", "resource", resourceID)
+		resourceState.State = "WaitingForReadiness"
+		resourceState.Err = fmt.Errorf("resource not ready")
+		return igr.delayedRequeue(resourceState.Err)
+	}
+
 	return igr.updateResource(ctx, rc, rUnstructured, observed, resourceID, resourceState)
 }
 

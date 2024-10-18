@@ -1,5 +1,5 @@
 apiVersion: x.symphony.k8s.aws/v1alpha1
-kind: EC2controller
+kind: EC2Controller
 metadata:
   name: my-symphony-ec2-controller
   namespace: default

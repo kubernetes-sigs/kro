@@ -104,7 +104,62 @@ func (rt *RuntimeResourceGroup) CanResolveResource(resource string) bool {
 			return false
 		}
 	}
+
 	return true
+}
+
+func (rt *RuntimeResourceGroup) IsResourceReady(resourceID string) (bool, error) {
+
+	expressions := rt.ResourceGroup.Resources[resourceID].ReadyOnExpressions
+	resource := rt.ResolvedResources[resourceID]
+	fieldNames := getResourceTopLevelFieldNames(rt.ResourceGroup.Resources[resourceID].Schema)
+	if len(expressions) == 0 {
+		return true, nil
+	}
+
+	// fieldNames := []string{"status", "spec"}
+	env, err := celutil.NewEnvironement(&celutil.EnvironementOptions{
+		ResourceNames: fieldNames,
+	})
+	// we should not expect errors here since we already compiled it
+	// in the dryRun
+	if err != nil {
+		return false, fmt.Errorf("failed creating new Environment: %w", err)
+	}
+	context := map[string]interface{}{}
+	for _, n := range fieldNames {
+		if obj, ok := resource.Object[n]; ok {
+			context[n] = obj.(map[string]interface{})
+		}
+	}
+	for _, e := range expressions {
+		if e.Resolved {
+			continue
+		}
+		ast, issues := env.Compile(e.Expression)
+		if issues != nil && issues.Err() != nil {
+			return false, fmt.Errorf("failed compiling expression %s: %w", e.Expression, err)
+		}
+		program, err := env.Program(ast)
+		if err != nil {
+			return false, fmt.Errorf("failed programming expression %s: %w", e.Expression, err)
+		}
+
+		output, _, err := program.Eval(context)
+		if err != nil {
+			return false, fmt.Errorf("failed evaluating expression %s: %w", e.Expression, err)
+		}
+		out, err := celutil.ConvertCELtoGo(output)
+		if err != nil {
+			return false, fmt.Errorf("failed converting output %v: %w", output, err)
+		}
+		// keep checking for a false
+		if !out.(bool) {
+			return false, nil
+		}
+		e.Resolved = out.(bool)
+	}
+	return true, err
 }
 
 func (rt *RuntimeResourceGroup) SetLatestResource(name string, resource *unstructured.Unstructured) {

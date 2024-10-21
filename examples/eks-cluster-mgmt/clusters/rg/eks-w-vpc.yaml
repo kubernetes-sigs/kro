@@ -18,6 +18,7 @@ spec:
         publicSubnet2Cidr: string | default="10.0.2.0/24"
         privateSubnet1Cidr: string | default="10.0.11.0/24"
         privateSubnet2Cidr: string | default="10.0.12.0/24"
+      accountId: string
       k8sVersion: string
       nodesCount: integer
   resources:
@@ -52,5 +53,6 @@ spec:
             workers:
               subnet1ID: ${vpc.status.privateSubnet1ID}
               subnet2ID: ${vpc.status.privateSubnet2ID}
+          accountId: ${spec.accountId}
           k8sVersion: ${spec.k8sVersion}
           nodesCount: ${spec.nodesCount}

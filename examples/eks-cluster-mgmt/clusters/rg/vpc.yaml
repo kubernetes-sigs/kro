@@ -30,6 +30,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-vpc
       spec:
         cidrBlocks: 
@@ -44,6 +45,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-igw
       spec:
         vpc: ${vpc.status.vpcID}
@@ -55,6 +57,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-nat-gateway1
       spec:
         subnetID: ${publicSubnet1.status.subnetID}
@@ -67,6 +70,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-nat-gateway2
       spec:
         subnetID: ${publicSubnet2.status.subnetID}
@@ -79,6 +83,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-eip1
       spec:
         tags:
@@ -89,6 +94,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-eip2
       spec:
         tags:
@@ -99,6 +105,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-public-routetable
       spec:
         vpcID: ${vpc.status.vpcID}
@@ -113,6 +120,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-private-routetable1
       spec:
         vpcID: ${vpc.status.vpcID}
@@ -127,6 +135,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-private-routetable2
       spec:
         vpcID: ${vpc.status.vpcID}
@@ -141,6 +150,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-public-subnet1
       spec:
         availabilityZone: ${spec.region}a
@@ -159,6 +169,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-public-subnet2
       spec:
         availabilityZone: ${spec.region}b
@@ -177,6 +188,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-private-subnet1
       spec:
         availabilityZone: ${spec.region}a
@@ -194,6 +206,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-private-subnet2
       spec:
         availabilityZone: ${spec.region}b

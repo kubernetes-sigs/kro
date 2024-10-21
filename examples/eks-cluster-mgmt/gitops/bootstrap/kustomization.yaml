@@ -4,5 +4,4 @@ resources:
 - clusters.yaml
 - karpenter.yaml
 - karpenter-iam.yaml
-
-
+- ack-multi-account.yaml

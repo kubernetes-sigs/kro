@@ -27,11 +27,10 @@ import (
 // we are mostly just validating, without caring what's in
 // the expression. Maybe we can rename it in the future 🤔
 func ParseConditionExpressions(conditions []string) ([]string, error) {
-
 	expressions := make([]string, 0, len(conditions))
 
 	for _, e := range conditions {
-		ok, err := isOneShotExpression(e)
+		ok, err := isStandaloneExpression(e)
 		if err != nil {
 			return nil, err
 		}

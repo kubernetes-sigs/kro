@@ -426,7 +426,7 @@ func (rt *ResourceGroupRuntime) evaluateInstanceStatuses() error {
 	for _, variable := range rt.instance.GetVariables() {
 		cached, ok := rt.expressionsCache[variable.Expressions[0]]
 		if ok && cached.Resolved {
-			err := rs.BlindSetValueAtPath(variable.Path, rt.expressionsCache[variable.Expressions[0]].ResolvedValue)
+			err := rs.UpsertValueAtPath(variable.Path, rt.expressionsCache[variable.Expressions[0]].ResolvedValue)
 			if err != nil {
 				return fmt.Errorf("failed to set value at path %s: %w", variable.Path, err)
 			}

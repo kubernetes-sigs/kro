@@ -34,7 +34,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 	switch field := resource.(type) {
 	case map[string]interface{}:
 		for field, value := range field {
-			fieldPath := path + ">" + field
+			fieldPath := joinPathAndFieldName(path, field)
 			fieldExpressions, err := parseSchemalessResource(value, fieldPath)
 			if err != nil {
 				return nil, err
@@ -51,7 +51,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			expressionsFields = append(expressionsFields, itemExpressions...)
 		}
 	case string:
-		ok, err := isOneShotExpression(field)
+		ok, err := isStandaloneExpression(field)
 		if err != nil {
 			return nil, err
 		}

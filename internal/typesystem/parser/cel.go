@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	// In symphony, CEL expressions are enclosed between "${" and "}"
 	exprStart = "${"
 	exprEnd   = "}"
 )
@@ -80,9 +81,9 @@ func extractExpressions(str string) ([]string, error) {
 	return expressions, nil
 }
 
-// isOneShotExpression returns true if the string is a single, complete non-nested expression.
+// isStandaloneExpression returns true if the string is a single, complete non-nested expression.
 // It returns an error if it encounters a nested expression.
-func isOneShotExpression(str string) (bool, error) {
+func isStandaloneExpression(str string) (bool, error) {
 	expressions, err := extractExpressions(str)
 	if err != nil {
 		return false, err

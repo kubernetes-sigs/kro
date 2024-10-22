@@ -20,7 +20,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
@@ -31,7 +30,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 	if err != nil {
 		return err
 	}
-	gvr := k8smetadata.GVKtoGVR(processedRG.Instance.GroupVersionKind)
+	gvr := processedRG.Instance.GetGroupVersionResource()
 
 	log.V(1).Info("Shutting down resource group microcontroller")
 	err = r.shutdownResourceGroupMicroController(ctx, &gvr)
@@ -39,7 +38,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 		return err
 	}
 
-	crdResource := processedRG.Instance.CRD
+	crdResource := processedRG.Instance.GetCRD()
 	log.V(1).Info("Cleaning up resource group CRD", "crd", crdResource.Name)
 	err = r.cleanupResourceGroupCRD(ctx, crdResource.Name)
 	if err != nil {

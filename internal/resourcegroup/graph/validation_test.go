@@ -11,7 +11,7 @@
 // express or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package resourcegroup
+package graph
 
 import (
 	"testing"
@@ -75,7 +75,7 @@ func TestValidateRGResourceNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateRGResourceNames(tt.rg)
+			err := validateResourceNames(tt.rg)
 			if (err != nil) != tt.expectError {
 				t.Errorf("validateRGResourceNames() error = %v, expectError %v", err, tt.expectError)
 			}
@@ -120,6 +120,95 @@ func TestIsValidResourceName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isValidResourceName(tt.name); got != tt.expected {
 				t.Errorf("isValidResourceName(%q) = %v, want %v", tt.name, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidateKubernetesObjectStructure(t *testing.T) {
+	tests := []struct {
+		name    string
+		obj     map[string]interface{}
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "Valid Kubernetes object",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"metadata":   map[string]interface{}{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Missing apiVersion",
+			obj: map[string]interface{}{
+				"kind":     "Pod",
+				"metadata": map[string]interface{}{},
+			},
+			wantErr: true,
+			errMsg:  "apiVersion field not found",
+		},
+		{
+			name: "apiVersion not a string",
+			obj: map[string]interface{}{
+				"apiVersion": 123,
+				"kind":       "Pod",
+				"metadata":   map[string]interface{}{},
+			},
+			wantErr: true,
+			errMsg:  "apiVersion field is not a string",
+		},
+		{
+			name: "Missing kind",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"metadata":   map[string]interface{}{},
+			},
+			wantErr: true,
+			errMsg:  "kind field not found",
+		},
+		{
+			name: "kind not a string",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       123,
+				"metadata":   map[string]interface{}{},
+			},
+			wantErr: true,
+			errMsg:  "kind field is not a string",
+		},
+		{
+			name: "Missing metadata",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+			},
+			wantErr: true,
+			errMsg:  "metadata field not found",
+		},
+		{
+			name: "metadata not a map",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Pod",
+				"metadata":   "not a map",
+			},
+			wantErr: true,
+			errMsg:  "metadata field is not a map",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateKubernetesObjectStructure(tt.obj)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateKubernetesObjectStructure() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && err.Error() != tt.errMsg {
+				t.Errorf("validateKubernetesObjectStructure() error message = %v, want %v", err.Error(), tt.errMsg)
 			}
 		})
 	}

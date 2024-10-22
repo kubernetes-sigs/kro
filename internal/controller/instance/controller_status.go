@@ -30,27 +30,23 @@ type ResourceState struct {
 	Err   error
 }
 
-func (igr *InstanceGraphReconciler) prepareStatus(instanceState string, reconcileErr error, resourceStates map[string]*ResourceState) map[string]interface{} {
+func (igr *instanceGraphReconciler) prepareStatus(instanceState string, reconcileErr error, resourceStates map[string]*ResourceState) map[string]interface{} {
 	// Get what ever is resolved in the status
 	instanceStatus := igr.getResolvedStatus()
+	generation := igr.runtime.GetInstance().GetGeneration()
 
 	// Update the instance status with the current state and conditions
 	instanceStatus["state"] = instanceState
-	instanceStatus["conditions"] = igr.prepareConditions(instanceStatus, reconcileErr, resourceStates, igr.runtime.Instance.GetGeneration())
+	instanceStatus["conditions"] = igr.prepareConditions(instanceStatus, reconcileErr, resourceStates, generation)
 	return instanceStatus
 }
 
-func (igr *InstanceGraphReconciler) getResolvedStatus() map[string]interface{} {
+func (igr *instanceGraphReconciler) getResolvedStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"conditions": []interface{}{},
 	}
 
-	if err := igr.runtime.ResolveInstanceStatus(); err != nil {
-		igr.log.Error(err, "Failed to resolve instance status")
-		return status
-	}
-
-	resolvedStatus, ok := igr.runtime.Instance.Object["status"].(map[string]interface{})
+	resolvedStatus, ok := igr.runtime.GetInstance().Object["status"].(map[string]interface{})
 	if !ok {
 		return status
 	}
@@ -61,7 +57,7 @@ func (igr *InstanceGraphReconciler) getResolvedStatus() map[string]interface{} {
 	return resolvedStatus
 }
 
-func (igr *InstanceGraphReconciler) prepareConditions(status map[string]interface{}, reconcileErr error, resourceStates map[string]*ResourceState, generation int64) []interface{} {
+func (igr *instanceGraphReconciler) prepareConditions(status map[string]interface{}, reconcileErr error, resourceStates map[string]*ResourceState, generation int64) []interface{} {
 	conditions := status["conditions"].([]interface{})
 
 	// Add overall reconciliation condition
@@ -108,8 +104,8 @@ func (igr *InstanceGraphReconciler) prepareConditions(status map[string]interfac
 	return conditions
 }
 
-func (igr *InstanceGraphReconciler) patchInstanceStatus(ctx context.Context, status map[string]interface{}) error {
-	instanceUnstructuredCopy := igr.runtime.Instance.DeepCopy()
+func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, status map[string]interface{}) error {
+	instanceUnstructuredCopy := igr.runtime.GetInstance().DeepCopy()
 	instanceUnstructuredCopy.Object["status"] = status
 
 	_, err := igr.client.Resource(igr.gvr).Namespace(instanceUnstructuredCopy.GetNamespace()).UpdateStatus(ctx, instanceUnstructuredCopy, metav1.UpdateOptions{})

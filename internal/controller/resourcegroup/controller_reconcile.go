@@ -27,7 +27,7 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
 	"github.com/aws-controllers-k8s/symphony/internal/errors"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup"
+	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 )
 
 func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) ([]string, error) {
@@ -40,7 +40,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 	}
 
 	log.V(1).Info("Reconciling resource group CRD")
-	err = r.reconcileResourceGroupCRD(ctx, processedRG.Instance.CRD)
+	err = r.reconcileResourceGroupCRD(ctx, processedRG.Instance.GetCRD())
 	if err != nil {
 		return processedRG.TopologicalOrder, err
 	}
@@ -52,7 +52,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 		return nil, fmt.Errorf("failed to merge labelers: %w", err)
 	}
 
-	gvr := k8smetadata.GVKtoGVR(processedRG.Instance.GroupVersionKind)
+	gvr := processedRG.Instance.GetGroupVersionResource()
 	//id := fmt.Sprintf("%s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 	instanceLogger := r.rootLogger.WithName("controller." + gvr.Resource)
 	// instanceLogger = instanceLogger.WithValues("gvr", id)
@@ -79,7 +79,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 	return processedRG.TopologicalOrder, nil
 }
 
-func (r *ResourceGroupReconciler) reconcileResourceGroupGraph(ctx context.Context, rg *v1alpha1.ResourceGroup) (*resourcegroup.ResourceGroup, error) {
+func (r *ResourceGroupReconciler) reconcileResourceGroupGraph(_ context.Context, rg *v1alpha1.ResourceGroup) (*graph.Graph, error) {
 	processedRG, err := r.rgBuilder.NewResourceGroup(rg)
 	if err != nil {
 		return nil, errors.NewReconcileGraphError(err)

@@ -16,19 +16,21 @@ package parser
 import (
 	"fmt"
 	"strings"
+
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful
 // when the schema is not available. e.g RGI statuses
-func ParseSchemalessResource(resource map[string]interface{}) ([]CELField, error) {
+func ParseSchemalessResource(resource map[string]interface{}) ([]variable.FieldDescriptor, error) {
 	return parseSchemalessResource(resource, "")
 }
 
 // parseSchemalessResource is a helper function that recursively
 // extracts expressions from a resource. It uses a depth first search to traverse
 // the resource and extract expressions from string fields
-func parseSchemalessResource(resource interface{}, path string) ([]CELField, error) {
-	var expressionsFields []CELField
+func parseSchemalessResource(resource interface{}, path string) ([]variable.FieldDescriptor, error) {
+	var expressionsFields []variable.FieldDescriptor
 	switch field := resource.(type) {
 	case map[string]interface{}:
 		for field, value := range field {
@@ -54,7 +56,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]CELField, err
 			return nil, err
 		}
 		if ok {
-			expressionsFields = append(expressionsFields, CELField{
+			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
 				Expressions:          []string{strings.Trim(field, "${}")},
 				ExpectedType:         "any",
 				Path:                 path,
@@ -66,7 +68,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]CELField, err
 				return nil, err
 			}
 			if len(expressions) > 0 {
-				expressionsFields = append(expressionsFields, CELField{
+				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
 					Expressions:  expressions,
 					ExpectedType: "any",
 					Path:         path,

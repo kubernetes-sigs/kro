@@ -20,6 +20,8 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/fieldpath"
 )
 
 // fieldDescriptor represents a field in an OpenAPI schema. Typically this field
@@ -137,18 +139,18 @@ func generateJSONSchemaFromFieldDescriptors(fieldDescriptors []fieldDescriptor) 
 }
 
 func addFieldToSchema(fieldDescriptor fieldDescriptor, schema *extv1.JSONSchemaProps) error {
-	pathParts, err := parsePath(fieldDescriptor.Path)
+	segments, err := fieldpath.Parse(fieldDescriptor.Path)
 	if err != nil {
 		return fmt.Errorf("failed to parse path %s: %w", fieldDescriptor.Path, err)
 	}
 
 	currentSchema := schema
 
-	for i, pathPart := range pathParts {
-		isLast := i == len(pathParts)-1
+	for i, segment := range segments {
+		isLast := i == len(segments)-1
 
-		if pathPart.isArray {
-			// Handle array part
+		if segment.Index >= 0 {
+			// Handle array segment
 			if currentSchema.Type != "array" {
 				currentSchema.Type = "array"
 				currentSchema.Items = &extv1.JSONSchemaPropsOrArray{
@@ -162,32 +164,32 @@ func addFieldToSchema(fieldDescriptor fieldDescriptor, schema *extv1.JSONSchemaP
 		}
 
 		if isLast {
-			// This is the final part of the path, add the schema here
+			// This is the final segment of the path, add the schema here
 			if fieldDescriptor.Schema != nil {
-				if pathPart.isArray {
+				if segment.Index >= 0 {
 					*currentSchema = *fieldDescriptor.Schema
 				} else {
-					currentSchema.Properties[pathPart.name] = *fieldDescriptor.Schema
+					currentSchema.Properties[segment.Name] = *fieldDescriptor.Schema
 				}
 			} else {
 				// If no schema is provided, default to a string type
 				defaultSchema := extv1.JSONSchemaProps{Type: "string"}
-				if pathPart.isArray {
+				if segment.Index >= 0 {
 					*currentSchema = defaultSchema
 				} else {
-					currentSchema.Properties[pathPart.name] = defaultSchema
+					currentSchema.Properties[segment.Name] = defaultSchema
 				}
 			}
 		} else {
-			// This is an intermediate part of the path
-			if !pathPart.isArray {
-				if _, exists := currentSchema.Properties[pathPart.name]; !exists {
-					currentSchema.Properties[pathPart.name] = extv1.JSONSchemaProps{
+			// This is an intermediate segment of the path
+			if segment.Index < 0 {
+				if _, exists := currentSchema.Properties[segment.Name]; !exists {
+					currentSchema.Properties[segment.Name] = extv1.JSONSchemaProps{
 						Type:       "object",
 						Properties: make(map[string]extv1.JSONSchemaProps),
 					}
 				}
-				s := currentSchema.Properties[pathPart.name]
+				s := currentSchema.Properties[segment.Name]
 				currentSchema = &s
 			}
 		}

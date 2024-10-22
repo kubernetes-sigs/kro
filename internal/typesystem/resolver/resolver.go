@@ -15,9 +15,9 @@ package resolver
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/fieldpath"
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
@@ -77,6 +77,11 @@ func (r *Resolver) Resolve(expressions []variable.FieldDescriptor) ResolutionSum
 	}
 
 	return summary
+}
+
+// UpsertValueAtPath sets a value in the resource using the fieldpath parser.
+func (r *Resolver) UpsertValueAtPath(path string, value interface{}) error {
+	return r.setValueAtPath(path, value)
 }
 
 // resolveField handles the resolution of a single ExpressionField (one field) in
@@ -144,47 +149,37 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 // we can refactor something here.
 // getValueFromPath retrieves a value from the resource using a dot-separated path.
 func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
-	path = strings.TrimPrefix(path, ">") // Remove leading dot if present
-	parts := strings.Split(path, ">")
+	path = strings.TrimPrefix(path, ".") // Remove leading dot if present
+	segments, err := fieldpath.Parse(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path '%s': %v", path, err)
+	}
+
 	current := interface{}(r.resource)
 
-	for _, part := range parts {
-		if strings.Contains(part, "[") && strings.Contains(part, "]") {
+	for _, segment := range segments {
+		if segment.Index >= 0 {
 			// Handle array access
-			arrayPart := strings.Split(part, "[")
-			key := arrayPart[0]
-			indexStr := strings.Trim(arrayPart[1], "]")
-			index, err := strconv.Atoi(indexStr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid array index: %s", indexStr)
-			}
-
-			// Check if current is a map
-			currentMap, ok := current.(map[string]interface{})
+			array, ok := current.([]interface{})
 			if !ok {
-				return nil, fmt.Errorf("expected map for array access at path: %s", path)
+				return nil, fmt.Errorf("expected array at path segment: %v", segment)
 			}
 
-			array, ok := currentMap[key].([]interface{})
-			if !ok {
-				return nil, fmt.Errorf("path is not an array: %s", key)
+			if segment.Index >= len(array) {
+				return nil, fmt.Errorf("array index out of bounds: %d", segment.Index)
 			}
 
-			if index < 0 || index >= len(array) {
-				return nil, fmt.Errorf("array index out of bounds: %d", index)
-			}
-
-			current = array[index]
+			current = array[segment.Index]
 		} else {
 			// Handle object access
 			currentMap, ok := current.(map[string]interface{})
 			if !ok {
-				return nil, fmt.Errorf("expected map at path: %s", path)
+				return nil, fmt.Errorf("expected map at path segment: %v", segment)
 			}
 
-			value, ok := currentMap[part]
+			value, ok := currentMap[segment.Name]
 			if !ok {
-				return nil, fmt.Errorf("key not found: %s in path: %s", part, path)
+				return nil, fmt.Errorf("key not found: %s", segment.Name)
 			}
 			current = value
 		}
@@ -195,160 +190,115 @@ func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
 
 // setValueAtPath sets a value in the resource using a dot-separated path.
 func (r *Resolver) setValueAtPath(path string, value interface{}) error {
-	path = strings.TrimPrefix(path, ">")
-	parts := strings.Split(path, ">")
-	current := r.resource
+	segments, err := fieldpath.Parse(path)
+	if err != nil {
+		return fmt.Errorf("invalid path '%s': %v", path, err)
+	}
 
-	for i, part := range parts {
-		if strings.HasSuffix(part, "]") {
-			// Handle array access
-			openBracket := strings.LastIndex(part, "[")
-			if openBracket == -1 {
-				return fmt.Errorf("invalid array syntax in path: %s", path)
-			}
+	if len(segments) == 0 {
+		return nil
+	}
 
-			key := part[:openBracket]
-			indexStr := part[openBracket+1 : len(part)-1]
-			index, err := strconv.Atoi(indexStr)
+	// We need to keep track of the parent and current object to be able to
+	// create new maps and arrays (pointers) as needed. This is crucial for
+	// maintaining the proper chain of references.
+	var parent interface{} = r.resource
+	var current interface{} = r.resource
+	var parentKey string
+	var parentIndex int
+
+	for i, segment := range segments {
+		if segment.Index >= 0 {
+			newCurrent, err := handleArraySegment(current, parent, segment, parentKey, parentIndex)
 			if err != nil {
-				return fmt.Errorf("invalid array index in path: %s", path)
+				return err
 			}
+			current = newCurrent
 
-			arr, ok := current[key].([]interface{})
-			if !ok {
-				if i == len(parts)-1 {
-					// If this is the last part and its not an array, we need to create it
-					// not sure if this is a valid case, but in theory we're supposed to.
-					arr = make([]interface{}, index+1)
-					current[key] = arr
-				} else {
-					return fmt.Errorf("expected array at key %s in path: %s", key, path)
-				}
-			}
-
-			if index >= len(arr) {
-				if i == len(parts)-1 {
-					// another edge case that sounds weird, but we need to handle it.
-					// the problem here is that we're trying to set a value in an array
-					// that has a gap in the indexes, so we need to fill the gap with nils
-					newArr := make([]interface{}, index+1)
-					copy(newArr, arr)
-					arr = newArr
-					current[key] = arr
-				} else {
-					return fmt.Errorf("array index out of bounds in path: %s", path)
-				}
-			}
-
-			if i == len(parts)-1 {
-				// set the value
-				arr[index] = value
+			if i == len(segments)-1 {
+				array := current.([]interface{})
+				array[segment.Index] = value
 				return nil
 			}
+			parent = current
+			parentIndex = segment.Index
 
-			// move to the next level
-			nextMap, ok := arr[index].(map[string]interface{})
-			if !ok {
-				nextMap = make(map[string]interface{})
-				arr[index] = nextMap
-			}
-			current = nextMap
+			current = getOrCreateNext(current.([]interface{}), segment.Index, segments[i+1].Index >= 0)
 		} else {
-			if i == len(parts)-1 {
-				// This is the last part, set the value
-				current[part] = value
+			currentMap, ok := current.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("expected map at path segment: %v", segment)
+			}
+
+			if i == len(segments)-1 {
+				currentMap[segment.Name] = value
 				return nil
 			}
 
-			// Handle object access
-			next, ok := current[part].(map[string]interface{})
-			if !ok {
-				next = make(map[string]interface{})
-				current[part] = next
+			parent = currentMap
+			parentKey = segment.Name
+			if currentMap[segment.Name] == nil {
+				if segments[i+1].Index >= 0 {
+					currentMap[segment.Name] = make([]interface{}, 0)
+				} else {
+					currentMap[segment.Name] = make(map[string]interface{})
+				}
 			}
-			current = next
+			current = currentMap[segment.Name]
 		}
 	}
 
 	return nil
 }
 
-func (r *Resolver) BlindSetValueAtPath(path string, value interface{}) error {
-	return r.setExpressionToPath(path, value)
+// handleArraySegment manages array access including creation and resizing.
+func handleArraySegment(
+	current, parent interface{},
+	segment fieldpath.Segment,
+	parentKey string,
+	parentIndex int,
+) (interface{}, error) {
+	array, ok := current.([]interface{})
+	if !ok && current == nil {
+		array = make([]interface{}, segment.Index+1)
+		updateParent(parent, parentKey, parentIndex, array)
+		return array, nil
+	} else if !ok {
+		return nil, fmt.Errorf("expected array or nil at segment %v, got %T", segment, current)
+	}
+
+	if segment.Index >= len(array) {
+		newArray := make([]interface{}, segment.Index+1)
+		copy(newArray, array)
+		updateParent(parent, parentKey, parentIndex, newArray)
+		return newArray, nil
+	}
+
+	return array, nil
 }
 
-// setExpressionToPath sets a value in the resource using a dot-separated path.
-// It constructs the path data structure if it doesn't exist.
-func (r *Resolver) setExpressionToPath(path string, value interface{}) error {
-	path = strings.TrimPrefix(path, ">")
-	parts := strings.Split(path, ">")
-	current := r.resource
-
-	for i, part := range parts {
-		if strings.HasSuffix(part, "]") {
-			// Handle array access
-			openBracket := strings.LastIndex(part, "[")
-			if openBracket == -1 {
-				return fmt.Errorf("invalid array syntax in path: %s", path)
-			}
-
-			key := part[:openBracket]
-			indexStr := part[openBracket+1 : len(part)-1]
-			index, err := strconv.Atoi(indexStr)
-			if err != nil {
-				return fmt.Errorf("invalid array index in path: %s", path)
-			}
-
-			arr, ok := current[key].([]interface{})
-			if !ok {
-				// If this is the last part and its not an array, we need to create it
-				// not sure if this is a valid case, but in theory we're supposed to.
-				arr = make([]interface{}, index+1)
-				current[key] = arr
-			}
-
-			if index >= len(arr) {
-				if i == len(parts)-1 {
-					// another edge case that sounds weird, but we need to handle it.
-					// the problem here is that we're trying to set a value in an array
-					// that has a gap in the indexes, so we need to fill the gap with nils
-					newArr := make([]interface{}, index+1)
-					copy(newArr, arr)
-					arr = newArr
-					current[key] = arr
-				} else {
-					return fmt.Errorf("array index out of bounds in path: %s", path)
-				}
-			}
-
-			if i == len(parts)-1 {
-				// set the value
-				arr[index] = value
-				return nil
-			}
-
-			// move to the next level
-			nextMap, ok := arr[index].(map[string]interface{})
-			if !ok {
-				nextMap = make(map[string]interface{})
-				arr[index] = nextMap
-			}
-			current = nextMap
+// getOrCreateNext ensures the next element in the path exists.
+// It initializes a new array or map based on whether the next
+// segment is array access.
+func getOrCreateNext(array []interface{}, index int, nextIsArray bool) interface{} {
+	if array[index] == nil {
+		if nextIsArray {
+			array[index] = make([]interface{}, 0)
 		} else {
-			if i == len(parts)-1 {
-				// This is the last part, set the value
-				current[part] = value
-				return nil
-			}
-
-			// Handle object access
-			next, ok := current[part].(map[string]interface{})
-			if !ok {
-				next = make(map[string]interface{})
-				current[part] = next
-			}
-			current = next
+			array[index] = make(map[string]interface{})
 		}
 	}
-	return nil
+	return array[index]
+}
+
+// updateParent updates the parent's reference to point to a new value.
+// This is crucial when we create new arrays or maps to ensure the entire
+// object structure remains properly connected.
+func updateParent(parent interface{}, key string, index int, value interface{}) {
+	switch p := parent.(type) {
+	case map[string]interface{}:
+		p[key] = value
+	case []interface{}:
+		p[index] = value
+	}
 }

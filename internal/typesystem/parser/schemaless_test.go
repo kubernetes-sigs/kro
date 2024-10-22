@@ -20,7 +20,7 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
-func compareExpressionFields(a, b []variable.FieldDescriptor) bool {
+func areEqualExpressionFields(a, b []variable.FieldDescriptor) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -55,7 +55,7 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions:          []string{"resource.value"},
 					ExpectedType:         "any",
-					Path:                 ">field",
+					Path:                 "field",
 					StandaloneExpression: true,
 				},
 			},
@@ -72,7 +72,7 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions:          []string{"nested.value"},
 					ExpectedType:         "any",
-					Path:                 ">outer>inner",
+					Path:                 "outer.inner",
 					StandaloneExpression: true,
 				},
 			},
@@ -90,13 +90,13 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions:          []string{"array[0]"},
 					ExpectedType:         "any",
-					Path:                 ">array[0]",
+					Path:                 "array[0]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array[1]"},
 					ExpectedType:         "any",
-					Path:                 ">array[1]",
+					Path:                 "array[1]",
 					StandaloneExpression: true,
 				},
 			},
@@ -111,7 +111,7 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions:  []string{"expr1", "expr2"},
 					ExpectedType: "any",
-					Path:         ">field",
+					Path:         "field",
 				},
 			},
 			wantErr: false,
@@ -133,13 +133,13 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions:          []string{"string.value"},
 					ExpectedType:         "any",
-					Path:                 ">string",
+					Path:                 "string",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array.value"},
 					ExpectedType:         "any",
-					Path:                 ">nested>array[0]",
+					Path:                 "nested.array[0]",
 					StandaloneExpression: true,
 				},
 			},
@@ -168,7 +168,7 @@ func TestParseSchemalessResource(t *testing.T) {
 				t.Errorf("ParseSchemalessResource() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !compareExpressionFields(got, tt.want) {
+			if !areEqualExpressionFields(got, tt.want) {
 				t.Errorf("ParseSchemalessResource() = %v, want %v", got, tt.want)
 			}
 		})
@@ -197,7 +197,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				{
 					Expressions:          []string{"deeply.nested.value"},
 					ExpectedType:         "any",
-					Path:                 ">level1>level2>level3>level4",
+					Path:                 "level1.level2.level3.level4",
 					StandaloneExpression: true,
 				},
 			},
@@ -219,13 +219,13 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				{
 					Expressions:          []string{"expr1"},
 					ExpectedType:         "any",
-					Path:                 ">array[0]",
+					Path:                 "array[0]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr2"},
 					ExpectedType:         "any",
-					Path:                 ">array[3]>nested",
+					Path:                 "array[3].nested",
 					StandaloneExpression: true,
 				},
 			},
@@ -241,13 +241,13 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				{
 					Expressions:          []string{""},
 					ExpectedType:         "any",
-					Path:                 ">empty1",
+					Path:                 "empty1",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"    "},
 					ExpectedType:         "any",
-					Path:                 ">empty2",
+					Path:                 "empty2",
 					StandaloneExpression: true,
 				},
 			},
@@ -291,36 +291,36 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				{
 					Expressions:          []string{"string.value"},
 					ExpectedType:         "any",
-					Path:                 ">string",
+					Path:                 "string",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array.value"},
 					ExpectedType:         "any",
-					Path:                 ">nested>array[0]",
+					Path:                 "nested.array[0]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:  []string{"expr1", "expr2"},
 					ExpectedType: "any",
-					Path:         ">complex>field",
+					Path:         "complex.field",
 				},
 				{
 					Expressions:          []string{"nested.value"},
 					ExpectedType:         "any",
-					Path:                 ">complex>nested>inner",
+					Path:                 "complex.nested.inner",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr4"},
 					ExpectedType:         "any",
-					Path:                 ">complex>array[1]",
+					Path:                 "complex.array[1]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr5"},
 					ExpectedType:         "any",
-					Path:                 ">complex>array[2]",
+					Path:                 "complex.array[2]",
 					StandaloneExpression: true,
 				},
 			},
@@ -334,7 +334,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				t.Errorf("ParseSchemalessResource() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !compareExpressionFields(got, tt.want) {
+			if !areEqualExpressionFields(got, tt.want) {
 				t.Errorf("ParseSchemalessResource() = %v, want %v", got, tt.want)
 			}
 		})

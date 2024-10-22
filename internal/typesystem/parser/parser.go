@@ -17,8 +17,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/aws-controllers-k8s/symphony/internal/typesystem/variable"
 )
 
 // ParseResource extracts CEL expressions from a resource based on
@@ -93,7 +94,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path, expect
 		if err != nil {
 			return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+fieldName, err)
 		}
-		fieldPath := path + ">" + fieldName
+		fieldPath := joinPathAndFieldName(path, fieldName)
 		fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
 		if err != nil {
 			return nil, err
@@ -126,7 +127,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path, expectedType str
 }
 
 func parseString(field string, schema *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
-	ok, err := isOneShotExpression(field)
+	ok, err := isStandaloneExpression(field)
 	if err != nil {
 		return nil, err
 	}
@@ -222,4 +223,17 @@ func isInteger(v interface{}) bool {
 	default:
 		return false
 	}
+}
+
+// joinPathAndField appends a field name to a path. If the fieldName contains
+// a dot or is empty, the path will be appended using ["fieldName"] instead of
+// .fieldName to avoid ambiguity and simplify parsing back the path.
+func joinPathAndFieldName(path, fieldName string) string {
+	if fieldName == "" || strings.Contains(fieldName, ".") {
+		return fmt.Sprintf("%s[%q]", path, fieldName)
+	}
+	if path == "" {
+		return fieldName
+	}
+	return fmt.Sprintf("%s.%s", path, fieldName)
 }

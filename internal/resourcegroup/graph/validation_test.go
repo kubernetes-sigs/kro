@@ -213,3 +213,40 @@ func TestValidateKubernetesObjectStructure(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateKubernetesVersion(t *testing.T) {
+	tests := []struct {
+		version    string
+		shouldPass bool
+	}{
+		{"v1", true},
+		{"v10", true},
+		{"v1beta1", true},
+		{"v1beta2", true},
+		{"v1alpha1", true},
+		{"v1alpha2", true},
+		{"v1alpha10", true},
+		{"v15alpha1", true},
+		{"v2", true},
+		{"v", false},
+		{"vvvv", false},
+		{"v1.1", false},
+		{"v1.1.1", false},
+		{"v1alpha", false},
+		{"valpha1", false},
+		{"alpha", false},
+		{"1alpha", false},
+		{"v1alpha1beta1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			err := validateKubernetesVersion(tt.version)
+			if tt.shouldPass && err != nil {
+				t.Errorf("Expected version %q to be valid, but got error: %v", tt.version, err)
+			}
+			if !tt.shouldPass && err == nil {
+				t.Errorf("Expected version %q to be invalid, but it passed validation", tt.version)
+			}
+		})
+	}
+}

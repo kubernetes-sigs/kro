@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"regexp"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
@@ -30,6 +32,8 @@ var (
 	lowerCamelCaseRegex = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
 	// UpperCamelCaseRegex
 	upperCamelCaseRegex = regexp.MustCompile(`^[A-Z][a-zA-Z0-9]*$`)
+	// kubernetesVersionRegex
+	kubernetesVersionRegex = regexp.MustCompile(`^v\d+(?:(?:alpha|beta)\d+)?$`)
 
 	// reservedKeyWords is a list of reserved words in Symphony.
 	reservedKeyWords = []string{
@@ -136,6 +140,17 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("apiVersion field is not a string")
 	}
 
+	groupVersion, err := schema.ParseGroupVersion(apiVersion.(string))
+	if err != nil {
+		return fmt.Errorf("apiVersion field is not a valid Kubernetes group version: %w", err)
+	}
+	if groupVersion.Version != "" {
+		// Only validate the version if it is not empty. Empty version is allowed.
+		if err := validateKubernetesVersion(groupVersion.Version); err != nil {
+			return fmt.Errorf("apiVersion field does not have a valid version: %w", err)
+		}
+	}
+
 	kind, exists := obj["kind"]
 	if !exists {
 		return fmt.Errorf("kind field not found")
@@ -154,5 +169,14 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("metadata field is not a map")
 	}
 
+	return nil
+}
+
+// validateKubernetesVersion checks if the given version is a valid Kubernetes
+// version. e.g v1, v1alpha1, v1beta1..
+func validateKubernetesVersion(version string) error {
+	if !kubernetesVersionRegex.MatchString(version) {
+		return fmt.Errorf("version %s is not a valid Kubernetes version", version)
+	}
 	return nil
 }

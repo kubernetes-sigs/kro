@@ -20,13 +20,16 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
 	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 )
 
@@ -83,6 +86,8 @@ type Controller struct {
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
+	// serviceAccounts is a map of service accounts to use for controller impersonation.
+	serviceAccounts map[string]string
 }
 
 // NewController creates a new Controller instance.
@@ -92,6 +97,7 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rg *graph.Graph,
 	client dynamic.Interface,
+	serviceAccounts map[string]string,
 	instanceLabeler k8smetadata.Labeler,
 ) *Controller {
 	return &Controller{
@@ -101,6 +107,7 @@ func NewController(
 		rg:              rg,
 		instanceLabeler: instanceLabeler,
 		reconcileConfig: reconcileConfig,
+		serviceAccounts: serviceAccounts,
 	}
 }
 
@@ -135,10 +142,17 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
 	}
 
+	// If possible, use a service account to create the execution client
+	// TODO(a-hilaly): client caching
+	executionClient, err := c.getExecutionClient(namespace)
+	if err != nil {
+		return fmt.Errorf("failed to create execution client: %w", err)
+	}
+
 	instanceGraphReconciler := &instanceGraphReconciler{
 		log:                         log,
 		gvr:                         c.gvr,
-		client:                      c.client,
+		client:                      executionClient,
 		runtime:                     rgRuntime,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
@@ -155,4 +169,99 @@ func getNamespaceName(req ctrl.Request) (string, string) {
 		namespace = metav1.NamespaceDefault
 	}
 	return namespace, name
+}
+
+// errorCategory helps classify different types of impersonation errors
+type errorCategory string
+
+const (
+	errorConfigCreate errorCategory = "config_create"
+	errorInvalidSA    errorCategory = "invalid_sa"
+	errorClientCreate errorCategory = "client_create"
+	errorPermissions  errorCategory = "permissions"
+)
+
+// getExecutionClient determines the execution client to use for the instance.
+// If the instance is created in a namespace of which a service account is specified,
+// the execution client will be created using the service account. If no service account
+// is specified for the namespace, the default client will be used.
+func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, error) {
+	// if no service accounts are specified, use the default client
+	if len(c.serviceAccounts) == 0 {
+		c.log.V(1).Info("no service accounts configured, using default client")
+		return c.client, nil
+	}
+
+	timer := prometheus.NewTimer(impersonationDuration.WithLabelValues(namespace, ""))
+	defer timer.ObserveDuration()
+
+	// Check for namespace specific service account
+	if sa, ok := c.serviceAccounts[namespace]; ok {
+		userName, err := getServiceAccountUserName(namespace, sa)
+		if err != nil {
+			c.handleImpersonateError(namespace, sa, err)
+			return nil, fmt.Errorf("invalid service account configuration: %w", err)
+		}
+
+		client, err := kubernetes.NewDynamicClient(userName)
+		if err != nil {
+			c.handleImpersonateError(namespace, sa, err)
+			return nil, fmt.Errorf("failed to create impersonated client: %w", err)
+		}
+
+		impersonationTotal.WithLabelValues(namespace, sa, "success").Inc()
+		return client, nil
+	}
+
+	// Check for default service account (marked by "*")
+	if defaultSA, ok := c.serviceAccounts[v1alpha1.DefaultServiceAccountKey]; ok {
+		userName, err := getServiceAccountUserName(namespace, defaultSA)
+		if err != nil {
+			c.handleImpersonateError(namespace, defaultSA, err)
+			return nil, fmt.Errorf("invalid default service account configuration: %w", err)
+		}
+
+		client, err := kubernetes.NewDynamicClient(userName)
+		if err != nil {
+			c.handleImpersonateError(namespace, defaultSA, err)
+			return nil, fmt.Errorf("failed to create impersonated client with default SA: %w", err)
+		}
+
+		impersonationTotal.WithLabelValues(namespace, defaultSA, "success").Inc()
+		return client, nil
+	}
+
+	impersonationTotal.WithLabelValues(namespace, "", "default").Inc()
+	// Fallback to the default client
+	return c.client, nil
+}
+
+// handleImpersonateError logs the error and records the error in the metrics
+func (c *Controller) handleImpersonateError(namespace, sa string, err error) {
+	var category errorCategory
+	switch {
+	case strings.Contains(err.Error(), "forbidden"):
+		category = errorPermissions
+	case strings.Contains(err.Error(), "cannot get token"):
+		category = errorConfigCreate
+	default:
+		category = errorClientCreate
+	}
+	recordImpersonateError(namespace, sa, category)
+	c.log.Error(
+		err,
+		"failed to create impersonated client",
+		"namespace", namespace,
+		"serviceAccount", sa,
+		"errorCategory", category,
+	)
+}
+
+// getServiceAccountUserName builds the impersonate service account user name.
+// The format of the user name is "system:serviceaccount:<namespace>:<serviceaccount>"
+func getServiceAccountUserName(namespace, serviceAccount string) (string, error) {
+	if namespace == "" || serviceAccount == "" {
+		return "", fmt.Errorf("namespace and service account must be provided")
+	}
+	return fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccount), nil
 }

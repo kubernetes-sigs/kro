@@ -41,3 +41,25 @@ func NewClients() (*rest.Config, *kubernetes.Clientset, *dynamic.DynamicClient, 
 	}
 	return config, clientset, dynamicClient, apiExtensionsClient, nil
 }
+
+// NewDynamicClient creates a new dynamic client with optional service account
+// impersonation
+func NewDynamicClient(impersonateUser string) (*dynamic.DynamicClient, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	if impersonateUser != "" {
+		config.Impersonate = rest.ImpersonationConfig{
+			UserName: impersonateUser,
+		}
+	}
+
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return dynamicClient, nil
+}

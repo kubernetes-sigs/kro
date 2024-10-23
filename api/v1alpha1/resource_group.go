@@ -18,6 +18,12 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
+const (
+	// DefaultServiceAccountKey is the key to use for the default service account
+	// in the serviceAccounts map.
+	DefaultServiceAccountKey = "*"
+)
+
 // ResourceGroupSpec defines the desired state of ResourceGroup
 type ResourceGroupSpec struct {
 	// The kind of the resourcegroup. This is used to generate
@@ -25,7 +31,6 @@ type ResourceGroupSpec struct {
 	//
 	// +kubebuilder:validation:Required
 	Kind string `json:"kind,omitempty"`
-
 	// The APIVersion of the resourcegroup. This is used to generate
 	// and create the CRD for the resourcegroup.
 	//
@@ -40,6 +45,13 @@ type ResourceGroupSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
+	// ServiceAccount configuration for controller impersonation.
+	// Key is the namespace, value is the service account name to use.
+	// Special key "*" defines the default service account for any
+	// namespace not explicitly mapped.
+	//
+	// +kubebuilder:validation:Optional
+	ServiceAccounts map[string]string `json:"serviceAccounts,omitempty"`
 }
 
 // Definition represents the attributes that define an instance of

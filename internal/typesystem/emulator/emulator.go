@@ -16,6 +16,7 @@ package emulator
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +25,11 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// TODO(a-hilaly): generate fields based on the schema constraints(min, max, pattern, etc...)
+var (
+	// kubernetesTopLevelFields are top-level fields that are common across all
+	// Kubernetes resources. We don't want to generate these fields.
+	kubernetesTopLevelFields = []string{"apiVersion", "kind", "metadata"}
+)
 
 // Emulator is used to generate dummy CRs based on an OpenAPI schema.
 type Emulator struct {
@@ -48,46 +53,24 @@ func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind, schema *spec.Sch
 		Object: make(map[string]interface{}),
 	}
 
-	// Generate the entire object based on the schema
-	object, err := e.generateObject(schema)
-	if err != nil {
-		return nil, fmt.Errorf("error generating CR: %w", err)
-	}
-
-	// Merge the generated object with the existing CR object
-	for k, v := range object {
-		cr.Object[k] = v
-	}
-
-	// Set the GVK after generating the object...
-	cr.SetAPIVersion(gvk.GroupVersion().String())
-	cr.SetKind(gvk.Kind)
-	cr.SetName(fmt.Sprintf("%s-sample", strings.ToLower(gvk.Kind)))
-	cr.SetNamespace("default")
-
-	return cr, nil
-}
-
-// generateObject generates an object (Struct) based on the provided schema.
-func (e *Emulator) generateObject(schema *spec.Schema) (map[string]interface{}, error) {
-	if schema == nil {
-		return nil, fmt.Errorf("schema is nil")
-	}
-
-	result := make(map[string]interface{})
+	// Only generate fields from the schema
 	for propertyName, propertySchema := range schema.Properties {
-		// Skip metadata as it's already set
-		if propertyName == "metadata" {
+		// Skip Kubernetes-specific top-level fields
+		if slices.Contains(kubernetesTopLevelFields, propertyName) {
 			continue
 		}
 		value, err := e.generateValue(&propertySchema)
 		if err != nil {
-			return nil, fmt.Errorf("error generating value for %s: %w", propertyName, err)
+			return nil, fmt.Errorf("error generating field %s: %w", propertyName, err)
 		}
-		result[propertyName] = value
+		cr.Object[propertyName] = value
 	}
 
-	return result, nil
+	cr.SetAPIVersion(gvk.GroupVersion().String())
+	cr.SetKind(gvk.Kind)
+	cr.SetName(fmt.Sprintf("%s-sample", strings.ToLower(gvk.Kind)))
+	cr.SetNamespace("default")
+	return cr, nil
 }
 
 // generateValue generates a value based on the provided schema.
@@ -109,7 +92,6 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		return nil, fmt.Errorf("schema type is empty and has no properties")
 	}
 
-	// Handle 0 or more than type
 	if len(schema.Type) != 1 {
 		return nil, fmt.Errorf("schema type is not a single type: %v", schema.Type)
 	}
@@ -133,6 +115,24 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 	}
 }
 
+// generateObject generates an object based on the provided schema.
+func (e *Emulator) generateObject(schema *spec.Schema) (map[string]interface{}, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("schema is nil")
+	}
+
+	result := make(map[string]interface{})
+	for propertyName, propertySchema := range schema.Properties {
+		value, err := e.generateValue(&propertySchema)
+		if err != nil {
+			return nil, fmt.Errorf("error generating field %s: %w", propertyName, err)
+		}
+		result[propertyName] = value
+	}
+
+	return result, nil
+}
+
 // generateString generates a string based on the provided schema.
 func (e *Emulator) generateString(schema *spec.Schema) string {
 	if len(schema.Enum) > 0 {
@@ -141,24 +141,61 @@ func (e *Emulator) generateString(schema *spec.Schema) string {
 	return fmt.Sprintf("dummy-string-%d", e.rand.Intn(1000))
 }
 
-func (e *Emulator) generateInteger(_ *spec.Schema) int64 {
-	return e.rand.Int63n(100)
+func (e *Emulator) generateInteger(schema *spec.Schema) int64 {
+	// Default to 0-10000 range
+	min := int64(0)
+	max := int64(10000)
+
+	if schema.Minimum != nil {
+		min = int64(*schema.Minimum)
+	}
+	if schema.Maximum != nil {
+		max = int64(*schema.Maximum)
+	}
+
+	if min == max {
+		return min
+	}
+
+	return min + e.rand.Int63n(max-min)
 }
 
-func (e *Emulator) generateNumber(_ *spec.Schema) float64 {
-	return e.rand.Float64() * 100
+func (e *Emulator) generateNumber(schema *spec.Schema) float64 {
+	min := 0.0
+	max := 100.0
+
+	if schema.Minimum != nil {
+		min = *schema.Minimum
+	}
+	if schema.Maximum != nil {
+		max = *schema.Maximum
+	}
+
+	return min + e.rand.Float64()*(max-min)
 }
 
 // generateArray generates an array based on the provided schema.
-// TODO(a-hilaly): respect the minItems and maxItems constraints.
 func (e *Emulator) generateArray(schema *spec.Schema) ([]interface{}, error) {
 	if schema.Items == nil || schema.Items.Schema == nil {
 		return nil, fmt.Errorf("array items schema is nil")
 	}
 
-	numItems := 1 + e.rand.Intn(3) // Generate 1 to 3 items
-	result := make([]interface{}, numItems)
+	minItems := 1
+	maxItems := 3
 
+	if schema.MinItems != nil {
+		minItems = int(*schema.MinItems)
+	}
+	if schema.MaxItems != nil {
+		maxItems = int(*schema.MaxItems)
+	}
+
+	numItems := minItems
+	if maxItems > minItems {
+		numItems += e.rand.Intn(maxItems - minItems)
+	}
+
+	result := make([]interface{}, numItems)
 	for i := 0; i < numItems; i++ {
 		value, err := e.generateValue(schema.Items.Schema)
 		if err != nil {

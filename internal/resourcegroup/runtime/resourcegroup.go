@@ -80,7 +80,7 @@ func NewResourceGroupRuntime(
 		for _, expr := range resource.GetReadyOnExpressions() {
 			ees := &expressionEvaluationState{
 				Expression: expr,
-				Kind:       variable.ResourceVariableKindDynamic,
+				Kind:       variable.ResourceVariableKindReadyOn,
 			}
 			r.expressionsCache[expr] = ees
 		}
@@ -473,28 +473,27 @@ func (rt *ResourceGroupRuntime) allExpressionsAreResolved() bool {
 // IsResourceReady checks if a resource is ready based on the readyOnExpressions
 // defined in the resource. If no readyOnExpressions are defined, the resource
 // is considered ready.
-func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, error) {
+func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string, error) {
 	observed, ok := rt.resolvedResources[resourceID]
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
 		// before calling this function.
-		return false, fmt.Errorf("resource %s not found", resourceID)
+		return false, fmt.Sprintf("resource %s is not created", resourceID), nil
 	}
 
 	expressions := rt.resources[resourceID].GetReadyOnExpressions()
 	if len(expressions) == 0 {
-		return true, nil
+		return true, "", nil
 	}
 
 	topLevelFields := rt.resources[resourceID].GetTopLevelFields()
 	env, err := celutil.NewEnvironement(&celutil.EnvironementOptions{
 		ResourceNames: topLevelFields,
 	})
-
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
 	if err != nil {
-		return false, fmt.Errorf("failed creating new Environment: %w", err)
+		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
 	context := map[string]interface{}{}
 	for _, n := range topLevelFields {
@@ -507,29 +506,36 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, error)
 		// the result. NOTE(a-hilaly): maybe we can cache the result, but for that
 		// we also need to define a new Kind for the variables, they are not dynamic
 		// nor static. And for sure they need to be expressionEvaluationStateo objects.
+		//
+		// We shouldn't expect an error here, since we tested it with dry run
+		// keeping check just in case
 		ast, issues := env.Compile(expression)
 		if issues != nil && issues.Err() != nil {
-			return false, fmt.Errorf("failed compiling expression %s: %w", expression, err)
+			return false, "", fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 		}
+		// Here as well
 		program, err := env.Program(ast)
 		if err != nil {
-			return false, fmt.Errorf("failed programming expression %s: %w", expression, err)
+			return false, "", fmt.Errorf("failed programming expression %s: %w", expression, err)
 		}
-
+		// We get an error here when the value field we're looking for is not yet defined
+		// For now leaving it as error, in the future when we see different scenarios
+		// of this error we can make some a reason, and others an error
 		output, _, err := program.Eval(context)
 		if err != nil {
-			return false, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
+			return false, "", fmt.Errorf("failed evaluating expression %s: %w", expression, err)
 		}
+		// We should not expect an error here as well since we checked during dry-run
 		out, err := celutil.ConvertCELtoGo(output)
 		if err != nil {
-			return false, fmt.Errorf("failed converting output %v: %w", output, err)
+			return false, "", fmt.Errorf("failed converting output %v: %w", output, err)
 		}
-		// keep checking for a false
+		// returning a reason here to point out which expression is not ready yet
 		if !out.(bool) {
-			return false, nil
+			return false, fmt.Sprintf("expression %s evaluated to false", expression), nil
 		}
 	}
-	return true, err
+	return true, "", nil
 }
 
 // containsAllElements checks if all elements in the inner slice are present

@@ -58,7 +58,7 @@ type Interface interface {
 	SetInstance(obj *unstructured.Unstructured)
 
 	// IsResourceReady returns true if the resource is ready, and false otherwise.
-	IsResourceReady(resourceID string) (bool, error)
+	IsResourceReady(resourceID string) (bool, string, error)
 }
 
 // ResourceDescriptor provides metadata about a resource.

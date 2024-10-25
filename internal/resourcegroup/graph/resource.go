@@ -153,6 +153,7 @@ func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
 		id:                 r.id,
 		gvr:                r.gvr,
+		schema:             r.schema,
 		originalObject:     r.originalObject.DeepCopy(),
 		variables:          slices.Clone(r.variables),
 		dependencies:       slices.Clone(r.dependencies),

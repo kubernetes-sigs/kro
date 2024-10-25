@@ -103,6 +103,17 @@ const (
 	//    spec:
 	//	    vpcID: ${vpc.status.vpcID}
 	ResourceVariableKindDynamic ResourceVariableKind = "dynamic"
+	// ResourceVariableKindReadyOn represents readyOn variables. ReadyOn variables
+	// are resolved at runtime. The difference between them, and the dynamic variables
+	// is that dynamic variable resolutions wait for other resources to provide a value
+	// while ReadyOn variables are created and wait for certain conditions before
+	// moving forward to the next resource to create
+	//
+	// For example:
+	//   name: cluster
+	//   readyOn:
+	//   - ${status.status == "Active"}
+	ResourceVariableKindReadyOn ResourceVariableKind = "readyOn"
 )
 
 // String returns the string representation of a ResourceVariableKind.

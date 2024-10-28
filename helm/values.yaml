@@ -1,12 +1,41 @@
 image:
   repository: 095708837592.dkr.ecr.us-west-2.amazonaws.com/symphony
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.1.0-rc.5"
+  tag: "0.1.0"
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+deployment:
+  annotations: {}
+  labels: {}
+  containerPort: 8080
+  # Which nodeSelector to set?
+  # See: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
+  nodeSelector:
+    kubernetes.io/os: linux
+  # Which tolerations to set?
+  # See: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+  tolerations: []
+  # What affinity to set?
+  # See: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity
+  affinity: {}
+  # Which priorityClassName to set?
+  # See: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#pod-priority
+  priorityClassName: ""
+  # Specifies the hostname of the Pod.
+  # If not specified, the pod's hostname will be set to a system-defined value.
+  hostNetwork: false
+  # Set DNS policy for the pod.
+  # Defaults to "ClusterFirst".
+  # Valid values are 'ClusterFirstWithHostNet', 'ClusterFirst', 'Default' or 'None'.
+  # To have DNS options set along with hostNetwork, you have to specify DNS policy
+  # explicitly to 'ClusterFirstWithHostNet'.
+  dnsPolicy: ClusterFirst
+  extraVolumes: []
+  extraVolumeMounts: []
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -19,6 +48,15 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
+metrics:
+  service:
+    # Set to true to automatically create a Kubernetes Service resource for the
+    # Prometheus metrics server endpoint in controller
+    create: false
+    # Which Type to use for the Kubernetes Service?
+    # See: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+    type: "ClusterIP"
+
 resources:
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
@@ -30,4 +68,16 @@ resources:
     cpu: 256m
     memory: 128Mi
 
-config: {}
+config:
+  # Allow symphony to delete CRDs
+  allowCRDDeletion: false
+  # The address the metric endpoint binds to
+  metricsBindAddress: :8078
+  # The address the probe endpoint binds to
+  healthProbeBindAddress: :8079
+  # The number of resource group reconciles to run in parallel
+  resourceGroupConcurrentReconciles: 1
+  # The number of dynamic controller reconciles to run in parallel
+  dynamicControllerConcurrentReconciles: 1
+  # The log level verbosity. 0 is the least verbose, 5 is the most verbose
+  logLevel: 3

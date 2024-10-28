@@ -1,0 +1,18 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: CoreDNSDeployment
+metadata:
+  name: mynameis
+spec:
+  name: mynameis
+  namespace: default
+  values:
+    clusterRole: {}
+    clusterRoleBinding: {}
+    configMap: {}
+    deployment: {}
+    image: {}
+    resources:
+      limits: {}
+      requests: {}
+    service: {}
+    serviceAccount: {}

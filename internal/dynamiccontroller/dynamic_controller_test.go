@@ -98,9 +98,9 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	_, exists := dc.informers.Load(gvr)
 	assert.True(t, exists)
 
-	// Try to register again (should fail)
+	// Try to register again (should not fail)
 	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 
 	// Unregister GVK
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -1,0 +1,417 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.2
+  name: securitygroups.ec2.services.k8s.aws
+spec:
+  group: ec2.services.k8s.aws
+  names:
+    kind: SecurityGroup
+    listKind: SecurityGroupList
+    plural: securitygroups
+    singular: securitygroup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.id
+      name: ID
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SecurityGroup is the Schema for the SecurityGroups API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SecurityGroupSpec defines the desired state of SecurityGroup.
+
+              Describes a security group.
+            properties:
+              description:
+                description: |-
+                  A description for the security group. This is informational only.
+
+                  Constraints: Up to 255 characters in length
+
+                  Constraints for EC2-Classic: ASCII characters
+
+                  Constraints for EC2-VPC: a-z, A-Z, 0-9, spaces, and ._-:/()#,@[]+=&;{}!$*
+                type: string
+              egressRules:
+                items:
+                  description: Describes a set of permissions for a security group
+                    rule.
+                  properties:
+                    fromPort:
+                      format: int64
+                      type: integer
+                    ipProtocol:
+                      type: string
+                    ipRanges:
+                      items:
+                        description: Describes an IPv4 range.
+                        properties:
+                          cidrIP:
+                            type: string
+                          description:
+                            type: string
+                        type: object
+                      type: array
+                    ipv6Ranges:
+                      items:
+                        description: '[EC2-VPC only] Describes an IPv6 range.'
+                        properties:
+                          cidrIPv6:
+                            type: string
+                          description:
+                            type: string
+                        type: object
+                      type: array
+                    prefixListIDs:
+                      items:
+                        description: Describes a prefix list ID.
+                        properties:
+                          description:
+                            type: string
+                          prefixListID:
+                            type: string
+                        type: object
+                      type: array
+                    toPort:
+                      format: int64
+                      type: integer
+                    userIDGroupPairs:
+                      items:
+                        description: |-
+                          Describes a security group and Amazon Web Services account ID pair.
+
+                          We are retiring EC2-Classic on August 15, 2022. We recommend that you migrate
+                          from EC2-Classic to a VPC. For more information, see Migrate from EC2-Classic
+                          to a VPC (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/vpc-migrate.html)
+                          in the Amazon Elastic Compute Cloud User Guide.
+                        properties:
+                          description:
+                            type: string
+                          groupID:
+                            type: string
+                          groupName:
+                            type: string
+                          groupRef:
+                            description: Reference field for GroupID
+                            properties:
+                              from:
+                                description: |-
+                                  AWSResourceReference provides all the values necessary to reference another
+                                  k8s resource for finding the identifier(Id/ARN/Name)
+                                properties:
+                                  name:
+                                    type: string
+                                  namespace:
+                                    type: string
+                                type: object
+                            type: object
+                          peeringStatus:
+                            type: string
+                          userID:
+                            type: string
+                          vpcID:
+                            type: string
+                          vpcPeeringConnectionID:
+                            type: string
+                          vpcRef:
+                            description: Reference field for VPCID
+                            properties:
+                              from:
+                                description: |-
+                                  AWSResourceReference provides all the values necessary to reference another
+                                  k8s resource for finding the identifier(Id/ARN/Name)
+                                properties:
+                                  name:
+                                    type: string
+                                  namespace:
+                                    type: string
+                                type: object
+                            type: object
+                        type: object
+                      type: array
+                  type: object
+                type: array
+              ingressRules:
+                items:
+                  description: Describes a set of permissions for a security group
+                    rule.
+                  properties:
+                    fromPort:
+                      format: int64
+                      type: integer
+                    ipProtocol:
+                      type: string
+                    ipRanges:
+                      items:
+                        description: Describes an IPv4 range.
+                        properties:
+                          cidrIP:
+                            type: string
+                          description:
+                            type: string
+                        type: object
+                      type: array
+                    ipv6Ranges:
+                      items:
+                        description: '[EC2-VPC only] Describes an IPv6 range.'
+                        properties:
+                          cidrIPv6:
+                            type: string
+                          description:
+                            type: string
+                        type: object
+                      type: array
+                    prefixListIDs:
+                      items:
+                        description: Describes a prefix list ID.
+                        properties:
+                          description:
+                            type: string
+                          prefixListID:
+                            type: string
+                        type: object
+                      type: array
+                    toPort:
+                      format: int64
+                      type: integer
+                    userIDGroupPairs:
+                      items:
+                        description: |-
+                          Describes a security group and Amazon Web Services account ID pair.
+
+                          We are retiring EC2-Classic on August 15, 2022. We recommend that you migrate
+                          from EC2-Classic to a VPC. For more information, see Migrate from EC2-Classic
+                          to a VPC (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/vpc-migrate.html)
+                          in the Amazon Elastic Compute Cloud User Guide.
+                        properties:
+                          description:
+                            type: string
+                          groupID:
+                            type: string
+                          groupName:
+                            type: string
+                          groupRef:
+                            description: Reference field for GroupID
+                            properties:
+                              from:
+                                description: |-
+                                  AWSResourceReference provides all the values necessary to reference another
+                                  k8s resource for finding the identifier(Id/ARN/Name)
+                                properties:
+                                  name:
+                                    type: string
+                                  namespace:
+                                    type: string
+                                type: object
+                            type: object
+                          peeringStatus:
+                            type: string
+                          userID:
+                            type: string
+                          vpcID:
+                            type: string
+                          vpcPeeringConnectionID:
+                            type: string
+                          vpcRef:
+                            description: Reference field for VPCID
+                            properties:
+                              from:
+                                description: |-
+                                  AWSResourceReference provides all the values necessary to reference another
+                                  k8s resource for finding the identifier(Id/ARN/Name)
+                                properties:
+                                  name:
+                                    type: string
+                                  namespace:
+                                    type: string
+                                type: object
+                            type: object
+                        type: object
+                      type: array
+                  type: object
+                type: array
+              name:
+                description: |-
+                  The name of the security group.
+
+                  Constraints: Up to 255 characters in length. Cannot start with sg-.
+
+                  Constraints for EC2-Classic: ASCII characters
+
+                  Constraints for EC2-VPC: a-z, A-Z, 0-9, spaces, and ._-:/()#,@[]+=&;{}!$*
+                type: string
+              tags:
+                description: |-
+                  The tags. The value parameter is required, but if you don't want the tag
+                  to have a value, specify the parameter with no value, and we set the value
+                  to an empty string.
+                items:
+                  description: Describes a tag.
+                  properties:
+                    key:
+                      type: string
+                    value:
+                      type: string
+                  type: object
+                type: array
+              vpcID:
+                description: '[EC2-VPC] The ID of the VPC. Required for EC2-VPC.'
+                type: string
+              vpcRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    type: object
+                type: object
+            required:
+            - description
+            - name
+            type: object
+          status:
+            description: SecurityGroupStatus defines the observed state of SecurityGroup
+            properties:
+              ackResourceMetadata:
+                description: |-
+                  All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                  that is used to contain resource sync state, account ownership,
+                  constructed ARN for the resource
+                properties:
+                  arn:
+                    description: |-
+                      ARN is the Amazon Resource Name for the resource. This is a
+                      globally-unique identifier and is set only by the ACK service controller
+                      once the controller has orchestrated the creation of the resource OR
+                      when it has verified that an "adopted" resource (a resource where the
+                      ARN annotation was set by the Kubernetes user on the CR) exists and
+                      matches the supplied CR's Spec field values.
+                      https://github.com/aws/aws-controllers-k8s/issues/270
+                    type: string
+                  ownerAccountID:
+                    description: |-
+                      OwnerAccountID is the AWS Account ID of the account that owns the
+                      backend AWS service API resource.
+                    type: string
+                  region:
+                    description: Region is the AWS region in which the resource exists
+                      or will exist.
+                    type: string
+                required:
+                - ownerAccountID
+                - region
+                type: object
+              conditions:
+                description: |-
+                  All CRS managed by ACK have a common `Status.Conditions` member that
+                  contains a collection of `ackv1alpha1.Condition` objects that describe
+                  the various terminal states of the CR and its backend AWS service API
+                  resource
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              id:
+                description: The ID of the security group.
+                type: string
+              rules:
+                description: Information about security group rules.
+                items:
+                  description: Describes a security group rule.
+                  properties:
+                    cidrIPv4:
+                      type: string
+                    cidrIPv6:
+                      type: string
+                    description:
+                      type: string
+                    fromPort:
+                      format: int64
+                      type: integer
+                    ipProtocol:
+                      type: string
+                    isEgress:
+                      type: boolean
+                    prefixListID:
+                      type: string
+                    securityGroupRuleID:
+                      type: string
+                    tags:
+                      items:
+                        description: Describes a tag.
+                        properties:
+                          key:
+                            type: string
+                          value:
+                            type: string
+                        type: object
+                      type: array
+                    toPort:
+                      format: int64
+                      type: integer
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

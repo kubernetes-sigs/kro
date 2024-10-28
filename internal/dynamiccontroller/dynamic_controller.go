@@ -330,10 +330,10 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 	var wg sync.WaitGroup
 	dc.informers.Range(func(key, value interface{}) bool {
 		wg.Add(1)
-		go func(informer dynamicinformer.DynamicSharedInformerFactory) {
+		go func(informer *informerWrapper) {
 			defer wg.Done()
-			informer.Shutdown()
-		}(value.(dynamicinformer.DynamicSharedInformerFactory))
+			informer.informer.Shutdown()
+		}(value.(*informerWrapper))
 		return true
 	})
 
@@ -425,10 +425,9 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
-	// Use Load to check if the GVK is already registered
 	_, exists := dc.informers.Load(gvr)
 	if exists {
-		return fmt.Errorf("GVK %v already registered", gvr.String())
+		return nil
 	}
 
 	// Create a new informer
@@ -509,7 +508,6 @@ func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.Grou
 
 	// Cancel the context to stop the informer
 	wrapper.shutdown()
-
 	// Wait for the informer to shut down
 	wrapper.informer.Shutdown()
 

@@ -18,8 +18,8 @@ import (
 	"errors"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,15 +73,15 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 
 	// set conditions
 	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewReconcilerReadyCondition(corev1.ConditionTrue, "", "micro controller is ready"),
+		condition.NewReconcilerReadyCondition(metav1.ConditionTrue, "", "micro controller is ready"),
 	)
 	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewGraphVerifiedCondition(corev1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
+		condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
 	)
 	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewCustomResourceDefinitionSyncedCondition(corev1.ConditionTrue, "", "Custom Resource Definition is synced"),
+		condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "", "Custom Resource Definition is synced"),
 	)
-	dc.Status.State = "ACTIVE"
+	dc.Status.State = v1alpha1.ResourceGroupStateActive
 	dc.Status.TopoligicalOrder = topologicalOrder
 
 	if reconcileErr != nil {
@@ -92,15 +92,15 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 		if errors.As(reconcileErr, &reconcielGraphErr) {
 			log.V(1).Info("Processing reconcile graph error", "error", reconcileErr)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(corev1.ConditionFalse, reconcileErr.Error(), "Directed Acyclic Graph is synced"),
+				condition.NewGraphVerifiedCondition(metav1.ConditionFalse, reconcileErr.Error(), "Directed Acyclic Graph is synced"),
 			)
 
 			reason := "Faulty Graph"
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(corev1.ConditionUnknown, reason, "micro controller is ready"),
+				condition.NewReconcilerReadyCondition(metav1.ConditionUnknown, reason, "micro controller is ready"),
 			)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(corev1.ConditionUnknown, reason, "Custom Resource Definition is synced"),
+				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, reason, "Custom Resource Definition is synced"),
 			)
 		}
 
@@ -109,14 +109,14 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 		if errors.As(reconcileErr, &reconcileCRDErr) {
 			log.V(1).Info("Processing reconcile crd error", "error", reconcileErr)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(corev1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
+				condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
 			)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(corev1.ConditionFalse, reconcileErr.Error(), "Custom Resource Definition is synced"),
+				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, reconcileErr.Error(), "Custom Resource Definition is synced"),
 			)
 			reason := "CRD not-synced"
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(corev1.ConditionUnknown, reason, "micro controller is ready"),
+				condition.NewReconcilerReadyCondition(metav1.ConditionUnknown, reason, "micro controller is ready"),
 			)
 		}
 
@@ -125,18 +125,18 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 		if errors.As(reconcileErr, &reconcileMicroController) {
 			log.V(1).Info("Processing reconcile micro controller error", "error", reconcileErr)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(corev1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
+				condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
 			)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(corev1.ConditionTrue, "", "Custom Resource Definition is synced"),
+				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "", "Custom Resource Definition is synced"),
 			)
 			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(corev1.ConditionFalse, reconcileErr.Error(), "micro controller is ready"),
+				condition.NewReconcilerReadyCondition(metav1.ConditionFalse, reconcileErr.Error(), "micro controller is ready"),
 			)
 		}
 
 		log.V(1).Info("Setting resource group status to INACTIVE", "error", reconcileErr)
-		dc.Status.State = "INACTIVE"
+		dc.Status.State = v1alpha1.ResourceGroupStateInactive
 	}
 
 	log.V(1).Info("Setting resource group status", "status", dc.Status)

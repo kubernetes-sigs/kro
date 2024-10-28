@@ -1,0 +1,182 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.2
+  name: elasticipaddresses.ec2.services.k8s.aws
+spec:
+  group: ec2.services.k8s.aws
+  names:
+    kind: ElasticIPAddress
+    listKind: ElasticIPAddressList
+    plural: elasticipaddresses
+    singular: elasticipaddress
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.allocationID
+      name: ALLOCATION-ID
+      type: string
+    - jsonPath: .status.publicIP
+      name: PUBLIC-IP
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ElasticIPAddress is the Schema for the ElasticIPAddresses API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ElasticIPAddressSpec defines the desired state of ElasticIPAddress.
+            properties:
+              address:
+                description: |-
+                  [EC2-VPC] The Elastic IP address to recover or an IPv4 address from an address
+                  pool.
+                type: string
+              customerOwnedIPv4Pool:
+                description: |-
+                  The ID of a customer-owned address pool. Use this parameter to let Amazon
+                  EC2 select an address from the address pool. Alternatively, specify a specific
+                  address from the address pool.
+                type: string
+              networkBorderGroup:
+                description: |-
+                  A unique set of Availability Zones, Local Zones, or Wavelength Zones from
+                  which Amazon Web Services advertises IP addresses. Use this parameter to
+                  limit the IP address to this location. IP addresses cannot move between network
+                  border groups.
+
+                  Use DescribeAvailabilityZones (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeAvailabilityZones.html)
+                  to view the network border groups.
+
+                  You cannot use a network border group with EC2 Classic. If you attempt this
+                  operation on EC2 Classic, you receive an InvalidParameterCombination error.
+                type: string
+              publicIPv4Pool:
+                description: |-
+                  The ID of an address pool that you own. Use this parameter to let Amazon
+                  EC2 select an address from the address pool. To specify a specific address
+                  from the address pool, use the Address parameter instead.
+                type: string
+              tags:
+                description: |-
+                  The tags. The value parameter is required, but if you don't want the tag
+                  to have a value, specify the parameter with no value, and we set the value
+                  to an empty string.
+                items:
+                  description: Describes a tag.
+                  properties:
+                    key:
+                      type: string
+                    value:
+                      type: string
+                  type: object
+                type: array
+            type: object
+          status:
+            description: ElasticIPAddressStatus defines the observed state of ElasticIPAddress
+            properties:
+              ackResourceMetadata:
+                description: |-
+                  All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                  that is used to contain resource sync state, account ownership,
+                  constructed ARN for the resource
+                properties:
+                  arn:
+                    description: |-
+                      ARN is the Amazon Resource Name for the resource. This is a
+                      globally-unique identifier and is set only by the ACK service controller
+                      once the controller has orchestrated the creation of the resource OR
+                      when it has verified that an "adopted" resource (a resource where the
+                      ARN annotation was set by the Kubernetes user on the CR) exists and
+                      matches the supplied CR's Spec field values.
+                      https://github.com/aws/aws-controllers-k8s/issues/270
+                    type: string
+                  ownerAccountID:
+                    description: |-
+                      OwnerAccountID is the AWS Account ID of the account that owns the
+                      backend AWS service API resource.
+                    type: string
+                  region:
+                    description: Region is the AWS region in which the resource exists
+                      or will exist.
+                    type: string
+                required:
+                - ownerAccountID
+                - region
+                type: object
+              allocationID:
+                description: |-
+                  [EC2-VPC] The ID that Amazon Web Services assigns to represent the allocation
+                  of the Elastic IP address for use with instances in a VPC.
+                type: string
+              carrierIP:
+                description: |-
+                  The carrier IP address. This option is only available for network interfaces
+                  which reside in a subnet in a Wavelength Zone (for example an EC2 instance).
+                type: string
+              conditions:
+                description: |-
+                  All CRS managed by ACK have a common `Status.Conditions` member that
+                  contains a collection of `ackv1alpha1.Condition` objects that describe
+                  the various terminal states of the CR and its backend AWS service API
+                  resource
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              customerOwnedIP:
+                description: The customer-owned IP address.
+                type: string
+              publicIP:
+                description: The Elastic IP address.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,288 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.2
+  name: natgateways.ec2.services.k8s.aws
+spec:
+  group: ec2.services.k8s.aws
+  names:
+    kind: NATGateway
+    listKind: NATGatewayList
+    plural: natgateways
+    singular: natgateway
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.natGatewayID
+      name: ID
+      type: string
+    - jsonPath: .status.state
+      name: state
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: NATGateway is the Schema for the NATGateways API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              NatGatewaySpec defines the desired state of NatGateway.
+
+              Describes a NAT gateway.
+            properties:
+              allocationID:
+                description: |-
+                  [Public NAT gateways only] The allocation ID of an Elastic IP address to
+                  associate with the NAT gateway. You cannot specify an Elastic IP address
+                  with a private NAT gateway. If the Elastic IP address is associated with
+                  another resource, you must first disassociate it.
+                type: string
+              allocationRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    type: object
+                type: object
+              connectivityType:
+                description: |-
+                  Indicates whether the NAT gateway supports public or private connectivity.
+                  The default is public connectivity.
+                type: string
+              subnetID:
+                description: The subnet in which to create the NAT gateway.
+                type: string
+              subnetRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    type: object
+                type: object
+              tags:
+                description: |-
+                  The tags. The value parameter is required, but if you don't want the tag
+                  to have a value, specify the parameter with no value, and we set the value
+                  to an empty string.
+                items:
+                  description: Describes a tag.
+                  properties:
+                    key:
+                      type: string
+                    value:
+                      type: string
+                  type: object
+                type: array
+            type: object
+          status:
+            description: NATGatewayStatus defines the observed state of NATGateway
+            properties:
+              ackResourceMetadata:
+                description: |-
+                  All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                  that is used to contain resource sync state, account ownership,
+                  constructed ARN for the resource
+                properties:
+                  arn:
+                    description: |-
+                      ARN is the Amazon Resource Name for the resource. This is a
+                      globally-unique identifier and is set only by the ACK service controller
+                      once the controller has orchestrated the creation of the resource OR
+                      when it has verified that an "adopted" resource (a resource where the
+                      ARN annotation was set by the Kubernetes user on the CR) exists and
+                      matches the supplied CR's Spec field values.
+                      https://github.com/aws/aws-controllers-k8s/issues/270
+                    type: string
+                  ownerAccountID:
+                    description: |-
+                      OwnerAccountID is the AWS Account ID of the account that owns the
+                      backend AWS service API resource.
+                    type: string
+                  region:
+                    description: Region is the AWS region in which the resource exists
+                      or will exist.
+                    type: string
+                required:
+                - ownerAccountID
+                - region
+                type: object
+              conditions:
+                description: |-
+                  All CRS managed by ACK have a common `Status.Conditions` member that
+                  contains a collection of `ackv1alpha1.Condition` objects that describe
+                  the various terminal states of the CR and its backend AWS service API
+                  resource
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              createTime:
+                description: The date and time the NAT gateway was created.
+                format: date-time
+                type: string
+              deleteTime:
+                description: The date and time the NAT gateway was deleted, if applicable.
+                format: date-time
+                type: string
+              failureCode:
+                description: |-
+                  If the NAT gateway could not be created, specifies the error code for the
+                  failure. (InsufficientFreeAddressesInSubnet | Gateway.NotAttached | InvalidAllocationID.NotFound
+                  | Resource.AlreadyAssociated | InternalError | InvalidSubnetID.NotFound)
+                type: string
+              failureMessage:
+                description: |-
+                  If the NAT gateway could not be created, specifies the error message for
+                  the failure, that corresponds to the error code.
+
+                     * For InsufficientFreeAddressesInSubnet: "Subnet has insufficient free
+                     addresses to create this NAT gateway"
+
+                     * For Gateway.NotAttached: "Network vpc-xxxxxxxx has no Internet gateway
+                     attached"
+
+                     * For InvalidAllocationID.NotFound: "Elastic IP address eipalloc-xxxxxxxx
+                     could not be associated with this NAT gateway"
+
+                     * For Resource.AlreadyAssociated: "Elastic IP address eipalloc-xxxxxxxx
+                     is already associated"
+
+                     * For InternalError: "Network interface eni-xxxxxxxx, created and used
+                     internally by this NAT gateway is in an invalid state. Please try again."
+
+                     * For InvalidSubnetID.NotFound: "The specified subnet subnet-xxxxxxxx
+                     does not exist or could not be found."
+                type: string
+              natGatewayAddresses:
+                description: |-
+                  Information about the IP addresses and network interface associated with
+                  the NAT gateway.
+                items:
+                  description: Describes the IP addresses and network interface associated
+                    with a NAT gateway.
+                  properties:
+                    allocationID:
+                      type: string
+                    networkInterfaceID:
+                      type: string
+                    privateIP:
+                      type: string
+                    publicIP:
+                      type: string
+                  type: object
+                type: array
+              natGatewayID:
+                description: The ID of the NAT gateway.
+                type: string
+              provisionedBandwidth:
+                description: |-
+                  Reserved. If you need to sustain traffic greater than the documented limits
+                  (https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html),
+                  contact us through the Support Center (https://console.aws.amazon.com/support/home?).
+                properties:
+                  provisionTime:
+                    format: date-time
+                    type: string
+                  provisioned:
+                    type: string
+                  requestTime:
+                    format: date-time
+                    type: string
+                  requested:
+                    type: string
+                  status:
+                    type: string
+                type: object
+              state:
+                description: |-
+                  The state of the NAT gateway.
+
+                     * pending: The NAT gateway is being created and is not ready to process
+                     traffic.
+
+                     * failed: The NAT gateway could not be created. Check the failureCode
+                     and failureMessage fields for the reason.
+
+                     * available: The NAT gateway is able to process traffic. This status remains
+                     until you delete the NAT gateway, and does not indicate the health of
+                     the NAT gateway.
+
+                     * deleting: The NAT gateway is in the process of being terminated and
+                     may still be processing traffic.
+
+                     * deleted: The NAT gateway has been terminated and is no longer processing
+                     traffic.
+                type: string
+              vpcID:
+                description: The ID of the VPC in which the NAT gateway is located.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

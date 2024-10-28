@@ -48,7 +48,7 @@ type ResourceGroupReconciler struct {
 
 func NewResourceGroupReconciler(
 	log logr.Logger,
-	mgr ctrl.Manager,
+	mgrClient client.Client,
 	dynamicClient dynamic.Interface,
 	allowCRDDeletion bool,
 	crdManager kubernetes.CRDManager,
@@ -60,7 +60,7 @@ func NewResourceGroupReconciler(
 	return &ResourceGroupReconciler{
 		rootLogger:        log,
 		log:               rgLogger,
-		Client:            mgr.GetClient(),
+		Client:            mgrClient,
 		allowCRDDeletion:  allowCRDDeletion,
 		crdManager:        crdManager,
 		dynamicController: dynamicController,

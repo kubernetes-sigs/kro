@@ -140,7 +140,7 @@ func main() {
 
 	reconciler := resourcegroupctrl.NewResourceGroupReconciler(
 		rootLogger,
-		mgr,
+		mgr.GetClient(),
 		dynamicClient,
 		allowCRDDeletion,
 		crdManager,

@@ -472,7 +472,7 @@ func (b *Builder) buildInstanceResource(
 	instanceStatusVariables := []*variable.ResourceField{}
 	for _, statusVariable := range statusVariables {
 		// These variables needs to be injected into the status field of the instance.
-		path := "status" + statusVariable.Path
+		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
 		instanceDependencies, isStatic, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames)

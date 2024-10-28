@@ -23,4 +23,4 @@ jobs:
         run: go build cmd
 
       - name: Run unit tests
-        run: go test -v ./...
+        run: make test WHAT=unit

@@ -14,19 +14,19 @@
 package condition
 
 import (
-	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
-func NewReconcilerReadyCondition(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewReconcilerReadyCondition(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.ResourceGroupConditionTypeReconcilerReady, status, reason, message)
 }
 
-func NewGraphVerifiedCondition(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewGraphVerifiedCondition(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.ResourceGroupConditionTypeGraphVerified, status, reason, message)
 }
 
-func NewCustomResourceDefinitionSyncedCondition(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced, status, reason, message)
 }

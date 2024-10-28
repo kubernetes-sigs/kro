@@ -213,7 +213,7 @@ var _ = Describe("Conditional", func() {
 			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(6))
 
-			g.Expect(createdRG.Status.TopoligicalOrder).To(Equal([]string{
+			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{
 				"deploymentA",
 				"serviceAccountA",
 				"deploymentB",
@@ -223,7 +223,7 @@ var _ = Describe("Conditional", func() {
 			}))
 
 			// Verify the ResourceGroup status
-			g.Expect(createdRG.Status.TopoligicalOrder).To(HaveLen(6))
+			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(6))
 			// Verify conditions
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
 			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeReconcilerReady))

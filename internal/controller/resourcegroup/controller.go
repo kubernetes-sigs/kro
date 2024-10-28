@@ -133,11 +133,11 @@ func (r *ResourceGroupReconciler) reconcile(ctx context.Context, resourcegroup *
 	}
 
 	log.V(1).Info("Syncing resourcegroup")
-	topologicalOrder, reconcileErr := r.reconcileResourceGroup(ctx, resourcegroup)
+	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGroup(ctx, resourcegroup)
 
 	log.V(1).Info("Setting resourcegroup status")
 	// set status
-	err = r.setResourceGroupStatus(ctx, resourcegroup, topologicalOrder, reconcileErr)
+	err = r.setResourceGroupStatus(ctx, resourcegroup, topologicalOrder, resourcesInformation, reconcileErr)
 	if err != nil {
 		return err
 	}

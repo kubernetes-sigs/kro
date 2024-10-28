@@ -95,9 +95,27 @@ type ResourceGroupStatus struct {
 	// State is the state of the resourcegroup
 	State ResourceGroupState `json:"state,omitempty"`
 	// TopologicalOrder is the topological order of the resourcegroup graph
-	TopoligicalOrder []string `json:"topologicalOrder,omitempty"`
+	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of an object's state
 	Conditions []Condition `json:"conditions,omitempty"`
+	// Resources represents the resources, and their information (dependencies for now)
+	Resources []ResourceInformation `json:"resources,omitempty"`
+}
+
+// ResourceInformation defines the information about a resource
+// in the resourcegroup
+type ResourceInformation struct {
+	// Name represents the name of the resources we're providing information for
+	Name string `json:"name,omitempty"`
+	// Dependencies represents the resource dependencies of a resource group
+	Dependencies []Dependency `json:"dependencies,omitempty"`
+}
+
+// Dependency defines the dependency a resource has observed
+// from the resources it points to based on expressions
+type Dependency struct {
+	// Name represents the name of the dependency resource
+	Name string `json:"name,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -105,7 +123,7 @@ type ResourceGroupStatus struct {
 // +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.apiVersion`
 // +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.kind`
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
-// +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=0,JSONPath=`.status.topologicalOrder`
+// +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:shortName=rg
 

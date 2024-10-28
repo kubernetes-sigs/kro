@@ -95,7 +95,7 @@ func (igr *instanceGraphReconciler) prepareConditions(status map[string]interfac
 				v1alpha1.ConditionType(conditionType),
 				corev1.ConditionTrue,
 				"Resource synced successfully",
-				fmt.Sprintf("Resource %s synced successfully", resourceID),
+				fmt.Sprintf("Resource %s synced successfully. status: %s", resourceID, resourceState.State),
 				generation,
 			))
 		}

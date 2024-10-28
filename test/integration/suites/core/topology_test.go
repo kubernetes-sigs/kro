@@ -159,8 +159,8 @@ var _ = Describe("Topology", func() {
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionTrue))
 
 			// Verify topological order
-			g.Expect(rg.Status.TopoligicalOrder).To(HaveLen(5))
-			g.Expect(rg.Status.TopoligicalOrder).To(Equal([]string{
+			g.Expect(rg.Status.TopologicalOrder).To(HaveLen(5))
+			g.Expect(rg.Status.TopologicalOrder).To(Equal([]string{
 				"clusterRole",
 				"vpc",
 				"subnetA",

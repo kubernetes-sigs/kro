@@ -15,6 +15,7 @@ KO_PUSH ?= true
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
 HELM_DIR = ./helm
+WHAT ?= unit
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -76,8 +77,16 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet ## Run tests.
-	go test ./... -coverprofile cover.out
+test: manifests generate fmt vet ## Run tests. Use WHAT=unit or WHAT=integration
+ifeq ($(WHAT),integration)
+	go test -v ./test/integration/... -coverprofile integration-cover.out
+else ifeq ($(WHAT),unit)
+	go test -v ./internal/... -coverprofile unit-cover.out
+else
+	@echo "Error: WHAT must be either 'unit' or 'integration'"
+	@echo "Usage: make test WHAT=unit|integration"
+	@exit 1
+endif
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2

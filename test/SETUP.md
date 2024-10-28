@@ -34,7 +34,7 @@ to make it permanent.
 ## Run the tests
 
 ```sh
-go test ./test/integration/... -v
+make test WHAT=integration
 ```
 
 If you're still encountering issues, make sure the `KUBEBUILDER_ASSETS` environment variable

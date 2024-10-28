@@ -15,7 +15,7 @@ clusters.
 1. Use existing Kubernetes testing frameworks (when possible): Don't reinvent the wheel. 
     If a feature is not covered by existing frameworks, contribute to them.
 3. Focus on Symphony's logic, not on other controllers or Kubernetes components. e.g
-   avoid testing antive controllers, ACK or Karpenter's behaviour...
+   avoid testing native controllers, ACK or Karpenter's behaviour...
 4. Prioritize integration tests, validate with end to end tests.
 5. Maintain seperation of concerns, controller logic, integration tests, and e2e tests
 6. Ensure readability: similar to the codebase, tests should be easy to read, understand

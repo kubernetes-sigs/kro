@@ -1,0 +1,32 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Install setup-envtest
+      run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+    - name: Configure envtest
+      run: |
+        KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.31.x)"
+        echo "KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS}" >> $GITHUB_ENV
+
+    - name: Run integration tests
+      run: make test WHAT=integration

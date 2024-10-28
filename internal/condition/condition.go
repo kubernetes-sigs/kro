@@ -14,14 +14,13 @@
 package condition
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 )
 
 // NewCondition returns a new Condition instance.
-func NewCondition(t v1alpha1.ConditionType, status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewCondition(t v1alpha1.ConditionType, status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return v1alpha1.Condition{
 		Type:               t,
 		Status:             status,

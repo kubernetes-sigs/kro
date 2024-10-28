@@ -14,23 +14,22 @@
 package condition
 
 import (
-	corev1 "k8s.io/api/core/v1"
-
 	v1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func NewInstanceConditionReady(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewInstanceConditionReady(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.InstanceConditionTypeReady, status, reason, message)
 }
 
-func NewInstanceConditionProgressing(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewInstanceConditionProgressing(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.InstanceConditionTypeProgressing, status, reason, message)
 }
 
-func NewInstanceConditionDegraded(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewInstanceConditionDegraded(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.InstanceConditionTypeDegraded, status, reason, message)
 }
 
-func NewInstanceConditionErrored(status corev1.ConditionStatus, reason, message string) v1alpha1.Condition {
+func NewInstanceConditionErrored(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {
 	return NewCondition(v1alpha1.InstanceConditionTypeError, status, reason, message)
 }

@@ -160,6 +160,15 @@ func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resou
 	resourceState := &ResourceState{State: "IN_PROGRESS"}
 	resourceStates[resourceID] = resourceState
 
+	if want, err := igr.runtime.WantToCreateResource(resourceID); err != nil || !want {
+		// TODO(michaelhtm) parse error to decide whether to set terminal error
+		// or move forward
+		log.V(1).Info("Skipping resource creation", "reason", err)
+		resourceState.State = "SKIPPED"
+		igr.runtime.IgnoreResource(resourceID)
+		return nil
+	}
+
 	rUnstructured, state := igr.runtime.GetResource(resourceID)
 	if state != runtime.ResourceStateResolved {
 		return igr.delayedRequeue(fmt.Errorf("resource %s is not resolved: %v", resourceID, state))
@@ -200,11 +209,12 @@ func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resou
 	log.V(1).Info("Checking if resource is Ready", "resource", resourceID)
 	if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
 		log.V(1).Info("Resource not ready", "resource", resourceID, "reason", reason, "error", err)
-		resourceState.State = "WaitingForReadiness"
+		resourceState.State = string(runtime.ResourceStateWaitingOnReadiness)
 		resourceState.Err = fmt.Errorf("resource not ready: %w", err)
 		return igr.delayedRequeue(resourceState.Err)
 	}
 
+	resourceState.State = "SYNCED"
 	return igr.updateResource(ctx, rc, rUnstructured, observed, resourceID, resourceState)
 }
 

@@ -59,6 +59,14 @@ type Interface interface {
 
 	// IsResourceReady returns true if the resource is ready, and false otherwise.
 	IsResourceReady(resourceID string) (bool, string, error)
+
+	// WantToCreateResource returns true if all the conditional expressions return true
+	// if not it will add itself to the ignored resources
+	WantToCreateResource(resourceID string) (bool, error)
+
+	// IgnoreResource ignores resource that has a conditional expressison that evaluated
+	// to false
+	IgnoreResource(resourceID string)
 }
 
 // ResourceDescriptor provides metadata about a resource.
@@ -95,6 +103,10 @@ type ResourceDescriptor interface {
 	// GetReadyOnExpressions returns the list of expressions that need to be
 	// evaluated before the resource is considered ready.
 	GetReadyOnExpressions() []string
+
+	// GetConditionalExpressions returns the list of expressions that need to
+	// be evaluated before deciding whether to create a resource
+	GetConditionalExpressions() []string
 
 	// GetTopLevelFields returns the list of top-level fields in the resource.
 	// e.g spec, status, metadata, etc.

@@ -76,9 +76,9 @@ func WithResource(
 ) ResourceGroupOption {
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
 		rg.Spec.Resources = append(rg.Spec.Resources, &symphonyv1alpha1.Resource{
-			Name:    name,
-			ReadyOn: readyOn,
-			// TODO: Add conditionals
+			Name:        name,
+			ReadyOn:     readyOn,
+			Conditional: conditionals,
 			Definition: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: definition},
 			},

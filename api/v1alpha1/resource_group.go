@@ -86,6 +86,8 @@ type Resource struct {
 	Definition runtime.RawExtension `json:"definition,omitempty"`
 	// +kubebuilder:validation:Optional
 	ReadyOn []string `json:"readyOn,omitempty"`
+	// +kubebuilder:validation:Optional
+	Conditional []string `json:"conditional,omitempty"`
 }
 
 // ResourceGroupStatus defines the observed state of ResourceGroup

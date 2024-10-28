@@ -21,7 +21,12 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/testutil/generator"
 )
 
-func networkingStack(name, namespace string) (*symphonyv1alpha1.ResourceGroup, func(namespace, name string) *unstructured.Unstructured) {
+func networkingStack(
+	name, namespace string,
+) (
+	*symphonyv1alpha1.ResourceGroup,
+	func(namespace, name string) *unstructured.Unstructured,
+) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
 		generator.WithKind("NetworkingStack", "v1alpha1"),

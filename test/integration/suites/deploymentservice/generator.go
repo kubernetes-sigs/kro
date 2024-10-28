@@ -22,7 +22,12 @@ import (
 )
 
 // deploymentService creates a ResourceGroup for testing deployment+service combinations
-func deploymentService(namespace, name string) (*symphonyv1alpha1.ResourceGroup, func(namespace, name string, port int) *unstructured.Unstructured) {
+func deploymentService(
+	namespace, name string,
+) (
+	*symphonyv1alpha1.ResourceGroup,
+	func(namespace, name string, port int) *unstructured.Unstructured,
+) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
 		generator.WithKind("DeploymentService", "v1alpha1"),

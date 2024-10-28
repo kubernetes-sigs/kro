@@ -1,0 +1,467 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: nodegroups.eks.services.k8s.aws
+spec:
+  group: eks.services.k8s.aws
+  names:
+    kind: Nodegroup
+    listKind: NodegroupList
+    plural: nodegroups
+    singular: nodegroup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterName
+      name: CLUSTER
+      type: string
+    - jsonPath: .spec.version
+      name: VERSION
+      type: string
+    - jsonPath: .status.status
+      name: STATUS
+      type: string
+    - jsonPath: .spec.releaseVersion
+      name: RELEASEVERSION
+      priority: 1
+      type: string
+    - jsonPath: .spec.scalingConfig.desiredSize
+      name: DESIREDSIZE
+      type: integer
+    - jsonPath: .spec.scalingConfig.minSize
+      name: MINSIZE
+      type: integer
+    - jsonPath: .spec.scalingConfig.maxSize
+      name: MAXSIZE
+      type: integer
+    - jsonPath: .spec.diskSize
+      name: DISKSIZE
+      priority: 1
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="ACK.ResourceSynced")].status
+      name: Synced
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Nodegroup is the Schema for the Nodegroups API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              NodegroupSpec defines the desired state of Nodegroup.
+
+
+              An object representing an Amazon EKS managed node group.
+            properties:
+              amiType:
+                description: |-
+                  The AMI type for your node group. If you specify launchTemplate, and your
+                  launch template uses a custom AMI, then don't specify amiType, or the node
+                  group deployment will fail. If your launch template uses a Windows custom
+                  AMI, then add eks:kube-proxy-windows to your Windows nodes rolearn in the
+                  aws-auth ConfigMap. For more information about using launch templates with
+                  Amazon EKS, see Customizing managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                type: string
+              capacityType:
+                description: The capacity type for your node group.
+                type: string
+              clientRequestToken:
+                description: |-
+                  A unique, case-sensitive identifier that you provide to ensure the idempotency
+                  of the request.
+                type: string
+              clusterName:
+                description: The name of your cluster.
+                type: string
+              clusterRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                    type: object
+                type: object
+              diskSize:
+                description: |-
+                  The root device disk size (in GiB) for your node group instances. The default
+                  disk size is 20 GiB for Linux and Bottlerocket. The default disk size is
+                  50 GiB for Windows. If you specify launchTemplate, then don't specify diskSize,
+                  or the node group deployment will fail. For more information about using
+                  launch templates with Amazon EKS, see Customizing managed nodes with launch
+                  templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                format: int64
+                type: integer
+              instanceTypes:
+                description: |-
+                  Specify the instance types for a node group. If you specify a GPU instance
+                  type, make sure to also specify an applicable GPU AMI type with the amiType
+                  parameter. If you specify launchTemplate, then you can specify zero or one
+                  instance type in your launch template or you can specify 0-20 instance types
+                  for instanceTypes. If however, you specify an instance type in your launch
+                  template and specify any instanceTypes, the node group deployment will fail.
+                  If you don't specify an instance type in a launch template or for instanceTypes,
+                  then t3.medium is used, by default. If you specify Spot for capacityType,
+                  then we recommend specifying multiple values for instanceTypes. For more
+                  information, see Managed node group capacity types (https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html#managed-node-group-capacity-types)
+                  and Customizing managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                items:
+                  type: string
+                type: array
+              labels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  The Kubernetes labels to apply to the nodes in the node group when they are
+                  created.
+                type: object
+              launchTemplate:
+                description: |-
+                  An object representing a node group's launch template specification. When
+                  using this object, don't directly specify instanceTypes, diskSize, or remoteAccess.
+                  Make sure that the launch template meets the requirements in launchTemplateSpecification.
+                  Also refer to Customizing managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  version:
+                    type: string
+                type: object
+              name:
+                description: The unique name to give your node group.
+                type: string
+              nodeRole:
+                description: |-
+                  The Amazon Resource Name (ARN) of the IAM role to associate with your node
+                  group. The Amazon EKS worker node kubelet daemon makes calls to Amazon Web
+                  Services APIs on your behalf. Nodes receive permissions for these API calls
+                  through an IAM instance profile and associated policies. Before you can launch
+                  nodes and register them into a cluster, you must create an IAM role for those
+                  nodes to use when they are launched. For more information, see Amazon EKS
+                  node IAM role (https://docs.aws.amazon.com/eks/latest/userguide/create-node-role.html)
+                  in the Amazon EKS User Guide . If you specify launchTemplate, then don't
+                  specify IamInstanceProfile (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_IamInstanceProfile.html)
+                  in your launch template, or the node group deployment will fail. For more
+                  information about using launch templates with Amazon EKS, see Customizing
+                  managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                type: string
+              nodeRoleRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                    type: object
+                type: object
+              releaseVersion:
+                description: |-
+                  The AMI version of the Amazon EKS optimized AMI to use with your node group.
+                  By default, the latest available AMI version for the node group's current
+                  Kubernetes version is used. For information about Linux versions, see Amazon
+                  EKS optimized Amazon Linux AMI versions (https://docs.aws.amazon.com/eks/latest/userguide/eks-linux-ami-versions.html)
+                  in the Amazon EKS User Guide. Amazon EKS managed node groups support the
+                  November 2022 and later releases of the Windows AMIs. For information about
+                  Windows versions, see Amazon EKS optimized Windows AMI versions (https://docs.aws.amazon.com/eks/latest/userguide/eks-ami-versions-windows.html)
+                  in the Amazon EKS User Guide.
+
+
+                  If you specify launchTemplate, and your launch template uses a custom AMI,
+                  then don't specify releaseVersion, or the node group deployment will fail.
+                  For more information about using launch templates with Amazon EKS, see Customizing
+                  managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                type: string
+              remoteAccess:
+                description: |-
+                  The remote access configuration to use with your node group. For Linux, the
+                  protocol is SSH. For Windows, the protocol is RDP. If you specify launchTemplate,
+                  then don't specify remoteAccess, or the node group deployment will fail.
+                  For more information about using launch templates with Amazon EKS, see Customizing
+                  managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                properties:
+                  ec2SshKey:
+                    type: string
+                  sourceSecurityGroupRefs:
+                    description: Reference field for SourceSecurityGroups
+                    items:
+                      description: "AWSResourceReferenceWrapper provides a wrapper
+                        around *AWSResourceReference\ntype to provide more user friendly
+                        syntax for references using 'from' field\nEx:\nAPIIDRef:\n\n\n\tfrom:\n\t
+                        \ name: my-api"
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                          type: object
+                      type: object
+                    type: array
+                  sourceSecurityGroups:
+                    items:
+                      type: string
+                    type: array
+                type: object
+              scalingConfig:
+                description: |-
+                  The scaling configuration details for the Auto Scaling group that is created
+                  for your node group.
+                properties:
+                  desiredSize:
+                    format: int64
+                    type: integer
+                  maxSize:
+                    format: int64
+                    type: integer
+                  minSize:
+                    format: int64
+                    type: integer
+                type: object
+              subnetRefs:
+                items:
+                  description: "AWSResourceReferenceWrapper provides a wrapper around
+                    *AWSResourceReference\ntype to provide more user friendly syntax
+                    for references using 'from' field\nEx:\nAPIIDRef:\n\n\n\tfrom:\n\t
+                    \ name: my-api"
+                  properties:
+                    from:
+                      description: |-
+                        AWSResourceReference provides all the values necessary to reference another
+                        k8s resource for finding the identifier(Id/ARN/Name)
+                      properties:
+                        name:
+                          type: string
+                      type: object
+                  type: object
+                type: array
+              subnets:
+                description: |-
+                  The subnets to use for the Auto Scaling group that is created for your node
+                  group. If you specify launchTemplate, then don't specify SubnetId (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateNetworkInterface.html)
+                  in your launch template, or the node group deployment will fail. For more
+                  information about using launch templates with Amazon EKS, see Customizing
+                  managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                items:
+                  type: string
+                type: array
+              tags:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Metadata that assists with categorization and organization. Each tag consists
+                  of a key and an optional value. You define both. Tags don't propagate to
+                  any other cluster or Amazon Web Services resources.
+                type: object
+              taints:
+                description: |-
+                  The Kubernetes taints to be applied to the nodes in the node group. For more
+                  information, see Node taints on managed node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+                items:
+                  description: |-
+                    A property that allows a node to repel a Pod. For more information, see Node
+                    taints on managed node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html)
+                    in the Amazon EKS User Guide.
+                  properties:
+                    effect:
+                      type: string
+                    key:
+                      type: string
+                    value:
+                      type: string
+                  type: object
+                type: array
+              updateConfig:
+                description: The node group update configuration.
+                properties:
+                  maxUnavailable:
+                    format: int64
+                    type: integer
+                  maxUnavailablePercentage:
+                    format: int64
+                    type: integer
+                type: object
+              version:
+                description: |-
+                  The Kubernetes version to use for your managed nodes. By default, the Kubernetes
+                  version of the cluster is used, and this is the only accepted specified value.
+                  If you specify launchTemplate, and your launch template uses a custom AMI,
+                  then don't specify version, or the node group deployment will fail. For more
+                  information about using launch templates with Amazon EKS, see Customizing
+                  managed nodes with launch templates (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
+                  in the Amazon EKS User Guide.
+                type: string
+            required:
+            - name
+            type: object
+          status:
+            description: NodegroupStatus defines the observed state of Nodegroup
+            properties:
+              ackResourceMetadata:
+                description: |-
+                  All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                  that is used to contain resource sync state, account ownership,
+                  constructed ARN for the resource
+                properties:
+                  arn:
+                    description: |-
+                      ARN is the Amazon Resource Name for the resource. This is a
+                      globally-unique identifier and is set only by the ACK service controller
+                      once the controller has orchestrated the creation of the resource OR
+                      when it has verified that an "adopted" resource (a resource where the
+                      ARN annotation was set by the Kubernetes user on the CR) exists and
+                      matches the supplied CR's Spec field values.
+                      TODO(vijat@): Find a better strategy for resources that do not have ARN in CreateOutputResponse
+                      https://github.com/aws/aws-controllers-k8s/issues/270
+                    type: string
+                  ownerAccountID:
+                    description: |-
+                      OwnerAccountID is the AWS Account ID of the account that owns the
+                      backend AWS service API resource.
+                    type: string
+                  region:
+                    description: Region is the AWS region in which the resource exists
+                      or will exist.
+                    type: string
+                required:
+                - ownerAccountID
+                - region
+                type: object
+              conditions:
+                description: |-
+                  All CRS managed by ACK have a common `Status.Conditions` member that
+                  contains a collection of `ackv1alpha1.Condition` objects that describe
+                  the various terminal states of the CR and its backend AWS service API
+                  resource
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              createdAt:
+                description: The Unix epoch timestamp at object creation.
+                format: date-time
+                type: string
+              health:
+                description: |-
+                  The health status of the node group. If there are issues with your node group's
+                  health, they are listed here.
+                properties:
+                  issues:
+                    items:
+                      description: An object representing an issue with an Amazon
+                        EKS resource.
+                      properties:
+                        code:
+                          type: string
+                        message:
+                          type: string
+                        resourceIDs:
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    type: array
+                type: object
+              modifiedAt:
+                description: The Unix epoch timestamp for the last modification to
+                  the object.
+                format: date-time
+                type: string
+              resources:
+                description: |-
+                  The resources associated with the node group, such as Auto Scaling groups
+                  and security groups for remote access.
+                properties:
+                  autoScalingGroups:
+                    items:
+                      description: |-
+                        An Auto Scaling group that is associated with an Amazon EKS managed node
+                        group.
+                      properties:
+                        name:
+                          type: string
+                      type: object
+                    type: array
+                  remoteAccessSecurityGroup:
+                    type: string
+                type: object
+              status:
+                description: The current status of the managed node group.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -101,7 +101,9 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(createdRG.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified))
 			g.Expect(createdRG.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.Conditions[2].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced))
+			g.Expect(createdRG.Status.Conditions[2].Type).To(
+				Equal(symphonyv1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
+			)
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
 
 			g.Expect(createdRG.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))

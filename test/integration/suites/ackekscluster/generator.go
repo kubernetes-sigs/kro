@@ -21,7 +21,12 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/testutil/generator"
 )
 
-func eksCluster(namespace, name string) (*symphonyv1alpha1.ResourceGroup, func(namespace, name, version string) *unstructured.Unstructured) {
+func eksCluster(
+	namespace, name string,
+) (
+	*symphonyv1alpha1.ResourceGroup,
+	func(namespace, name, version string) *unstructured.Unstructured,
+) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
 		generator.WithKind("EKSCluster", "v1alpha1"),
@@ -43,8 +48,14 @@ func eksCluster(namespace, name string) (*symphonyv1alpha1.ResourceGroup, func(n
 		generator.WithResource("clusterElasticIPAddress", eipDef(namespace), nil, nil),
 		generator.WithResource("clusterInternetGateway", igwDef(namespace), nil, nil),
 		generator.WithResource("clusterRouteTable", routeTableDef(namespace), nil, nil),
-		generator.WithResource("clusterSubnetA", subnetDef(namespace, "symphony-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil),
-		generator.WithResource("clusterSubnetB", subnetDef(namespace, "symphony-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil),
+		generator.WithResource(
+			"clusterSubnetA",
+			subnetDef(namespace, "symphony-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil,
+		),
+		generator.WithResource(
+			"clusterSubnetB",
+			subnetDef(namespace, "symphony-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil,
+		),
 		generator.WithResource("clusterNATGateway", natGatewayDef(namespace), nil, nil),
 		generator.WithResource("clusterRole", clusterRoleDef(namespace), nil, nil),
 		generator.WithResource("clusterNodeRole", nodeRoleDef(namespace), nil, nil),

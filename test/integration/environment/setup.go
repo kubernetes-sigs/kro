@@ -148,7 +148,12 @@ func (e *Environment) setupController() error {
 		},
 		e.DynamicClient,
 	)
-	go dc.Run(e.context)
+	go func() {
+		err := dc.Run(e.context)
+		if err != nil {
+			panic(fmt.Sprintf("failed to run dynamic controller: %v", err))
+		}
+	}()
 
 	rgReconciler := ctrlresourcegroup.NewResourceGroupReconciler(
 		noopLogger(),

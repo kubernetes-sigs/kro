@@ -1,0 +1,343 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.2
+  name: routetables.ec2.services.k8s.aws
+spec:
+  group: ec2.services.k8s.aws
+  names:
+    kind: RouteTable
+    listKind: RouteTableList
+    plural: routetables
+    singular: routetable
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.routeTableID
+      name: ID
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: RouteTable is the Schema for the RouteTables API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RouteTableSpec defines the desired state of RouteTable.
+
+              Describes a route table.
+            properties:
+              routes:
+                items:
+                  properties:
+                    carrierGatewayID:
+                      type: string
+                    coreNetworkARN:
+                      type: string
+                    destinationCIDRBlock:
+                      type: string
+                    destinationIPv6CIDRBlock:
+                      type: string
+                    destinationPrefixListID:
+                      type: string
+                    egressOnlyInternetGatewayID:
+                      type: string
+                    gatewayID:
+                      type: string
+                    gatewayRef:
+                      description: Reference field for GatewayID
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    instanceID:
+                      type: string
+                    localGatewayID:
+                      type: string
+                    natGatewayID:
+                      type: string
+                    natGatewayRef:
+                      description: Reference field for NATGatewayID
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    networkInterfaceID:
+                      type: string
+                    transitGatewayID:
+                      type: string
+                    transitGatewayRef:
+                      description: Reference field for TransitGatewayID
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    vpcEndpointID:
+                      type: string
+                    vpcEndpointRef:
+                      description: Reference field for VPCEndpointID
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    vpcPeeringConnectionID:
+                      type: string
+                    vpcPeeringConnectionRef:
+                      description: Reference field for VPCPeeringConnectionID
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                  type: object
+                type: array
+              tags:
+                description: |-
+                  The tags. The value parameter is required, but if you don't want the tag
+                  to have a value, specify the parameter with no value, and we set the value
+                  to an empty string.
+                items:
+                  description: Describes a tag.
+                  properties:
+                    key:
+                      type: string
+                    value:
+                      type: string
+                  type: object
+                type: array
+              vpcID:
+                description: The ID of the VPC.
+                type: string
+              vpcRef:
+                description: "AWSResourceReferenceWrapper provides a wrapper around
+                  *AWSResourceReference\ntype to provide more user friendly syntax
+                  for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                  \ name: my-api"
+                properties:
+                  from:
+                    description: |-
+                      AWSResourceReference provides all the values necessary to reference another
+                      k8s resource for finding the identifier(Id/ARN/Name)
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    type: object
+                type: object
+            type: object
+          status:
+            description: RouteTableStatus defines the observed state of RouteTable
+            properties:
+              ackResourceMetadata:
+                description: |-
+                  All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                  that is used to contain resource sync state, account ownership,
+                  constructed ARN for the resource
+                properties:
+                  arn:
+                    description: |-
+                      ARN is the Amazon Resource Name for the resource. This is a
+                      globally-unique identifier and is set only by the ACK service controller
+                      once the controller has orchestrated the creation of the resource OR
+                      when it has verified that an "adopted" resource (a resource where the
+                      ARN annotation was set by the Kubernetes user on the CR) exists and
+                      matches the supplied CR's Spec field values.
+                      https://github.com/aws/aws-controllers-k8s/issues/270
+                    type: string
+                  ownerAccountID:
+                    description: |-
+                      OwnerAccountID is the AWS Account ID of the account that owns the
+                      backend AWS service API resource.
+                    type: string
+                  region:
+                    description: Region is the AWS region in which the resource exists
+                      or will exist.
+                    type: string
+                required:
+                - ownerAccountID
+                - region
+                type: object
+              associations:
+                description: The associations between the route table and one or more
+                  subnets or a gateway.
+                items:
+                  description: Describes an association between a route table and
+                    a subnet or gateway.
+                  properties:
+                    associationState:
+                      description: |-
+                        Describes the state of an association between a route table and a subnet
+                        or gateway.
+                      properties:
+                        state:
+                          type: string
+                        statusMessage:
+                          type: string
+                      type: object
+                    gatewayID:
+                      type: string
+                    main:
+                      type: boolean
+                    routeTableAssociationID:
+                      type: string
+                    routeTableID:
+                      type: string
+                    subnetID:
+                      type: string
+                  type: object
+                type: array
+              conditions:
+                description: |-
+                  All CRS managed by ACK have a common `Status.Conditions` member that
+                  contains a collection of `ackv1alpha1.Condition` objects that describe
+                  the various terminal states of the CR and its backend AWS service API
+                  resource
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human readable message indicating details about
+                        the transition.
+                      type: string
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              ownerID:
+                description: The ID of the Amazon Web Services account that owns the
+                  route table.
+                type: string
+              propagatingVGWs:
+                description: Any virtual private gateway (VGW) propagating routes.
+                items:
+                  description: Describes a virtual private gateway propagating route.
+                  properties:
+                    gatewayID:
+                      type: string
+                  type: object
+                type: array
+              routeStatuses:
+                description: The routes in the route table.
+                items:
+                  description: Describes a route in a route table.
+                  properties:
+                    carrierGatewayID:
+                      type: string
+                    coreNetworkARN:
+                      type: string
+                    destinationCIDRBlock:
+                      type: string
+                    destinationIPv6CIDRBlock:
+                      type: string
+                    destinationPrefixListID:
+                      type: string
+                    egressOnlyInternetGatewayID:
+                      type: string
+                    gatewayID:
+                      type: string
+                    instanceID:
+                      type: string
+                    instanceOwnerID:
+                      type: string
+                    localGatewayID:
+                      type: string
+                    natGatewayID:
+                      type: string
+                    networkInterfaceID:
+                      type: string
+                    origin:
+                      type: string
+                    state:
+                      type: string
+                    transitGatewayID:
+                      type: string
+                    vpcPeeringConnectionID:
+                      type: string
+                  type: object
+                type: array
+              routeTableID:
+                description: The ID of the route table.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

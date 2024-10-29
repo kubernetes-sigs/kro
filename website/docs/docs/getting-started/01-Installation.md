@@ -41,7 +41,9 @@ aws ecr get-login-password --region us-west-2 | helm registry login \
 Once authenticated, install Symphony using the Helm chart:
 
 ```sh
-export SYMPHONY_VERSION=0.0.7 # TODO(a-hilaly): some curl-github-fu to get the latest version
+export SYMPHONY_VERSION=0.0.7 
+# TODO(a-hilaly): replace with curl-github-fu to get the latest version
+# export SYMPHONY_VERSION=$(curl -s https://api.github.com/repos/aws-controllers-k8s/private-symphony/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 helm install --version=${SYMPHONY_VERSION} -n symphony \
    symphony oci://095708837592.dkr.ecr.us-west-2.amazonaws.com/symphony-chart \

@@ -1,7 +1,7 @@
 # Symphony
 
 <p align="center">
-  <img src="./logo/final-blue.svg" />
+  <img src="./images/logo/final-blue.svg" />
 </p>
 
 Symphony is a Kubernetes controller that simplifies application management and

@@ -231,6 +231,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get topological order: %w", err)
 	}
+
 	resourceGroup := &Graph{
 		DAG:              dag,
 		Instance:         instance,
@@ -313,18 +314,24 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		return nil, fmt.Errorf("failed to parse readyOn expressions: %v", err)
 	}
 
+	conditional, err := parser.ParseConditionExpressions(rgResource.Conditional)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse consitional expressions: %v", err)
+	}
+
 	_, isNamespaced := namespacedResources[gvk]
 
 	// Note that at this point we don't inject the dependencies into the resource.
 	return &Resource{
-		id:                 rgResource.Name,
-		gvr:                k8smetadata.GVKtoGVR(gvk),
-		schema:             resourceSchema,
-		emulatedObject:     emulatedResource,
-		originalObject:     &unstructured.Unstructured{Object: resourceObject},
-		variables:          resourceVariables,
-		readyOnExpressions: readyOn,
-		namespaced:         isNamespaced,
+		id:                     rgResource.Name,
+		gvr:                    k8smetadata.GVKtoGVR(gvk),
+		schema:                 resourceSchema,
+		emulatedObject:         emulatedResource,
+		originalObject:         &unstructured.Unstructured{Object: resourceObject},
+		variables:              resourceVariables,
+		readyOnExpressions:     readyOn,
+		conditionalExpressions: conditional,
+		namespaced:             isNamespaced,
 	}, nil
 }
 
@@ -676,6 +683,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	resourceNames := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "spec")
+	conditionalFieldNames := []string{"spec"}
 
 	env, err := celutil.NewEnvironement(celutil.WithResourceNames(resourceNames))
 	if err != nil {
@@ -747,6 +755,36 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				}
 				if !celutil.IsBoolType(output) {
 					return fmt.Errorf("output of readyOn expression %s can only be of type bool", readyOnExpression)
+				}
+			}
+
+			for _, conditionalExpression := range resource.conditionalExpressions {
+				instanceEnv, err := celutil.NewEnvironement(celutil.WithResourceNames(conditionalFieldNames))
+				if err != nil {
+					return fmt.Errorf("failed to create CEL environment: %w", err)
+				}
+
+				err = validateCELExpressionContext(instanceEnv, conditionalExpression, conditionalFieldNames)
+				if err != nil {
+					return fmt.Errorf("failed to validate expression context: '%s' %w", conditionalExpression, err)
+				}
+				// create context
+				context := map[string]*Resource{}
+				// for now we will only support the instance context for conditional expressions.
+				// With this decision we will decide in creation time, and update time
+				// If we'll be creating resources or not
+				context["spec"] = &Resource{
+					emulatedObject: &unstructured.Unstructured{
+						Object: instance.emulatedObject.Object["spec"].(map[string]interface{}),
+					},
+				}
+
+				output, err := dryRunExpression(instanceEnv, conditionalExpression, context)
+				if err != nil {
+					return fmt.Errorf("failed to dry-run expression %s: %w", conditionalExpression, err)
+				}
+				if !celutil.IsBoolType(output) {
+					return fmt.Errorf("output of conditional expression %s can only be of type bool", conditionalExpression)
 				}
 			}
 		}

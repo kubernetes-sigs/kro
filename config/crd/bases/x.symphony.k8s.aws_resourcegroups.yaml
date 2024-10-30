@@ -105,6 +105,10 @@ spec:
                 description: The resources that are part of the resourcegroup.
                 items:
                   properties:
+                    conditional:
+                      items:
+                        type: string
+                      type: array
                     definition:
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
@@ -119,6 +123,15 @@ spec:
                   - name
                   type: object
                 type: array
+              serviceAccounts:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ServiceAccount configuration for controller impersonation.
+                  Key is the namespace, value is the service account name to use.
+                  Special key "*" defines the default service account for any
+                  namespace not explicitly mapped.
+                type: object
             required:
             - apiVersion
             - definition

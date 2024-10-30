@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -46,12 +47,13 @@ func NewResourceGroupRuntime(
 	topologicalOrder []string,
 ) (*ResourceGroupRuntime, error) {
 	r := &ResourceGroupRuntime{
-		instance:          instance,
-		resources:         resources,
-		topologicalOrder:  topologicalOrder,
-		resolvedResources: make(map[string]*unstructured.Unstructured),
-		runtimeVariables:  make(map[string][]*expressionEvaluationState),
-		expressionsCache:  make(map[string]*expressionEvaluationState),
+		instance:                      instance,
+		resources:                     resources,
+		topologicalOrder:              topologicalOrder,
+		resolvedResources:             make(map[string]*unstructured.Unstructured),
+		runtimeVariables:              make(map[string][]*expressionEvaluationState),
+		expressionsCache:              make(map[string]*expressionEvaluationState),
+		ignoredByConditionalResources: make(map[string]bool),
 	}
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
@@ -160,6 +162,9 @@ type ResourceGroupRuntime struct {
 	// dependencies, preventing circular dependencies and ensuring efficient
 	// synchronization.
 	topologicalOrder []string
+
+	// ignoredByConditionalResources holds the resources whos defined conditionals returned false
+	ignoredByConditionalResources map[string]bool
 }
 
 // TopologicalOrder returns the topological order of resources.
@@ -297,23 +302,12 @@ func (rt *ResourceGroupRuntime) evaluateStaticVariables() error {
 		return err
 	}
 
+	evalContext := map[string]interface{}{
+		"spec": rt.instance.Unstructured().Object["spec"],
+	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
-			ast, issues := env.Compile(variable.Expression)
-			if issues != nil {
-				return issues.Err()
-			}
-			program, err := env.Program(ast)
-			if err != nil {
-				return err
-			}
-			val, _, err := program.Eval(map[string]interface{}{
-				"spec": rt.instance.Unstructured().Object["spec"],
-			})
-			if err != nil {
-				return err
-			}
-			value, err := celutil.ConvertCELtoGo(val)
+			value, err := evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				return err
 			}
@@ -376,16 +370,8 @@ func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
 			for _, dep := range variable.Dependencies {
 				evalContext[dep] = rt.resolvedResources[dep].Object
 			}
-			ast, issues := env.Compile(variable.Expression)
-			if issues != nil {
-				return issues.Err()
-			}
-			program, err := env.Program(ast)
-			if err != nil {
-				return err
-			}
 
-			val, _, err := program.Eval(evalContext)
+			value, err := evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				if strings.Contains(err.Error(), "no such key") {
 					// TODO(a-hilaly): I'm not sure if this is the best way to handle
@@ -398,10 +384,6 @@ func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
 				return &EvalError{
 					Err: err,
 				}
-			}
-			value, err := celutil.ConvertCELtoGo(val)
-			if err != nil {
-				return nil
 			}
 
 			variable.Resolved = true
@@ -487,11 +469,12 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 	}
 
 	topLevelFields := rt.resources[resourceID].GetTopLevelFields()
+
+	// we should not expect errors here since we already compiled it
+	// in the dryRun
 	env, err := celutil.NewEnvironement(&celutil.EnvironementOptions{
 		ResourceNames: topLevelFields,
 	})
-	// we should not expect errors here since we already compiled it
-	// in the dryRun
 	if err != nil {
 		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
@@ -502,33 +485,9 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 		}
 	}
 	for _, expression := range expressions {
-		// We do want re-evaluate the expression every time, and avoid caching
-		// the result. NOTE(a-hilaly): maybe we can cache the result, but for that
-		// we also need to define a new Kind for the variables, they are not dynamic
-		// nor static. And for sure they need to be expressionEvaluationStateo objects.
-		//
-		// We shouldn't expect an error here, since we tested it with dry run
-		// keeping check just in case
-		ast, issues := env.Compile(expression)
-		if issues != nil && issues.Err() != nil {
-			return false, "", fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
-		}
-		// Here as well
-		program, err := env.Program(ast)
+		out, err := evaluateExpression(env, context, expression)
 		if err != nil {
-			return false, "", fmt.Errorf("failed programming expression %s: %w", expression, err)
-		}
-		// We get an error here when the value field we're looking for is not yet defined
-		// For now leaving it as error, in the future when we see different scenarios
-		// of this error we can make some a reason, and others an error
-		output, _, err := program.Eval(context)
-		if err != nil {
-			return false, "", fmt.Errorf("failed evaluating expression %s: %w", expression, err)
-		}
-		// We should not expect an error here as well since we checked during dry-run
-		out, err := celutil.ConvertCELtoGo(output)
-		if err != nil {
-			return false, "", fmt.Errorf("failed converting output %v: %w", output, err)
+			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !out.(bool) {
@@ -536,6 +495,84 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 		}
 	}
 	return true, "", nil
+}
+
+// IgnoreResource ignores resource that has a conditional expressison that evaluated
+// to false
+func (rt *ResourceGroupRuntime) IgnoreResource(resourceID string) {
+	rt.ignoredByConditionalResources[resourceID] = true
+}
+
+// areDependenciesIgnored will returns true if the dependencies of the resource
+// are ignored, false if they are not
+func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
+	for _, p := range rt.resources[resourceID].GetDependencies() {
+		if _, isIgnored := rt.ignoredByConditionalResources[p]; isIgnored {
+			return true
+		}
+	}
+	return false
+}
+
+// WantToCreateResource returns true if all the conditional expressions return true
+// if not it will add itself to the ignored resources
+func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, error) {
+	if rt.areDependenciesIgnored(resourceID) {
+		return false, nil
+	}
+
+	conditions := rt.resources[resourceID].GetConditionalExpressions()
+	if len(conditions) == 0 {
+		return true, nil
+	}
+
+	// we should not expect errors here since we already compiled it
+	// in the dryRun
+	env, err := celutil.NewEnvironement(&celutil.EnvironementOptions{
+		ResourceNames: []string{"spec"},
+	})
+	if err != nil {
+		return false, nil
+	}
+
+	context := map[string]interface{}{
+		"spec": rt.instance.Unstructured().Object["spec"],
+	}
+
+	for _, condition := range conditions {
+		// We should not expect an error here as well since we checked during dry-run
+		value, err := evaluateExpression(env, context, condition)
+		if err != nil {
+			return false, err
+		}
+		// returning a reason here to point out which expression is not ready yet
+		if !value.(bool) {
+			return false, fmt.Errorf("Skipping resource creation due to condition %s", condition)
+		}
+	}
+	return true, nil
+}
+
+// evaluateExpression evaluates an CEL expression and returns a value if successful, or error
+func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
+	ast, issues := env.Compile(expression)
+	if issues.Err() != nil {
+		return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
+	}
+	// Here as well
+	program, err := env.Program(ast)
+	if err != nil {
+		return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
+	}
+	// We get an error here when the value field we're looking for is not yet defined
+	// For now leaving it as error, in the future when we see different scenarios
+	// of this error we can make some a reason, and others an error
+	val, _, err := program.Eval(context)
+	if err != nil {
+		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
+	}
+
+	return celutil.ConvertCELtoGo(val)
 }
 
 // containsAllElements checks if all elements in the inner slice are present

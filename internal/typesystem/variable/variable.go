@@ -114,6 +114,16 @@ const (
 	//   readyOn:
 	//   - ${status.status == "Active"}
 	ResourceVariableKindReadyOn ResourceVariableKind = "readyOn"
+	// ResourceVariableKindConditional represents a conditional variable.
+	// Conditional variables are resolved at the beginning of the execution and
+	// their value is constant. They decide whether we are going to create
+	// a resource or not
+	//
+	// For example:
+	//   name: deployment
+	//   conditional:
+	//   - ${spec.replicas > 1}
+	ResourceVariableKindConditional ResourceVariableKind = "conditional"
 )
 
 // String returns the string representation of a ResourceVariableKind.
@@ -129,4 +139,9 @@ func (r ResourceVariableKind) IsStatic() bool {
 // IsDynamic returns true if the ResourceVariableKind is dynamic
 func (r ResourceVariableKind) IsDynamic() bool {
 	return r == ResourceVariableKindDynamic
+}
+
+// IsConditional returns true if the ResourceVariableKind is conditional
+func (r ResourceVariableKind) IsConditional() bool {
+	return r == ResourceVariableKindConditional
 }

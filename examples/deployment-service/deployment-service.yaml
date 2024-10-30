@@ -9,6 +9,8 @@ spec:
     spec:
       name: string
       namespace: string | default=default
+      service:
+        enabled: boolean | default=false
     status:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas}
@@ -22,7 +24,7 @@ spec:
       metadata:
         name: ${spec.name}
       spec:
-        replicas: 50
+        replicas: 5
         selector:
           matchLabels:
             app: deployment
@@ -37,11 +39,13 @@ spec:
               ports:
               - containerPort: 80
   - name: service
+    conditional:
+    - ${spec.service.enabled}
     definition:
       apiVersion: v1
       kind: Service
       metadata:
-        name: ${spec.name}
+        name: ${deployment.metadata.name}
       spec:
         selector:
           app: deployment

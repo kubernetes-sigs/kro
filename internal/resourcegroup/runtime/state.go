@@ -40,6 +40,13 @@ const (
 	// according to its defined readiness criteria. e.g waiting for a Pod to
 	// be running and ready, a PVC to be bound ...
 	ResourceStateWaitingOnReadiness ResourceState = "WaitingOnReadiness"
+
+	// ResourceStateIgnoredByConditions indicates that the resource is ignored
+	// by a condition that evaluated to false. This typically occurs before
+	// a resource is created or updated, and is decided by a variable defined
+	// in the instance spec. Eg. Deciding whether to create a Deployment or
+	// just a simple pod based on the defined replica.
+	ResourceStateIgnoredByConditions ResourceState = "IgnoredByConditions"
 )
 
 // expressionEvaluationState represents the state of an expression evaluation

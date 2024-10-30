@@ -64,7 +64,7 @@ func (r *ResourceGroupReconciler) handleReconcileError(ctx context.Context, err 
 	return ctrl.Result{}, err
 }
 
-func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup, topologicalOrder []string, reconcileErr error) error {
+func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup, topologicalOrder []string, resources []v1alpha1.ResourceInformation, reconcileErr error) error {
 	log, _ := logr.FromContext(ctx)
 
 	log.V(1).Info("calculating resource group status and conditions")
@@ -82,7 +82,8 @@ func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, re
 		condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "", "Custom Resource Definition is synced"),
 	)
 	dc.Status.State = v1alpha1.ResourceGroupStateActive
-	dc.Status.TopoligicalOrder = topologicalOrder
+	dc.Status.TopologicalOrder = topologicalOrder
+	dc.Status.Resources = resources
 
 	if reconcileErr != nil {
 		log.V(1).Info("Error occurred during reconcile", "error", reconcileErr)

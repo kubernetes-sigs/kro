@@ -28,6 +28,7 @@ spec:
       type: string
     - jsonPath: .status.topologicalOrder
       name: TOPOLOGICALORDER
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: AGE
@@ -178,6 +179,34 @@ spec:
                   required:
                   - status
                   - type
+                  type: object
+                type: array
+              resources:
+                description: Resources represents the resources, and their information
+                  (dependencies for now)
+                items:
+                  description: |-
+                    ResourceInformation defines the information about a resource
+                    in the resourcegroup
+                  properties:
+                    dependencies:
+                      description: Dependencies represents the resource dependencies
+                        of a resource group
+                      items:
+                        description: |-
+                          Dependency defines the dependency a resource has observed
+                          from the resources it points to based on expressions
+                        properties:
+                          name:
+                            description: Name represents the name of the dependency
+                              resource
+                            type: string
+                        type: object
+                      type: array
+                    name:
+                      description: Name represents the name of the resources we're
+                        providing information for
+                      type: string
                   type: object
                 type: array
               state:

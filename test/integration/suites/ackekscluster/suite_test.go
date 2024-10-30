@@ -87,7 +87,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(12)) // All resources from the generator
 
-			g.Expect(createdRG.Status.TopoligicalOrder).To(Equal([]string{
+			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{
 				"clusterRole",
 				"clusterVPC",
 				"clusterInternetGateway",
@@ -103,7 +103,7 @@ var _ = Describe("EKSCluster", func() {
 			}))
 
 			// Verify the ResourceGroup status
-			g.Expect(createdRG.Status.TopoligicalOrder).To(HaveLen(12))
+			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(12))
 			// Verify conditions
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
 			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeReconcilerReady))

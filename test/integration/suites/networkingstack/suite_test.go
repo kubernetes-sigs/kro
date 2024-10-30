@@ -88,8 +88,8 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(5)) // vpc, 3 subnets, security group
 
 			// Verify the ResourceGroup status
-			g.Expect(createdRG.Status.TopoligicalOrder).To(HaveLen(5))
-			g.Expect(createdRG.Status.TopoligicalOrder).To(Equal([]string{
+			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(5))
+			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{
 				"vpc",
 				"securityGroup",
 				"subnetAZA",

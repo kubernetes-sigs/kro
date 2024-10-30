@@ -100,8 +100,8 @@ var _ = Describe("DeploymentService", func() {
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
 
 			g.Expect(createdRG.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
-			g.Expect(createdRG.Status.TopoligicalOrder).To(HaveLen(2))
-			g.Expect(createdRG.Status.TopoligicalOrder).To(Equal([]string{"deployment", "service"}))
+			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(2))
+			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{"deployment", "service"}))
 		}, 10*time.Second, time.Second).Should(Succeed())
 
 		// Create instance

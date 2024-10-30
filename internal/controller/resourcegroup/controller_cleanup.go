@@ -15,37 +15,48 @@ package resourcegroup
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
 	log, _ := logr.FromContext(ctx)
 
 	log.V(1).Info("Cleaning up resource group")
-	processedRG, err := r.rgBuilder.NewResourceGroup(rg)
-	if err != nil {
-		return err
-	}
-	gvr := processedRG.Instance.GetGroupVersionResource()
+	gvr := r.extractGVKFromResourceGroup(rg.Spec.APIVersion, rg.Spec.Kind)
 
 	log.V(1).Info("Shutting down resource group microcontroller")
-	err = r.shutdownResourceGroupMicroController(ctx, &gvr)
+	err := r.shutdownResourceGroupMicroController(ctx, &gvr)
 	if err != nil {
 		return err
 	}
 
-	crdResource := processedRG.Instance.GetCRD()
-	log.V(1).Info("Cleaning up resource group CRD", "crd", crdResource.Name)
-	err = r.cleanupResourceGroupCRD(ctx, crdResource.Name)
+	crdName := r.extractCRDName(rg.Spec.Kind)
+	log.V(1).Info("Cleaning up resource group CRD", "crd", crdName)
+	err = r.cleanupResourceGroupCRD(ctx, crdName)
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (r *ResourceGroupReconciler) extractCRDName(kind string) string {
+	pluralKind := flect.Pluralize(strings.ToLower(kind))
+	return fmt.Sprintf("%s.x.%s", pluralKind, v1alpha1.SymphonyDomainName)
+}
+
+func (r *ResourceGroupReconciler) extractGVKFromResourceGroup(apiVersion, kind string) schema.GroupVersionResource {
+	gvk := k8smetadata.GetResourceGroupInstanceGVK(apiVersion, kind)
+
+	return k8smetadata.GVKtoGVR(gvk)
 }
 
 func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {

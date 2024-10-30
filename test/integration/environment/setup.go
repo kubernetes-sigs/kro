@@ -80,7 +80,7 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 			filepath.Join("../..", "crds", "ack-eks-controller"),
 		},
 		ErrorIfCRDPathMissing:   true,
-		ControlPlaneStopTimeout: 1 * time.Minute,
+		ControlPlaneStopTimeout: 2 * time.Minute,
 	}
 
 	// Start the test environment

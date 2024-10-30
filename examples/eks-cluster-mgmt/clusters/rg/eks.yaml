@@ -183,6 +183,7 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: OpenIDConnectProvider
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-odic
       spec:
         url: ${ekscluster.status.identity.oidc.issuer}

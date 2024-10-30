@@ -5,5 +5,5 @@ kind: Namespace
 metadata:
   name: {{ $key }}
   annotations:
-    services.k8s.aws/owner-account-id: "{{ $value }}"
+    services.k8s.aws/team-id: "{{ $key }}"
 {{- end }}

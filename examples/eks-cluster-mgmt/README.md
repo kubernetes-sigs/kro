@@ -8,28 +8,28 @@ A hub-spoke model is used in this example; a management cluster (hub) is created
 
 ## Prerequisites
 1. AWS account for the management cluster
-2. AWS account for workload clusters; each with an IAM role named `eks-cluster-mgmt` with trust policy that allows the role attached to ACK controllers to assume the role, and with the required permissions.
+2. AWS account for workload clusters; each with the following IAM roles:
+    - `eks-cluster-mgmt-ec2`
+    - `eks-cluster-mgmt-eks`
+    - `eks-cluster-mgmt-iam`
 
-Trust policy:
-```json
-{
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Effect": "Allow",
-			"Principal": {
-				"AWS": [
-					"arn:aws:iam::<mgmt-account-id>:role/ack-ec2-controller",
-					"arn:aws:iam::<mgmt-account-id>:role/ack-iam-controller",
-					"arn:aws:iam::<mgmt-account-id>:role/ack-eks-controller"
-				]
-			},
-			"Action": "sts:AssumeRole",
-			"Condition": {}
-		}
-	]
-}
-```
+    The permissions should be as needed for every controller.
+    Trust policy:
+    ```json
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "arn:aws:iam::<mgmt-account-id>:role/ack-<srvc-name>-controller"
+                },
+                "Action": "sts:AssumeRole",
+                "Condition": {}
+            }
+        ]
+    }
+    ```
 
 ## Instructions
 ### Environment variables
@@ -172,6 +172,8 @@ The initial configuration creates one workload cluster named `workload-cluster1`
 
 18. Add a workload cluster by adding a manifest for it under `clusters/`. Refer to `clusters/workload-cluster1.yaml` as an example.
 19. Include the new cluster manifest in `clusters/kustomization.yaml`.
+20. Add the cluster name and corresponding account number in `charts-values/ack-multi-account/values.yaml`.
+21. Commit/push the changes to Git.
 
 
 ## Known issues

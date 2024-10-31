@@ -324,6 +324,42 @@ var _ = Describe("Validation", func() {
 			}
 		})
 	})
+
+	Context("Proper Cleanup", func() {
+		It("should not panic when deleting an inactive ResourceGroup", func() {
+			rg := generator.NewResourceGroup("test-cleanup",
+				generator.WithNamespace(namespace),
+				generator.WithKind("TestCleanup", "v1alpha1"),
+				generator.WithDefinition(
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("testResource", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ServiceAccount",
+					"metadata": map[string]interface{}{
+						"name": "${Bad expression}",
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rg)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      rg.Name,
+					Namespace: namespace,
+				}, rg)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+				g.Expect(rg.Status.TopologicalOrder).To(BeEmpty())
+			}, 10*time.Second, time.Second).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rg)).To(Succeed())
+		})
+	})
 })
 
 func validResourceDef() map[string]interface{} {

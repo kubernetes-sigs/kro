@@ -6,6 +6,31 @@ A hub-spoke model is used in this example; a management cluster (hub) is created
 
 **NOTE:** As this example evolves, some of the instructions below will be detailed further (e.g. the creation of the management cluster), others (e.g. controllers installation) will be automated via the GitOps flow.
 
+## Prerequisites
+1. AWS account for the management cluster
+2. AWS account for workload clusters; each with the following IAM roles:
+    - `eks-cluster-mgmt-ec2`
+    - `eks-cluster-mgmt-eks`
+    - `eks-cluster-mgmt-iam`
+
+    The permissions should be as needed for every controller.
+    Trust policy:
+    ```json
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "arn:aws:iam::<mgmt-account-id>:role/ack-<srvc-name>-controller"
+                },
+                "Action": "sts:AssumeRole",
+                "Condition": {}
+            }
+        ]
+    }
+    ```
+
 ## Instructions
 ### Environment variables
 
@@ -138,8 +163,22 @@ helm upgrade --install argocd argo-cd/argo-cd --version $ARGOCD_CHART_VERSION \
 ```sh
 kubectl apply -f $WORKSPACE_PATH/cluster-mgmt/gitops/bootstrap.yaml
 ```
-The initial configuration creates one workload cluster named `workload-cluster1`. Feel free to add more by editing the configurations at `clusters/`.
 
+### Adding workload clusters
+
+The initial configuration creates one workload cluster named `workload-cluster1`. 
+
+**TODO:** add steps for cluster/account mapping
+
+18. Add a workload cluster by adding a manifest for it under `clusters/`. Refer to `clusters/workload-cluster1.yaml` as an example.
+19. Include the new cluster manifest in `clusters/kustomization.yaml`.
+20. Add the cluster name and corresponding account number in `charts-values/ack-multi-account/values.yaml`.
+21. Commit/push the changes to Git.
+
+
+## Known issues
+1. You will need to restart the Symphony controller when you add a new workload cluster due to a bug in the controller. Once the resource group `eksclusterwithvpc` is applied, the controller is able to apply the corresponding VPC resources, but it is not able to recognize the generated ids (e.g. subnet id), and feed that into EKS resources. Refer to [this issue](https://github.com/aws-controllers-k8s/private-symphony/issues/8) for more details. 
+2. Deleting a cluster does not properly clean up all cluster resources i.e. subnets, routetables are left strangling. ACK EC2 controller keep reporting dependencies preventing deletion. To work around this issue, attempt restart ACK EC2 controller, and/or manually deleting the resources.
 
 ## Clean-up
 1. Delete ArgoCD bootstrap application, and wait for workload clusters and hosting VPCs to be deleted:

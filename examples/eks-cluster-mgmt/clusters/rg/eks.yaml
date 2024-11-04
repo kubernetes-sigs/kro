@@ -19,6 +19,7 @@ spec:
         workers:
           subnet1ID: string
           subnet2ID: string
+      accountId: string
       k8sVersion: string
       nodesCount: integer
   resources:
@@ -27,6 +28,7 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-cluster-role
       spec:
         name: ${spec.name}-cluster-role
@@ -50,6 +52,7 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-cluster-node-role
       spec:
         name: ${spec.name}-cluster-node-role
@@ -75,6 +78,7 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}
       spec:
         name: ${spec.name}
@@ -93,6 +97,7 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-nodegroup
       spec:
         name: ${spec.name}-nodegroup
@@ -141,7 +146,7 @@ spec:
         labels:
           argocd.argoproj.io/secret-type: cluster
         annotations:
-          accountId: ${ekscluster.status.ackResourceMetadata.ownerAccountID}
+          accountId: ${spec.accountId}
           region: ${spec.region}
           oidcProvider: ${ekscluster.status.identity.oidc.issuer}
       type: Opaque
@@ -164,6 +169,7 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: AccessEntry
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-accessentry
       spec:
         clusterName: ${spec.name}
@@ -177,6 +183,7 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: OpenIDConnectProvider
       metadata:
+        namespace: ${spec.name}
         name: ${spec.name}-odic
       spec:
         url: ${ekscluster.status.identity.oidc.issuer}

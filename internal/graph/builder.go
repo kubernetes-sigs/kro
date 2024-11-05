@@ -314,7 +314,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		return nil, fmt.Errorf("failed to parse readyOn expressions: %v", err)
 	}
 
-	conditional, err := parser.ParseConditionExpressions(rgResource.Conditional)
+	conditions, err := parser.ParseConditionExpressions(rgResource.Conditions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse consitional expressions: %v", err)
 	}
@@ -323,15 +323,15 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 
 	// Note that at this point we don't inject the dependencies into the resource.
 	return &Resource{
-		id:                     rgResource.Name,
-		gvr:                    metadata.GVKtoGVR(gvk),
-		schema:                 resourceSchema,
-		emulatedObject:         emulatedResource,
-		originalObject:         &unstructured.Unstructured{Object: resourceObject},
-		variables:              resourceVariables,
-		readyOnExpressions:     readyOn,
-		conditionalExpressions: conditional,
-		namespaced:             isNamespaced,
+		id:                   rgResource.Name,
+		gvr:                  metadata.GVKtoGVR(gvk),
+		schema:               resourceSchema,
+		emulatedObject:       emulatedResource,
+		originalObject:       &unstructured.Unstructured{Object: resourceObject},
+		variables:            resourceVariables,
+		readyOnExpressions:   readyOn,
+		conditionExpressions: conditions,
+		namespaced:           isNamespaced,
 	}, nil
 }
 
@@ -683,7 +683,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	resourceNames := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "spec")
-	conditionalFieldNames := []string{"spec"}
+	conditionFieldNames := []string{"spec"}
 
 	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
 	if err != nil {
@@ -758,19 +758,19 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				}
 			}
 
-			for _, conditionalExpression := range resource.conditionalExpressions {
+			for _, conditionExpression := range resource.conditionExpressions {
 				instanceEnv, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
 
-				err = validateCELExpressionContext(instanceEnv, conditionalExpression, conditionalFieldNames)
+				err = validateCELExpressionContext(instanceEnv, conditionExpression, conditionFieldNames)
 				if err != nil {
-					return fmt.Errorf("failed to validate expression context: '%s' %w", conditionalExpression, err)
+					return fmt.Errorf("failed to validate expression context: '%s' %w", conditionExpression, err)
 				}
 				// create context
 				context := map[string]*Resource{}
-				// for now we will only support the instance context for conditional expressions.
+				// for now we will only support the instance context for condition expressions.
 				// With this decision we will decide in creation time, and update time
 				// If we'll be creating resources or not
 				context["spec"] = &Resource{
@@ -779,12 +779,12 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 					},
 				}
 
-				output, err := dryRunExpression(instanceEnv, conditionalExpression, context)
+				output, err := dryRunExpression(instanceEnv, conditionExpression, context)
 				if err != nil {
-					return fmt.Errorf("failed to dry-run expression %s: %w", conditionalExpression, err)
+					return fmt.Errorf("failed to dry-run expression %s: %w", conditionExpression, err)
 				}
 				if !scel.IsBoolType(output) {
-					return fmt.Errorf("output of conditional expression %s can only be of type bool", conditionalExpression)
+					return fmt.Errorf("output of condition expression %s can only be of type bool", conditionExpression)
 				}
 			}
 		}

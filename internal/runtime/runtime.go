@@ -53,7 +53,7 @@ func NewResourceGroupRuntime(
 		resolvedResources:             make(map[string]*unstructured.Unstructured),
 		runtimeVariables:              make(map[string][]*expressionEvaluationState),
 		expressionsCache:              make(map[string]*expressionEvaluationState),
-		ignoredByConditionalResources: make(map[string]bool),
+		ignoredByConditionsResources: make(map[string]bool),
 	}
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
@@ -163,8 +163,9 @@ type ResourceGroupRuntime struct {
 	// synchronization.
 	topologicalOrder []string
 
-	// ignoredByConditionalResources holds the resources whos defined conditionals returned false
-	ignoredByConditionalResources map[string]bool
+	// ignoredByConditionsResources holds the resources whos defined conditions returned false
+	// or who's dependencies are ignored
+	ignoredByConditionsResources map[string]bool
 }
 
 // TopologicalOrder returns the topological order of resources.
@@ -491,31 +492,31 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 	return true, "", nil
 }
 
-// IgnoreResource ignores resource that has a conditional expressison that evaluated
-// to false
+// IgnoreResource ignores resource that has a conditions expressison that evaluated
+// to false or whose dependencies are ignored
 func (rt *ResourceGroupRuntime) IgnoreResource(resourceID string) {
-	rt.ignoredByConditionalResources[resourceID] = true
+	rt.ignoredByConditionsResources[resourceID] = true
 }
 
 // areDependenciesIgnored will returns true if the dependencies of the resource
 // are ignored, false if they are not
 func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
 	for _, p := range rt.resources[resourceID].GetDependencies() {
-		if _, isIgnored := rt.ignoredByConditionalResources[p]; isIgnored {
+		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
 			return true
 		}
 	}
 	return false
 }
 
-// WantToCreateResource returns true if all the conditional expressions return true
+// WantToCreateResource returns true if all the condition expressions return true
 // if not it will add itself to the ignored resources
 func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, error) {
 	if rt.areDependenciesIgnored(resourceID) {
 		return false, nil
 	}
 
-	conditions := rt.resources[resourceID].GetConditionalExpressions()
+	conditions := rt.resources[resourceID].GetConditionExpressions()
 	if len(conditions) == 0 {
 		return true, nil
 	}

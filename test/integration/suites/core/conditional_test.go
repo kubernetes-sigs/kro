@@ -33,7 +33,7 @@ import (
 	"github.com/aws-controllers-k8s/symphony/internal/testutil/generator"
 )
 
-var _ = Describe("Conditional", func() {
+var _ = Describe("Conditions", func() {
 	var (
 		ctx       context.Context
 		namespace string
@@ -51,10 +51,10 @@ var _ = Describe("Conditional", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 	})
 
-	It("should not create deployment, service, and configmap due to conditional deploymentEnabled == false", func() {
-		rg := generator.NewResourceGroup("test-conditional",
+	It("should not create deployment, service, and configmap due to condition deploymentEnabled == false", func() {
+		rg := generator.NewResourceGroup("test-conditions",
 			generator.WithNamespace(namespace),
-			generator.WithKind("TestConditional", "v1alpha1"),
+			generator.WithKind("TestConditions", "v1alpha1"),
 			generator.WithDefinition(
 				map[string]interface{}{
 					"name":                   "string",
@@ -209,7 +209,7 @@ var _ = Describe("Conditional", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify the ResourceGroup fields
-			g.Expect(createdRG.Spec.Kind).To(Equal("TestConditional"))
+			g.Expect(createdRG.Spec.Kind).To(Equal("TestConditions"))
 			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(6))
 
@@ -238,12 +238,12 @@ var _ = Describe("Conditional", func() {
 
 		}, 10*time.Second, time.Second).Should(Succeed())
 
-		name := "test-conditional"
+		name := "test-conditions"
 		// Create instance
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": fmt.Sprintf("x.%s/%s", symphonyv1alpha1.SymphonyDomainName, "v1alpha1"),
-				"kind":       "TestConditional",
+				"kind":       "TestConditions",
 				"metadata": map[string]interface{}{
 					"name":      name,
 					"namespace": namespace,

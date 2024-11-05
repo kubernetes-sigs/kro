@@ -59,7 +59,7 @@ func TestNetworkingStack(t *testing.T) {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "CRD Suite")
+	RunSpecs(t, "Core Suite")
 }
 
 // Helper function to convert map to runtime.RawExtension

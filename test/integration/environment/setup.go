@@ -16,7 +16,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
+	"io/ioutil"
 	"path/filepath"
 	"time"
 
@@ -205,7 +205,7 @@ func noopLogger() logr.Logger {
 	} */
 
 	logger := zap.New(zap.UseFlagOptions(&zap.Options{
-		DestWriter:  os.Stdout,
+		DestWriter:  ioutil.Discard,
 		Development: true,
 	}))
 

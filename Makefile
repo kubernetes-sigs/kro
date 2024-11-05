@@ -79,7 +79,7 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	go test -v ./test/integration/... -coverprofile integration-cover.out
+	go test -v ./test/integration/suites/... -coverprofile integration-cover.out
 else ifeq ($(WHAT),unit)
 	go test -v ./internal/... -coverprofile unit-cover.out
 else

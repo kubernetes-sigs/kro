@@ -75,7 +75,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 	"github.com/aws-controllers-k8s/symphony/internal/requeue"
 )
 
@@ -406,7 +406,7 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	}
 
 	gvk := u.GroupVersionKind()
-	gvr := k8smetadata.GVKtoGVR(gvk)
+	gvr := metadata.GVKtoGVR(gvk)
 
 	objectIdentifiers := ObjectIdentifiers{
 		NamespacedKey: namespacedKey,

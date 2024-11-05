@@ -24,10 +24,10 @@ import (
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 	instancectrl "github.com/aws-controllers-k8s/symphony/internal/controller/instance"
+	"github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup/errors"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
-	"github.com/aws-controllers-k8s/symphony/internal/errors"
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
+	"github.com/aws-controllers-k8s/symphony/internal/graph"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 )
 
 func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) ([]string, []v1alpha1.ResourceInformation, error) {
@@ -45,7 +45,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 		return processedRG.TopologicalOrder, resourcesInformation, err
 	}
 
-	rgLabeler := k8smetadata.NewResourceGroupLabeler(rg)
+	rgLabeler := metadata.NewResourceGroupLabeler(rg)
 	// Merge the ResourceGroupLabeler with the SymphonyLabeler
 	graphExecLabeler, err := r.metadataLabeler.Merge(rgLabeler)
 	if err != nil {

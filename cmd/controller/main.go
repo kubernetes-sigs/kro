@@ -33,8 +33,8 @@ import (
 	xv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 	resourcegroupctrl "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
+	"github.com/aws-controllers-k8s/symphony/internal/graph"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 	//+kubebuilder:scaffold:imports
 )
 

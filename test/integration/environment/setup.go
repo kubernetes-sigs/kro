@@ -16,7 +16,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"path/filepath"
 	"time"
 
@@ -36,8 +35,8 @@ import (
 	ctrlinstance "github.com/aws-controllers-k8s/symphony/internal/controller/instance"
 	ctrlresourcegroup "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
+	"github.com/aws-controllers-k8s/symphony/internal/graph"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
 )
 
 type Environment struct {
@@ -205,7 +204,7 @@ func noopLogger() logr.Logger {
 	} */
 
 	logger := zap.New(zap.UseFlagOptions(&zap.Options{
-		DestWriter:  ioutil.Discard,
+		DestWriter:  io.Discard,
 		Development: true,
 	}))
 

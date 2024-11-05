@@ -26,8 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/condition"
-	serr "github.com/aws-controllers-k8s/symphony/internal/errors"
+	"github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup/condition"
+	serr "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup/errors"
 	"github.com/aws-controllers-k8s/symphony/internal/requeue"
 )
 

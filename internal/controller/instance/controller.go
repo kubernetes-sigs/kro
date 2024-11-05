@@ -28,9 +28,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/graph"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 )
 
 // ReconcileConfig holds configuration parameters for the recnociliation process.
@@ -82,7 +82,7 @@ type Controller struct {
 	rg *graph.Graph
 	// instanceLabeler is responsible for applying consistent labels
 	// to resources managed by this controller.
-	instanceLabeler k8smetadata.Labeler
+	instanceLabeler metadata.Labeler
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
@@ -98,7 +98,7 @@ func NewController(
 	rg *graph.Graph,
 	client dynamic.Interface,
 	serviceAccounts map[string]string,
-	instanceLabeler k8smetadata.Labeler,
+	instanceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
 		log:             log,
@@ -137,7 +137,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		return fmt.Errorf("failed to create runtime resource group: %w", err)
 	}
 
-	instanceSubResourcesLabeler, err := k8smetadata.NewInstanceLabeler(instance).Merge(c.instanceLabeler)
+	instanceSubResourcesLabeler, err := metadata.NewInstanceLabeler(instance).Merge(c.instanceLabeler)
 	if err != nil {
 		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
 	}

@@ -26,9 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 	"github.com/aws-controllers-k8s/symphony/internal/requeue"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/runtime"
+	"github.com/aws-controllers-k8s/symphony/internal/runtime"
 )
 
 // instanceGraphReconciler is responsible for reconciling a single instance and
@@ -46,10 +46,10 @@ type instanceGraphReconciler struct {
 	// their dependencies, and the resolved values... etc
 	runtime runtime.Interface
 	// instanceLabeler is responsible for applying labels to the instance object
-	instanceLabeler k8smetadata.Labeler
+	instanceLabeler metadata.Labeler
 	// instanceSubResourcesLabeler is responsible for applying labels to the
 	// sub resources.
-	instanceSubResourcesLabeler k8smetadata.Labeler
+	instanceSubResourcesLabeler metadata.Labeler
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
@@ -374,14 +374,14 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 
 func (igr *instanceGraphReconciler) setManaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
 	// if the instance is already managed, do nothing
-	if exist, _ := k8smetadata.HasInstanceFinalizerUnstructured(uObj, uid); exist {
+	if exist, _ := metadata.HasInstanceFinalizerUnstructured(uObj, uid); exist {
 		return uObj, nil
 	}
 
 	igr.log.V(1).Info("Setting managed", "resource", uObj.GetName(), "namespace", uObj.GetNamespace())
 
 	dc := uObj.DeepCopy()
-	if err := k8smetadata.SetInstanceFinalizerUnstructured(dc, uid); err != nil {
+	if err := metadata.SetInstanceFinalizerUnstructured(dc, uid); err != nil {
 		return nil, fmt.Errorf("failed to set instance finalizer: %w", err)
 	}
 
@@ -397,14 +397,14 @@ func (igr *instanceGraphReconciler) setManaged(ctx context.Context, uObj *unstru
 
 func (igr *instanceGraphReconciler) setUnmanaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
 	// if the instance is already unmanaged, do nothing
-	if exist, _ := k8smetadata.HasInstanceFinalizerUnstructured(uObj, uid); !exist {
+	if exist, _ := metadata.HasInstanceFinalizerUnstructured(uObj, uid); !exist {
 		return uObj, nil
 	}
 
 	igr.log.V(1).Info("Setting unmanaged", "resource", uObj.GetName(), "namespace", uObj.GetNamespace())
 
 	dc := uObj.DeepCopy()
-	if err := k8smetadata.RemoveInstanceFinalizerUnstructured(dc, uid); err != nil {
+	if err := metadata.RemoveInstanceFinalizerUnstructured(dc, uid); err != nil {
 		return nil, fmt.Errorf("failed to remove instance finalizer: %w", err)
 	}
 

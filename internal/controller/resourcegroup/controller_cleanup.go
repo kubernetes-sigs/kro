@@ -23,14 +23,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
 	log, _ := logr.FromContext(ctx)
 
 	log.V(1).Info("Cleaning up resource group")
-	gvr := r.extractGVKFromResourceGroup(rg.Spec.APIVersion, rg.Spec.Kind)
+	gvr := metadata.GetResourceGroupInstanceGVR(rg.Spec.APIVersion, rg.Spec.Kind)
 
 	log.V(1).Info("Shutting down resource group microcontroller")
 	err := r.shutdownResourceGroupMicroController(ctx, &gvr)
@@ -51,12 +51,6 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 func (r *ResourceGroupReconciler) extractCRDName(kind string) string {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return fmt.Sprintf("%s.x.%s", pluralKind, v1alpha1.SymphonyDomainName)
-}
-
-func (r *ResourceGroupReconciler) extractGVKFromResourceGroup(apiVersion, kind string) schema.GroupVersionResource {
-	gvk := k8smetadata.GetResourceGroupInstanceGVK(apiVersion, kind)
-
-	return k8smetadata.GVKtoGVR(gvk)
 }
 
 func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {

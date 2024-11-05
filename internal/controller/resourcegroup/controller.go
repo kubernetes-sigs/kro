@@ -24,9 +24,9 @@ import (
 
 	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
 	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
-	"github.com/aws-controllers-k8s/symphony/internal/k8smetadata"
+	"github.com/aws-controllers-k8s/symphony/internal/graph"
 	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/resourcegroup/graph"
+	"github.com/aws-controllers-k8s/symphony/internal/metadata"
 )
 
 //+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups,verbs=get;list;watch;create;update;patch;delete
@@ -43,7 +43,7 @@ type ResourceGroupReconciler struct {
 	crdManager        kubernetes.CRDManager
 	dynamicController *dynamiccontroller.DynamicController
 	rgBuilder         *graph.Builder
-	metadataLabeler   k8smetadata.Labeler
+	metadataLabeler   metadata.Labeler
 }
 
 func NewResourceGroupReconciler(
@@ -65,7 +65,7 @@ func NewResourceGroupReconciler(
 		crdManager:        crdManager,
 		dynamicController: dynamicController,
 		dynamicClient:     dynamicClient,
-		metadataLabeler:   k8smetadata.NewSymphonyMetaLabeler("dev", "pod-id"),
+		metadataLabeler:   metadata.NewSymphonyMetaLabeler("dev", "pod-id"),
 		rgBuilder:         builder,
 	}
 }

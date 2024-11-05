@@ -97,8 +97,8 @@ func (in *Resource) DeepCopyInto(out *Resource) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.Conditional != nil {
-		in, out := &in.Conditional, &out.Conditional
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

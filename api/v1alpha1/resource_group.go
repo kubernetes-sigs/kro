@@ -87,7 +87,7 @@ type Resource struct {
 	// +kubebuilder:validation:Optional
 	ReadyOn []string `json:"readyOn,omitempty"`
 	// +kubebuilder:validation:Optional
-	Conditional []string `json:"conditional,omitempty"`
+	Conditions []string `json:"conditions,omitempty"`
 }
 
 // ResourceGroupStatus defines the observed state of ResourceGroup

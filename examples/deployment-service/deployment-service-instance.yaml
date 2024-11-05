@@ -4,4 +4,5 @@ metadata:
   name: my-deployment-and-service3
 spec:
   name: app3
-  service: {}
+  service:
+    enabled: true

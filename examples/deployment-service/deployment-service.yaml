@@ -39,13 +39,15 @@ spec:
               ports:
               - containerPort: 80
   - name: service
-    conditional:
+    conditions:
     - ${spec.service.enabled}
     definition:
       apiVersion: v1
       kind: Service
       metadata:
         name: ${deployment.metadata.name}
+        annotations:
+          age: ${string(deployment.status.readyReplicas)}
       spec:
         selector:
           app: deployment

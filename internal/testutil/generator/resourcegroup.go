@@ -67,18 +67,18 @@ func WithDefinition(spec, status map[string]interface{}) ResourceGroupOption {
 }
 
 // WithResource adds a resource to the ResourceGroup with the given name and definition
-// readyOn and conditionals are optional.
+// readyOn and conditions are optional.
 func WithResource(
 	name string,
 	definition map[string]interface{},
 	readyOn []string,
-	conditionals []string,
+	conditions []string,
 ) ResourceGroupOption {
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
 		rg.Spec.Resources = append(rg.Spec.Resources, &symphonyv1alpha1.Resource{
-			Name:        name,
-			ReadyOn:     readyOn,
-			Conditional: conditionals,
+			Name:       name,
+			ReadyOn:    readyOn,
+			Conditions: conditions,
 			Definition: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: definition},
 			},

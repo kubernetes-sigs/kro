@@ -63,9 +63,9 @@ type Resource struct {
 	// readyOnExpressions is a list of the expressions that need to be evaluated
 	// before the resource is considered ready.
 	readyOnExpressions []string
-	// conditionalExpressions is a list of the expresisons that need to be evaluated
+	// conditionExpressions is a list of the expresisons that need to be evaluated
 	// to decide whether to create a resource group or not
-	conditionalExpressions []string
+	conditionExpressions []string
 	// namespaced indicates if the resource is namespaced or cluster-scoped.
 	// This is useful when initiating the dynamic client to interact with the
 	// resource.
@@ -141,9 +141,9 @@ func (r *Resource) GetReadyOnExpressions() []string {
 	return r.readyOnExpressions
 }
 
-// GetConditionalExpressions returns the conditional expressions of the resource.
-func (r *Resource) GetConditionalExpressions() []string {
-	return r.conditionalExpressions
+// GetConditionExpressions returns the condition expressions of the resource.
+func (r *Resource) GetConditionExpressions() []string {
+	return r.conditionExpressions
 }
 
 // GetTopLevelFields returns the top-level fields of the resource.
@@ -159,14 +159,14 @@ func (r *Resource) IsNamespaced() bool {
 // DeepCopy returns a deep copy of the resource.
 func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
-		id:                     r.id,
-		gvr:                    r.gvr,
-		schema:                 r.schema,
-		originalObject:         r.originalObject.DeepCopy(),
-		variables:              slices.Clone(r.variables),
-		dependencies:           slices.Clone(r.dependencies),
-		readyOnExpressions:     slices.Clone(r.readyOnExpressions),
-		conditionalExpressions: slices.Clone(r.conditionalExpressions),
-		namespaced:             r.namespaced,
+		id:                   r.id,
+		gvr:                  r.gvr,
+		schema:               r.schema,
+		originalObject:       r.originalObject.DeepCopy(),
+		variables:            slices.Clone(r.variables),
+		dependencies:         slices.Clone(r.dependencies),
+		readyOnExpressions:   slices.Clone(r.readyOnExpressions),
+		conditionExpressions: slices.Clone(r.conditionExpressions),
+		namespaced:           r.namespaced,
 	}
 }

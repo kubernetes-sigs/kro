@@ -548,7 +548,7 @@ func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, e
 // evaluateExpression evaluates an CEL expression and returns a value if successful, or error
 func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
 	ast, issues := env.Compile(expression)
-	if issues.Err() != nil {
+	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 	}
 	// Here as well

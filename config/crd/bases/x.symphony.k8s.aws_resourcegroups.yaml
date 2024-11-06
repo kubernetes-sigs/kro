@@ -63,6 +63,15 @@ spec:
                   The APIVersion of the resourcegroup. This is used to generate
                   and create the CRD for the resourcegroup.
                 type: string
+              defaultServiceAccounts:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ServiceAccount configuration for controller impersonation.
+                  Key is the namespace, value is the service account name to use.
+                  Special key "*" defines the default service account for any
+                  namespace not explicitly mapped.
+                type: object
               definition:
                 description: |-
                   The definition of the resourcegroup, which includes the spec, status,
@@ -124,15 +133,6 @@ spec:
                   - name
                   type: object
                 type: array
-              serviceAccounts:
-                additionalProperties:
-                  type: string
-                description: |-
-                  ServiceAccount configuration for controller impersonation.
-                  Key is the namespace, value is the service account name to use.
-                  Special key "*" defines the default service account for any
-                  namespace not explicitly mapped.
-                type: object
             required:
             - apiVersion
             - definition

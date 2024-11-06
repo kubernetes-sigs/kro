@@ -86,8 +86,8 @@ type Controller struct {
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
-	// serviceAccounts is a map of service accounts to use for controller impersonation.
-	serviceAccounts map[string]string
+	// defaultServiceAccounts is a map of service accounts to use for controller impersonation.
+	defaultServiceAccounts map[string]string
 }
 
 // NewController creates a new Controller instance.
@@ -97,17 +97,17 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rg *graph.Graph,
 	client dynamic.Interface,
-	serviceAccounts map[string]string,
+	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		gvr:             gvr,
-		client:          client,
-		rg:              rg,
-		instanceLabeler: instanceLabeler,
-		reconcileConfig: reconcileConfig,
-		serviceAccounts: serviceAccounts,
+		log:                    log,
+		gvr:                    gvr,
+		client:                 client,
+		rg:                     rg,
+		instanceLabeler:        instanceLabeler,
+		reconcileConfig:        reconcileConfig,
+		defaultServiceAccounts: defaultServiceAccounts,
 	}
 }
 
@@ -187,7 +187,7 @@ const (
 // is specified for the namespace, the default client will be used.
 func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, error) {
 	// if no service accounts are specified, use the default client
-	if len(c.serviceAccounts) == 0 {
+	if len(c.defaultServiceAccounts) == 0 {
 		c.log.V(1).Info("no service accounts configured, using default client")
 		return c.client, nil
 	}
@@ -196,7 +196,7 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 	defer timer.ObserveDuration()
 
 	// Check for namespace specific service account
-	if sa, ok := c.serviceAccounts[namespace]; ok {
+	if sa, ok := c.defaultServiceAccounts[namespace]; ok {
 		userName, err := getServiceAccountUserName(namespace, sa)
 		if err != nil {
 			c.handleImpersonateError(namespace, sa, err)
@@ -214,7 +214,7 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 	}
 
 	// Check for default service account (marked by "*")
-	if defaultSA, ok := c.serviceAccounts[v1alpha1.DefaultServiceAccountKey]; ok {
+	if defaultSA, ok := c.defaultServiceAccounts[v1alpha1.DefaultServiceAccountKey]; ok {
 		userName, err := getServiceAccountUserName(namespace, defaultSA)
 		if err != nil {
 			c.handleImpersonateError(namespace, defaultSA, err)

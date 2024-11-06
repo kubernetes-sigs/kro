@@ -51,7 +51,7 @@ type ResourceGroupSpec struct {
 	// namespace not explicitly mapped.
 	//
 	// +kubebuilder:validation:Optional
-	ServiceAccounts map[string]string `json:"serviceAccounts,omitempty"`
+	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
 
 // Definition represents the attributes that define an instance of

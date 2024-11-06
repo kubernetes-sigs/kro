@@ -192,8 +192,8 @@ func (in *ResourceGroupSpec) DeepCopyInto(out *ResourceGroupSpec) {
 			}
 		}
 	}
-	if in.ServiceAccounts != nil {
-		in, out := &in.ServiceAccounts, &out.ServiceAccounts
+	if in.DefaultServiceAccounts != nil {
+		in, out := &in.DefaultServiceAccounts, &out.DefaultServiceAccounts
 		*out = make(map[string]string, len(*in))
 		for key, val := range *in {
 			(*out)[key] = val

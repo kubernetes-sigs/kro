@@ -179,8 +179,7 @@ var _ = Describe("Conditions", func() {
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata": map[string]interface{}{
-					"name":      "${deploymentB.metadata.name}",
-					"namespace": "${deploymentA.metadata.namespace}",
+					"name": "${deploymentB.metadata.name + deploymentA.metadata.name}",
 				},
 				"spec": map[string]interface{}{
 					"selector": map[string]interface{}{

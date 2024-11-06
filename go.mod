@@ -1,4 +1,4 @@
-module github.com/aws-controllers-k8s/symphony
+module github.com/awslabs/symphony
 
 go 1.22.0
 

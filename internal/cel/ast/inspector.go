@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	scel "github.com/aws-controllers-k8s/symphony/internal/cel"
+	scel "github.com/awslabs/symphony/internal/cel"
 	"github.com/google/cel-go/cel"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )

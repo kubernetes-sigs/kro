@@ -18,7 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/api/v1alpha1"
 )
 
 var (

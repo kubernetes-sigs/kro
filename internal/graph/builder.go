@@ -28,17 +28,17 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	scel "github.com/aws-controllers-k8s/symphony/internal/cel"
-	"github.com/aws-controllers-k8s/symphony/internal/cel/ast"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/crd"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/dag"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/emulator"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/parser"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/schema"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/variable"
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
-	"github.com/aws-controllers-k8s/symphony/internal/simpleschema"
+	"github.com/awslabs/symphony/api/v1alpha1"
+	scel "github.com/awslabs/symphony/internal/cel"
+	"github.com/awslabs/symphony/internal/cel/ast"
+	"github.com/awslabs/symphony/internal/graph/crd"
+	"github.com/awslabs/symphony/internal/graph/dag"
+	"github.com/awslabs/symphony/internal/graph/emulator"
+	"github.com/awslabs/symphony/internal/graph/parser"
+	"github.com/awslabs/symphony/internal/graph/schema"
+	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/symphony/internal/simpleschema"
 )
 
 // NewBuilder creates a new GraphBuilder instance.

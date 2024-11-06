@@ -26,9 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
-	"github.com/aws-controllers-k8s/symphony/internal/requeue"
-	"github.com/aws-controllers-k8s/symphony/internal/runtime"
+	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/symphony/internal/requeue"
+	"github.com/awslabs/symphony/internal/runtime"
 )
 
 // instanceGraphReconciler is responsible for reconciling a single instance and

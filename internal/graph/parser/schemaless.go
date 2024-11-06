@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws-controllers-k8s/symphony/internal/graph/variable"
+	"github.com/awslabs/symphony/internal/graph/variable"
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful

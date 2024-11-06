@@ -16,8 +16,8 @@ package graph
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/aws-controllers-k8s/symphony/internal/graph/dag"
-	"github.com/aws-controllers-k8s/symphony/internal/runtime"
+	"github.com/awslabs/symphony/internal/graph/dag"
+	"github.com/awslabs/symphony/internal/runtime"
 )
 
 // Graph represents a processed resourcegroup. It contains the DAG representation

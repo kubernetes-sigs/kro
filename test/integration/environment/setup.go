@@ -31,12 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	symphonyv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	ctrlinstance "github.com/aws-controllers-k8s/symphony/internal/controller/instance"
-	ctrlresourcegroup "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup"
-	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
-	"github.com/aws-controllers-k8s/symphony/internal/graph"
-	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
+	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	ctrlinstance "github.com/awslabs/symphony/internal/controller/instance"
+	ctrlresourcegroup "github.com/awslabs/symphony/internal/controller/resourcegroup"
+	"github.com/awslabs/symphony/internal/dynamiccontroller"
+	"github.com/awslabs/symphony/internal/graph"
+	"github.com/awslabs/symphony/internal/kubernetes"
 )
 
 type Environment struct {

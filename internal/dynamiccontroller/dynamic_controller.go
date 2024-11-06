@@ -75,8 +75,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
-	"github.com/aws-controllers-k8s/symphony/internal/requeue"
+	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/symphony/internal/requeue"
 )
 
 // Config holds the configuration for DynamicController

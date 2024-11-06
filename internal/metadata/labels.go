@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

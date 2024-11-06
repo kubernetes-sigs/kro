@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/testutil/generator"
+	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/testutil/generator"
 )
 
 var _ = Describe("Validation", func() {

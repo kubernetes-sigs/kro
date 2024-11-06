@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aws-controllers-k8s/symphony/internal/graph/fieldpath"
-	"github.com/aws-controllers-k8s/symphony/internal/graph/variable"
+	"github.com/awslabs/symphony/internal/graph/fieldpath"
+	"github.com/awslabs/symphony/internal/graph/variable"
 )
 
 // ResolutionResult represents the result of resolving a single expression.

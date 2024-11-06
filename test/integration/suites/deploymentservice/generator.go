@@ -15,10 +15,10 @@ package deploymentservice_test
 import (
 	"fmt"
 
-	"github.com/aws-controllers-k8s/symphony/internal/testutil/generator"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	symphonyv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/testutil/generator"
 )
 
 // deploymentService creates a ResourceGroup for testing deployment+service combinations

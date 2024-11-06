@@ -16,7 +16,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/api/v1alpha1"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {

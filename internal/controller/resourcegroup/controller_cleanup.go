@@ -22,8 +22,8 @@ import (
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
+	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/metadata"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {

@@ -27,10 +27,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/graph"
-	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
+	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/graph"
+	"github.com/awslabs/symphony/internal/kubernetes"
+	"github.com/awslabs/symphony/internal/metadata"
 )
 
 // ReconcileConfig holds configuration parameters for the recnociliation process.

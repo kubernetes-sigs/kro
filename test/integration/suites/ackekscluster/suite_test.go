@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	ctrlinstance "github.com/aws-controllers-k8s/symphony/internal/controller/instance"
-	"github.com/aws-controllers-k8s/symphony/test/integration/environment"
+	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	ctrlinstance "github.com/awslabs/symphony/internal/controller/instance"
+	"github.com/awslabs/symphony/test/integration/environment"
 )
 
 var env *environment.Environment

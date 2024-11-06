@@ -25,10 +25,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup/condition"
-	serr "github.com/aws-controllers-k8s/symphony/internal/controller/resourcegroup/errors"
-	"github.com/aws-controllers-k8s/symphony/internal/requeue"
+	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/controller/resourcegroup/condition"
+	serr "github.com/awslabs/symphony/internal/controller/resourcegroup/errors"
+	"github.com/awslabs/symphony/internal/requeue"
 )
 
 // handleReconcileError will handle errors from reconcile handlers, which

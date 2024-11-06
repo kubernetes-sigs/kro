@@ -22,11 +22,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/aws-controllers-k8s/symphony/api/v1alpha1"
-	"github.com/aws-controllers-k8s/symphony/internal/dynamiccontroller"
-	"github.com/aws-controllers-k8s/symphony/internal/graph"
-	"github.com/aws-controllers-k8s/symphony/internal/kubernetes"
-	"github.com/aws-controllers-k8s/symphony/internal/metadata"
+	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/symphony/internal/dynamiccontroller"
+	"github.com/awslabs/symphony/internal/graph"
+	"github.com/awslabs/symphony/internal/kubernetes"
+	"github.com/awslabs/symphony/internal/metadata"
 )
 
 //+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups,verbs=get;list;watch;create;update;patch;delete

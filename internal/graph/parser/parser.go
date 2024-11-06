@@ -19,7 +19,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/aws-controllers-k8s/symphony/internal/graph/variable"
+	"github.com/awslabs/symphony/internal/graph/variable"
 )
 
 // ParseResource extracts CEL expressions from a resource based on

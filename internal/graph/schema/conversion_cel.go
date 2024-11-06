@@ -19,7 +19,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
-	scel "github.com/aws-controllers-k8s/symphony/internal/cel"
+	scel "github.com/awslabs/symphony/internal/cel"
 )
 
 // inferSchemaFromCELValue infers a JSONSchemaProps from a CEL value.

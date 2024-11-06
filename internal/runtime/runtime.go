@@ -47,12 +47,12 @@ func NewResourceGroupRuntime(
 	topologicalOrder []string,
 ) (*ResourceGroupRuntime, error) {
 	r := &ResourceGroupRuntime{
-		instance:                      instance,
-		resources:                     resources,
-		topologicalOrder:              topologicalOrder,
-		resolvedResources:             make(map[string]*unstructured.Unstructured),
-		runtimeVariables:              make(map[string][]*expressionEvaluationState),
-		expressionsCache:              make(map[string]*expressionEvaluationState),
+		instance:                     instance,
+		resources:                    resources,
+		topologicalOrder:             topologicalOrder,
+		resolvedResources:            make(map[string]*unstructured.Unstructured),
+		runtimeVariables:             make(map[string][]*expressionEvaluationState),
+		expressionsCache:             make(map[string]*expressionEvaluationState),
 		ignoredByConditionsResources: make(map[string]bool),
 	}
 	// make sure to copy the variables and the dependencies, to avoid
@@ -571,7 +571,10 @@ func evaluateExpression(env *cel.Env, context map[string]interface{}, expression
 // containsAllElements checks if all elements in the inner slice are present
 // in the outer slice.
 func containsAllElements[T comparable](outer, inner []T) bool {
-	return slices.ContainsFunc(inner, func(v T) bool {
-		return slices.Contains(outer, v)
-	})
+	for _, v := range inner {
+		if !slices.Contains(outer, v) {
+			return false
+		}
+	}
+	return true
 }

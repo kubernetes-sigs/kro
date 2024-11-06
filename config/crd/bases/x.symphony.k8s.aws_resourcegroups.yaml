@@ -106,7 +106,7 @@ spec:
                 description: The resources that are part of the resourcegroup.
                 items:
                   properties:
-                    conditional:
+                    conditions:
                       items:
                         type: string
                       type: array

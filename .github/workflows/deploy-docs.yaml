@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'website/**'
+      - "website/**"
 
 jobs:
   build:
@@ -24,15 +24,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-        working-directory: ./website
 
       - name: Build website
         run: bun build
-        working-directory: ./website
 
       - name: Upload Build Artifact
         uses: actions/upload-pages-artifact@v3
-        working-directory: ./website
         with:
           path: build
 
@@ -54,9 +51,10 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if:
+          github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./websites/build
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"

@@ -1,59 +1,57 @@
-import { themes as prismThemes } from 'prism-react-renderer';
-import type { Config } from '@docusaurus/types';
-import type * as Preset from '@docusaurus/preset-classic';
+import { themes as prismThemes } from "prism-react-renderer";
+import type { Config } from "@docusaurus/types";
+import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: 'Symphony',
-  tagline: 'All purpose glue for Kubernetes resources',
+  title: "Symphony",
+  tagline: "All purpose glue for Kubernetes resources",
   // The Melodious Kubernetes Integrator
   // Cementing Your Kubernetes Infrastructure
   // Connecting the Dots in Your Kubernetes Environment
   // Bringing Cohesion to Your Kubernetes Clusters
-  favicon: 'img/favicon.ico',
-  plugins: [
-    require.resolve('docusaurus-lunr-search'),
-  ],
+  favicon: "img/favicon.ico",
+  plugins: [require.resolve("docusaurus-lunr-search")],
   // Set the production url of your site here
-  url: 'https://aws-controllers-k8s.github.io',
+  url: "https://aws-controllers-k8s.github.io",
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  baseUrl: "/",
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'aws-controllers-k8s', // Usually your GitHub org/user name.
-  projectName: 'private-symphony', // Usually your repo name.
+  organizationName: "aws-controllers-k8s", // Usually your GitHub org/user name.
+  projectName: "private-symphony", // Usually your repo name.
 
-  onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
+  onBrokenLinks: "throw",
+  onBrokenMarkdownLinks: "warn",
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
   // may want to replace "en" with "zh-Hans".
   i18n: {
-    defaultLocale: 'en',
-    locales: ['en'],
+    defaultLocale: "en",
+    locales: ["en"],
   },
 
   presets: [
     [
-      'classic',
+      "classic",
       {
         docs: {
-          sidebarPath: './sidebars.ts',
+          sidebarPath: "./sidebars.ts",
           versions: {
             current: {
-              label: 'latest',
+              label: "latest",
             },
           },
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            'https://github.com/facebook/docusaurus/tree/main/packages/create-docusaurus/templates/shared/',
+            "https://github.com/facebook/docusaurus/tree/main/packages/create-docusaurus/templates/shared/",
         },
         blog: false,
         theme: {
-          customCss: './src/css/custom.css',
+          customCss: "./src/css/custom.css",
         },
       } satisfies Preset.Options,
     ],
@@ -61,7 +59,7 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: 'img/symphony.svg',
+    image: "img/symphony.svg",
     docs: {
       sidebar: {
         hideable: false,
@@ -69,82 +67,82 @@ const config: Config = {
       },
     },
     navbar: {
-      title: 'Symphony',
+      title: "Symphony",
       hideOnScroll: true,
       logo: {
-        alt: 'My Site Logo',
-        src: 'img/logo-light.svg',
-        srcDark: 'img/logo-dark.svg',
+        alt: "My Site Logo",
+        src: "img/logo-light.svg",
+        srcDark: "img/logo-dark.svg",
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
-          position: 'left',
-          label: 'Documentation',
+          type: "docSidebar",
+          sidebarId: "docsSidebar",
+          position: "left",
+          label: "Documentation",
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'examplesSidebar',
-          position: 'left',
-          label: 'Examples',
+          type: "docSidebar",
+          sidebarId: "examplesSidebar",
+          position: "left",
+          label: "Examples",
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'apisSidebar',
-          position: 'left',
-          label: 'API Reference',
+          type: "docSidebar",
+          sidebarId: "apisSidebar",
+          position: "left",
+          label: "API Reference",
         },
         {
-          type: 'docsVersionDropdown',
-          position: 'right',
+          type: "docsVersionDropdown",
+          position: "right",
           dropdownActiveClassDisabled: true,
           dropdownItemsAfter: [
             {
-              type: 'html',
+              type: "html",
               value: '<hr class="dropdown-separator">',
             },
             {
-              to: '/versions',
-              label: 'All versions',
+              to: "/versions",
+              label: "All versions",
             },
           ],
         },
         {
-          href: 'https://github.com/aws-controllers-k8s/private-symphony',
-          position: 'right',
-          className: 'header-github-link',
-          'aria-label': 'GitHub repository',
+          href: "https://github.com/aws-controllers-k8s/private-symphony",
+          position: "right",
+          className: "header-github-link",
+          "aria-label": "GitHub repository",
         },
       ],
     },
     footer: {
-      style: 'dark',
+      style: "dark",
       links: [
         {
-          title: 'Docs',
+          title: "Docs",
           items: [
             {
-              label: 'Tutorial',
-              to: '/docs/docs/overview',
+              label: "Tutorial",
+              to: "/docs/docs/overview",
             },
           ],
         },
         {
-          title: 'Community',
+          title: "Community",
           items: [
             {
-              label: 'Slack',
-              href: 'https://github.com/aws-controllers-k8s/private-symphony',
+              label: "Slack",
+              href: "https://github.com/aws-controllers-k8s/private-symphony",
             },
           ],
         },
         {
-          title: 'More',
+          title: "More",
           items: [
             {
-              label: 'GitHub',
-              href: 'https://github.com/aws-controllers-k8s/private-symphony',
+              label: "GitHub",
+              href: "https://github.com/aws-controllers-k8s/private-symphony",
             },
           ],
         },
@@ -161,8 +159,8 @@ const config: Config = {
     },
     prism: {
       theme: prismThemes.github,
-      darkTheme: prismThemes.oneDark,
-      additionalLanguages: ['yaml', 'bash'],
+      darkTheme: prismThemes.github,
+      additionalLanguages: ["bash", "yaml"],
     },
   } satisfies Preset.ThemeConfig,
 };

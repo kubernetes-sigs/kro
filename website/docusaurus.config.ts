@@ -12,14 +12,14 @@ const config: Config = {
   favicon: "img/favicon.ico",
   plugins: [require.resolve("docusaurus-lunr-search")],
   // Set the production url of your site here
-  url: "https://aws-controllers-k8s.github.io",
+  url: "https://awslabs.github.io",
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: "/",
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: "aws-controllers-k8s", // Usually your GitHub org/user name.
+  organizationName: "awslabs", // Usually your GitHub org/user name.
   projectName: "private-symphony", // Usually your repo name.
 
   onBrokenLinks: "throw",
@@ -109,7 +109,7 @@ const config: Config = {
           ],
         },
         {
-          href: "https://github.com/aws-controllers-k8s/private-symphony",
+          href: "https://github.com/awslabs/private-symphony",
           position: "right",
           className: "header-github-link",
           "aria-label": "GitHub repository",
@@ -133,7 +133,7 @@ const config: Config = {
           items: [
             {
               label: "Slack",
-              href: "https://github.com/aws-controllers-k8s/private-symphony",
+              href: "https://github.com/awslabs/private-symphony",
             },
           ],
         },
@@ -142,7 +142,7 @@ const config: Config = {
           items: [
             {
               label: "GitHub",
-              href: "https://github.com/aws-controllers-k8s/private-symphony",
+              href: "https://github.com/awslabs/private-symphony",
             },
           ],
         },

@@ -174,6 +174,10 @@ func (rt *ResourceGroupRuntime) TopologicalOrder() []string {
 }
 
 // ResourceDescriptor returns the descriptor for a given resource name.
+//
+// It is the responsibility of the caller to ensure that the resource name
+// exists in the runtime. a.k.a the caller should use the TopologicalOrder
+// to get the resource names.
 func (rt *ResourceGroupRuntime) ResourceDescriptor(name string) ResourceDescriptor {
 	return rt.resources[name]
 }
@@ -251,6 +255,8 @@ func (rt *ResourceGroupRuntime) Synchronize() (bool, error) {
 	return true, nil
 }
 
+// propagateResourceVariables iterates over all resources and evaluates their
+// variables if all dependencies are resolved.
 func (rt *ResourceGroupRuntime) propagateResourceVariables() error {
 	for name := range rt.resources {
 		if rt.canProcessResource(name) {
@@ -431,6 +437,7 @@ func (rt *ResourceGroupRuntime) evaluateResourceExpressions(resource string) err
 	}
 
 	rs := resolver.NewResolver(rt.resources[resource].Unstructured().Object, exprValues)
+
 	summary := rs.Resolve(exprFields)
 	if summary.Errors != nil {
 		return fmt.Errorf("failed to resolve resource %s: %v", resource, summary.Errors)
@@ -457,7 +464,7 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
 		// before calling this function.
-		return false, fmt.Sprintf("resource %s is not created", resourceID), nil
+		return false, fmt.Sprintf("resource %s is not resolved", resourceID), nil
 	}
 
 	expressions := rt.resources[resourceID].GetReadyOnExpressions()
@@ -499,7 +506,11 @@ func (rt *ResourceGroupRuntime) IgnoreResource(resourceID string) {
 }
 
 // areDependenciesIgnored will returns true if the dependencies of the resource
-// are ignored, false if they are not
+// are ignored, false if they are not.
+//
+// Naturally, if a resource is judged to be ignored, it will be marked as ignored
+// and all its dependencies will be ignored as well. Causing a chain reaction
+// of ignored resources.
 func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
 	for _, p := range rt.resources[resourceID].GetDependencies() {
 		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {

@@ -142,7 +142,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 	}
 
 	if expectedType != "string" && expectedType != "any" {
-		return nil, fmt.Errorf("expected string type or AdditionalProperties allowed for path %s, got %v", path, field)
+		return nil, fmt.Errorf("expected string type or AdditionalProperties for path %s, got %v", path, field)
 	}
 
 	expressions, err := extractExpressions(field)

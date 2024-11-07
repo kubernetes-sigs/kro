@@ -93,7 +93,7 @@ type Builder struct {
 	// Maybe there is a better way, if anything probably there is a better way to
 	// validate the CEL expressions. To revisit.
 	resourceEmulator *emulator.Emulator
-	discoveryClient  *discovery.DiscoveryClient
+	discoveryClient  discovery.DiscoveryInterface
 }
 
 // NewResourceGroup creates a new ResourceGroup object from the given ResourceGroup
@@ -314,9 +314,10 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		return nil, fmt.Errorf("failed to parse readyOn expressions: %v", err)
 	}
 
+	// 7. Parse condition expressions
 	conditions, err := parser.ParseConditionExpressions(rgResource.Conditions)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse consitional expressions: %v", err)
+		return nil, fmt.Errorf("failed to parse conditional expressions: %v", err)
 	}
 
 	_, isNamespaced := namespacedResources[gvk]
@@ -383,10 +384,12 @@ func (b *Builder) buildDependencyGraph(
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 				}
-				if isStatic {
-					resourceVariable.Kind = variable.ResourceVariableKindStatic
-				} else {
-					// If we have seen a dynamic dependency, we need to mark the variable as dynamic.
+
+				// Static until proven dynamic.
+				//
+				// This reads as: If the expression is dynamic and the resource variable is
+				// static, then we need to mark the resource variable as dynamic.
+				if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
 					resourceVariable.Kind = variable.ResourceVariableKindDynamic
 				}
 
@@ -718,6 +721,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 					return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
 				}
 			}
+
 			// validate readyOn Expressions for resource
 			// Only accepting expressions accessing the status and spec for now
 			// and need to evaluate to a boolean type

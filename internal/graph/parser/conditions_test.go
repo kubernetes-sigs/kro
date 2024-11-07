@@ -26,17 +26,17 @@ func TestParseReadyOn(t *testing.T) {
 		{
 			name:          "Two expressions",
 			expression:    []string{"${hello}${goodbye}"},
-			expectedError: "single expression per line allowed",
+			expectedError: "only standalone expressions are allowed",
 		},
 		{
 			name:          "With Postfix",
 			expression:    []string{"${hello}-world"},
-			expectedError: "single expression per line allowed",
+			expectedError: "only standalone expressions are allowed",
 		},
 		{
 			name:          "With Prefix",
 			expression:    []string{"hello-${world}"},
-			expectedError: "single expression per line allowed",
+			expectedError: "only standalone expressions are allowed",
 		},
 		{
 			name:          "Standalone expression",

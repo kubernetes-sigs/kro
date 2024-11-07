@@ -545,7 +545,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      "true",
-			expectedError: "expected string type or AdditionalProperties allowed for path , got true",
+			expectedError: "expected string type or AdditionalProperties for path , got true",
 		},
 		{
 			name: "Type mismatch integer/float",

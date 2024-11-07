@@ -14,6 +14,8 @@
 package generator
 
 import (
+	"encoding/json"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,13 +57,24 @@ func WithKind(kind, version string) ResourceGroupOption {
 
 // WithDefinition sets the definition and status of the ResourceGroup
 func WithDefinition(spec, status map[string]interface{}) ResourceGroupOption {
+	rawSpec, err := json.Marshal(spec)
+	if err != nil {
+		panic(err)
+	}
+	rawStatus, err := json.Marshal(status)
+	if err != nil {
+		panic(err)
+	}
+
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
 		rg.Spec.Definition = &symphonyv1alpha1.Definition{
 			Spec: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: spec},
+				Raw:    rawSpec,
 			},
 			Status: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: status},
+				Raw:    rawStatus,
 			},
 		}
 	}
@@ -76,12 +89,17 @@ func WithResource(
 	conditions []string,
 ) ResourceGroupOption {
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
+		raw, err := json.Marshal(definition)
+		if err != nil {
+			panic(err)
+		}
 		rg.Spec.Resources = append(rg.Spec.Resources, &symphonyv1alpha1.Resource{
 			Name:       name,
 			ReadyOn:    readyOn,
 			Conditions: conditions,
 			Definition: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: definition},
+				Raw:    raw,
 			},
 		})
 	}

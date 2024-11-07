@@ -27,7 +27,7 @@ Once authenticated, install Symphony using the Helm chart:
 ```sh
 # Fetch the latest release version from GitHub
 export SYMPHONY_VERSION=$(curl -s \
-    https://api.github.com/repos/aws-controllers-k8s/private-symphony/releases/latest | \
+    https://api.github.com/repos/awslabs/private-symphony/releases/latest | \
     grep '"tag_name":' | \
     sed -E 's/.*"([^"]+)".*/\1/' \
   )

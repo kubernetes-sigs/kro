@@ -177,13 +177,13 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 .PHONY: image
 build-image: ## Build the Symphony controller images using ko build
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/symphony" \
-		ko build --bare github.com/aws-controllers-k8s/symphony/cmd/controller \
+		ko build --bare github.com/awslabs/symphony/cmd/controller \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
 publish-image: ## Publish the Symphony controller images to ECR
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/symphony" \
-		ko publish --bare github.com/aws-controllers-k8s/symphony/cmd/controller \
+		ko publish --bare github.com/awslabs/symphony/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: package-helm

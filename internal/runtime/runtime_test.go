@@ -2183,7 +2183,7 @@ func Test_IsResourceReady(t *testing.T) {
 		{
 			name: "resource not resolved",
 			resource: newTestResource(
-				withReadyExpressions([]string{"status.ready"}),
+				withReadyExpressions([]string{"test.status.ready"}),
 			),
 			want:       false,
 			wantReason: "resource test is not resolved",
@@ -2191,8 +2191,7 @@ func Test_IsResourceReady(t *testing.T) {
 		{
 			name: "ready expression true",
 			resource: newTestResource(
-				withReadyExpressions([]string{"status.ready"}),
-				withTopLevelFields([]string{"status"}),
+				withReadyExpressions([]string{"test.status.ready"}),
 			),
 			resolvedObject: map[string]interface{}{
 				"status": map[string]interface{}{
@@ -2204,8 +2203,7 @@ func Test_IsResourceReady(t *testing.T) {
 		{
 			name: "ready expression false",
 			resource: newTestResource(
-				withReadyExpressions([]string{"status.ready"}),
-				withTopLevelFields([]string{"status"}),
+				withReadyExpressions([]string{"test.status.ready"}),
 			),
 			resolvedObject: map[string]interface{}{
 				"status": map[string]interface{}{
@@ -2213,13 +2211,12 @@ func Test_IsResourceReady(t *testing.T) {
 				},
 			},
 			want:       false,
-			wantReason: "expression status.ready evaluated to false",
+			wantReason: "expression test.status.ready evaluated to false",
 		},
 		{
 			name: "invalid expression",
 			resource: newTestResource(
 				withReadyExpressions([]string{"invalid )"}),
-				withTopLevelFields([]string{"status"}),
 			),
 			resolvedObject: map[string]interface{}{},
 			want:           false,
@@ -2228,8 +2225,7 @@ func Test_IsResourceReady(t *testing.T) {
 		{
 			name: "multiple expressions all true",
 			resource: newTestResource(
-				withReadyExpressions([]string{"status.ready", "status.healthy && status.count > 10", "status.count > 5"}),
-				withTopLevelFields([]string{"status"}),
+				withReadyExpressions([]string{"test.status.ready", "test.status.healthy && test.status.count > 10", "test.status.count > 5"}),
 			),
 			resolvedObject: map[string]interface{}{
 				"status": map[string]interface{}{
@@ -2243,8 +2239,7 @@ func Test_IsResourceReady(t *testing.T) {
 		{
 			name: "multiple expressions one false",
 			resource: newTestResource(
-				withReadyExpressions([]string{"status.ready", "status.healthy"}),
-				withTopLevelFields([]string{"status"}),
+				withReadyExpressions([]string{"test.status.ready", "test.status.healthy"}),
 			),
 			resolvedObject: map[string]interface{}{
 				"status": map[string]interface{}{
@@ -2253,7 +2248,7 @@ func Test_IsResourceReady(t *testing.T) {
 				},
 			},
 			want:       false,
-			wantReason: "expression status.healthy evaluated to false",
+			wantReason: "expression test.status.healthy evaluated to false",
 		},
 	}
 

@@ -112,7 +112,7 @@ const (
 	// For example:
 	//   name: cluster
 	//   readyWhen:
-	//   - ${status.status == "Active"}
+	//   - ${cluster.status.status == "Active"}
 	ResourceVariableKindReadyWhen ResourceVariableKind = "readyWhen"
 	// ResourceVariableKindIncludeWhen represents an includeWhen variable.
 	// IncludeWhen variables are resolved at the beginning of the execution and

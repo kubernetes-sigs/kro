@@ -20,7 +20,7 @@ spec:
   resources:
   - name: clusterVPC
     readyWhen:
-    - ${status.state == "available"}
+    - ${clusterVPC.status.state == "available"}
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
@@ -59,7 +59,7 @@ spec:
             gatewayID: ${clusterInternetGateway.status.internetGatewayID}
   - name: clusterSubnetA
     readyWhen:
-    - ${status.state == "available"}
+    - ${clusterSubnetA.status.state == "available"}
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
@@ -174,7 +174,7 @@ spec:
           }
   - name: cluster
     readyWhen:
-    - ${status.status == "ACTIVE"}
+    - ${cluster.status.status == "ACTIVE"}
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster

@@ -51,7 +51,8 @@ var _ = Describe("Readiness", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 	})
 
-	It("should wait for deployment to have spec.replicas == status.availableReplicas before creating service", func() {
+	It(`should wait for deployment to have deployment.spec.replicas 
+		== deployment.status.availableReplicas before creating service`, func() {
 		rg := generator.NewResourceGroup("test-readiness",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
@@ -97,7 +98,7 @@ var _ = Describe("Readiness", func() {
 						},
 					},
 				},
-			}, []string{"${spec.replicas == status.availableReplicas}"}, nil),
+			}, []string{"${deployment.spec.replicas == deployment.status.availableReplicas}"}, nil),
 			// ServiceB - depends on deploymentA and deploymentB
 			generator.WithResource("service", map[string]interface{}{
 				"apiVersion": "v1",

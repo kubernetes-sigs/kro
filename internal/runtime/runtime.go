@@ -472,20 +472,16 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 		return true, "", nil
 	}
 
-	topLevelFields := rt.resources[resourceID].GetTopLevelFields()
-
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(topLevelFields))
+	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{resourceID}))
 	if err != nil {
 		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
-	context := map[string]interface{}{}
-	for _, n := range topLevelFields {
-		if obj, ok := observed.Object[n]; ok {
-			context[n] = obj.(map[string]interface{})
-		}
+	context := map[string]interface{}{
+		resourceID: observed.Object,
 	}
+
 	for _, expression := range expressions {
 		out, err := evaluateExpression(env, context, expression)
 		if err != nil {

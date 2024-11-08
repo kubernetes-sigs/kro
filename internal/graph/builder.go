@@ -731,27 +731,26 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			// I would also suggest separating the dryRuns of readyWhenExpressions
 			// and the resourceExpressions.
 			for _, readyWhenExpression := range resource.readyWhenExpressions {
-				fieldNames := schema.GetResourceTopLevelFieldNames(resource.schema)
-				fieldEnv, err := scel.DefaultEnvironment(scel.WithResourceNames(fieldNames))
+				fieldEnv, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{resource.id}))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
 
-				err = validateCELExpressionContext(fieldEnv, readyWhenExpression, fieldNames)
+				err = validateCELExpressionContext(fieldEnv, readyWhenExpression, []string{resource.id})
 				if err != nil {
 					return fmt.Errorf("failed to validate expression context: '%s' %w", readyWhenExpression, err)
 				}
 				// create context
 				// add resource fields to the context
-				context := map[string]*Resource{}
-				for _, n := range fieldNames {
-					context[n] = &Resource{
-						emulatedObject: &unstructured.Unstructured{
-							Object: resource.emulatedObject.Object[n].(map[string]interface{}),
-						},
-					}
+				resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
+				if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
+					delete(resourceEmulatedCopy.Object, "apiVersion")
+					delete(resourceEmulatedCopy.Object, "kind")
 				}
-
+				context := map[string]*Resource{}
+				context[resource.id] = &Resource{
+					emulatedObject: resourceEmulatedCopy,
+				}
 				output, err := dryRunExpression(fieldEnv, readyWhenExpression, context)
 
 				if err != nil {

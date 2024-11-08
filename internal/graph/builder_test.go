@@ -209,7 +209,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"enableDNSSupport":   true,
 						"enableDNSHostnames": true,
 					},
-				}, []string{"${status.state == 'available'}"}, nil),
+				}, []string{"${vpc.status.state == 'available'}"}, nil),
 				generator.WithResource("subnet1", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
@@ -220,7 +220,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
-				}, []string{"${status.state == 'available'}"}, []string{"${spec.enableSubnets == true}"}),
+				}, []string{"${subnet1.status.state == 'available'}"}, []string{"${spec.enableSubnets == true}"}),
 				generator.WithResource("subnet2", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
@@ -231,7 +231,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"cidrBlock": "10.0.127.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
-				}, []string{"${status.state == 'available'}"}, []string{"${spec.enableSubnets}"})},
+				}, []string{"${subnet2.status.state == 'available'}"}, []string{"${spec.enableSubnets}"})},
 			wantErr: false,
 		},
 		{
@@ -1001,8 +1001,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						"cidrBlocks": []interface{}{"10.0.0.0/16"},
 					},
 				}, []string{
-					"${status.state == 'available'}",
-					"${status.vpcID != ''}",
+					"${vpc.status.state == 'available'}",
+					"${vpc.status.vpcID != ''}",
 				}, nil),
 				// Resource with mix of static and dynamic expressions
 				generator.WithResource("subnet", map[string]interface{}{
@@ -1021,7 +1021,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 							},
 						},
 					},
-				}, []string{"${status.state == 'available'}"}, nil),
+				}, []string{"${subnet.status.state == 'available'}"}, nil),
 				// Non-standalone expressions
 				generator.WithResource("cluster", map[string]interface{}{
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
@@ -1038,7 +1038,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						},
 					},
 				}, []string{
-					"${status.status == 'ACTIVE'}",
+					"${cluster.status.status == 'ACTIVE'}",
 				}, []string{
 					"${spec.createMonitoring}",
 				}),
@@ -1075,7 +1075,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						},
 					},
 				}, []string{
-					"${status.phase == 'Running'}",
+					"${monitor.status.phase == 'Running'}",
 				}, []string{
 					"${spec.createMonitoring == true}",
 				}),
@@ -1091,8 +1091,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				vpc := g.Resources["vpc"]
 				assert.Empty(t, vpc.variables)
 				assert.Equal(t, []string{
-					"status.state == 'available'",
-					"status.vpcID != ''",
+					"vpc.status.state == 'available'",
+					"vpc.status.vpcID != ''",
 				}, vpc.GetReadyWhenExpressions())
 				assert.Empty(t, vpc.GetIncludeWhenExpressions())
 

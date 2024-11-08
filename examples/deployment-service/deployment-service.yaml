@@ -17,7 +17,7 @@ spec:
   resources:
   - name: deployment
     readyWhen:
-      - ${spec.replicas == status.availableReplicas}
+      - ${deployment.spec.replicas == deployment.status.availableReplicas}
     template:
       apiVersion: apps/v1
       kind: Deployment

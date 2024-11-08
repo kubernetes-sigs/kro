@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: deploymentservice.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: DeploymentService
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: DeploymentService
     spec:
       name: string
       namespace: string | default=default
@@ -16,9 +16,9 @@ spec:
       availableReplicas: ${deployment.status.availableReplicas}
   resources:
   - name: deployment
-    readyOn:
+    readyWhen:
       - ${spec.replicas == status.availableReplicas}
-    definition:
+    template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -39,9 +39,9 @@ spec:
               ports:
               - containerPort: 80
   - name: service
-    conditions:
+    includeWhen:
     - ${spec.service.enabled}
-    definition:
+    template:
       apiVersion: v1
       kind: Service
       metadata:

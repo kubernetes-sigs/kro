@@ -30,7 +30,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 	log, _ := logr.FromContext(ctx)
 
 	log.V(1).Info("Cleaning up resource group")
-	gvr := metadata.GetResourceGroupInstanceGVR(rg.Spec.APIVersion, rg.Spec.Kind)
+	gvr := metadata.GetResourceGroupInstanceGVR(rg.Spec.Schema.APIVersion, rg.Spec.Schema.Kind)
 
 	log.V(1).Info("Shutting down resource group microcontroller")
 	err := r.shutdownResourceGroupMicroController(ctx, &gvr)
@@ -38,7 +38,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 		return err
 	}
 
-	crdName := r.extractCRDName(rg.Spec.Kind)
+	crdName := r.extractCRDName(rg.Spec.Schema.Kind)
 	log.V(1).Info("Cleaning up resource group CRD", "crd", crdName)
 	err = r.cleanupResourceGroupCRD(ctx, crdName)
 	if err != nil {

@@ -78,11 +78,11 @@ func NewResourceGroupRuntime(
 				r.expressionsCache[expr] = ees
 			}
 		}
-		// Process the readyOnExpressions.
-		for _, expr := range resource.GetReadyOnExpressions() {
+		// Process the readyWhenExpressions.
+		for _, expr := range resource.GetReadyWhenExpressions() {
 			ees := &expressionEvaluationState{
 				Expression: expr,
-				Kind:       variable.ResourceVariableKindReadyOn,
+				Kind:       variable.ResourceVariableKindReadyWhen,
 			}
 			r.expressionsCache[expr] = ees
 		}
@@ -456,8 +456,8 @@ func (rt *ResourceGroupRuntime) allExpressionsAreResolved() bool {
 	return true
 }
 
-// IsResourceReady checks if a resource is ready based on the readyOnExpressions
-// defined in the resource. If no readyOnExpressions are defined, the resource
+// IsResourceReady checks if a resource is ready based on the readyWhenExpressions
+// defined in the resource. If no readyWhenExpressions are defined, the resource
 // is considered ready.
 func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string, error) {
 	observed, ok := rt.resolvedResources[resourceID]
@@ -467,7 +467,7 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 		return false, fmt.Sprintf("resource %s is not resolved", resourceID), nil
 	}
 
-	expressions := rt.resources[resourceID].GetReadyOnExpressions()
+	expressions := rt.resources[resourceID].GetReadyWhenExpressions()
 	if len(expressions) == 0 {
 		return true, "", nil
 	}
@@ -527,7 +527,7 @@ func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, e
 		return false, nil
 	}
 
-	conditions := rt.resources[resourceID].GetConditionExpressions()
+	conditions := rt.resources[resourceID].GetIncludeWhenExpressions()
 	if len(conditions) == 0 {
 		return true, nil
 	}

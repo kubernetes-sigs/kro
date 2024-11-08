@@ -3,10 +3,10 @@ kind: ResourceGroup
 metadata:
   name: ekscluster.x.symphony.k8s.aws
 spec:
-  # CRD Definition
-  apiVersion: v1alpha1
-  kind: EKSCluster
-  definition:
+  # CRD Schema
+  schema:
+    apiVersion: v1alpha1
+    kind: EKSCluster
     spec:
       name: string
       version: string
@@ -16,7 +16,7 @@ spec:
   # resources
   resources:
   - name: cluster1
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster
       metadata:
@@ -25,7 +25,7 @@ spec:
         name: cluster1-${spec.name}
         version: ${spc.version}
   - name: cluster2
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster
       metadata:

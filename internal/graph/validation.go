@@ -88,8 +88,8 @@ func isSymphonyReservedWord(word string) bool {
 // validateResourceGroupNamingConventions validates the naming conventions of
 // the given resource group.
 func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
-	if !isValidKindName(rg.Spec.Kind) {
-		return fmt.Errorf("%s: kind '%s' is not a valid Symphony kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Kind)
+	if !isValidKindName(rg.Spec.Schema.Kind) {
+		return fmt.Errorf("%s: kind '%s' is not a valid Symphony kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Schema.Kind)
 	}
 	err := validateResourceNames(rg)
 	if err != nil {

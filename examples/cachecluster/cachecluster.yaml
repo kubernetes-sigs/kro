@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: redis.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: Redis
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: Redis
     spec:
       name: string
     status:
@@ -14,7 +14,7 @@ spec:
       clusterARN: ${redis.status.ackResourceMetadata.arn}
   resources:
   - name: networkingStack
-    definition:
+    template:
       apiVersion: x.symphony.k8s.aws/v1alpha1
       kind: NetworkingStack
       metadata:
@@ -22,7 +22,7 @@ spec:
       spec:
         name: ${spec.name}-networking-stack
   - name: cacheSubnetGroup
-    definition:
+    template:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheSubnetGroup
       metadata:
@@ -35,7 +35,7 @@ spec:
         - ${networkingStack.status.networkingInfo.subnetAZB}
         - ${networkingStack.status.networkingInfo.subnetAZC}
   - name: sg
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: SecurityGroup
       metadata:
@@ -51,7 +51,7 @@ spec:
           ipRanges:
           - cidrIP: 0.0.0.0/0
   - name: redis
-    definition:
+    template:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheCluster
       metadata:

@@ -3,10 +3,10 @@ kind: ResourceGroup
 metadata:
   name: networkingstack.x.symphony.k8s.aws
 spec:
-  # CRD Definition
-  apiVersion: v1alpha1
-  kind: NetworkingStack
-  definition:
+  # CRD Schema
+  schema:
+    apiVersion: v1alpha1
+    kind: NetworkingStack
     spec:
       name: string
     status:
@@ -19,7 +19,7 @@ spec:
   # resources
   resources:
   - name: vpc
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
@@ -30,7 +30,7 @@ spec:
         enableDNSHostnames: false
         enableDNSSupport: true
   - name: subnetAZA
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -40,7 +40,7 @@ spec:
         cidrBlock: 192.168.0.0/18
         vpcID: ${vpc.status.vpcID}
   - name: subnetAZB
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -50,7 +50,7 @@ spec:
         cidrBlock: 192.168.64.0/18
         vpcID: ${vpc.status.vpcID}
   - name: subnetAZC
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -60,7 +60,7 @@ spec:
         cidrBlock: 192.168.128.0/18
         vpcID: ${vpc.status.vpcID}
   - name: securityGroup
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: SecurityGroup
       metadata:

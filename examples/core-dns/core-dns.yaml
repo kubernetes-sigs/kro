@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: coredns.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: CoreDNSDeployment
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: CoreDNSDeployment
     spec:
       name: string | default=mycoredns
       namespace: string | default=default
@@ -41,7 +41,7 @@ spec:
           secrets: 'map[string]string | default={"name": "coredns-token-pvcnf"}'
   resources:
   - name: clusterRole
-    definition:
+    template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
       metadata:
@@ -72,7 +72,7 @@ spec:
         verbs:
         - get
   - name: clusterRoleBinding
-    definition:
+    template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata:
@@ -88,7 +88,7 @@ spec:
         name: ${serviceAccount.metadata.name}
         namespace: ${serviceAccount.metadata.namespace}
   - name: configMap
-    definition:
+    template:
       apiVersion: v1
       kind: ConfigMap
       metadata:
@@ -111,7 +111,7 @@ spec:
               loadbalance
           }
   - name: deployment
-    definition:
+    template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -143,7 +143,7 @@ spec:
                   - key: Corefile
                     path: Corefile
   - name: service
-    definition:
+    template:
       apiVersion: v1
       kind: Service
       metadata:
@@ -170,7 +170,7 @@ spec:
          k8s-app: kube-dns
         sessionAffinity: None
   - name: serviceAccount
-    definition:
+    template:
       apiVersion: v1
       kind: ServiceAccount
       metadata:

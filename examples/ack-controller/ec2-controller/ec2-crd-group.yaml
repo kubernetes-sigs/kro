@@ -3,14 +3,14 @@ kind: ResourceGroup
 metadata:
   name: ec2crdgroup.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: EC2CRDGroup
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: EC2CRDGroup
     spec:
       name: string | default=ec2CRDGroup
   resources:
   - name: dhcpOptionsCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -193,7 +193,7 @@ spec:
           subresources:
             status: {}
   - name: elasticIPAddressCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -379,7 +379,7 @@ spec:
           subresources:
             status: {}
   - name: flowLogsCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -646,7 +646,7 @@ spec:
           subresources:
             status: {}
   - name: instanceCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1526,7 +1526,7 @@ spec:
           subresources:
             status: {}
   - name: internetGatewayCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1728,7 +1728,7 @@ spec:
           subresources:
             status: {}
   - name: natGatewayCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -2030,7 +2030,7 @@ spec:
           subresources:
             status: {}
   - name: networkAclCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -2266,7 +2266,7 @@ spec:
           subresources:
             status: {}
   - name: routeTableCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -2612,7 +2612,7 @@ spec:
           subresources:
             status: {}
   - name: securityGroupCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -3040,7 +3040,7 @@ spec:
           subresources:
             status: {}
   - name: subnetCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -3352,7 +3352,7 @@ spec:
           subresources:
             status: {}
   - name: transitGatewayCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -3534,7 +3534,7 @@ spec:
           subresources:
             status: {}
   - name: vpcEndpointCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -3877,7 +3877,7 @@ spec:
           subresources:
             status: {}
   - name: vpcEndpointServiceConfigurationCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -4104,7 +4104,7 @@ spec:
           subresources:
             status: {}
   - name: vpcPeeringConnectionCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -4432,7 +4432,7 @@ spec:
           subresources:
             status: {}
   - name: vpcCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -4724,7 +4724,7 @@ spec:
           subresources:
             status: {}
   - name: adoptedResourceCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -4979,7 +4979,7 @@ spec:
           subresources:
             status: {}
   - name: fieldExportCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:

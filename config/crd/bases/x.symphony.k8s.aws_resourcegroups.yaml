@@ -58,11 +58,6 @@ spec:
           spec:
             description: ResourceGroupSpec defines the desired state of ResourceGroup
             properties:
-              apiVersion:
-                description: |-
-                  The APIVersion of the resourcegroup. This is used to generate
-                  and create the CRD for the resourcegroup.
-                type: string
               defaultServiceAccounts:
                 additionalProperties:
                   type: string
@@ -72,11 +67,44 @@ spec:
                   Special key "*" defines the default service account for any
                   namespace not explicitly mapped.
                 type: object
-              definition:
+              resources:
+                description: The resources that are part of the resourcegroup.
+                items:
+                  properties:
+                    includeWhen:
+                      items:
+                        type: string
+                      type: array
+                    name:
+                      type: string
+                    readyWhen:
+                      items:
+                        type: string
+                      type: array
+                    template:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - name
+                  - template
+                  type: object
+                type: array
+              schema:
                 description: |-
-                  The definition of the resourcegroup, which includes the spec, status,
-                  types, and some validation rules.
+                  The schema of the resourcegroup, which includes the
+                  apiVersion, kind, spec, status, types, and some validation
+                  rules.
                 properties:
+                  apiVersion:
+                    description: |-
+                      The APIVersion of the resourcegroup. This is used to generate
+                      and create the CRD for the resourcegroup.
+                    type: string
+                  kind:
+                    description: |-
+                      The kind of the resourcegroup. This is used to generate
+                      and create the CRD for the resourcegroup.
+                    type: string
                   spec:
                     description: |-
                       The spec of the resourcegroup. Typically, this is the spec of
@@ -105,38 +133,12 @@ spec:
                     items:
                       type: string
                     type: array
+                required:
+                - apiVersion
+                - kind
                 type: object
-              kind:
-                description: |-
-                  The kind of the resourcegroup. This is used to generate
-                  and create the CRD for the resourcegroup.
-                type: string
-              resources:
-                description: The resources that are part of the resourcegroup.
-                items:
-                  properties:
-                    conditions:
-                      items:
-                        type: string
-                      type: array
-                    definition:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    name:
-                      type: string
-                    readyOn:
-                      items:
-                        type: string
-                      type: array
-                  required:
-                  - definition
-                  - name
-                  type: object
-                type: array
             required:
-            - apiVersion
-            - definition
-            - kind
+            - schema
             type: object
           status:
             description: ResourceGroupStatus defines the observed state of ResourceGroup

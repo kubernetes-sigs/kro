@@ -103,27 +103,27 @@ const (
 	//    spec:
 	//	    vpcID: ${vpc.status.vpcID}
 	ResourceVariableKindDynamic ResourceVariableKind = "dynamic"
-	// ResourceVariableKindReadyOn represents readyOn variables. ReadyOn variables
+	// ResourceVariableKindReadyWhen represents readyWhen variables. ReadyWhen variables
 	// are resolved at runtime. The difference between them, and the dynamic variables
 	// is that dynamic variable resolutions wait for other resources to provide a value
-	// while ReadyOn variables are created and wait for certain conditions before
+	// while ReadyWhen variables are created and wait for certain conditions before
 	// moving forward to the next resource to create
 	//
 	// For example:
 	//   name: cluster
-	//   readyOn:
+	//   readyWhen:
 	//   - ${status.status == "Active"}
-	ResourceVariableKindReadyOn ResourceVariableKind = "readyOn"
-	// ResourceVariableKindCondition represents a condition variable.
-	// Condition variables are resolved at the beginning of the execution and
+	ResourceVariableKindReadyWhen ResourceVariableKind = "readyWhen"
+	// ResourceVariableKindIncludeWhen represents an includeWhen variable.
+	// IncludeWhen variables are resolved at the beginning of the execution and
 	// their value is constant. They decide whether we are going to create
 	// a resource or not
 	//
 	// For example:
 	//   name: deployment
-	//   condition:
+	//   includeWhen:
 	//   - ${spec.replicas > 1}
-	ResourceVariableKindCondition ResourceVariableKind = "condition"
+	ResourceVariableKindIncludeWhen ResourceVariableKind = "includeWhen"
 )
 
 // String returns the string representation of a ResourceVariableKind.
@@ -141,7 +141,7 @@ func (r ResourceVariableKind) IsDynamic() bool {
 	return r == ResourceVariableKindDynamic
 }
 
-// IsCondition returns true if the ResourceVariableKind is condition
-func (r ResourceVariableKind) IsCondition() bool {
-	return r == ResourceVariableKindCondition
+// IsIncludeWhen returns true if the ResourceVariableKind is includeWhen
+func (r ResourceVariableKind) IsIncludeWhen() bool {
+	return r == ResourceVariableKindIncludeWhen
 }

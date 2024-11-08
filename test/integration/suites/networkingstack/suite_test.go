@@ -83,8 +83,8 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify the ResourceGroup fields
-			g.Expect(createdRG.Spec.Kind).To(Equal("NetworkingStack"))
-			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
+			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("NetworkingStack"))
+			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(5)) // vpc, 3 subnets, security group
 
 			// Verify the ResourceGroup status

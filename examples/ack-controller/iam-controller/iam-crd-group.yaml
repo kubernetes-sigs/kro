@@ -3,14 +3,14 @@ kind: ResourceGroup
 metadata:
   name: iamcrdgroup.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: IAMCRDGroup
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: IAMCRDGroup
     spec:
       name: string | default=iamCRDGroup
   resources:
   - name: iamGroupCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -211,7 +211,7 @@ spec:
           subresources:
             status: {}
   - name: iamInstanceProfileCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -428,7 +428,7 @@ spec:
           subresources:
             status: {}
   - name: iamOpenIDConnectProviderCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -632,7 +632,7 @@ spec:
           subresources:
             status: {}
   - name: iamPolicyCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -921,7 +921,7 @@ spec:
           subresources:
             status: {}
   - name: iamRoleCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1242,7 +1242,7 @@ spec:
           subresources:
             status: {}
   - name: iamUserCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:

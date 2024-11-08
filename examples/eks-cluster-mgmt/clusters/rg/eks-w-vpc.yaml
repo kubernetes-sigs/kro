@@ -6,9 +6,9 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-wave: "1"
 spec:
-  apiVersion: v1alpha1
-  kind: EksclusterWithVpc
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: EksclusterWithVpc
     spec:
       name: string
       region: string
@@ -23,7 +23,7 @@ spec:
       nodesCount: integer
   resources:
   - name: vpc
-    definition:
+    template:
       apiVersion: x.symphony.k8s.aws/v1alpha1
       kind: Vpc
       metadata:
@@ -38,7 +38,7 @@ spec:
           privateSubnet1Cidr: ${spec.cidr.privateSubnet1Cidr}
           privateSubnet2Cidr: ${spec.cidr.privateSubnet2Cidr}
   - name: eks
-    definition:
+    template:
       apiVersion: x.symphony.k8s.aws/v1alpha1
       kind: EksCluster
       metadata:

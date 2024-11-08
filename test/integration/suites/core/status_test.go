@@ -49,8 +49,8 @@ var _ = Describe("Status", func() {
 	It("should have correct conditions when ResourceGroup is created", func() {
 		rg := generator.NewResourceGroup("test-status",
 			generator.WithNamespace(namespace),
-			generator.WithKind("TestStatus", "v1alpha1"),
-			generator.WithDefinition(
+			generator.WithSchema(
+				"TestStatus", "v1alpha1",
 				map[string]interface{}{
 					"field1": "string",
 				},
@@ -89,8 +89,8 @@ var _ = Describe("Status", func() {
 	It("should reflect failure conditions when definition is invalid", func() {
 		rg := generator.NewResourceGroup("test-status-fail",
 			generator.WithNamespace(namespace),
-			generator.WithKind("TestStatusFail", "v1alpha1"),
-			generator.WithDefinition(
+			generator.WithSchema(
+				"TestStatusFail", "v1alpha1",
 				map[string]interface{}{
 					"field1": "invalid-type", // Invalid type
 				},

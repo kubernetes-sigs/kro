@@ -29,8 +29,8 @@ func eksCluster(
 ) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
-		generator.WithKind("EKSCluster", "v1alpha1"),
-		generator.WithDefinition(
+		generator.WithSchema(
+			"EKSCluster", "v1alpha1",
 			map[string]interface{}{
 				"name":    "string",
 				"version": "string",

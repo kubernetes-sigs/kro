@@ -3,10 +3,10 @@ kind: ResourceGroup
 metadata:
   name: ekscluster.x.symphony.k8s.aws
 spec:
-  # CRD Definition
-  apiVersion: v1alpha1
-  kind: EKSCluster
-  definition:
+  # CRD Schema
+  schema:
+    apiVersion: v1alpha1
+    kind: EKSCluster
     spec:
       name: string
       version: string
@@ -19,9 +19,9 @@ spec:
   # resources
   resources:
   - name: clusterVPC
-    readyOn:
+    readyWhen:
     - ${status.state == "available"}
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
@@ -32,14 +32,14 @@ spec:
         enableDNSSupport: true
         enableDNSHostnames: true
   - name: clusterElasticIPAddress
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
         name: symphony-cluster-eip
       spec: {}
   - name: clusterInternetGateway
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
       metadata:
@@ -47,7 +47,7 @@ spec:
       spec:
         vpc: ${clusterVPC.status.vpcID}
   - name: clusterRouteTable
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
@@ -58,9 +58,9 @@ spec:
           - destinationCIDRBlock: 0.0.0.0/0
             gatewayID: ${clusterInternetGateway.status.internetGatewayID}
   - name: clusterSubnetA
-    readyOn:
+    readyWhen:
     - ${status.state == "available"}
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -73,7 +73,7 @@ spec:
         - ${clusterRouteTable.status.routeTableID}
         mapPublicIPOnLaunch: true
   - name: clusterSubnetB
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -86,7 +86,7 @@ spec:
         - ${clusterRouteTable.status.routeTableID}
         mapPublicIPOnLaunch: true
   - name: clusterNATGateway
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
@@ -95,7 +95,7 @@ spec:
         subnetID: ${clusterSubnetB.status.subnetID}
         allocationID: ${clusterElasticIPAddress.status.allocationID}
   - name: clusterRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -119,7 +119,7 @@ spec:
             ]
           }
   - name: clusterNodeRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -145,7 +145,7 @@ spec:
             ]
           }
   - name: clusterAdminRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -173,9 +173,9 @@ spec:
               ]
           }
   - name: cluster
-    readyOn:
+    readyWhen:
     - ${status.status == "ACTIVE"}
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
@@ -193,7 +193,7 @@ spec:
           - ${clusterSubnetA.status.subnetID}
           - ${clusterSubnetB.status.subnetID}
   - name: clusterNodeGroup
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
       metadata:

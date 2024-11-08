@@ -101,13 +101,13 @@ type ResourceDescriptor interface {
 	// depends on.
 	GetDependencies() []string
 
-	// GetReadyOnExpressions returns the list of expressions that need to be
+	// GetReadyWhenExpressions returns the list of expressions that need to be
 	// evaluated before the resource is considered ready.
-	GetReadyOnExpressions() []string
+	GetReadyWhenExpressions() []string
 
-	// GetConditionExpressions returns the list of expressions that need to
+	// GetIncludeWhenExpressions returns the list of expressions that need to
 	// be evaluated before deciding whether to create a resource
-	GetConditionExpressions() []string
+	GetIncludeWhenExpressions() []string
 
 	// GetTopLevelFields returns the list of top-level fields in the resource.
 	// e.g spec, status, metadata, etc.

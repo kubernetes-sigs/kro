@@ -6,9 +6,9 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-wave: "0"
 spec:
-  apiVersion: v1alpha1
-  kind: Vpc
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: Vpc
     spec:
       name: string
       region: string
@@ -26,7 +26,7 @@ spec:
       privateSubnet2ID: ${privateSubnet2.status.subnetID}
   resources: # how to publish a field in the RG claim e.g. vpcID
   - name: vpc
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
@@ -41,7 +41,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-vpc
   - name: internetGateway
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
       metadata:
@@ -53,7 +53,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-igw
   - name: natGateway1
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
@@ -66,7 +66,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-nat-gateway1
   - name: natGateway2
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
@@ -79,7 +79,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-nat-gateway2
   - name: eip1
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
@@ -90,7 +90,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-eip1
   - name: eip2
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
@@ -101,7 +101,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-eip2
   - name: publicRoutetable
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
@@ -116,7 +116,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-public-routetable
   - name: privateRoutetable1
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
@@ -131,7 +131,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-private-routetable1
   - name: privateRoutetable2
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
@@ -146,7 +146,7 @@ spec:
           - key: "Name"
             value: ${spec.name}-private-routetable2
   - name: publicSubnet1
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -165,7 +165,7 @@ spec:
           - key: kubernetes.io/role/elb
             value: '1'
   - name: publicSubnet2
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -184,7 +184,7 @@ spec:
           - key: kubernetes.io/role/elb
             value: '1'
   - name: privateSubnet1
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
@@ -202,7 +202,7 @@ spec:
           - key: kubernetes.io/role/internal-elb
             value: '1'
   - name: privateSubnet2
-    definition:
+    template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:

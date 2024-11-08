@@ -3,14 +3,14 @@ kind: ResourceGroup
 metadata:
   name: ekscrds.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: EKSCRDGroup
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: EKSCRDGroup
     spec:
       name: string | default=eksCRDGroup
   resources:
   - name: accessEntryCRD
-    definition: 
+    template: 
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -274,7 +274,7 @@ spec:
           subresources:
             status: {}
   - name: addonsCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -593,7 +593,7 @@ spec:
           subresources:
             status: {}
   - name: clusterCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1029,7 +1029,7 @@ spec:
           subresources:
             status: {}
   - name: fargateProfilesCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1280,7 +1280,7 @@ spec:
           subresources:
             status: {}
   - name: identityProviderCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1457,7 +1457,7 @@ spec:
           subresources:
             status: {}
   - name: nodeGroupsCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:
@@ -1930,7 +1930,7 @@ spec:
           subresources:
             status: {}
   - name: podIdentityAssociationCRD
-    definition:
+    template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
       metadata:

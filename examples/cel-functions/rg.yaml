@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: somethings.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: Something
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: Something
     spec:
       name: string
       fullDNSName: string | default="a.b.c.d.example.com"
@@ -14,7 +14,7 @@ spec:
       availableReplicas: ${deployment.status.availableReplicas * 10}
   resources:
   - name: deployment
-    definition:
+    template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -42,7 +42,7 @@ spec:
               - name: DNS_PARTIALS
                 value: ${spec.fullDNSName.split('.').slice(0, 1).join('.')}
   - name: service
-    definition:
+    template:
       apiVersion: v1
       kind: Service
       metadata:

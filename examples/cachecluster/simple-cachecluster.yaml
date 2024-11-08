@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: redis.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: Redis
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: Redis
     spec:
       name: string
       subnetIDs: "[]string"
@@ -14,7 +14,7 @@ spec:
       subnets: ${cacheSubnetGroup.status.subnets}
   resources:
   - name: cacheSubnetGroup
-    definition:
+    template:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheSubnetGroup
       metadata:

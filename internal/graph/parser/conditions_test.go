@@ -17,7 +17,7 @@ import (
 	"testing"
 )
 
-func TestParseReadyOn(t *testing.T) {
+func TestParseReadyWhen(t *testing.T) {
 	testCases := []struct {
 		name          string
 		expression    []string

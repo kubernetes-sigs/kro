@@ -5,7 +5,7 @@ metadata:
 spec:
   apiVersion: v1alpha1
   kind: Application
-  definition:
+  schema:
     spec:
       name: string
       image: string | default="nginx"
@@ -15,7 +15,7 @@ spec:
 
   resources:
   - name: deployment
-    definition:
+    template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -41,7 +41,7 @@ spec:
               - containerPort: ${spec.port}
 
   - name: service
-    definition:
+    template:
       apiVersion: v1
       kind: Service
       metadata:
@@ -59,7 +59,7 @@ spec:
           protocol: TCP
 
   - name: ingress
-    definition:
+    template:
       apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:

@@ -6,9 +6,9 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-wave: "0"
 spec:
-  apiVersion: v1alpha1
-  kind: EksCluster
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: EksCluster
     spec:
       name: string
       region: string
@@ -24,7 +24,7 @@ spec:
       nodesCount: integer
   resources:
   - name: clusterRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -48,7 +48,7 @@ spec:
             ]
           }
   - name: nodeRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -74,7 +74,7 @@ spec:
             ]
           }
   - name: ekscluster
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
@@ -93,7 +93,7 @@ spec:
             - ${spec.subnets.controlplane.subnet2ID}
         #version: ${spec.k8sVersion} a bug needs to be fixed for this to work
   - name: nodegroup
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
       metadata:
@@ -113,7 +113,7 @@ spec:
           maxSize: 3 #${spec.nodesCount} a bug needs to be fixed for this to work
           desiredSize: 3 #${spec.nodesCount} a bug needs to be fixed for this to work
   - name: argocdRole
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
@@ -137,7 +137,7 @@ spec:
             ]
           }
   - name: argocdSecret
-    definition:
+    template:
       apiVersion: v1
       kind: Secret
       metadata:
@@ -165,7 +165,7 @@ spec:
             }
           }
   - name: accessEntry
-    definition:
+    template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: AccessEntry
       metadata:
@@ -179,7 +179,7 @@ spec:
           policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
         principalARN: "${argocdRole.status.ackResourceMetadata.arn}"
   - name: oidcProvider
-    definition:
+    template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: OpenIDConnectProvider
       metadata:

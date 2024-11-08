@@ -29,8 +29,8 @@ func networkingStack(
 ) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
-		generator.WithKind("NetworkingStack", "v1alpha1"),
-		generator.WithDefinition(
+		generator.WithSchema(
+			"NetworkingStack", "v1alpha1",
 			map[string]interface{}{
 				"name": "string",
 			},

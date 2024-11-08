@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: somethings.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: Something
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: Something
     spec:
       name: string
       elements: '[]string | default=["a","b","c","d"]'

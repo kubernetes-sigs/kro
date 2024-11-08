@@ -2638,11 +2638,11 @@ func (m *mockResource) GetDependencies() []string {
 	return m.dependencies
 }
 
-func (m *mockResource) GetReadyOnExpressions() []string {
+func (m *mockResource) GetReadyWhenExpressions() []string {
 	return m.readyExpressions
 }
 
-func (m *mockResource) GetConditionExpressions() []string {
+func (m *mockResource) GetIncludeWhenExpressions() []string {
 	return m.conditions
 }
 

@@ -54,8 +54,8 @@ var _ = Describe("Conditions", func() {
 	It("should not create deployment, service, and configmap due to condition deploymentEnabled == false", func() {
 		rg := generator.NewResourceGroup("test-conditions",
 			generator.WithNamespace(namespace),
-			generator.WithKind("TestConditions", "v1alpha1"),
-			generator.WithDefinition(
+			generator.WithSchema(
+				"TestConditions", "v1alpha1",
 				map[string]interface{}{
 					"name":                   "string",
 					"deploymentAenabled":     "boolean",
@@ -208,8 +208,8 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify the ResourceGroup fields
-			g.Expect(createdRG.Spec.Kind).To(Equal("TestConditions"))
-			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
+			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("TestConditions"))
+			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(6))
 
 			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{

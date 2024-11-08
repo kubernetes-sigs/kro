@@ -190,9 +190,9 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	// 4. Infer the status schema based on the CEL expressions.
 
 	instance, err := b.buildInstanceResource(
-		rg.Spec.APIVersion,
-		rg.Spec.Kind,
-		rg.Spec.Definition,
+		rg.Spec.Schema.APIVersion,
+		rg.Spec.Schema.Kind,
+		rg.Spec.Schema,
 		// We need to pass the resources to the instance resource, so we can validate
 		// the CEL expressions in the context of the resources.
 		resources,
@@ -249,7 +249,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 	// 1. We need to unmashal the resource into a map[string]interface{} to
 	//    make it easier to work with.
 	resourceObject := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgResource.Definition.Raw, &resourceObject)
+	err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.Name, err)
 	}
@@ -308,31 +308,31 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		}
 	}
 
-	// 6. Parse ReadyOn expressions
-	readyOn, err := parser.ParseConditionExpressions(rgResource.ReadyOn)
+	// 6. Parse ReadyWhen expressions
+	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse readyOn expressions: %v", err)
+		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
 	// 7. Parse condition expressions
-	conditions, err := parser.ParseConditionExpressions(rgResource.Conditions)
+	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse conditional expressions: %v", err)
+		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
 
 	_, isNamespaced := namespacedResources[gvk]
 
 	// Note that at this point we don't inject the dependencies into the resource.
 	return &Resource{
-		id:                   rgResource.Name,
-		gvr:                  metadata.GVKtoGVR(gvk),
-		schema:               resourceSchema,
-		emulatedObject:       emulatedResource,
-		originalObject:       &unstructured.Unstructured{Object: resourceObject},
-		variables:            resourceVariables,
-		readyOnExpressions:   readyOn,
-		conditionExpressions: conditions,
-		namespaced:           isNamespaced,
+		id:                     rgResource.Name,
+		gvr:                    metadata.GVKtoGVR(gvk),
+		schema:                 resourceSchema,
+		emulatedObject:         emulatedResource,
+		originalObject:         &unstructured.Unstructured{Object: resourceObject},
+		variables:              resourceVariables,
+		readyWhenExpressions:   readyWhen,
+		includeWhenExpressions: includeWhen,
+		namespaced:             isNamespaced,
 	}, nil
 }
 
@@ -416,7 +416,7 @@ func (b *Builder) buildDependencyGraph(
 // approach to build the instance resource. We need to:
 func (b *Builder) buildInstanceResource(
 	apiVersion, kind string,
-	rgDefinition *v1alpha1.Definition,
+	rgDefinition *v1alpha1.Schema,
 	resources map[string]*Resource,
 ) (*Resource, error) {
 	// The instance resource is the resource users will create in their cluster,
@@ -430,12 +430,12 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGroupInstanceGVK(apiVersion, kind)
 
-	// We need to unmarshal the instance definition to a map[string]interface{} to
+	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.
 	unstructuredInstance := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgDefinition.Spec.Raw, &unstructuredInstance)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal instance definition: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal instance schema: %w", err)
 	}
 
 	// The instance resource has a schema defined using the "SimpleSchema" format.
@@ -508,19 +508,19 @@ func (b *Builder) buildInstanceResource(
 // buildInstanceSpecSchema builds the instance spec schema that will be
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
-func buildInstanceSpecSchema(definition *v1alpha1.Definition) (*extv1.JSONSchemaProps, error) {
+func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
 	customTypes := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(definition.Types.Raw, &customTypes)
+	err := yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal types definition: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal types schema: %w", err)
 	}
 
-	// We need to unmarshal the instance definition to a map[string]interface{} to
+	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.
 	unstructuredInstance := map[string]interface{}{}
-	err = yaml.UnmarshalStrict(definition.Spec.Raw, &unstructuredInstance)
+	err = yaml.UnmarshalStrict(rgSchema.Spec.Raw, &unstructuredInstance)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal spec definition: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
 
 	// The instance resource has a schema defined using the "SimpleSchema" format.
@@ -534,7 +534,7 @@ func buildInstanceSpecSchema(definition *v1alpha1.Definition) (*extv1.JSONSchema
 // buildStatusSchema builds the status schema for the instance resource. The
 // status schema is inferred from the CEL expressions in the status field.
 func buildStatusSchema(
-	definition *v1alpha1.Definition,
+	rgSchema *v1alpha1.Schema,
 	resources map[string]*Resource,
 ) (
 	*extv1.JSONSchemaProps,
@@ -543,9 +543,9 @@ func buildStatusSchema(
 ) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	unstructuredStatus := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(definition.Status.Raw, &unstructuredStatus)
+	err := yaml.UnmarshalStrict(rgSchema.Status.Raw, &unstructuredStatus)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal status definition: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
 
 	// different from the instance spec, the status schema is inferred from the
@@ -722,24 +722,24 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				}
 			}
 
-			// validate readyOn Expressions for resource
+			// validate readyWhen Expressions for resource
 			// Only accepting expressions accessing the status and spec for now
 			// and need to evaluate to a boolean type
 			//
 			// TODO(michaelhtm) It shares some of the logic with the loop from above..maybe
 			// we can refactor them or put it in one function.
-			// I would also suggest separating the dryRuns of readyOnExpressions
+			// I would also suggest separating the dryRuns of readyWhenExpressions
 			// and the resourceExpressions.
-			for _, readyOnExpression := range resource.readyOnExpressions {
+			for _, readyWhenExpression := range resource.readyWhenExpressions {
 				fieldNames := schema.GetResourceTopLevelFieldNames(resource.schema)
 				fieldEnv, err := scel.DefaultEnvironment(scel.WithResourceNames(fieldNames))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
 
-				err = validateCELExpressionContext(fieldEnv, readyOnExpression, fieldNames)
+				err = validateCELExpressionContext(fieldEnv, readyWhenExpression, fieldNames)
 				if err != nil {
-					return fmt.Errorf("failed to validate expression context: '%s' %w", readyOnExpression, err)
+					return fmt.Errorf("failed to validate expression context: '%s' %w", readyWhenExpression, err)
 				}
 				// create context
 				// add resource fields to the context
@@ -752,25 +752,25 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 					}
 				}
 
-				output, err := dryRunExpression(fieldEnv, readyOnExpression, context)
+				output, err := dryRunExpression(fieldEnv, readyWhenExpression, context)
 
 				if err != nil {
-					return fmt.Errorf("failed to dry-run expression %s: %w", readyOnExpression, err)
+					return fmt.Errorf("failed to dry-run expression %s: %w", readyWhenExpression, err)
 				}
 				if !scel.IsBoolType(output) {
-					return fmt.Errorf("output of readyOn expression %s can only be of type bool", readyOnExpression)
+					return fmt.Errorf("output of readyWhen expression %s can only be of type bool", readyWhenExpression)
 				}
 			}
 
-			for _, conditionExpression := range resource.conditionExpressions {
+			for _, includeWhenExpression := range resource.includeWhenExpressions {
 				instanceEnv, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
 
-				err = validateCELExpressionContext(instanceEnv, conditionExpression, conditionFieldNames)
+				err = validateCELExpressionContext(instanceEnv, includeWhenExpression, conditionFieldNames)
 				if err != nil {
-					return fmt.Errorf("failed to validate expression context: '%s' %w", conditionExpression, err)
+					return fmt.Errorf("failed to validate expression context: '%s' %w", includeWhenExpression, err)
 				}
 				// create context
 				context := map[string]*Resource{}
@@ -783,12 +783,12 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 					},
 				}
 
-				output, err := dryRunExpression(instanceEnv, conditionExpression, context)
+				output, err := dryRunExpression(instanceEnv, includeWhenExpression, context)
 				if err != nil {
-					return fmt.Errorf("failed to dry-run expression %s: %w", conditionExpression, err)
+					return fmt.Errorf("failed to dry-run expression %s: %w", includeWhenExpression, err)
 				}
 				if !scel.IsBoolType(output) {
-					return fmt.Errorf("output of condition expression %s can only be of type bool", conditionExpression)
+					return fmt.Errorf("output of condition expression %s can only be of type bool", includeWhenExpression)
 				}
 			}
 		}

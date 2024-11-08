@@ -54,8 +54,8 @@ var _ = Describe("Readiness", func() {
 	It("should wait for deployment to have spec.replicas == status.availableReplicas before creating service", func() {
 		rg := generator.NewResourceGroup("test-readiness",
 			generator.WithNamespace(namespace),
-			generator.WithKind("TestReadiness", "v1alpha1"),
-			generator.WithDefinition(
+			generator.WithSchema(
+				"TestReadiness", "v1alpha1",
 				map[string]interface{}{
 					"name":     "string",
 					"replicas": "integer",
@@ -132,8 +132,8 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify the ResourceGroup fields
-			g.Expect(createdRG.Spec.Kind).To(Equal("TestReadiness"))
-			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
+			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("TestReadiness"))
+			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(2))
 
 			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{

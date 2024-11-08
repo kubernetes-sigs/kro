@@ -30,8 +30,8 @@ func deploymentService(
 ) {
 	resourcegroup := generator.NewResourceGroup(name,
 		generator.WithNamespace(namespace),
-		generator.WithKind("DeploymentService", "v1alpha1"),
-		generator.WithDefinition(
+		generator.WithSchema(
+			"DeploymentService", "v1alpha1",
 			map[string]interface{}{
 				"name": "string",
 				"port": "integer | default=80",

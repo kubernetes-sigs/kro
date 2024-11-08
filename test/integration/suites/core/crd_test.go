@@ -51,8 +51,8 @@ var _ = Describe("CRD", func() {
 			// Create a simple ResourceGroup
 			rg := generator.NewResourceGroup("test-crd",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestResource", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestResource", "v1alpha1",
 					map[string]interface{}{
 						"field1": "string",
 						"field2": "integer | default=42",
@@ -101,8 +101,8 @@ var _ = Describe("CRD", func() {
 			// Create initial ResourceGroup
 			rg := generator.NewResourceGroup("test-crd-update",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestUpdate", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestUpdate", "v1alpha1",
 					map[string]interface{}{
 						"field1": "string",
 						"field2": "integer | default=42",
@@ -128,7 +128,7 @@ var _ = Describe("CRD", func() {
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				rg.Spec.Definition.Spec = toRawExtension(map[string]interface{}{
+				rg.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
 					"field1": "string",
 					"field2": "integer | default=42",
 					"field3": "boolean",
@@ -155,8 +155,8 @@ var _ = Describe("CRD", func() {
 			// Create ResourceGroup
 			rg := generator.NewResourceGroup("test-crd-delete",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestDelete", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestDelete", "v1alpha1",
 					map[string]interface{}{
 						"field1": "string",
 					},

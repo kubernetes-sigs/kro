@@ -43,8 +43,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid resource type",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -64,8 +64,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid resource name with operator",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -85,8 +85,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "resource without a valid GVK",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -100,10 +100,10 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "is not a valid Kubernetes object",
 		},
 		{
-			name: "invalid CEL syntax in readyOn",
+			name: "invalid CEL syntax in readyWhen",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -118,13 +118,13 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, []string{"invalid ! syntax"}, nil),
 			},
 			wantErr: true,
-			errMsg:  "failed to parse readyOn expressions",
+			errMsg:  "failed to parse readyWhen expressions",
 		},
 		{
-			name: "invalid CEL syntax in conditional",
+			name: "invalid CEL syntax in includeWhen expression",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -139,13 +139,13 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, []string{"invalid ! syntax"}),
 			},
 			wantErr: true,
-			errMsg:  "failed to parse conditional expressions",
+			errMsg:  "failed to parse includeWhen expressions",
 		},
 		{
 			name: "missing required field",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -166,8 +166,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid field reference",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -190,8 +190,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "valid VPC with valid conditional subnets",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name":          "string",
 						"enableSubnets": "boolean",
@@ -237,8 +237,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid resource type",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -258,8 +258,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid instance spec field type",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"port": "wrongtype",
 					},
@@ -272,8 +272,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid instance status field reference",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -295,8 +295,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "invalid field type in resource spec",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -319,8 +319,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "crds aren't allowed to have variables in their spec fields",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -351,8 +351,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		{
 			name: "valid instance definition with complex types",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name":     "string",
 						"port":     "integer | default=80",
@@ -412,8 +412,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "complex eks setup dependencies",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -515,8 +515,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "missing dependency",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -540,8 +540,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "cyclic dependency",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -576,8 +576,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "independent pods",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -657,8 +657,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "cyclic pod dependencies",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -731,8 +731,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		{
 			name: "shared infrastructure dependencies",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -970,8 +970,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 		{
 			name: "complex resource variable parsing",
 			resourceGroupOpts: []generator.ResourceGroupOption{
-				generator.WithKind("Test", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"Test", "v1alpha1",
 					map[string]interface{}{
 						"replicas":         "integer | default=3",
 						"environment":      "string | default=dev",
@@ -990,7 +990,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						"document": "{}",
 					},
 				}, nil, nil),
-				// Resource with only readyOn expressions
+				// Resource with only readyWhen expressions
 				generator.WithResource("vpc", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
@@ -1084,17 +1084,17 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Verify resource with no expressions
 				policy := g.Resources["policy"]
 				assert.Empty(t, policy.variables)
-				assert.Empty(t, policy.GetReadyOnExpressions())
-				assert.Empty(t, policy.GetConditionExpressions())
+				assert.Empty(t, policy.GetReadyWhenExpressions())
+				assert.Empty(t, policy.GetIncludeWhenExpressions())
 
-				// Verify resource with only readyOn
+				// Verify resource with only readyWhen
 				vpc := g.Resources["vpc"]
 				assert.Empty(t, vpc.variables)
 				assert.Equal(t, []string{
 					"status.state == 'available'",
 					"status.vpcID != ''",
-				}, vpc.GetReadyOnExpressions())
-				assert.Empty(t, vpc.GetConditionExpressions())
+				}, vpc.GetReadyWhenExpressions())
+				assert.Empty(t, vpc.GetIncludeWhenExpressions())
 
 				// Verify resource with mixed expressions
 				subnet := g.Resources["subnet"]
@@ -1132,7 +1132,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
-				assert.Equal(t, []string{"spec.createMonitoring"}, cluster.GetConditionExpressions())
+				assert.Equal(t, []string{"spec.createMonitoring"}, cluster.GetIncludeWhenExpressions())
 
 				// Verify monitor pod with all types of expressions
 				monitor := g.Resources["monitor"]

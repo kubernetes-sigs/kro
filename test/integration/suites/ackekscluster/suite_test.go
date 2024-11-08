@@ -83,8 +83,8 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify the ResourceGroup fields
-			g.Expect(createdRG.Spec.Kind).To(Equal("EKSCluster"))
-			g.Expect(createdRG.Spec.APIVersion).To(Equal("v1alpha1"))
+			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("EKSCluster"))
+			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(12)) // All resources from the generator
 
 			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{

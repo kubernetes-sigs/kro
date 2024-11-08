@@ -49,8 +49,8 @@ var _ = Describe("Validation", func() {
 		It("should validate correct resource naming conventions", func() {
 			rg := generator.NewResourceGroup("test-validation",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestValidation", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestValidation", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -91,8 +91,8 @@ var _ = Describe("Validation", func() {
 			for _, invalidName := range invalidNames {
 				rg := generator.NewResourceGroup(fmt.Sprintf("test-validation-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
-					generator.WithKind("TestValidation", "v1alpha1"),
-					generator.WithDefinition(
+					generator.WithSchema(
+						"TestValidation", "v1alpha1",
 						map[string]interface{}{
 							"name": "string",
 						},
@@ -129,8 +129,8 @@ var _ = Describe("Validation", func() {
 		It("should reject duplicate resource names", func() {
 			rg := generator.NewResourceGroup("test-validation-dup",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestValidation", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestValidation", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -169,8 +169,8 @@ var _ = Describe("Validation", func() {
 		It("should validate correct kubernetes object structure", func() {
 			rg := generator.NewResourceGroup("test-k8s-valid",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestK8sValidation", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestK8sValidation", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},
@@ -231,8 +231,8 @@ var _ = Describe("Validation", func() {
 			for i, invalidObj := range invalidObjects {
 				rg := generator.NewResourceGroup(fmt.Sprintf("test-k8s-invalid-%d", i),
 					generator.WithNamespace(namespace),
-					generator.WithKind("TestK8sValidation", "v1alpha1"),
-					generator.WithDefinition(
+					generator.WithSchema(
+						"TestK8sValidation", "v1alpha1",
 						map[string]interface{}{
 							"name": "string",
 						},
@@ -267,8 +267,8 @@ var _ = Describe("Validation", func() {
 			for _, kind := range validKinds {
 				rg := generator.NewResourceGroup(fmt.Sprintf("test-kind-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
-					generator.WithKind(kind, "v1alpha1"),
-					generator.WithDefinition(
+					generator.WithSchema(
+						kind, "v1alpha1",
 						map[string]interface{}{
 							"name": "string",
 						},
@@ -302,8 +302,8 @@ var _ = Describe("Validation", func() {
 			for _, kind := range invalidKinds {
 				rg := generator.NewResourceGroup(fmt.Sprintf("test-kind-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
-					generator.WithKind(kind, "v1alpha1"),
-					generator.WithDefinition(
+					generator.WithSchema(
+						kind, "v1alpha1",
 						map[string]interface{}{
 							"name": "string",
 						},
@@ -329,8 +329,8 @@ var _ = Describe("Validation", func() {
 		It("should not panic when deleting an inactive ResourceGroup", func() {
 			rg := generator.NewResourceGroup("test-cleanup",
 				generator.WithNamespace(namespace),
-				generator.WithKind("TestCleanup", "v1alpha1"),
-				generator.WithDefinition(
+				generator.WithSchema(
+					"TestCleanup", "v1alpha1",
 					map[string]interface{}{
 						"name": "string",
 					},

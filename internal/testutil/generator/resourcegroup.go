@@ -47,16 +47,8 @@ func WithNamespace(namespace string) ResourceGroupOption {
 	}
 }
 
-// WithKind sets the kind and version of the ResourceGroup
-func WithKind(kind, version string) ResourceGroupOption {
-	return func(rg *symphonyv1alpha1.ResourceGroup) {
-		rg.Spec.Kind = kind
-		rg.Spec.APIVersion = version
-	}
-}
-
-// WithDefinition sets the definition and status of the ResourceGroup
-func WithDefinition(spec, status map[string]interface{}) ResourceGroupOption {
+// WithSchema sets the definition and status of the ResourceGroup
+func WithSchema(kind, version string, spec, status map[string]interface{}) ResourceGroupOption {
 	rawSpec, err := json.Marshal(spec)
 	if err != nil {
 		panic(err)
@@ -67,7 +59,9 @@ func WithDefinition(spec, status map[string]interface{}) ResourceGroupOption {
 	}
 
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
-		rg.Spec.Definition = &symphonyv1alpha1.Definition{
+		rg.Spec.Schema = &symphonyv1alpha1.Schema{
+			Kind:       kind,
+			APIVersion: version,
 			Spec: runtime.RawExtension{
 				Object: &unstructured.Unstructured{Object: spec},
 				Raw:    rawSpec,
@@ -81,24 +75,24 @@ func WithDefinition(spec, status map[string]interface{}) ResourceGroupOption {
 }
 
 // WithResource adds a resource to the ResourceGroup with the given name and definition
-// readyOn and conditions are optional.
+// readyWhen and includeWhen expressions are optional.
 func WithResource(
 	name string,
-	definition map[string]interface{},
-	readyOn []string,
-	conditions []string,
+	template map[string]interface{},
+	readyWhen []string,
+	includeWhen []string,
 ) ResourceGroupOption {
 	return func(rg *symphonyv1alpha1.ResourceGroup) {
-		raw, err := json.Marshal(definition)
+		raw, err := json.Marshal(template)
 		if err != nil {
 			panic(err)
 		}
 		rg.Spec.Resources = append(rg.Spec.Resources, &symphonyv1alpha1.Resource{
-			Name:       name,
-			ReadyOn:    readyOn,
-			Conditions: conditions,
-			Definition: runtime.RawExtension{
-				Object: &unstructured.Unstructured{Object: definition},
+			Name:        name,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			Template: runtime.RawExtension{
+				Object: &unstructured.Unstructured{Object: template},
 				Raw:    raw,
 			},
 		})

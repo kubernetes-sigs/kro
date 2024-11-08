@@ -3,9 +3,9 @@ kind: ResourceGroup
 metadata:
   name: iamcontroller.x.symphony.k8s.aws
 spec:
-  apiVersion: v1alpha1
-  kind: IAMController
-  definition:
+  schema:
+    apiVersion: v1alpha1
+    kind: IAMController
     spec:
       name: string | default=iam-controller
       namespace: string | default=default
@@ -34,7 +34,7 @@ spec:
           roleArn: string | required=true
   resources:
   - name: iamCRDGroup
-    definition:
+    template:
       apiVersion: x.symphony.k8s.aws/v1alpha1
       kind: IAMCRDGroup
       metadata:
@@ -42,7 +42,7 @@ spec:
       spec:
         name: ${spec.name}-crd-group
   - name: serviceAccount
-    definition:
+    template:
       apiVersion: v1
       kind: ServiceAccount
       metadata:
@@ -51,7 +51,7 @@ spec:
         annotations:
           eks.amazonaws.com/role-arn: ${spec.values.serviceAccount.roleArn}
   - name: deployment
-    definition:
+    template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -110,7 +110,7 @@ spec:
               ports:
               - containerPort: 80
   - name: clusterRoleBinding
-    definition:
+    template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata:
@@ -124,7 +124,7 @@ spec:
         name: ${serviceAccount.metadata.name}
         namespace: ${serviceAccount.metadata.namespace}
   - name: clusterRole
-    definition:
+    template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
       metadata:

@@ -26,21 +26,12 @@ const (
 
 // ResourceGroupSpec defines the desired state of ResourceGroup
 type ResourceGroupSpec struct {
-	// The kind of the resourcegroup. This is used to generate
-	// and create the CRD for the resourcegroup.
+	// The schema of the resourcegroup, which includes the
+	// apiVersion, kind, spec, status, types, and some validation
+	// rules.
 	//
 	// +kubebuilder:validation:Required
-	Kind string `json:"kind,omitempty"`
-	// The APIVersion of the resourcegroup. This is used to generate
-	// and create the CRD for the resourcegroup.
-	//
-	// +kubebuilder:validation:Required
-	APIVersion string `json:"apiVersion,omitempty"`
-	// The definition of the resourcegroup, which includes the spec, status,
-	// types, and some validation rules.
-	//
-	// +kubebuilder:validation:Required
-	Definition *Definition `json:"definition,omitempty"`
+	Schema *Schema `json:"schema,omitempty"`
 	// The resources that are part of the resourcegroup.
 	//
 	// +kubebuilder:validation:Optional
@@ -54,9 +45,19 @@ type ResourceGroupSpec struct {
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
 
-// Definition represents the attributes that define an instance of
+// Schema represents the attributes that define an instance of
 // a resourcegroup.
-type Definition struct {
+type Schema struct {
+	// The kind of the resourcegroup. This is used to generate
+	// and create the CRD for the resourcegroup.
+	//
+	// +kubebuilder:validation:Required
+	Kind string `json:"kind,omitempty"`
+	// The APIVersion of the resourcegroup. This is used to generate
+	// and create the CRD for the resourcegroup.
+	//
+	// +kubebuilder:validation:Required
+	APIVersion string `json:"apiVersion,omitempty"`
 	// The spec of the resourcegroup. Typically, this is the spec of
 	// the CRD that the resourcegroup is managing. This is adhering
 	// to the SimpleSchema spec
@@ -83,11 +84,11 @@ type Resource struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
 	// +kubebuilder:validation:Required
-	Definition runtime.RawExtension `json:"definition,omitempty"`
+	Template runtime.RawExtension `json:"template,omitempty"`
 	// +kubebuilder:validation:Optional
-	ReadyOn []string `json:"readyOn,omitempty"`
+	ReadyWhen []string `json:"readyWhen,omitempty"`
 	// +kubebuilder:validation:Optional
-	Conditions []string `json:"conditions,omitempty"`
+	IncludeWhen []string `json:"includeWhen,omitempty"`
 }
 
 // ResourceGroupStatus defines the observed state of ResourceGroup

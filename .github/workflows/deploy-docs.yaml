@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "website/**"
 
 jobs:
   build:
@@ -18,15 +16,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: 18
+          cache: yarn
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-
+        run: yarn install --frozen-lockfile
       - name: Build website
-        run: bun build
+        run: yarn build
 
       - name: Upload Build Artifact
         uses: actions/upload-pages-artifact@v3
@@ -50,11 +48,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        if:
-          github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./websites/build
-          user_name: "github-actions[bot]"
-          user_email: "github-actions[bot]@users.noreply.github.com"
+        id: deployment
+        uses: actions/deploy-pages@v4

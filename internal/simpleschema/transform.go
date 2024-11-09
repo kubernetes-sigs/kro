@@ -19,24 +19,27 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
-// Transformer is a transformer for OpenAPI schemas
-type Transformer struct {
+// transformer is a transformer for OpenAPI schemas
+type transformer struct {
 	preDefinedTypes map[string]extv1.JSONSchemaProps
 }
 
-// NewTransformer creates a new transformer
-func NewTransformer() *Transformer {
-	return &Transformer{
+// newTransformer creates a new transformer
+func newTransformer() *transformer {
+	return &transformer{
 		preDefinedTypes: make(map[string]extv1.JSONSchemaProps),
 	}
 }
 
-// LoadPreDefinedTypes loads pre-defined types into the transformer.
+// loadPreDefinedTypes loads pre-defined types into the transformer.
 // The pre-defined types are used to resolve references in the schema.
-func (t *Transformer) LoadPreDefinedTypes(obj map[string]interface{}) error {
+//
+// As of today, KRO doesn't support custom types in the schema - do
+// not use this function.
+func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	t.preDefinedTypes = make(map[string]extv1.JSONSchemaProps)
 
-	jsonSchemaProps, err := t.BuildOpenAPISchema(obj)
+	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
 	if err != nil {
 		return fmt.Errorf("failed to build pre-defined types schema: %w", err)
 	}
@@ -47,9 +50,9 @@ func (t *Transformer) LoadPreDefinedTypes(obj map[string]interface{}) error {
 	return nil
 }
 
-// BuildOpenAPISchema builds an OpenAPI schema from the given object
+// buildOpenAPISchema builds an OpenAPI schema from the given object
 // of a SimpleSchema.
-func (tf *Transformer) BuildOpenAPISchema(obj map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JSONSchemaProps, error) {
 	schema := &extv1.JSONSchemaProps{
 		Type:       "object",
 		Properties: map[string]extv1.JSONSchemaProps{},
@@ -65,7 +68,7 @@ func (tf *Transformer) BuildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 
 	return schema, nil
 }
-func (tf *Transformer) transformField(
+func (tf *transformer) transformField(
 	key string, value interface{},
 	// parentSchema is used to add the key to the required list
 	parentSchema *extv1.JSONSchemaProps,
@@ -73,9 +76,9 @@ func (tf *Transformer) transformField(
 	switch v := value.(type) {
 	case map[interface{}]interface{}:
 		nMap := transformMap(v)
-		return tf.BuildOpenAPISchema(nMap)
+		return tf.buildOpenAPISchema(nMap)
 	case map[string]interface{}:
-		return tf.BuildOpenAPISchema(v)
+		return tf.buildOpenAPISchema(v)
 	case string:
 		return tf.parseFieldSchema(key, v, parentSchema)
 	default:
@@ -83,7 +86,7 @@ func (tf *Transformer) transformField(
 	}
 }
 
-func (tf *Transformer) parseFieldSchema(key, fieldValue string, parentSchema *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
+func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
 	fieldType, markers, err := parseFieldSchema(fieldValue)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse field schema for %s: %v", key, err)
@@ -117,7 +120,7 @@ func (tf *Transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *Transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
+func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
 	keyType, valueType, err := parseMapType(fieldType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
@@ -150,7 +153,7 @@ func (tf *Transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *Transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
+func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
 	elementType, err := parseSliceType(fieldType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse slice type for %s: %w", key, err)
@@ -180,7 +183,7 @@ func (tf *Transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *Transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) {
+func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) {
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:

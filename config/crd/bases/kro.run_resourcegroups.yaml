@@ -119,12 +119,6 @@ spec:
                       SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
-                  types:
-                    description: |-
-                      Types are custom types that are used to simplify the spec and
-                      status.
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
                   validation:
                     description: |-
                       Validation is a list of validation rules that are applied to the

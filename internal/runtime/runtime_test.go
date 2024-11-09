@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	scel "github.com/awslabs/kro/internal/cel"
+	krocel "github.com/awslabs/kro/internal/cel"
 	"github.com/awslabs/kro/internal/graph/variable"
 )
 
@@ -2463,7 +2463,7 @@ func Test_areDependenciesIgnored(t *testing.T) {
 }
 
 func setupTestEnv(names []string) (*cel.Env, error) {
-	return scel.DefaultEnvironment(scel.WithResourceNames(names))
+	return krocel.DefaultEnvironment(krocel.WithResourceNames(names))
 }
 
 func Test_evaluateExpression(t *testing.T) {

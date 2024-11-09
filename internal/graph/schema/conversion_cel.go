@@ -19,7 +19,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
-	scel "github.com/awslabs/kro/internal/cel"
+	krocel "github.com/awslabs/kro/internal/cel"
 )
 
 // inferSchemaFromCELValue infers a JSONSchemaProps from a CEL value.
@@ -27,7 +27,7 @@ func inferSchemaFromCELValue(val ref.Val) (*extv1.JSONSchemaProps, error) {
 	if val == nil {
 		return nil, fmt.Errorf("value is nil")
 	}
-	goRuntimeVal, err := scel.GoNativeType(val)
+	goRuntimeVal, err := krocel.GoNativeType(val)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert CEL value to Go: %w", err)
 	}

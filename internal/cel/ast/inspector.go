@@ -17,9 +17,10 @@ import (
 	"fmt"
 	"strings"
 
-	scel "github.com/awslabs/kro/internal/cel"
 	"github.com/google/cel-go/cel"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+
+	krocel "github.com/awslabs/kro/internal/cel"
 )
 
 // ResourceDependency represents a resource and its accessed path within a CEL expression.
@@ -117,7 +118,7 @@ func DefaultInspector(resources []string, functions []string) (*Inspector, error
 		functionMap[function] = struct{}{}
 	}
 
-	env, err := scel.DefaultEnvironment(scel.WithCustomDeclarations(declarations))
+	env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(declarations))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %v", err)
 	}

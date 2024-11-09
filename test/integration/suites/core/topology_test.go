@@ -119,12 +119,12 @@ var _ = Describe("Topology", func() {
 				"apiVersion": "eks.services.k8s.aws/v1alpha1",
 				"kind":       "Cluster",
 				"metadata": map[string]interface{}{
-					"name": "${spec.name}",
+					"name": "${schema.spec.name}",
 				},
 				"spec": map[string]interface{}{
-					"name":    "${spec.name}",
+					"name":    "${schema.spec.name}",
 					"roleARN": "${clusterRole.status.ackResourceMetadata.arn}",
-					"version": "${spec.version}",
+					"version": "${schema.spec.version}",
 					"resourcesVPCConfig": map[string]interface{}{
 						"subnetIDs": []interface{}{
 							"${subnetA.status.subnetID}",

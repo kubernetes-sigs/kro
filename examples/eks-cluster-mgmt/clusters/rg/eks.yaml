@@ -28,10 +28,10 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-cluster-role
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-cluster-role
       spec:
-        name: ${spec.name}-cluster-role
+        name: ${schema.spec.name}-cluster-role
         policies:
         - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
         assumeRolePolicyDocument: |
@@ -52,10 +52,10 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-cluster-node-role
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-cluster-node-role
       spec:
-        name: ${spec.name}-cluster-node-role
+        name: ${schema.spec.name}-cluster-node-role
         policies:
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
@@ -78,10 +78,10 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}
       spec:
-        name: ${spec.name}
+        name: ${schema.spec.name}
         roleARN: ${clusterRole.status.ackResourceMetadata.arn}
         accessConfig:
           authenticationMode: "API_AND_CONFIG_MAP"
@@ -89,37 +89,37 @@ spec:
           endpointPrivateAccess: false
           endpointPublicAccess: true
           subnetIDs:
-            - ${spec.subnets.controlplane.subnet1ID}
-            - ${spec.subnets.controlplane.subnet2ID}
-        #version: ${spec.k8sVersion} a bug needs to be fixed for this to work
+            - ${schema.spec.subnets.controlplane.subnet1ID}
+            - ${schema.spec.subnets.controlplane.subnet2ID}
+        #version: ${schema.spec.k8sVersion} a bug needs to be fixed for this to work
   - name: nodegroup
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-nodegroup
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-nodegroup
       spec:
-        name: ${spec.name}-nodegroup
-        clusterName: ${spec.name}
+        name: ${schema.spec.name}-nodegroup
+        clusterName: ${schema.spec.name}
         subnets:
-          - ${spec.subnets.workers.subnet1ID}
-          - ${spec.subnets.workers.subnet2ID}
+          - ${schema.spec.subnets.workers.subnet1ID}
+          - ${schema.spec.subnets.workers.subnet2ID}
         nodeRole: ${nodeRole.status.ackResourceMetadata.arn}
         updateConfig:
           maxUnavailable: 1
         scalingConfig:
-          minSize: 3 #${spec.nodesCount} a bug needs to be fixed for this to work
-          maxSize: 3 #${spec.nodesCount} a bug needs to be fixed for this to work
-          desiredSize: 3 #${spec.nodesCount} a bug needs to be fixed for this to work
+          minSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
+          maxSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
+          desiredSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
   - name: argocdRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: ${spec.name}-argocd-role
+        name: ${schema.spec.name}-argocd-role
       spec:
-        name: ${spec.name}-argocd-role
+        name: ${schema.spec.name}-argocd-role
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -141,22 +141,22 @@ spec:
       apiVersion: v1
       kind: Secret
       metadata:
-        name: ${spec.name}
+        name: ${schema.spec.name}
         namespace: argocd
         labels:
           argocd.argoproj.io/secret-type: cluster
         annotations:
-          accountId: ${spec.accountId}
-          region: ${spec.region}
+          accountId: ${schema.spec.accountId}
+          region: ${schema.spec.region}
           oidcProvider: ${ekscluster.status.identity.oidc.issuer}
       type: Opaque
       stringData:
-        name: ${spec.name}
+        name: ${schema.spec.name}
         server: "${ekscluster.status.endpoint}"
         config: |
           {
             "awsAuthConfig": {
-              "clusterName": "${spec.name}",
+              "clusterName": "${schema.spec.name}",
               "roleARN": "${argocdRole.status.ackResourceMetadata.arn}"
             },
             "tlsClientConfig": {
@@ -169,10 +169,10 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: AccessEntry
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-accessentry
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-accessentry
       spec:
-        clusterName: ${spec.name}
+        clusterName: ${schema.spec.name}
         accessPolicies:
         - accessScope:
             type: "cluster"
@@ -183,8 +183,8 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: OpenIDConnectProvider
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-odic
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-odic
       spec:
         url: ${ekscluster.status.identity.oidc.issuer}
         clientIDs:

@@ -20,16 +20,16 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster
       metadata:
-        name: cluster1-${spec.name}
+        name: cluster1-${schema.spec.name}
       spec:
-        name: cluster1-${spec.name}
+        name: cluster1-${schema.spec.name}
         version: ${spc.version}
   - name: cluster2
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster
       metadata:
-        name: cluster2-${spec.name}
+        name: cluster2-${schema.spec.name}
       spec:
-        name: cluster2-${spec.name}
+        name: cluster2-${schema.spec.name}
         version: ${spc.version}

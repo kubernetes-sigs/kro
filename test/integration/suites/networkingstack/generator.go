@@ -74,7 +74,7 @@ func vpcDef() map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
 		"metadata": map[string]interface{}{
-			"name": "vpc-${spec.name}",
+			"name": "vpc-${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
 			"cidrBlocks": []interface{}{
@@ -91,7 +91,7 @@ func subnetDef(suffix, az, cidr string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "Subnet",
 		"metadata": map[string]interface{}{
-			"name": "subnet-" + suffix + "-${spec.name}",
+			"name": "subnet-" + suffix + "-${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
 			"availabilityZone": az,
@@ -106,11 +106,11 @@ func securityGroupDef() map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "SecurityGroup",
 		"metadata": map[string]interface{}{
-			"name": "security-group-${spec.name}",
+			"name": "security-group-${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
 			"vpcID":       "${vpc.status.vpcID}",
-			"name":        "my-sg-${spec.name}",
+			"name":        "my-sg-${schema.spec.name}",
 			"description": "something something",
 		},
 	}

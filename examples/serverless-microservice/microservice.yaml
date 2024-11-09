@@ -29,7 +29,7 @@ spec:
       apiVersion: dynamodb.services.k8s.aws/v1alpha1
       kind: Table
       metadata:
-        name: ${spec.namePrefix}-items-table
+        name: ${schema.spec.namePrefix}-items-table
       spec:
         keySchema:
           - attributeName: id
@@ -38,15 +38,15 @@ spec:
           - attributeName: id
             attributeType: S
         billingMode: PAY_PER_REQUEST
-        tableName: ${spec.namePrefix}-items-table
+        tableName: ${schema.spec.namePrefix}-items-table
   - name: lambdaDDBAccessPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
       metadata:
-          name: ${spec.namePrefix}-lambda-ddb-access-policy
+          name: ${schema.spec.namePrefix}-lambda-ddb-access-policy
       spec:
-        name: ${spec.namePrefix}-lambda-ddb-access-policy
+        name: ${schema.spec.namePrefix}-lambda-ddb-access-policy
         policyDocument: |
           {
             "Version": "2012-10-17",
@@ -79,9 +79,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
       metadata:
-          name: ${spec.namePrefix}-lambda-basic-policy
+          name: ${schema.spec.namePrefix}-lambda-basic-policy
       spec:
-        name: ${spec.namePrefix}-lambda-basic-policy
+        name: ${schema.spec.namePrefix}-lambda-basic-policy
         policyDocument: |
           {
             "Version": "2012-10-17",
@@ -104,9 +104,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: ${spec.namePrefix}-logic-role
+        name: ${schema.spec.namePrefix}-logic-role
       spec:
-        name: ${spec.namePrefix}-logic-role
+        name: ${schema.spec.namePrefix}-logic-role
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -130,18 +130,18 @@ spec:
       apiVersion: lambda.services.k8s.aws/v1alpha1
       kind: Function
       metadata:
-        name: ${spec.namePrefix}-logic
+        name: ${schema.spec.namePrefix}-logic
       spec:
-        name: ${spec.namePrefix}-logic
+        name: ${schema.spec.namePrefix}-logic
         packageType: Zip
         code:
-          s3Bucket: ${spec.lambda.codeBucketName}
-          s3Key: ${spec.lambda.logicLambdaCode}
+          s3Bucket: ${schema.spec.lambda.codeBucketName}
+          s3Key: ${schema.spec.lambda.logicLambdaCode}
         environment:
           variables: 
             TABLE_NAME: ${itemsTable.spec.tableName}
-        handler: ${spec.lambda.logicLambdaHandler}
-        runtime: ${spec.lambda.logicLambdaRunTime}
+        handler: ${schema.spec.lambda.logicLambdaHandler}
+        runtime: ${schema.spec.lambda.logicLambdaRunTime}
         role: ${logicLambdaRole.status.ackResourceMetadata.arn}
 
 # Lambda authorizer along with permissions required to retrieve password from AWS Secrets Manager
@@ -150,9 +150,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
       metadata:
-          name: ${spec.namePrefix}-lambda-secrets-access-policy
+          name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
       spec:
-        name: ${spec.namePrefix}-lambda-secrets-access-policy
+        name: ${schema.spec.namePrefix}-lambda-secrets-access-policy
         policyDocument: |
           {
             "Version": "2012-10-17",
@@ -163,7 +163,7 @@ spec:
                   "secretsmanager:GetSecretValue"
                   ],
                   "Resource": [
-                      "${spec.lambda.authorizerPasswordParameterARN}"
+                      "${schema.spec.lambda.authorizerPasswordParameterARN}"
                   ]
               }
             ]
@@ -173,9 +173,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: ${spec.namePrefix}-authorizer-role
+        name: ${schema.spec.namePrefix}-authorizer-role
       spec:
-        name: ${spec.namePrefix}-authorizer-role
+        name: ${schema.spec.namePrefix}-authorizer-role
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -199,18 +199,18 @@ spec:
       apiVersion: lambda.services.k8s.aws/v1alpha1
       kind: Function
       metadata:
-        name: ${spec.namePrefix}-authorizer
+        name: ${schema.spec.namePrefix}-authorizer
       spec:
-        name: ${spec.namePrefix}-authorizer
+        name: ${schema.spec.namePrefix}-authorizer
         packageType: Zip
         code:
-          s3Bucket: ${spec.lambda.codeBucketName}
-          s3Key: ${spec.lambda.authorizerLambdaCode}
+          s3Bucket: ${schema.spec.lambda.codeBucketName}
+          s3Key: ${schema.spec.lambda.authorizerLambdaCode}
         environment:
           variables: 
-            AUTHORIZER_PASSWORD_ARN: ${spec.lambda.authorizerPasswordParameterARN}
-        handler: ${spec.lambda.authorizerLambdaHandler}
-        runtime: ${spec.lambda.authorizerLambdaRunTime}
+            AUTHORIZER_PASSWORD_ARN: ${schema.spec.lambda.authorizerPasswordParameterARN}
+        handler: ${schema.spec.lambda.authorizerLambdaHandler}
+        runtime: ${schema.spec.lambda.authorizerLambdaRunTime}
         role: ${authorizerLambdaRole.status.ackResourceMetadata.arn}
 
 # ACK Lambda controller does not support Lambda resource policies typically used by API Gateway - https://github.com/aws-controllers-k8s/community/issues/1405
@@ -220,9 +220,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
       metadata:
-        name: ${spec.namePrefix}-api-logic-invoke-policy
+        name: ${schema.spec.namePrefix}-api-logic-invoke-policy
       spec:
-        name: ${spec.namePrefix}-api-logic-invoke-policy
+        name: ${schema.spec.namePrefix}-api-logic-invoke-policy
         policyDocument: |
           {
             "Version": "2012-10-17",
@@ -241,9 +241,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: ${spec.namePrefix}-apigw-logic-execution-role
+        name: ${schema.spec.namePrefix}-apigw-logic-execution-role
       spec:
-        name: ${spec.namePrefix}-apigw-logic-execution-role
+        name: ${schema.spec.namePrefix}-apigw-logic-execution-role
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -266,9 +266,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
       metadata:
-        name: ${spec.namePrefix}-api-authorizer-invoke-policy
+        name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
       spec:
-        name: ${spec.namePrefix}-api-authorizer-invoke-policy
+        name: ${schema.spec.namePrefix}-api-authorizer-invoke-policy
         policyDocument: |
           {
             "Version": "2012-10-17",
@@ -287,9 +287,9 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: ${spec.namePrefix}-apigw-authorizer-execution-role
+        name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
       spec:
-        name: ${spec.namePrefix}-apigw-authorizer-execution-role
+        name: ${schema.spec.namePrefix}-apigw-authorizer-execution-role
         assumeRolePolicyDocument: |
           {
             "Version": "2012-10-17",
@@ -314,21 +314,21 @@ spec:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: API
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
       spec:
-        name: ${spec.namePrefix}-${spec.api.apiName}
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
         protocolType: HTTP
   - name: apigwLambdaIntegration
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Integration
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}-integration
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-integration
       spec:
         apiID: ${apigw.status.apiID}
         credentialsARN: ${apigwLogicLambdaExecutionRole.status.ackResourceMetadata.arn}
         integrationType: AWS_PROXY
-        integrationURI: "arn:aws:apigateway:${spec.region}:lambda:path/2015-03-31/functions/${logicLambda.status.ackResourceMetadata.arn}/invocations"
+        integrationURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${logicLambda.status.ackResourceMetadata.arn}/invocations"
         integrationMethod: POST
         payloadFormatVersion: "2.0"
   - name: apigwItemsIdRoute
@@ -336,7 +336,7 @@ spec:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Route
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}-route-item
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-item
       spec:
         apiID: ${apigw.status.apiID}
         routeKey: "ANY /items/{id}"
@@ -348,7 +348,7 @@ spec:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Route
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}-route-items
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-route-items
       spec:
         apiID: ${apigw.status.apiID}
         routeKey: "ANY /items"
@@ -360,7 +360,7 @@ spec:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Stage
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}-stage
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-stage
       spec:
         apiID: ${apigw.status.apiID}
         stageName: "$default"
@@ -370,7 +370,7 @@ spec:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Authorizer
       metadata:
-        name: ${spec.namePrefix}-${spec.api.apiName}-authorizer
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer
       spec:
         apiID: ${apigw.status.apiID}
         authorizerCredentialsARN: ${apigwAuthorizerLambdaExecutionRole.status.ackResourceMetadata.arn}
@@ -378,5 +378,5 @@ spec:
         authorizerType: REQUEST
         identitySource:
           - $request.header.Authorization
-        authorizerURI: "arn:aws:apigateway:${spec.region}:lambda:path/2015-03-31/functions/${authorizerLambda.status.ackResourceMetadata.arn}/invocations"
-        name: ${spec.namePrefix}-${spec.api.apiName}-authorizer
+        authorizerURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${authorizerLambda.status.ackResourceMetadata.arn}/invocations"
+        name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}-authorizer

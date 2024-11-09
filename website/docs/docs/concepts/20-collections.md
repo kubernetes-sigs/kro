@@ -36,7 +36,7 @@ spec:
   resources:
     - name: nodesCollection
       collection:
-        index: ${range(0, spec.podCount)}
+        index: ${range(0, schema.spec.podCount)}
         definition:
           apiVersion: v1
           kind: Pod
@@ -105,7 +105,7 @@ spec:
     - name: nodes
       strategy: RollingUpdate
       collection:
-        index: ${range(0, spec.podCount)}
+        index: ${range(0, schema.spec.podCount)}
         definition:
           apiVersion: v1
           kind: Pod

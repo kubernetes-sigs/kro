@@ -27,7 +27,7 @@ spec:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: VPC
         metadata:
-          name: cluster-vpc-${spec.name}
+          name: cluster-vpc-${schema.spec.name}
         spec:
           cidrBlocks:
             - 192.168.0.0/16
@@ -39,7 +39,7 @@ spec:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
         metadata:
-          name: cluster-subnet-a-${spec.name}
+          name: cluster-subnet-a-${schema.spec.name}
         spec:
           availabilityZone: us-west-2a
           cidrBlock: 192.168.0.0/18
@@ -50,10 +50,10 @@ spec:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: SecurityGroup
         metadata:
-          name: cluster-security-group-${spec.name}
+          name: cluster-security-group-${schema.spec.name}
         spec:
           vpcID: ${clusterVPC.status.vpcID}
-          name: my-eks-cluster-sg-${spec.name}
+          name: my-eks-cluster-sg-${schema.spec.name}
           description: something something
 
     - name: subnetAZB
@@ -61,7 +61,7 @@ spec:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
         metadata:
-          name: cluster-subnet-b-${spec.name}
+          name: cluster-subnet-b-${schema.spec.name}
         spec:
           availabilityZone: us-west-2b
           cidrBlock: 192.168.64.0/18
@@ -72,9 +72,9 @@ spec:
         apiVersion: iam.services.k8s.aws/v1alpha1
         kind: Role
         metadata:
-          name: cluster-role-${spec.name}
+          name: cluster-role-${schema.spec.name}
         spec:
-          name: cluster-role-${spec.name}
+          name: cluster-role-${schema.spec.name}
           policies:
             - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
           assumeRolePolicyDocument: |
@@ -96,9 +96,9 @@ spec:
         apiVersion: iam.services.k8s.aws/v1alpha1
         kind: Role
         metadata:
-          name: cluster-node-role-${spec.name}
+          name: cluster-node-role-${schema.spec.name}
         spec:
-          name: cluster-node-role-${spec.name}
+          name: cluster-node-role-${schema.spec.name}
           policies:
             - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
             - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
@@ -122,11 +122,11 @@ spec:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: Cluster
         metadata:
-          name: cluster-${spec.name}
+          name: cluster-${schema.spec.name}
         spec:
-          name: cluster-${spec.name}
+          name: cluster-${schema.spec.name}
           roleARN: ${clusterRole.status.ackResourceMetadata.arn}
-          version: ${spec.version}
+          version: ${schema.spec.version}
           resourcesVPCConfig:
             subnetIDs:
               - ${subnetAZA.status.subnetID}
@@ -137,10 +137,10 @@ spec:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: Nodegroup
         metadata:
-          name: nodegroup-${spec.name}
+          name: nodegroup-${schema.spec.name}
         spec:
-          name: nodegroup-${spec.name}
-          clusterName: cluster-${spec.name}
+          name: nodegroup-${schema.spec.name}
+          clusterName: cluster-${schema.spec.name}
           subnets:
             - ${subnetAZA.status.subnetID}
             - ${subnetAZB.status.subnetID}
@@ -148,7 +148,7 @@ spec:
           updateConfig:
             maxUnavailable: 1
           scalingConfig:
-            minSize: ${spec.numNodes}
-            maxSize: ${spec.numNodes}
-            desiredSize: ${spec.numNodes}
+            minSize: ${schema.spec.numNodes}
+            maxSize: ${schema.spec.numNodes}
+            desiredSize: ${schema.spec.numNodes}
 ```

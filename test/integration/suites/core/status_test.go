@@ -60,7 +60,7 @@ var _ = Describe("Status", func() {
 				"apiVersion": "v1",
 				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
-					"name": "${spec.field1}",
+					"name": "${schema.spec.field1}",
 				},
 			}, nil, nil),
 		)

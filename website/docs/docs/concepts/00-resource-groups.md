@@ -52,29 +52,29 @@ spec:
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: ${spec.appName}-deployment
+          name: ${schema.spec.appName}-deployment
         spec:
-          replicas: ${spec.replicas}
+          replicas: ${schema.spec.replicas}
           selector:
             matchLabels:
-              app: ${spec.appName}
+              app: ${schema.spec.appName}
           template:
             metadata:
               labels:
-                app: ${spec.appName}
+                app: ${schema.spec.appName}
             spec:
               containers:
-                - name: ${spec.appName}-container
-                  image: ${spec.image}
+                - name: ${schema.spec.appName}-container
+                  image: ${schema.spec.image}
     - name: service
       definition:
         apiVersion: v1
         kind: Service
         metadata:
-          name: ${spec.appName}-service
+          name: ${schema.spec.appName}-service
         spec:
           selector:
-            app: ${spec.appName}
+            app: ${schema.spec.appName}
           ports:
             - port: 80
               targetPort: 80

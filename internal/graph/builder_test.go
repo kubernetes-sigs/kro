@@ -220,7 +220,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
-				}, []string{"${subnet1.status.state == 'available'}"}, []string{"${spec.enableSubnets == true}"}),
+				}, []string{"${subnet1.status.state == 'available'}"}, []string{"${schema.spec.enableSubnets == true}"}),
 				generator.WithResource("subnet2", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "Subnet",
@@ -231,7 +231,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"cidrBlock": "10.0.127.0/24",
 						"vpcID":     "${vpc.status.vpcID}",
 					},
-				}, []string{"${subnet2.status.state == 'available'}"}, []string{"${spec.enableSubnets}"})},
+				}, []string{"${subnet2.status.state == 'available'}"}, []string{"${schema.spec.enableSubnets}"})},
 			wantErr: false,
 		},
 		{
@@ -341,7 +341,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 							"singular": "vpc",
 							"plural":   "vpcs",
 						},
-						"scope": "Namespaced-${spec.name}",
+						"scope": "Namespaced-${schema.spec.name}",
 					},
 				}, nil, nil),
 			},
@@ -1017,7 +1017,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						"tags": []interface{}{
 							map[string]interface{}{
 								"key":   "Environment",
-								"value": "${spec.environment}",
+								"value": "${schema.spec.environment}",
 							},
 						},
 					},
@@ -1027,7 +1027,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					"apiVersion": "eks.services.k8s.aws/v1alpha1",
 					"kind":       "Cluster",
 					"metadata": map[string]interface{}{
-						"name": "${vpc.metadata.name}cluster${spec.environment}",
+						"name": "${vpc.metadata.name}cluster${schema.spec.environment}",
 					},
 					"spec": map[string]interface{}{
 						"name": "testcluster",
@@ -1040,7 +1040,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				}, []string{
 					"${cluster.status.status == 'ACTIVE'}",
 				}, []string{
-					"${spec.createMonitoring}",
+					"${schema.spec.createMonitoring}",
 				}),
 				// All the above combined
 				generator.WithResource("monitor", map[string]interface{}{
@@ -1049,10 +1049,10 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					"metadata": map[string]interface{}{
 						"name": "monitor",
 						"labels": map[string]interface{}{
-							"environment":  "${spec.environment}",
+							"environment":  "${schema.spec.environment}",
 							"cluster":      "${cluster.metadata.name}",
-							"combined":     "${cluster.metadata.name}-${spec.environment}",
-							"two.statics":  "${spec.environment}-static-${spec.replicas}",
+							"combined":     "${cluster.metadata.name}-${schema.spec.environment}",
+							"two.statics":  "${schema.spec.environment}-static-${schema.spec.replicas}",
 							"two.dynamics": "${vpc.metadata.name}-${cluster.status.ackResourceMetadata.arn}",
 						},
 					},
@@ -1068,7 +1068,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 									},
 									map[string]interface{}{
 										"name":  "REPLICAS",
-										"value": "${spec.replicas}",
+										"value": "${schema.spec.replicas}",
 									},
 								},
 							},
@@ -1077,7 +1077,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				}, []string{
 					"${monitor.status.phase == 'Running'}",
 				}, []string{
-					"${spec.createMonitoring == true}",
+					"${schema.spec.createMonitoring == true}",
 				}),
 			},
 			validateVars: func(t *testing.T, g *Graph) {
@@ -1109,7 +1109,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "spec.tags[0].value",
-						expressions:          []string{"spec.environment"},
+						expressions:          []string{"schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: true,
 					},
@@ -1121,7 +1121,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				validateVariables(t, cluster.variables, []expectedVar{
 					{
 						path:                 "metadata.name",
-						expressions:          []string{"vpc.metadata.name", "spec.environment"},
+						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindDynamic,
 						standaloneExpression: false,
 					},
@@ -1132,7 +1132,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
-				assert.Equal(t, []string{"spec.createMonitoring"}, cluster.GetIncludeWhenExpressions())
+				assert.Equal(t, []string{"schema.spec.createMonitoring"}, cluster.GetIncludeWhenExpressions())
 
 				// Verify monitor pod with all types of expressions
 				monitor := g.Resources["monitor"]
@@ -1140,7 +1140,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				validateVariables(t, monitor.variables, []expectedVar{
 					{
 						path:                 "metadata.labels.environment",
-						expressions:          []string{"spec.environment"},
+						expressions:          []string{"schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: true,
 					},
@@ -1152,13 +1152,13 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "metadata.labels.combined",
-						expressions:          []string{"cluster.metadata.name", "spec.environment"},
+						expressions:          []string{"cluster.metadata.name", "schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindDynamic,
 						standaloneExpression: false,
 					},
 					{
 						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"spec.environment", "spec.replicas"},
+						expressions:          []string{"schema.spec.environment", "schema.spec.replicas"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: false,
 					},
@@ -1176,7 +1176,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "spec.containers[0].env[1].value",
-						expressions:          []string{"spec.replicas"},
+						expressions:          []string{"schema.spec.replicas"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: true,
 					},

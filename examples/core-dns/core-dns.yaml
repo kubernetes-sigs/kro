@@ -45,8 +45,8 @@ spec:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
       metadata:
-        name: ${spec.name}
-        labels: ${spec.values.clusterRole.labels}
+        name: ${schema.spec.name}
+        labels: ${schema.spec.values.clusterRole.labels}
       rules:
       - apiGroups:
         - ""
@@ -76,9 +76,9 @@ spec:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata:
-        name: ${spec.name}
-        labels: ${spec.values.clusterRole.labels}
-        annotations: ${spec.values.clusterRoleBinding.annotations}
+        name: ${schema.spec.name}
+        labels: ${schema.spec.values.clusterRole.labels}
+        annotations: ${schema.spec.values.clusterRoleBinding.annotations}
       roleRef:
         apiGroup: rbac.authorization.k8s.io
         kind: ClusterRole
@@ -92,8 +92,8 @@ spec:
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: ${spec.name}
-        labels: ${spec.values.configMap.labels}
+        name: ${schema.spec.name}
+        labels: ${schema.spec.values.configMap.labels}
       data:
         Corefile: |-
           .:53 {
@@ -115,30 +115,30 @@ spec:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        annotations: ${spec.values.deployment.annotations}
-        labels: ${spec.values.deployment.labels}
-        name: ${spec.name}
+        annotations: ${schema.spec.values.deployment.annotations}
+        labels: ${schema.spec.values.deployment.labels}
+        name: ${schema.spec.name}
       spec:
-        replicas: ${spec.values.deployment.replicas}
+        replicas: ${schema.spec.values.deployment.replicas}
         selector:
-          matchLabels: ${spec.values.configMap.labels}
+          matchLabels: ${schema.spec.values.configMap.labels}
         template:
           metadata:
-            labels: ${spec.values.configMap.labels}
+            labels: ${schema.spec.values.configMap.labels}
           spec:
             serviceAccountName: ${serviceAccount.metadata.name}
             containers:
             - name: "coredns"
-              image: ${spec.values.image.repository}:${spec.values.image.tag}
+              image: ${schema.spec.values.image.repository}:${schema.spec.values.image.tag}
               args: ["-conf", "/etc/coredns/Corefile"]
-              resources: ${spec.values.resources}
+              resources: ${schema.spec.values.resources}
               volumeMounts:
               - name: config-volume
                 mountPath: /etc/coredns
             volumes:
               - name: config-volume
                 configMap:
-                  name: ${spec.name}
+                  name: ${schema.spec.name}
                   items:
                   - key: Corefile
                     path: Corefile
@@ -147,16 +147,16 @@ spec:
       apiVersion: v1
       kind: Service
       metadata:
-        name: ${spec.name}
-        labels: ${spec.values.service.labels}
-        annotations: ${spec.values.service.annotations}
+        name: ${schema.spec.name}
+        labels: ${schema.spec.values.service.labels}
+        annotations: ${schema.spec.values.service.annotations}
       spec:
         selector:
           k8s-app: kube-dns
-        clusterIP: ${spec.values.service.clusterIP}
-        clusterIPs: ${spec.values.service.clusterIPs}
+        clusterIP: ${schema.spec.values.service.clusterIP}
+        clusterIPs: ${schema.spec.values.service.clusterIPs}
         internalTrafficPolicy: Cluster
-        ipFamilies: ${spec.values.service.ipFamilies}
+        ipFamilies: ${schema.spec.values.service.ipFamilies}
         ports:
         - name: dns
           port: 53
@@ -174,9 +174,9 @@ spec:
       apiVersion: v1
       kind: ServiceAccount
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
-        labels: ${spec.values.configMap.labels}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels: ${schema.spec.values.configMap.labels}
       secrets: 
-      - ${spec.values.serviceAccount.secrets}
+      - ${schema.spec.values.serviceAccount.secrets}
         

@@ -18,8 +18,8 @@ spec:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheSubnetGroup
       metadata:
-        name: ${spec.name}-redis-subnet-group
+        name: ${schema.spec.name}-redis-subnet-group
       spec:
         cacheSubnetGroupDescription: "Redis ElastiCache subnet group"
-        cacheSubnetGroupName: ${spec.name}-redis-subnet-group
-        subnetIDs: ${spec.subnetIDs}
+        cacheSubnetGroupName: ${schema.spec.name}-redis-subnet-group
+        subnetIDs: ${schema.spec.subnetIDs}

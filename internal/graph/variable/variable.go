@@ -48,7 +48,7 @@ type FieldDescriptor struct {
 // value a.k.a contains one or multiple expressions. For example
 //
 //	spec:
-//	  replicas: ${spec.mycustomReplicasField + 5}
+//	  replicas: ${schema.spec.mycustomReplicasField + 5}
 //
 // Contains a variable named "spec.mycustomReplicasField". Variables can be
 // static or dynamic. Static variables are resolved at the beginning of the
@@ -92,7 +92,7 @@ const (
 	//
 	// For example:
 	//   spec:
-	//      replicas: ${spec.replicas + 5}
+	//      replicas: ${schema.spec.replicas + 5}
 	ResourceVariableKindStatic ResourceVariableKind = "static"
 	// ResourceVariableKindDynamic represents a dynamic variable. Dynamic variables
 	// are resolved at runtime and their value can change during the execution. Dynamic
@@ -122,7 +122,7 @@ const (
 	// For example:
 	//   name: deployment
 	//   includeWhen:
-	//   - ${spec.replicas > 1}
+	//   - ${schema.spec.replicas > 1}
 	ResourceVariableKindIncludeWhen ResourceVariableKind = "includeWhen"
 )
 

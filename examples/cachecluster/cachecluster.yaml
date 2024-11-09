@@ -18,18 +18,18 @@ spec:
       apiVersion: kro.run/v1alpha1
       kind: NetworkingStack
       metadata:
-        name: ${spec.name}-networking-stack
+        name: ${schema.spec.name}-networking-stack
       spec:
-        name: ${spec.name}-networking-stack
+        name: ${schema.spec.name}-networking-stack
   - name: cacheSubnetGroup
     template:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheSubnetGroup
       metadata:
-        name: ${spec.name}-redis-subnet-group
+        name: ${schema.spec.name}-redis-subnet-group
       spec:
         cacheSubnetGroupDescription: "Redis ElastiCache subnet group"
-        cacheSubnetGroupName: ${spec.name}-redis-subnet-group
+        cacheSubnetGroupName: ${schema.spec.name}-redis-subnet-group
         subnetIDs:
         - ${networkingStack.status.networkingInfo.subnetAZA}
         - ${networkingStack.status.networkingInfo.subnetAZB}
@@ -39,9 +39,9 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: SecurityGroup
       metadata:
-        name: ${spec.name}-redis-sg
+        name: ${schema.spec.name}-redis-sg
       spec:
-        name: ${spec.name}-redis-sg
+        name: ${schema.spec.name}-redis-sg
         description: "Redis ElastiCache security group"
         vpcID: ${networkingStack.status.networkingInfo.vpcID}
         ingressRules:
@@ -55,11 +55,11 @@ spec:
       apiVersion: elasticache.services.k8s.aws/v1alpha1
       kind: CacheCluster
       metadata:
-        name: ${spec.name}-redis
+        name: ${schema.spec.name}-redis
       spec:
         cacheClusterID: vote-redis-cluster
         cacheNodeType: cache.t3.micro
-        cacheSubnetGroupName: ${spec.name}-redis-subnet-group
+        cacheSubnetGroupName: ${schema.spec.name}-redis-subnet-group
         engine: redis
         engineVersion: "7.1"
         numCacheNodes: 1

@@ -302,13 +302,13 @@ func (rt *ResourceGroupRuntime) resourceVariablesResolved(resource string) bool 
 // depending only on the initial configuration. This function is usually
 // called once during runtime initialization to set up the baseline state
 func (rt *ResourceGroupRuntime) evaluateStaticVariables() error {
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"spec"}))
+	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"schema"}))
 	if err != nil {
 		return err
 	}
 
 	evalContext := map[string]interface{}{
-		"spec": rt.instance.Unstructured().Object["spec"],
+		"schema": rt.instance.Unstructured().Object,
 	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
@@ -530,13 +530,13 @@ func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, e
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"spec"}))
+	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"schema"}))
 	if err != nil {
 		return false, nil
 	}
 
 	context := map[string]interface{}{
-		"spec": rt.instance.Unstructured().Object["spec"],
+		"schema": rt.instance.Unstructured().Object,
 	}
 
 	for _, condition := range conditions {

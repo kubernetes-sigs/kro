@@ -51,7 +51,8 @@ kind: ResourceGroup
 metadata:
   name: my-application
 spec:
-  # This becomes your CRD schema - defines what users can provide in their instances
+  # KRO uses this simple schema to create your CRD schema and apply it
+  # The schema defines what users can provide when they instantiate the RG (create an instance).
   schema:
     apiVersion: v1alpha1
     kind: Application

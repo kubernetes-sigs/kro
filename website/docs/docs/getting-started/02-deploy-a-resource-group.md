@@ -10,10 +10,10 @@ We'll create a simple `ResourceGroup` that demonstrates key KRO features.
 ## What is a **ResourceGroup**?
 
 A `ResourceGroup` lets you create new Kubernetes APIs that deploy multiple
-resources together as a single, reusable unit. For example, instead of
-repeatedly creating `Deployments`, `Services` and `Ingress` resources
-separately, you can create a `ResourceGroup` that packages them into one
-reusable API. Users can then deploy resources as a single unit, ensuring they're
+resources together as a single, reusable unit. In this example, we’ll create a 
+`ResourceGroup` that packages a reusable set of resources, including a `Deployment`, `Service`, 
+and `Ingress`. These resources are available in any Kubernetes cluster.
+Users can then call the API to deploy resources as a single unit, ensuring they're
 always created together with the right configuration.
 
 Under the hood, when you create a `ResourceGroup`, KRO:

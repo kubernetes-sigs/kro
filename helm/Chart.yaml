@@ -1,6 +1,6 @@
 apiVersion: v2
-name: symphony-chart
-description: A Helm chart for Symphony
+name: kro-chart
+description: A Helm chart for KRO
 type: application
 version: 0.1.0-rc.5
 appVersion: "0.1.0-rc.5"

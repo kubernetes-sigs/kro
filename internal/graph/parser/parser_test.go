@@ -19,7 +19,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 func TestParseResource(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 	"github.com/gobuffalo/flect"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,11 +33,11 @@ func newCRD(apiVersion, kind string, schema *extv1.JSONSchemaProps) *extv1.Custo
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s.x.%s", pluralKind, v1alpha1.SymphonyDomainName),
+			Name:            fmt.Sprintf("%s.%s", pluralKind, v1alpha1.KroDomainName),
 			OwnerReferences: nil, // Injecting owner references is the responsibility of the caller.
 		},
 		Spec: extv1.CustomResourceDefinitionSpec{
-			Group: fmt.Sprintf("x.%s", v1alpha1.SymphonyDomainName),
+			Group: v1alpha1.KroDomainName,
 			Names: extv1.CustomResourceDefinitionNames{
 				Kind:     kind,
 				ListKind: kind + "List",

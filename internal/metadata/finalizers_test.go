@@ -46,7 +46,7 @@ func TestResourceGroupFinalizer(t *testing.T) {
 		},
 		{
 			name:          "Remove finalizer from object w/ finalizer",
-			initialObject: &metav1.ObjectMeta{Finalizers: []string{symphonyFinalizer}},
+			initialObject: &metav1.ObjectMeta{Finalizers: []string{kroFinalizer}},
 			operation:     RemoveResourceGroupFinalizer,
 			check:         HasResourceGroupFinalizer,
 			expected:      false,

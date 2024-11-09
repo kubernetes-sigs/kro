@@ -17,14 +17,14 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 func eksCluster(
 	namespace, name string,
 ) (
-	*symphonyv1alpha1.ResourceGroup,
+	*krov1alpha1.ResourceGroup,
 	func(namespace, name, version string) *unstructured.Unstructured,
 ) {
 	resourcegroup := generator.NewResourceGroup(name,
@@ -50,11 +50,11 @@ func eksCluster(
 		generator.WithResource("clusterRouteTable", routeTableDef(namespace), nil, nil),
 		generator.WithResource(
 			"clusterSubnetA",
-			subnetDef(namespace, "symphony-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil,
+			subnetDef(namespace, "kro-cluster-public-subnet1", "us-west-2a", "192.168.0.0/18"), nil, nil,
 		),
 		generator.WithResource(
 			"clusterSubnetB",
-			subnetDef(namespace, "symphony-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil,
+			subnetDef(namespace, "kro-cluster-public-subnet2", "us-west-2b", "192.168.64.0/18"), nil, nil,
 		),
 		generator.WithResource("clusterNATGateway", natGatewayDef(namespace), nil, nil),
 		generator.WithResource("clusterRole", clusterRoleDef(namespace), nil, nil),
@@ -67,7 +67,7 @@ func eksCluster(
 	instanceGenerator := func(namespace, name, version string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("x.%s/%s", symphonyv1alpha1.SymphonyDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
 				"kind":       "EKSCluster",
 				"metadata": map[string]interface{}{
 					"name":      name,
@@ -88,7 +88,7 @@ func vpcDef(namespace string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "VPC",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-vpc",
+			"name":      "kro-cluster-vpc",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
@@ -106,7 +106,7 @@ func eipDef(namespace string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "ElasticIPAddress",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-eip",
+			"name":      "kro-cluster-eip",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{},
@@ -118,7 +118,7 @@ func igwDef(namespace string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "InternetGateway",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-igw",
+			"name":      "kro-cluster-igw",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
@@ -132,7 +132,7 @@ func routeTableDef(namespace string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "RouteTable",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-public-route-table",
+			"name":      "kro-cluster-public-route-table",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
@@ -170,7 +170,7 @@ func natGatewayDef(namespace string) map[string]interface{} {
 		"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 		"kind":       "NATGateway",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-natgateway1",
+			"name":      "kro-cluster-natgateway1",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
@@ -185,12 +185,12 @@ func clusterRoleDef(namespace string) map[string]interface{} {
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-role",
+			"name":      "kro-cluster-role",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
-			"name":        "symphony-cluster-role",
-			"description": "Symphony created cluster cluster role",
+			"name":        "kro-cluster-role",
+			"description": "KRO created cluster cluster role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
 			},
@@ -215,12 +215,12 @@ func nodeRoleDef(namespace string) map[string]interface{} {
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-node-role",
+			"name":      "kro-cluster-node-role",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
-			"name":        "symphony-cluster-node-role",
-			"description": "Symphony created cluster node role",
+			"name":        "kro-cluster-node-role",
+			"description": "KRO created cluster node role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
 				"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
@@ -247,12 +247,12 @@ func adminRoleDef(namespace string) map[string]interface{} {
 		"apiVersion": "iam.services.k8s.aws/v1alpha1",
 		"kind":       "Role",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-pia-role",
+			"name":      "kro-cluster-pia-role",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
-			"name":        "symphony-cluster-pia-role",
-			"description": "Symphony created cluster admin pia role",
+			"name":        "kro-cluster-pia-role",
+			"description": "KRO created cluster admin pia role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AdministratorAccess",
 			},
@@ -308,11 +308,11 @@ func nodeGroupDef(namespace string) map[string]interface{} {
 		"apiVersion": "eks.services.k8s.aws/v1alpha1",
 		"kind":       "Nodegroup",
 		"metadata": map[string]interface{}{
-			"name":      "symphony-cluster-nodegroup",
+			"name":      "kro-cluster-nodegroup",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
-			"name":        "symphony-cluster-ng",
+			"name":        "kro-cluster-ng",
 			"diskSize":    100,
 			"clusterName": "${cluster.spec.name}",
 			"subnets": []interface{}{

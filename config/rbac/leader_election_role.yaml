@@ -6,8 +6,8 @@ metadata:
     app.kubernetes.io/name: role
     app.kubernetes.io/instance: leader-election-role
     app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: symphony
-    app.kubernetes.io/part-of: symphony
+    app.kubernetes.io/created-by: kro
+    app.kubernetes.io/part-of: kro
     app.kubernetes.io/managed-by: kustomize
   name: leader-election-role
 rules:

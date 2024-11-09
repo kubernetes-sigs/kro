@@ -16,7 +16,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
@@ -83,7 +83,7 @@ func TestValidateRGResourceNames(t *testing.T) {
 	}
 }
 
-func TestIsSymphonyReservedWord(t *testing.T) {
+func TestIsKROReservedWord(t *testing.T) {
 	tests := []struct {
 		word     string
 		expected bool
@@ -96,8 +96,8 @@ func TestIsSymphonyReservedWord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.word, func(t *testing.T) {
-			if got := isSymphonyReservedWord(tt.word); got != tt.expected {
-				t.Errorf("isSymphonyReservedWord(%q) = %v, want %v", tt.word, got, tt.expected)
+			if got := isKROReservedWord(tt.word); got != tt.expected {
+				t.Errorf("isKROReservedWord(%q) = %v, want %v", tt.word, got, tt.expected)
 			}
 		})
 	}

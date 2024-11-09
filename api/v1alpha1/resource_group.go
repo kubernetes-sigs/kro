@@ -121,8 +121,8 @@ type Dependency struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.apiVersion`
-// +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.kind`
+// +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.schema.apiVersion`
+// +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.schema.kind`
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"

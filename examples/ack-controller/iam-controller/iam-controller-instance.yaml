@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: IAMController
 metadata:
-  name: my-symphony-iam-controller
+  name: my-kro-iam-controller
   namespace: default
 spec:
   name: ack-iam-controller

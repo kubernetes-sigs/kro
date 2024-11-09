@@ -17,45 +17,45 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-	// LabelSymphony is the label key used to identify Symphony owned resources.
-	LabelSymphonyPrefix = v1alpha1.SymphonyDomainName + "/"
+	// LabelKro is the label key used to identify Kro owned resources.
+	LabelKroPrefix = v1alpha1.KroDomainName + "/"
 )
 
 const (
-	NodeIDLabel = LabelSymphonyPrefix + "node-id"
+	NodeIDLabel = LabelKroPrefix + "node-id"
 
-	OwnedLabel           = LabelSymphonyPrefix + "owned"
-	SymphonyVersionLabel = LabelSymphonyPrefix + "symphony-version"
-	ControllerPodIDLabel = LabelSymphonyPrefix + "controller-pod-id"
+	OwnedLabel           = LabelKroPrefix + "owned"
+	KroVersionLabel      = LabelKroPrefix + "kro-version"
+	ControllerPodIDLabel = LabelKroPrefix + "controller-pod-id"
 
-	InstanceIDLabel        = LabelSymphonyPrefix + "instance-id"
-	InstanceLabel          = LabelSymphonyPrefix + "instance-name"
-	InstanceNamespaceLabel = LabelSymphonyPrefix + "instance-namespace"
+	InstanceIDLabel        = LabelKroPrefix + "instance-id"
+	InstanceLabel          = LabelKroPrefix + "instance-name"
+	InstanceNamespaceLabel = LabelKroPrefix + "instance-namespace"
 
-	ResourceGroupIDLabel        = LabelSymphonyPrefix + "resource-group-id"
-	ResourceGroupNameLabel      = LabelSymphonyPrefix + "resource-group-name"
-	ResourceGroupNamespaceLabel = LabelSymphonyPrefix + "resource-group-namespace"
-	ResourceGroupVersionLabel   = LabelSymphonyPrefix + "resource-group-version"
+	ResourceGroupIDLabel        = LabelKroPrefix + "resource-group-id"
+	ResourceGroupNameLabel      = LabelKroPrefix + "resource-group-name"
+	ResourceGroupNamespaceLabel = LabelKroPrefix + "resource-group-namespace"
+	ResourceGroupVersionLabel   = LabelKroPrefix + "resource-group-version"
 )
 
-// IsSymphonyOwned returns true if the resource is owned by Symphony.
-func IsSymphonyOwned(meta metav1.ObjectMeta) bool {
+// IsKroOwned returns true if the resource is owned by Kro.
+func IsKroOwned(meta metav1.ObjectMeta) bool {
 	v, ok := meta.Labels[OwnedLabel]
 	return ok && booleanFromString(v)
 }
 
-// SetSymphonyOwned sets the OwnedLabel to true on the resource.
-func SetSymphonyOwned(meta metav1.ObjectMeta) {
+// SetKroOwned sets the OwnedLabel to true on the resource.
+func SetKroOwned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
 }
 
-// SetSymphonyUnowned sets the OwnedLabel to false on the resource.
-func SetSymphonyUnowned(meta metav1.ObjectMeta) {
+// SetKroUnowned sets the OwnedLabel to false on the resource.
+func SetKroUnowned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
 }
 
@@ -132,15 +132,15 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 	}
 }
 
-// NewSymphonyMetaLabeler returns a new labeler that sets the OwnedLabel,
-// SymphonyVersion, and ControllerPodID labels on a resource.
-func NewSymphonyMetaLabeler(
-	symphonyVersion string,
+// NewKroMetaLabeler returns a new labeler that sets the OwnedLabel,
+// KroVersion, and ControllerPodID labels on a resource.
+func NewKroMetaLabeler(
+	kroVersion string,
 	controllerPodID string,
 ) GenericLabeler {
 	return map[string]string{
 		OwnedLabel:           "true",
-		SymphonyVersionLabel: symphonyVersion,
+		KroVersionLabel:      kroVersion,
 		ControllerPodIDLabel: controllerPodID,
 	}
 }

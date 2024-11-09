@@ -17,15 +17,15 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 // deploymentService creates a ResourceGroup for testing deployment+service combinations
 func deploymentService(
 	namespace, name string,
 ) (
-	*symphonyv1alpha1.ResourceGroup,
+	*krov1alpha1.ResourceGroup,
 	func(namespace, name string, port int) *unstructured.Unstructured,
 ) {
 	resourcegroup := generator.NewResourceGroup(name,
@@ -47,7 +47,7 @@ func deploymentService(
 	instanceGenerator := func(namespace, name string, port int) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("x.%s/%s", symphonyv1alpha1.SymphonyDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
 				"kind":       "DeploymentService",
 				"metadata": map[string]interface{}{
 					"name":      name,

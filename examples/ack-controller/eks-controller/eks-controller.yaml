@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: ekscontrollers.x.symphony.k8s.aws
+  name: ekscontrollers.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
@@ -19,7 +19,7 @@ spec:
         iamRole:
           maxSessionDuration: integer | default=3600
           oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EKS controller deployement on EKS cluster using Symphony Resource group
+          roleDescription: string | default=IRSA role for ACK EKS controller deployement on EKS cluster using KRO Resource group
         iamPolicy:
           # would prefer to add a policyDocument here, need to support multiline string here
           description: string | default="policy for eks controller"
@@ -42,7 +42,7 @@ spec:
   resources:
   - name: eksCRDGroup
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: EKSCRDGroup
       metadata:
         name: ${spec.name}-crd-group

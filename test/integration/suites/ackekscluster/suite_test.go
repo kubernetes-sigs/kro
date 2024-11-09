@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	ctrlinstance "github.com/awslabs/symphony/internal/controller/instance"
-	"github.com/awslabs/symphony/test/integration/environment"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	ctrlinstance "github.com/awslabs/kro/internal/controller/instance"
+	"github.com/awslabs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -74,7 +74,7 @@ var _ = Describe("EKSCluster", func() {
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Verify ResourceGroup is created and becomes ready
-		createdRG := &symphonyv1alpha1.ResourceGroup{}
+		createdRG := &krov1alpha1.ResourceGroup{}
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -106,15 +106,15 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(12))
 			// Verify conditions
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
-			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeReconcilerReady))
+			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeReconcilerReady))
 			g.Expect(createdRG.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified))
+			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeGraphVerified))
 			g.Expect(createdRG.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(createdRG.Status.Conditions[2].Type).To(
-				Equal(symphonyv1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
+				Equal(krov1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
 			)
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 
 		// Create instance
@@ -139,7 +139,7 @@ var _ = Describe("EKSCluster", func() {
 		clusterRole.SetGroupVersionKind(roleGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-role",
+				Name:      "kro-cluster-role",
 				Namespace: namespace,
 			}, clusterRole)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -149,7 +149,7 @@ var _ = Describe("EKSCluster", func() {
 			"ackResourceMetadata": map[string]interface{}{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
-				"arn":            "arn:aws:iam::123456789012:role/symphony-cluster-role",
+				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-role",
 			},
 		}
 		Expect(env.Client.Status().Update(ctx, clusterRole)).To(Succeed())
@@ -164,7 +164,7 @@ var _ = Describe("EKSCluster", func() {
 		vpc.SetGroupVersionKind(vpcGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-vpc",
+				Name:      "kro-cluster-vpc",
 				Namespace: namespace,
 			}, vpc)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -185,7 +185,7 @@ var _ = Describe("EKSCluster", func() {
 		igw.SetGroupVersionKind(igwGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-igw",
+				Name:      "kro-cluster-igw",
 				Namespace: namespace,
 			}, igw)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -210,7 +210,7 @@ var _ = Describe("EKSCluster", func() {
 		rt.SetGroupVersionKind(rtGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-public-route-table",
+				Name:      "kro-cluster-public-route-table",
 				Namespace: namespace,
 			}, rt)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -233,7 +233,7 @@ var _ = Describe("EKSCluster", func() {
 		subnetA.SetGroupVersionKind(subnetGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-public-subnet1",
+				Name:      "kro-cluster-public-subnet1",
 				Namespace: namespace,
 			}, subnetA)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -249,7 +249,7 @@ var _ = Describe("EKSCluster", func() {
 		subnetB.SetGroupVersionKind(subnetGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-public-subnet2",
+				Name:      "kro-cluster-public-subnet2",
 				Namespace: namespace,
 			}, subnetB)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -290,7 +290,7 @@ var _ = Describe("EKSCluster", func() {
 		adminRole.SetGroupVersionKind(roleGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-pia-role",
+				Name:      "kro-cluster-pia-role",
 				Namespace: namespace,
 			}, adminRole)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -300,7 +300,7 @@ var _ = Describe("EKSCluster", func() {
 			"ackResourceMetadata": map[string]interface{}{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
-				"arn":            "arn:aws:iam::123456789012:role/symphony-cluster-pia-role",
+				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-pia-role",
 			},
 		}
 		Expect(env.Client.Status().Update(ctx, adminRole)).To(Succeed())
@@ -315,7 +315,7 @@ var _ = Describe("EKSCluster", func() {
 		eip.SetGroupVersionKind(eipGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-eip",
+				Name:      "kro-cluster-eip",
 				Namespace: namespace,
 			}, eip)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -336,7 +336,7 @@ var _ = Describe("EKSCluster", func() {
 		nat.SetGroupVersionKind(natGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-natgateway1",
+				Name:      "kro-cluster-natgateway1",
 				Namespace: namespace,
 			}, nat)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -352,7 +352,7 @@ var _ = Describe("EKSCluster", func() {
 		nodeRole.SetGroupVersionKind(roleGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-node-role",
+				Name:      "kro-cluster-node-role",
 				Namespace: namespace,
 			}, nodeRole)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -362,7 +362,7 @@ var _ = Describe("EKSCluster", func() {
 			"ackResourceMetadata": map[string]interface{}{
 				"ownerAccountID": "123456789012",
 				"region":         "us-west-2",
-				"arn":            "arn:aws:iam::123456789012:role/symphony-cluster-node-role",
+				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-node-role",
 			},
 		}
 		Expect(env.Client.Status().Update(ctx, nodeRole)).To(Succeed())
@@ -377,7 +377,7 @@ var _ = Describe("EKSCluster", func() {
 		nodeGroup.SetGroupVersionKind(nodeGroupGVK)
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "symphony-cluster-nodegroup",
+				Name:      "kro-cluster-nodegroup",
 				Namespace: namespace,
 			}, nodeGroup)
 			g.Expect(err).ToNot(HaveOccurred())
@@ -422,7 +422,7 @@ var _ = Describe("EKSCluster", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
-			}, &symphonyv1alpha1.ResourceGroup{})
+			}, &krov1alpha1.ResourceGroup{})
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 

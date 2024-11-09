@@ -22,12 +22,12 @@ import (
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
-	instancectrl "github.com/awslabs/symphony/internal/controller/instance"
-	"github.com/awslabs/symphony/internal/controller/resourcegroup/errors"
-	"github.com/awslabs/symphony/internal/dynamiccontroller"
-	"github.com/awslabs/symphony/internal/graph"
-	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/kro/api/v1alpha1"
+	instancectrl "github.com/awslabs/kro/internal/controller/instance"
+	"github.com/awslabs/kro/internal/controller/resourcegroup/errors"
+	"github.com/awslabs/kro/internal/dynamiccontroller"
+	"github.com/awslabs/kro/internal/graph"
+	"github.com/awslabs/kro/internal/metadata"
 )
 
 func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) ([]string, []v1alpha1.ResourceInformation, error) {
@@ -46,7 +46,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 	}
 
 	rgLabeler := metadata.NewResourceGroupLabeler(rg)
-	// Merge the ResourceGroupLabeler with the SymphonyLabeler
+	// Merge the ResourceGroupLabeler with the KroLabeler
 	graphExecLabeler, err := r.metadataLabeler.Merge(rgLabeler)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to merge labelers: %w", err)

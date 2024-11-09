@@ -14,7 +14,7 @@
 package condition
 
 import (
-	v1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	v1alpha1 "github.com/awslabs/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

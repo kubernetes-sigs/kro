@@ -6,13 +6,13 @@ metadata:
     app.kubernetes.io/name: clusterrole
     app.kubernetes.io/instance: resourcegroup-viewer-role
     app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: symphony
-    app.kubernetes.io/part-of: symphony
+    app.kubernetes.io/created-by: kro
+    app.kubernetes.io/part-of: kro
     app.kubernetes.io/managed-by: kustomize
   name: resourcegroup-viewer-role
 rules:
 - apiGroups:
-  - x.symphony.k8s.aws
+  - kro.run
   resources:
   - resourcegroups
   verbs:
@@ -20,7 +20,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - x.symphony.k8s.aws
+  - kro.run
   resources:
   - resourcegroups/status
   verbs:

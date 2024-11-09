@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// In symphony, CEL expressions are enclosed between "${" and "}"
+	// In kro, CEL expressions are enclosed between "${" and "}"
 	exprStart = "${"
 	exprEnd   = "}"
 )

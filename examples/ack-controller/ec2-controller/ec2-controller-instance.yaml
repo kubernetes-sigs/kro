@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: EC2Controller
 metadata:
-  name: my-symphony-ec2-controller
+  name: my-kro-ec2-controller
   namespace: default
 spec:
   name: ec2-controller

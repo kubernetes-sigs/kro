@@ -25,8 +25,8 @@ Dockerfile.cross
 *.swo
 *~
 
-symphony-controller
-symphony-chart*
+kro-controller
+kro-chart*
 cover.html
 .read
 .snapshots

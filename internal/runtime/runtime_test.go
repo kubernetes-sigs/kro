@@ -23,8 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	scel "github.com/awslabs/symphony/internal/cel"
-	"github.com/awslabs/symphony/internal/graph/variable"
+	scel "github.com/awslabs/kro/internal/cel"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 func Test_RuntimeWorkflow(t *testing.T) {

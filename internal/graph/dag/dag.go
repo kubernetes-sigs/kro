@@ -24,7 +24,7 @@ type Vertex struct {
 	// ID is a unique identifier for the node
 	ID string
 	// Edges stores the IDs of the nodes that this node has an outgoing edge to.
-	// In symphony, this would be the children of a resource.
+	// In kro, this would be the children of a resource.
 	Edges map[string]struct{}
 }
 

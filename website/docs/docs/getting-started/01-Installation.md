@@ -18,7 +18,7 @@ Before you begin, ensure you have the following:
 
 :::info[**Alpha Stage**]
 
-KRO is currently in alpha stage. While the images arepublicly available, please
+KRO is currently in alpha stage. While the images are publicly available, please
 note that the software is still under active development and APIs may change.
 
 :::

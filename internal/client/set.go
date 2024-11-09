@@ -1,0 +1,135 @@
+// Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"). You may
+// not use this file except in compliance with the License. A copy of the
+// License is located at
+//
+//	http://aws.amazon.com/apache2.0/
+//
+// or in the "license" file accompanying this file. This file is distributed
+// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+// express or implied. See the License for the specific language governing
+// permissions and limitations under the License.
+package client
+
+import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+)
+
+const (
+	// defaultQPS is the default QPS for the client
+	defaultQPS = 100
+	// defaultBurst is the default burst for the client
+	defaultBurst = 150
+)
+
+// Set provides a unified interface for different Kubernetes clients
+type Set struct {
+	config          *rest.Config
+	kubernetes      *kubernetes.Clientset
+	dynamic         *dynamic.DynamicClient
+	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
+}
+
+// Config holds configuration for client creation
+type Config struct {
+	RestConfig      *rest.Config
+	ImpersonateUser string
+}
+
+// NewSet creates a new client Set with the given config
+func NewSet(cfg Config) (*Set, error) {
+	var err error
+	config := cfg.RestConfig
+
+	if config == nil {
+		config, err = ctrlrtconfig.GetConfig()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if cfg.ImpersonateUser != "" {
+		config = rest.CopyConfig(config)
+		config.Impersonate = rest.ImpersonationConfig{
+			UserName: cfg.ImpersonateUser,
+		}
+	}
+
+	// Set default QPS and burst
+	if config.QPS == 0 {
+		config.QPS = defaultQPS
+	}
+	if config.Burst == 0 {
+		config.Burst = defaultBurst
+	}
+
+	c := &Set{config: config}
+	if err := c.init(); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func (c *Set) init() error {
+	var err error
+
+	c.kubernetes, err = kubernetes.NewForConfig(c.config)
+	if err != nil {
+		return err
+	}
+
+	c.dynamic, err = dynamic.NewForConfig(c.config)
+	if err != nil {
+		return err
+	}
+
+	c.apiExtensionsV1, err = apiextensionsv1.NewForConfig(c.config)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Kubernetes returns the standard Kubernetes clientset
+func (c *Set) Kubernetes() *kubernetes.Clientset {
+	return c.kubernetes
+}
+
+// Dynamic returns the dynamic client
+func (c *Set) Dynamic() *dynamic.DynamicClient {
+	return c.dynamic
+}
+
+// APIExtensionsV1 returns the API extensions client
+func (c *Set) APIExtensionsV1() *apiextensionsv1.ApiextensionsV1Client {
+	return c.apiExtensionsV1
+}
+
+// RESTConfig returns a copy of the underlying REST config
+func (c *Set) RESTConfig() *rest.Config {
+	return rest.CopyConfig(c.config)
+}
+
+// CRD returns a new CRDWrapper instance
+func (s *Set) CRD(cfg CRDWrapperConfig) *CRDWrapper {
+	if cfg.Client == nil {
+		cfg.Client = s.apiExtensionsV1
+	}
+
+	return newCRDWrapper(cfg)
+}
+
+// WithImpersonation returns a new client that impersonates the given user
+func (c *Set) WithImpersonation(user string) (*Set, error) {
+	return NewSet(Config{
+		RestConfig:      c.config,
+		ImpersonateUser: user,
+	})
+}

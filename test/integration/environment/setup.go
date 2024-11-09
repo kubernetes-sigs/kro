@@ -20,10 +20,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -32,11 +29,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	kroclient "github.com/awslabs/kro/internal/client"
 	ctrlinstance "github.com/awslabs/kro/internal/controller/instance"
 	ctrlresourcegroup "github.com/awslabs/kro/internal/controller/resourcegroup"
 	"github.com/awslabs/kro/internal/dynamiccontroller"
 	"github.com/awslabs/kro/internal/graph"
-	"github.com/awslabs/kro/internal/kubernetes"
 )
 
 type Environment struct {
@@ -44,12 +41,11 @@ type Environment struct {
 	cancel  context.CancelFunc
 
 	ControllerConfig ControllerConfig
-	Config           *rest.Config
 	Client           client.Client
 	TestEnv          *envtest.Environment
 	CtrlManager      ctrl.Manager
-	DynamicClient    dynamic.Interface
-	CRDManager       *kubernetes.CRDClient
+	ClientSet        *kroclient.Set
+	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
 }
 
@@ -87,7 +83,14 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting test environment: %w", err)
 	}
-	env.Config = cfg
+
+	clientSet, err := kroclient.NewSet(kroclient.Config{
+		RestConfig: cfg,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating client set: %w", err)
+	}
+	env.ClientSet = clientSet
 
 	// Setup scheme
 	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
@@ -111,24 +114,17 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 func (e *Environment) initializeClients() error {
 	var err error
 
-	e.Client, err = client.New(e.Config, client.Options{Scheme: scheme.Scheme})
+	e.Client, err = client.New(e.ClientSet.RESTConfig(), client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		return fmt.Errorf("creating client: %w", err)
 	}
 
-	extensionsClient, err := apiextensionsv1.NewForConfig(e.Config)
-	if err != nil {
-		return fmt.Errorf("creating extensions client: %w", err)
-	}
+	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{
+		Log: noopLogger(),
+	})
 
-	e.DynamicClient, err = dynamic.NewForConfig(e.Config)
-	if err != nil {
-		return fmt.Errorf("creating dynamic client: %w", err)
-	}
-
-	e.CRDManager = kubernetes.NewCRDClient(extensionsClient, noopLogger())
-
-	e.GraphBuilder, err = graph.NewBuilder(e.Config)
+	restConfig := e.ClientSet.RESTConfig()
+	e.GraphBuilder, err = graph.NewBuilder(restConfig)
 	if err != nil {
 		return fmt.Errorf("creating graph builder: %w", err)
 	}
@@ -145,7 +141,7 @@ func (e *Environment) setupController() error {
 			QueueMaxRetries: 20,
 			ShutdownTimeout: 60 * time.Second,
 		},
-		e.DynamicClient,
+		e.ClientSet.Dynamic(),
 	)
 	go func() {
 		err := dc.Run(e.context)
@@ -157,15 +153,14 @@ func (e *Environment) setupController() error {
 	rgReconciler := ctrlresourcegroup.NewResourceGroupReconciler(
 		noopLogger(),
 		e.Client,
-		e.DynamicClient,
+		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
-		e.CRDManager,
 		dc,
 		e.GraphBuilder,
 	)
 
 	var err error
-	e.CtrlManager, err = ctrl.NewManager(e.Config, ctrl.Options{
+	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
 		Metrics: server.Options{
 			// Disable the metrics server

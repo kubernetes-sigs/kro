@@ -66,7 +66,7 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 		},
 		gvr,
 		processedRG,
-		r.dynamicClient,
+		r.clientSet,
 		rg.Spec.DefaultServiceAccounts,
 		graphExecLabeler,
 	)

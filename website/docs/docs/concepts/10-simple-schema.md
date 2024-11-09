@@ -136,9 +136,9 @@ status:
 
 ## Default status fields
 
-**KRO** automatically injects two common fields into the status of all claims
+**KRO** automatically injects two common fields into the status of all instances
 generated from **ResourceGroups**: `conditions` and `state`. These fields
-provide essential information about the current status of the claim and its
+provide essential information about the current status of the instance and its
 associated resources.
 
 :::tip `conditions` and `state` are reserved words in the status section. If a
@@ -148,7 +148,7 @@ override them with its own values. :::
 ### 1. Conditions
 
 The `conditions` field is an array of condition objects, each representing a
-specific aspect of the claim's state. KRO automatically manages this field.
+specific aspect of the instance's state. KRO automatically manages this field.
 
 ```yaml
 status:
@@ -164,22 +164,22 @@ customTypes:
 
 Common condition types include:
 
-- `Ready`: Indicates whether the claim is fully reconciled and operational.
-- `Progressing`: Shows if the claim is in the process of reaching the desired
+- `Ready`: Indicates whether the instance is fully reconciled and operational.
+- `Progressing`: Shows if the instance is in the process of reaching the desired
   state.
-- `Degraded`: Signals that the claim is operational but not functioning
+- `Degraded`: Signals that the instance is operational but not functioning
   optimally.
 - `Error`: Indicates that an error has occurred during reconciliation.
 
 ### 2. State
 
-The `state` field provides a high-level summary of the claim's current status.
+The `state` field provides a high-level summary of the instance's current status.
 
 ```yaml
 status:
   state: string | enum="Ready,Progressing,Degraded,Error,Terminating,Unknown"
 ```
 
-> These default status fields are automatically added to every claim's status,
+> These default status fields are automatically added to every instance's status,
 > providing a consistent way to check the health and state of resources across
 > different **ResourceGroups**.

@@ -59,9 +59,9 @@ based on the `podCount` parameter.
 2. **definition**: Defines the structure of each resource instance in the
    collection. The `${index}` variable ensures uniqueness of each resource.
 
-## Using Collections in Claims
+## Using Collections in Instances
 
-When creating a claim, users can specify the count for the collection:
+When creating an instance, users can specify the count for the collection:
 
 ```yaml
 apiVersion: kro.run/v1alpha1
@@ -73,7 +73,7 @@ spec:
   podCount: 3
 ```
 
-This claim will result in the creation of three Postgres Pods named
+This instance will result in the creation of three Postgres Pods named
 `production-db-node-0`, `production-db-node-1`, and `production-db-node-2`.
 
 ## Deployment Strategy

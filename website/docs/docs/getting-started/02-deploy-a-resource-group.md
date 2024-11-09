@@ -92,11 +92,11 @@ spec:
    deployment-service                     v1alpha1     DeploymentService   ACTIVE   16m
    ```
 
-4. **Install a resource group claim**: Create a claim for the resource group you
-   just deployed. Claims are used to define the desired state of the resources
+4. **Install a resource group instance**: Create an instance for the resource group you
+   just deployed. Instances are used to define the desired state of the resources
    in the ResourceGroup.
 
-   Here's an example of a Claim for the `EKSCluster` ResourceGroup:
+   Here's an example of an Instance for the `EKSCluster` ResourceGroup:
 
    ```yaml
    apiVersion: kro.run/v1alpha1
@@ -107,5 +107,5 @@ spec:
      name: app1
    ```
 
-   The spec fields of a Claim correspond to the parameters defined in the
+   The spec fields of an Instance correspond to the parameters defined in the
    ResourceGroup.

@@ -107,10 +107,10 @@ controller processes it as follows:
    Kubernetes API server, making it available for use in the cluster.
 
 4. **Micro-Controller Deployment**: KRO deploys a dedicated micro-controller for
-   this ResourceGroup. This micro-controller will listen for **"claim"
+   this ResourceGroup. This micro-controller will listen for **"instance"
    events** - instances of the CRD created in step 2. It will be responsible for
    managing the **lifecycle of resources** defined in the ResourceGroup for each
-   claim.
+   instance.
 
 5. **Status Update**: The controller updates the status of the ResourceGroup to
    reflect that the corresponding CRD has been created and registered.
@@ -125,12 +125,12 @@ associated **Deployments** and **Services** as defined in the ResourceGroup.
 The **KRO** controller continues to monitor the **ResourceGroup** for any
 changes, updating the corresponding CRD and micro-controller as necessary.
 
-## **ResourceGroup** Claim Example
+## **ResourceGroup** Instance Example
 
 After the **ResourceGroup** is processed, users can create instances of it.
-Here's an example of how a claim for the `SimpleWebApp` might look:
+Here's an example of how an instance for the `SimpleWebApp` might look:
 
-```yaml title="my-web-app-claim.yaml"
+```yaml title="my-web-app-instance.yaml"
 apiVersion: kro.run/v1alpha1
 kind: SimpleWebApp
 metadata:

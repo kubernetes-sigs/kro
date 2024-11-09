@@ -1,0 +1,11 @@
+apiVersion: x.symphony.k8s.aws/v1alpha1
+kind: App
+metadata:
+  name: s3demo
+  namespace: default
+spec:
+  name: s3demo
+  image: candonov/s3-demo-app
+  s3bucket: s3demo-11112222
+  ingress:
+    enabled: true

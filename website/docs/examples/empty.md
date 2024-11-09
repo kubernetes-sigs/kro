@@ -5,10 +5,10 @@ sidebar_position: 0
 # Empty ResourceGroup
 
 ```yaml title="no-resources-rg.yaml"
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: noop.x.symphony.k8s.aws
+  name: kro.run/v1alpha1
 spec:
   apiVersion: v1alpha1
   kind: Noop

@@ -24,35 +24,35 @@ spec:
 
   resources:
   - name: deployment
-    readyWhen:
-      - ${deployment.spec.replicas == deployment.status.availableReplicas}
+    #readyWhen:
+    #  - ${deployment.spec.replicas == deployment.status.availableReplicas}
     template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
         labels:
-          app.kubernetes.io/name: ${spec.name}
+          app.kubernetes.io/name: ${schema.spec.name}
       spec:
-        replicas: ${spec.replicas}
+        replicas: ${schema.spec.replicas}
         selector:
           matchLabels:
-            app.kubernetes.io/name: ${spec.name}
-            app: ${spec.name}
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
         template:
           metadata:
             labels:
-              app.kubernetes.io/name: ${spec.name}
-              app: ${spec.name}
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
           spec:
-            serviceAccountName: ${spec.name}
+            serviceAccountName: ${serviceaccount.metadata.name}
             containers:
             - name: s3-demo
-              image: ${spec.image}
+              image: ${schema.spec.image}
               imagePullPolicy: Always
               ports:
-              - containerPort: ${spec.port}
+              - containerPort: ${schema.spec.port}
               resources:
                 requests:
                   memory: "64Mi"
@@ -62,7 +62,7 @@ spec:
                   cpu: "1"
               env:
               - name: S3_BUCKET_NAME
-                value: ${spec.s3bucket}
+                value: ${schema.spec.s3bucket}
             restartPolicy: Always
 
   - name: serviceaccount
@@ -70,8 +70,8 @@ spec:
       apiVersion: v1
       kind: ServiceAccount
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
 
   - name: service
     includeWhen:
@@ -84,12 +84,12 @@ spec:
         namespace: ${deployment.metadata.namespace}
       spec:
         selector:
-          app: ${spec.name}
+          app: ${schema.spec.name}
         ports:
         - name: http
           protocol: TCP
           port: 80
-          targetPort: ${spec.port}
+          targetPort: ${schema.spec.port}
 
   - name: ingress
     includeWhen:
@@ -115,6 +115,6 @@ spec:
               pathType: Prefix
               backend:
                 service:
-                  name: ${spec.name}
+                  name: ${service.metadata.name}
                   port:
                     number: 80

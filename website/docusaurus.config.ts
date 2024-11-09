@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
   title: "KRO",
-  tagline: "Kube Runtime Orchestrator",
+  tagline: "Kube Resource Orchestrator",
   // The Melodious Kubernetes Integrator
   // Cementing Your Kubernetes Infrastructure
   // Connecting the Dots in Your Kubernetes Environment

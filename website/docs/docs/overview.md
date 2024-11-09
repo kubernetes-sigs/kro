@@ -2,18 +2,18 @@
 sidebar_position: 1
 ---
 
-# What is Symphony?
+# What is KRO?
 
-**Symphony** is an open-source project that allows you to define custom
-**Kubernetes APIs** using straightforward configuration. With Symphony, you can
-easily configure new custom APIs that create a group of Kubernetes objects and
-the logical operations between them. Symphony automatically calculates the order
-in which objects should be created. You can pass values from one object to
-another, set default values for fields in the API specification, and incorporate
-conditionals into your custom API definitions. End users can easily call these
-custom APIs to create grouped resources.
+**KRO** (Kube Resource Orchesrtator) is an open-source project that allows you
+to define custom **Kubernetes APIs** using straightforward configuration. With
+KRO, you can easily configure new custom APIs that create a group of Kubernetes
+objects and the logical operations between them. KRO automatically calculates
+the order in which objects should be created. You can pass values from one
+object to another, set default values for fields in the API specification, and
+incorporate conditionals into your custom API definitions. End users can easily
+call these custom APIs to create grouped resources.
 
-# How does Symphony work?
+# How does KRO work?
 
 ### Developer interface
 
@@ -29,12 +29,12 @@ creates resources such as the **Deployment**, **Ingress**, **ServiceAccount**,
 Developers to easily manage and deploy their applications in a standardized and
 streamlined manner.
 
-![End user interface - Custom API](../../../images/architecture-diagrams/Symphony-Dev-Interface.png)
+![End user interface - Custom API](../../../images/architecture-diagrams/Kro-Dev-Interface.png)
 _Fugure 1: End user interface - Custom API_
 
 ### ResourceGroup
 
-When you install **Symphony** in your cluster, it installs a Custom Resource
+When you install **Kro** in your cluster, it installs a Custom Resource
 Definition (CRD) called **ResourceGroup (RG)**. The **Platform**, **Security**,
 and **Compliance** teams, can collaborate to create custom APIs by defining
 Custom Resources for the ResourceGroup CRD.
@@ -47,7 +47,7 @@ longer need to directly manage the underlying infrastructure complexities, as
 the custom API handles the deployment and configuration of the required
 resources.
 
-![Platform Team Interface](../../../images/architecture-diagrams/Symphony-Platform-Team.png)
+![Platform Team Interface](../../../images/architecture-diagrams/Kro-Platform-Team.png)
 _Fugure 2: ResourceGroup (RG) - Platform Team Interface_
 
 ### ResourceGroup Instance
@@ -61,14 +61,14 @@ keep their service internal to the cluster. This flexibility allows each
 development team to customize their application stack based on their specific
 requirements.
 
-![ResourceGroup Instance](../../../images/architecture-diagrams/Symphony-Instance.png)
+![ResourceGroup Instance](../../../images/architecture-diagrams/Kro-Instance.png)
 _Fugure 3: ResourceGroup Instance (RGI)_
 
-# Why Symphony?
+# Why KRO?
 
 ### Manage any group of resources as one unit
 
-Using **Symphony**, the **Platform Team** can enable Developer teams to quickly
+Using **KRO**, the **Platform Team** can enable Developer teams to quickly
 deploy and manage applications and their dependencies as one unit, handling the
 entire lifecycle from deployment to maintenance. The new APIs integrate
 seamlessly with developers' existing CD tools, preserving familiar processes and
@@ -77,12 +77,12 @@ interfaces to simplify adoption.
 ### Collaborate
 
 Transform **Kubernetes** into your unified platform configuration framework
-using **Symphony**. Platform, Compliance, and Security teams work together to
-develop APIs that standardize and streamline configurations, making it easier
-for Developer teams to adopt secure, compliant practices. This collaboration
-lets you build your organizational standards directly into the APIs, ensuring
-every application deployment aligns with security and compliance requirements
-without adding complexity for developers.
+using **KRO**. Platform, Compliance, and Security teams work together to develop
+APIs that standardize and streamline configurations, making it easier for
+Developer teams to adopt secure, compliant practices. This collaboration lets
+you build your organizational standards directly into the APIs, ensuring every
+application deployment aligns with security and compliance requirements without
+adding complexity for developers.
 
 ### Standardize
 
@@ -94,8 +94,8 @@ achieving consistency across deployment environments.
 
 We welcome questions, suggestions, and contributions from the community! To get
 involved, check out our
-[contributing guide](https://github.com/awslabs/private-symphony/blob/main/CONTRIBUTING.md).
+[contributing guide](https://github.com/awslabs/kro/blob/main/CONTRIBUTING.md).
 For bugs or feature requests, feel free to
-[submit an issue](https://github.com/awslabs/private-symphony/issues). You’re
-also invited to join our
-[community meeting](https://github.com/awslabs/private-symphony?tab=readme-ov-file#symphony).
+[submit an issue](https://github.com/awslabs/kro/issues). You’re also invited to
+join our
+[community meeting](https://github.com/awslabs/kro?tab=readme-ov-file#kro).

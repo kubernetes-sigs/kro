@@ -3,8 +3,8 @@ import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: "Symphony",
-  tagline: "All purpose glue for Kubernetes resources",
+  title: "KRO",
+  tagline: "Kube Runtime Orchestrator",
   // The Melodious Kubernetes Integrator
   // Cementing Your Kubernetes Infrastructure
   // Connecting the Dots in Your Kubernetes Environment
@@ -20,7 +20,7 @@ const config: Config = {
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
   organizationName: "awslabs", // Usually your GitHub org/user name.
-  projectName: "private-symphony", // Usually your repo name.
+  projectName: "kro", // Usually your repo name.
 
   onBrokenLinks: "throw",
   onBrokenMarkdownLinks: "warn",
@@ -59,7 +59,7 @@ const config: Config = {
 
   themeConfig: {
     // Replace with your project's social card
-    image: "img/symphony.svg",
+    image: "img/kro.svg",
     docs: {
       sidebar: {
         hideable: false,
@@ -67,13 +67,13 @@ const config: Config = {
       },
     },
     navbar: {
-      title: "Symphony",
+      title: "KRO",
       hideOnScroll: true,
-      logo: {
-        alt: "My Site Logo",
-        src: "img/logo-light.svg",
-        srcDark: "img/logo-dark.svg",
-      },
+      /* logo: {
+        alt: "KRO Logo",
+        src: "img/kro-light.svg",
+        srcDark: "img/kro-dark.svg",
+      }, */
       items: [
         {
           type: "docSidebar",
@@ -109,7 +109,7 @@ const config: Config = {
           ],
         },
         {
-          href: "https://github.com/awslabs/private-symphony",
+          href: "https://github.com/awslabs/kro",
           position: "right",
           className: "header-github-link",
           "aria-label": "GitHub repository",
@@ -133,7 +133,7 @@ const config: Config = {
           items: [
             {
               label: "Slack",
-              href: "https://github.com/awslabs/private-symphony",
+              href: "https://github.com/awslabs/kro",
             },
           ],
         },
@@ -142,21 +142,21 @@ const config: Config = {
           items: [
             {
               label: "GitHub",
-              href: "https://github.com/awslabs/private-symphony",
+              href: "https://github.com/awslabs/kro",
             },
           ],
         },
       ],
       copyright: `© ${new Date().getFullYear()} Amazon.com, Inc. or its affiliates. All rights reserved.`,
     },
-    announcementBar: {
+    /* announcementBar: {
       id: `beta announcement`,
       // content: `⭐️ If you like Docusaurus, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/facebook/docusaurus">GitHub</a> and follow us on <a target="_blank" rel="noopener noreferrer" href="https://twitter.com/docusaurus">Twitter </a>`,
       // content: `🎉️ <b><a target="_blank" href="https://docusaurus.io/blog/releases/v">Docusaurus v</a> is out!</b> 🥳️`,
-      content: `<b class="announcement-bar-style"> ⚠️ This is a private preview version of Symphony. Do not expose to public networks. </b>`,
+      content: `<b class="announcement-bar-style"> ⚠️ This is a private preview version of KRO. Do not expose to public networks. </b>`,
       backgroundColor: "#ff2617",
       textColor: "white",
-    },
+    }, */
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.github,
@@ -166,4 +166,3 @@ const config: Config = {
 };
 
 export default config;
-// '<a> This a private preview version of Symphony. Please do not expose to public networks.</a>',

@@ -4,14 +4,14 @@ sidebar_position: 20
 
 # 4. Collections
 
-Collections in Symphony provide a powerful way to manage groups of similar
-resources within a **ResourceGroup**. They allow for dynamic creation and
-management of multiple instances of a resource type based on user input.
+Collections in KRO provide a powerful way to manage groups of similar resources
+within a **ResourceGroup**. They allow for dynamic creation and management of
+multiple instances of a resource type based on user input.
 
 ## What are Collections?
 
-A collection is a special field in a **ResourceGroup** that defines a template for
-creating multiple similar resources. Key features of collections include:
+A collection is a special field in a **ResourceGroup** that defines a template
+for creating multiple similar resources. Key features of collections include:
 
 - Dynamic creation of resources based on user input
 - Consistent structure across multiple resource instances
@@ -22,10 +22,10 @@ creating multiple similar resources. Key features of collections include:
 Here's an example of how to define a collection in a ResourceGroup:
 
 ```yaml
-apiVersion: symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: ReplicaSet.x.symphony.k8s.aws
+  name: replica-set
 spec:
   kind: ReplicaSet
   apiVersion: v1alpha1
@@ -48,8 +48,8 @@ spec:
                 image: nginx:latest
 ```
 
-In this example, `nodes` is a collection that will create multiple Pod
-resources based on the `podCount` parameter.
+In this example, `nodes` is a collection that will create multiple Pod resources
+based on the `podCount` parameter.
 
 ## Key Concepts
 
@@ -64,7 +64,7 @@ resources based on the `podCount` parameter.
 When creating a claim, users can specify the count for the collection:
 
 ```yaml
-apiVersion: symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ReplicaSet
 metadata:
   name: my-db-cluster
@@ -79,17 +79,19 @@ This claim will result in the creation of three Postgres Pods named
 ## Deployment Strategy
 
 While defining collections is straightforward, it's essential to consider the
-deployment strategy for managing multiple resources. Symphony provides
-flexibility in managing collections, allowing users to define how resources are
-created, updated, and deleted based on the desired state.
+deployment strategy for managing multiple resources. KRO provides flexibility in
+managing collections, allowing users to define how resources are created,
+updated, and deleted based on the desired state.
 
-Symphony provide two strategies for managing collections:
-- **RollingUpdate**: Creates, updates and deletes resources in an incremental manner,
-  ensuring that only one resource is updated at a time.
-- **ParallelUpdate**: Creates, updates and deletes resources in parallel, allowing
-  for faster deployment of multiple resources.
+KRO provide two strategies for managing collections:
 
-For examples you can add the following to the `spec` section of the `ResourceGroup`:
+- **RollingUpdate**: Creates, updates and deletes resources in an incremental
+  manner, ensuring that only one resource is updated at a time.
+- **ParallelUpdate**: Creates, updates and deletes resources in parallel,
+  allowing for faster deployment of multiple resources.
+
+For examples you can add the following to the `spec` section of the
+`ResourceGroup`:
 
 ```yaml
 spec:

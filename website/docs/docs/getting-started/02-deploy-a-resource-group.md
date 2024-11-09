@@ -26,9 +26,9 @@ Under the hood, when you create a `ResourceGroup`, KRO:
 
 :::tip[info]
 
-**KRO** is a Kubernetes-native tool that only speaks **Kubernetes**! No external
-services or databases needed - just pure Kubernetes APIs. Whether it's native
-resources or custom ones, KRO understands and works with them all.
+**KRO** is a Kubernetes-native tool that speaks **Kubernetes**! All you need
+to get started is a Kubernetes cluster that supports CRDs, version 1.16 or later. 
+KRO understands native Kubernetes resource as well as any custom resources your cluster supports.
 
 :::
 

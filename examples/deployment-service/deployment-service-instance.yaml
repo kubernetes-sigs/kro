@@ -1,8 +1,0 @@
-apiVersion: kro.run/v1alpha1
-kind: DeploymentService
-metadata:
-  name: my-deployment-and-service3
-spec:
-  name: app3
-  service:
-    enabled: true

@@ -5,13 +5,13 @@ sidebar_position: 1
 # What is KRO?
 
 **KRO** (Kube Resource Orchesrtator) is an open-source project that allows you
-to define custom **Kubernetes APIs** using straightforward configuration. With
-KRO, you can easily configure new custom APIs that create a group of Kubernetes
-objects and the logical operations between them. KRO automatically calculates
-the order in which objects should be created. You can pass values from one
-object to another, set default values for fields in the API specification, and
-incorporate conditionals into your custom API definitions. End users can easily
-call these custom APIs to create grouped resources.
+to define custom **Kubernetes APIs** using simple and straightforward
+configuration. With KRO, you can easily configure new custom APIs that create a
+group of Kubernetes objects and the logical operations between them. KRO
+automatically calculates the order in which objects should be created. You can
+pass values from one object to another, set default values for fields in the API
+specification, and incorporate conditionals into your custom API definitions.
+End users can easily call these custom APIs to create grouped resources.
 
 # How does KRO work?
 
@@ -25,12 +25,16 @@ create additional resources outside of your cluster.
 
 As depicted in the following diagram, the Developers call the Custom API, which
 creates resources such as the **Deployment**, **Ingress**, **ServiceAccount**,
-**Prometheus Monitor**, **Role**, **Policy**, and **Amazon S3**. This allows the
-Developers to easily manage and deploy their applications in a standardized and
-streamlined manner.
+**Prometheus Monitor**, **IAM Role**, **IAM Policy**, and **Amazon S3 Bucket**.
+This allows the Developers to easily manage and deploy their applications in a
+standardized and streamlined manner.
+
+<div align="center">
 
 ![End user interface - Custom API](../../../images/architecture-diagrams/KRO-Dev-Interface.png)
 _Fugure 1: End user interface - Custom API_
+
+</div>
 
 ### ResourceGroup
 
@@ -47,8 +51,12 @@ longer need to directly manage the underlying infrastructure complexities, as
 the custom API handles the deployment and configuration of the required
 resources.
 
+<div align="center">
+
 ![Platform Team Interface](../../../images/architecture-diagrams/KRO-Platform-Team.png)
 _Fugure 2: ResourceGroup (RG) - Platform Team Interface_
+
+</div>
 
 ### ResourceGroup Instance
 
@@ -61,8 +69,12 @@ keep their service internal to the cluster. This flexibility allows each
 development team to customize their application stack based on their specific
 requirements.
 
+<div align="center">
+
 ![ResourceGroup Instance](../../../images/architecture-diagrams/KRO-Instance.png)
 _Fugure 3: ResourceGroup Instance (RGI)_
+
+</div>
 
 # Why KRO?
 

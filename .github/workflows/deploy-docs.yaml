@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "website/**"
+      - "images/archiecture-diagrams"
 
 jobs:
   build:

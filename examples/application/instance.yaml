@@ -6,3 +6,4 @@ spec:
   name: test-app
   ingress:
     enabled: true
+  service: {}

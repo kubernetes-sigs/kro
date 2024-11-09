@@ -29,7 +29,7 @@ creates resources such as the **Deployment**, **Ingress**, **ServiceAccount**,
 Developers to easily manage and deploy their applications in a standardized and
 streamlined manner.
 
-![End user interface - Custom API](../../../images/architecture-diagrams/Kro-Dev-Interface.png)
+![End user interface - Custom API](../../../images/architecture-diagrams/KRO-Dev-Interface.png)
 _Fugure 1: End user interface - Custom API_
 
 ### ResourceGroup
@@ -47,7 +47,7 @@ longer need to directly manage the underlying infrastructure complexities, as
 the custom API handles the deployment and configuration of the required
 resources.
 
-![Platform Team Interface](../../../images/architecture-diagrams/Kro-Platform-Team.png)
+![Platform Team Interface](../../../images/architecture-diagrams/KRO-Platform-Team.png)
 _Fugure 2: ResourceGroup (RG) - Platform Team Interface_
 
 ### ResourceGroup Instance
@@ -61,7 +61,7 @@ keep their service internal to the cluster. This flexibility allows each
 development team to customize their application stack based on their specific
 requirements.
 
-![ResourceGroup Instance](../../../images/architecture-diagrams/Kro-Instance.png)
+![ResourceGroup Instance](../../../images/architecture-diagrams/KRO-Instance.png)
 _Fugure 3: ResourceGroup Instance (RGI)_
 
 # Why KRO?

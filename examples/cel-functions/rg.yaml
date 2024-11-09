@@ -18,7 +18,7 @@ spec:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: ${spec.name}
+        name: ${schema.spec.name}
       spec:
         replicas: 1
         selector:
@@ -30,28 +30,28 @@ spec:
               app: deployment
           spec:
             containers:
-            - name: ${spec.name}-deployment
+            - name: ${schema.spec.name}-deployment
               image: nginx
               ports:
               - containerPort: 80
               env:
               - name: FULL_DNS_NAME
-                value: ${spec.fullDNSName}
+                value: ${schema.spec.fullDNSName}
               - name: DNS_FIRST_PART
-                value: ${spec.fullDNSName.split('.')[0]}
+                value: ${schema.spec.fullDNSName.split('.')[0]}
               - name: DNS_PARTIALS
-                value: ${spec.fullDNSName.split('.').slice(0, 1).join('.')}
+                value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
   - name: service
     template:
       apiVersion: v1
       kind: Service
       metadata:
-        name: ${spec.name}
+        name: ${schema.spec.name}
         labels:
           app: deployment
-          dns: ${spec.fullDNSName}
-          partials: "${size(spec.fullDNSName.split('.')) > 2 ? spec.fullDNSName.split('.').slice(0, 3).join('.') : spec.fullDNSName}"
-          first_part: ${spec.fullDNSName.split('.')[0]}
+          dns: ${schema.spec.fullDNSName}
+          partials: "${size(schema.spec.fullDNSName.split('.')) > 2 ? schema.spec.fullDNSName.split('.').slice(0, 3).join('.') : schema.spec.fullDNSName}"
+          first_part: ${schema.schema.spec.fullDNSName.split('.')[0]}
       spec:
         selector:
           app: deployment

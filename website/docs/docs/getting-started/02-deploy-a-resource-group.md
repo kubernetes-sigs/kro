@@ -35,7 +35,7 @@ spec:
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: ${spec.name}
+          name: ${schema.spec.name}
         spec:
           replicas: 1
           selector:
@@ -47,7 +47,7 @@ spec:
                 app: deployment
             spec:
               containers:
-                - name: ${spec.name}-deployment
+                - name: ${schema.spec.name}-deployment
                   image: nginx
                   ports:
                     - containerPort: 80
@@ -56,7 +56,7 @@ spec:
         apiVersion: v1
         kind: Service
         metadata:
-          name: ${spec.name}
+          name: ${schema.spec.name}
         spec:
           selector:
             app: deployment

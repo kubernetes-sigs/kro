@@ -30,83 +30,83 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-vpc
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-vpc
       spec:
         cidrBlocks: 
-        - ${spec.cidr.vpcCidr}
+        - ${schema.spec.cidr.vpcCidr}
         enableDNSSupport: true
         enableDNSHostnames: true
         tags:
           - key: "Name"
-            value: ${spec.name}-vpc
+            value: ${schema.spec.name}-vpc
   - name: internetGateway
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-igw
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-igw
       spec:
         vpc: ${vpc.status.vpcID}
         tags:
           - key: "Name"
-            value: ${spec.name}-igw
+            value: ${schema.spec.name}-igw
   - name: natGateway1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-nat-gateway1
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-nat-gateway1
       spec:
         subnetID: ${publicSubnet1.status.subnetID}
         allocationID: ${eip1.status.allocationID}
         tags:
           - key: "Name"
-            value: ${spec.name}-nat-gateway1
+            value: ${schema.spec.name}-nat-gateway1
   - name: natGateway2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-nat-gateway2
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-nat-gateway2
       spec:
         subnetID: ${publicSubnet2.status.subnetID}
         allocationID: ${eip2.status.allocationID}
         tags:
           - key: "Name"
-            value: ${spec.name}-nat-gateway2
+            value: ${schema.spec.name}-nat-gateway2
   - name: eip1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-eip1
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-eip1
       spec:
         tags:
           - key: "Name"
-            value: ${spec.name}-eip1
+            value: ${schema.spec.name}-eip1
   - name: eip2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-eip2
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-eip2
       spec:
         tags:
           - key: "Name"
-            value: ${spec.name}-eip2
+            value: ${schema.spec.name}-eip2
   - name: publicRoutetable
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-public-routetable
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-public-routetable
       spec:
         vpcID: ${vpc.status.vpcID}
         routes:
@@ -114,14 +114,14 @@ spec:
           gatewayID: ${internetGateway.status.internetGatewayID}
         tags:
           - key: "Name"
-            value: ${spec.name}-public-routetable
+            value: ${schema.spec.name}-public-routetable
   - name: privateRoutetable1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-private-routetable1
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-private-routetable1
       spec:
         vpcID: ${vpc.status.vpcID}
         routes:
@@ -129,14 +129,14 @@ spec:
           natGatewayID: ${natGateway1.status.natGatewayID}
         tags:
           - key: "Name"
-            value: ${spec.name}-private-routetable1
+            value: ${schema.spec.name}-private-routetable1
   - name: privateRoutetable2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-private-routetable2
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-private-routetable2
       spec:
         vpcID: ${vpc.status.vpcID}
         routes:
@@ -144,24 +144,24 @@ spec:
           natGatewayID: ${natGateway2.status.natGatewayID}
         tags:
           - key: "Name"
-            value: ${spec.name}-private-routetable2
+            value: ${schema.spec.name}-private-routetable2
   - name: publicSubnet1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-public-subnet1
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-public-subnet1
       spec:
-        availabilityZone: ${spec.region}a
-        cidrBlock: ${spec.cidr.publicSubnet1Cidr}
+        availabilityZone: ${schema.spec.region}a
+        cidrBlock: ${schema.spec.cidr.publicSubnet1Cidr}
         mapPublicIPOnLaunch: true
         vpcID: ${vpc.status.vpcID}
         routeTables:
         - ${publicRoutetable.status.routeTableID}
         tags:
           - key: "Name"
-            value: ${spec.name}-public-subnet1
+            value: ${schema.spec.name}-public-subnet1
           - key: kubernetes.io/role/elb
             value: '1'
   - name: publicSubnet2
@@ -169,18 +169,18 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-public-subnet2
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-public-subnet2
       spec:
-        availabilityZone: ${spec.region}b
-        cidrBlock: ${spec.cidr.publicSubnet2Cidr}
+        availabilityZone: ${schema.spec.region}b
+        cidrBlock: ${schema.spec.cidr.publicSubnet2Cidr}
         mapPublicIPOnLaunch: true
         vpcID: ${vpc.status.vpcID}
         routeTables:
         - ${publicRoutetable.status.routeTableID}
         tags:
           - key: "Name"
-            value: ${spec.name}-public-subnet2
+            value: ${schema.spec.name}-public-subnet2
           - key: kubernetes.io/role/elb
             value: '1'
   - name: privateSubnet1
@@ -188,17 +188,17 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-private-subnet1
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-private-subnet1
       spec:
-        availabilityZone: ${spec.region}a
-        cidrBlock: ${spec.cidr.privateSubnet1Cidr}
+        availabilityZone: ${schema.spec.region}a
+        cidrBlock: ${schema.spec.cidr.privateSubnet1Cidr}
         vpcID: ${vpc.status.vpcID}
         routeTables:
         - ${privateRoutetable1.status.routeTableID}
         tags:
           - key: "Name"
-            value: ${spec.name}-private-subnet1
+            value: ${schema.spec.name}-private-subnet1
           - key: kubernetes.io/role/internal-elb
             value: '1'
   - name: privateSubnet2
@@ -206,16 +206,16 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        namespace: ${spec.name}
-        name: ${spec.name}-private-subnet2
+        namespace: ${schema.spec.name}
+        name: ${schema.spec.name}-private-subnet2
       spec:
-        availabilityZone: ${spec.region}b
-        cidrBlock: ${spec.cidr.privateSubnet2Cidr}
+        availabilityZone: ${schema.spec.region}b
+        cidrBlock: ${schema.spec.cidr.privateSubnet2Cidr}
         vpcID: ${vpc.status.vpcID}
         routeTables:
         - ${privateRoutetable2.status.routeTableID}
         tags:
           - key: "Name"
-            value: ${spec.name}-private-subnet2
+            value: ${schema.spec.name}-private-subnet2
           - key: kubernetes.io/role/internal-elb
             value: '1'

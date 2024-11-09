@@ -38,39 +38,39 @@ spec:
       apiVersion: kro.run/v1alpha1
       kind: IAMCRDGroup
       metadata:
-        name: ${spec.name}-crd-group
+        name: ${schema.spec.name}-crd-group
       spec:
-        name: ${spec.name}-crd-group
+        name: ${schema.spec.name}-crd-group
   - name: serviceAccount
     template:
       apiVersion: v1
       kind: ServiceAccount
       metadata:
-        name: ${spec.values.serviceAccount.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.values.serviceAccount.name}
+        namespace: ${schema.spec.namespace}
         annotations:
-          eks.amazonaws.com/role-arn: ${spec.values.serviceAccount.roleArn}
+          eks.amazonaws.com/role-arn: ${schema.spec.values.serviceAccount.roleArn}
   - name: deployment
     template:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: ${spec.name}-deployment
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}-deployment
+        namespace: ${schema.spec.namespace}
         labels:
-          app.kubernetes.io.name: ${spec.name}-deployment
-          app.kubernetes.io.instance: ${spec.name}
+          app.kubernetes.io.name: ${schema.spec.name}-deployment
+          app.kubernetes.io.instance: ${schema.spec.name}
       spec:
-        replicas: ${spec.values.deployment.replicas}
+        replicas: ${schema.spec.values.deployment.replicas}
         selector:
           matchLabels:
-            app.kubernetes.io.name: ${spec.name}-deployment
-            app.kubernetes.io.instance: ${spec.name}
+            app.kubernetes.io.name: ${schema.spec.name}-deployment
+            app.kubernetes.io.instance: ${schema.spec.name}
         template:
           metadata:
             labels:
-              app.kubernetes.io.name: ${spec.name}-deployment
-              app.kubernetes.io.instance: ${spec.name}
+              app.kubernetes.io.name: ${schema.spec.name}-deployment
+              app.kubernetes.io.instance: ${schema.spec.name}
           spec:
             serviceAccountName: ${serviceAccount.metadata.name}
             containers:
@@ -78,35 +78,35 @@ spec:
               - ./bin/controller
               args:
               - --aws-region
-              - ${spec.values.aws.region}
-              - --enable-development-logging=${spec.values.log.enabled}
+              - ${schema.spec.values.aws.region}
+              - --enable-development-logging=${schema.spec.values.log.enabled}
               - --log-level
-              - ${spec.values.log.level}
+              - ${schema.spec.values.log.level}
               - --deletion-policy
-              - ${spec.values.image.deletePolicy}
+              - ${schema.spec.values.image.deletePolicy}
               - --watch-namespace
-              - ${spec.namespace}
-              image: ${spec.values.image.repository}:${spec.values.image.tag}
+              - ${schema.spec.namespace}
+              image: ${schema.spec.values.image.repository}:${schema.spec.values.image.tag}
               name: controller
               ports:
                 - name: http
-                  containerPort: ${spec.values.deployment.containerPort}
+                  containerPort: ${schema.spec.values.deployment.containerPort}
               resources:
                 requests:
-                  memory: ${spec.values.image.resources.requests.memory}
-                  cpu: ${spec.values.image.resources.requests.cpu}
+                  memory: ${schema.spec.values.image.resources.requests.memory}
+                  cpu: ${schema.spec.values.image.resources.requests.cpu}
                 limits:
-                    memory: ${spec.values.image.resources.limits.memory}
-                    cpu: ${spec.values.image.resources.limits.cpu}
+                    memory: ${schema.spec.values.image.resources.limits.memory}
+                    cpu: ${schema.spec.values.image.resources.limits.cpu}
               env:
               - name: ACK_SYSTEM_NAMESPACE
-                value: ${spec.namespace}
+                value: ${schema.spec.namespace}
               - name: AWS_REGION
-                value: ${spec.values.aws.region}
+                value: ${schema.spec.values.aws.region}
               - name: DELETE_POLICY
-                value: ${spec.values.image.deletePolicy}
+                value: ${schema.spec.values.image.deletePolicy}
               - name: ACK_LOG_LEVEL
-                value: ${spec.values.log.level}              
+                value: ${schema.spec.values.log.level}              
               ports:
               - containerPort: 80
   - name: clusterRoleBinding
@@ -114,7 +114,7 @@ spec:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
       metadata:
-        name: ${spec.name}-clusterrolebinding
+        name: ${schema.spec.name}-clusterrolebinding
       roleRef:
         kind: ClusterRole
         apiGroup: rbac.authorization.k8s.io
@@ -128,7 +128,7 @@ spec:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
       metadata:
-        name: ${spec.name}-clusterrole
+        name: ${schema.spec.name}-clusterrole
       rules:
       - apiGroups:
         - ""

@@ -68,10 +68,10 @@ var _ = Describe("Readiness", func() {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${spec.name}",
+					"name": "${schema.spec.name}",
 				},
 				"spec": map[string]interface{}{
-					"replicas": "${spec.replicas}",
+					"replicas": "${schema.spec.replicas}",
 					"selector": map[string]interface{}{
 						"matchLabels": map[string]interface{}{
 							"app": "deployment",
@@ -86,7 +86,7 @@ var _ = Describe("Readiness", func() {
 						"spec": map[string]interface{}{
 							"containers": []interface{}{
 								map[string]interface{}{
-									"name":  "${spec.name}-deployment",
+									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
 									"ports": []interface{}{
 										map[string]interface{}{

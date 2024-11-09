@@ -157,7 +157,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	// Before we get into the dependency graph computation, we need to understand
 	// the shape of the instance resource (Mainly trying to understand the instance
 	// resource schema) to help validating the CEL expressions that are pointing to
-	// the instance resource e.g ${spec.something.something}.
+	// the instance resource e.g ${schema.spec.something.something}.
 	//
 	// You might wonder why are we building the resources before the instance resource?
 	// That's because the instance status schema is inferred from the CEL expressions
@@ -354,7 +354,7 @@ func (b *Builder) buildDependencyGraph(
 
 	resourceNames := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
-	resourceNames = append(resourceNames, "spec")
+	resourceNames = append(resourceNames, "schema")
 
 	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
 	if err != nil {
@@ -660,7 +660,7 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	isStatic := true
 	dependencies := make([]string, 0)
 	for _, resource := range inspectionResult.ResourceDependencies {
-		if resource.Name != "spec" && !slices.Contains(dependencies, resource.Name) {
+		if resource.Name != "schema" && !slices.Contains(dependencies, resource.Name) {
 			isStatic = false
 			dependencies = append(dependencies, resource.Name)
 		}
@@ -685,12 +685,18 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
 	resourceNames := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
-	resourceNames = append(resourceNames, "spec")
-	conditionFieldNames := []string{"spec"}
+	resourceNames = append(resourceNames, "schema")
+	conditionFieldNames := []string{"schema"}
 
 	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
 	if err != nil {
 		return fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+	instanceEmulatedCopy := instance.emulatedObject.DeepCopy()
+	if instanceEmulatedCopy != nil && instanceEmulatedCopy.Object != nil {
+		delete(instanceEmulatedCopy.Object, "apiVersion")
+		delete(instanceEmulatedCopy.Object, "kind")
+		delete(instanceEmulatedCopy.Object, "status")
 	}
 
 	for _, resource := range resources {
@@ -710,9 +716,9 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 					}
 				}
 				// add instance spec to the context
-				context["spec"] = &Resource{
+				context["schema"] = &Resource{
 					emulatedObject: &unstructured.Unstructured{
-						Object: instance.emulatedObject.Object["spec"].(map[string]interface{}),
+						Object: instanceEmulatedCopy.Object,
 					},
 				}
 
@@ -776,9 +782,9 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				// for now we will only support the instance context for condition expressions.
 				// With this decision we will decide in creation time, and update time
 				// If we'll be creating resources or not
-				context["spec"] = &Resource{
+				context["schema"] = &Resource{
 					emulatedObject: &unstructured.Unstructured{
-						Object: instance.emulatedObject.Object["spec"].(map[string]interface{}),
+						Object: instanceEmulatedCopy.Object,
 					},
 				}
 

@@ -23,7 +23,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
-        name: vpc-${spec.name}
+        name: vpc-${schema.spec.name}
       spec:
         cidrBlocks:
         - 192.168.0.0/16
@@ -34,7 +34,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: subnet-a-${spec.name}
+        name: subnet-a-${schema.spec.name}
       spec:
         availabilityZone: us-west-2a
         cidrBlock: 192.168.0.0/18
@@ -44,7 +44,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: subnet-b-${spec.name}
+        name: subnet-b-${schema.spec.name}
       spec:
         availabilityZone: us-west-2b
         cidrBlock: 192.168.64.0/18
@@ -54,7 +54,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: subnet-c-${spec.name}
+        name: subnet-c-${schema.spec.name}
       spec:
         availabilityZone: us-west-2c
         cidrBlock: 192.168.128.0/18
@@ -64,8 +64,8 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: SecurityGroup
       metadata:
-        name: cluster-security-group-${spec.name}
+        name: cluster-security-group-${schema.spec.name}
       spec:
         vpcID: ${vpc.status.vpcID}
-        name: my-sg-${spec.name}
+        name: my-sg-${schema.spec.name}
         description: something something

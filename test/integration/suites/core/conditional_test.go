@@ -71,7 +71,7 @@ var _ = Describe("Conditions", func() {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${spec.name}-a",
+					"name": "${schema.spec.name}-a",
 				},
 				"spec": map[string]interface{}{
 					"replicas": 1,
@@ -89,7 +89,7 @@ var _ = Describe("Conditions", func() {
 						"spec": map[string]interface{}{
 							"containers": []interface{}{
 								map[string]interface{}{
-									"name":  "${spec.name}-deployment",
+									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
 									"ports": []interface{}{
 										map[string]interface{}{
@@ -101,13 +101,13 @@ var _ = Describe("Conditions", func() {
 						},
 					},
 				},
-			}, nil, []string{"${spec.deploymentAenabled}"}),
+			}, nil, []string{"${schema.spec.deploymentAenabled}"}),
 			// Depends on serviceAccountA
 			generator.WithResource("deploymentB", map[string]interface{}{
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${spec.name}-b",
+					"name": "${schema.spec.name}-b",
 				},
 				"spec": map[string]interface{}{
 					"replicas": 1,
@@ -126,7 +126,7 @@ var _ = Describe("Conditions", func() {
 							"serviceAccountName": "${serviceAccountA.metadata.name}",
 							"containers": []interface{}{
 								map[string]interface{}{
-									"name":  "${spec.name}-deployment",
+									"name":  "${schema.spec.name}-deployment",
 									"image": "nginx",
 									"ports": []interface{}{
 										map[string]interface{}{
@@ -138,15 +138,15 @@ var _ = Describe("Conditions", func() {
 						},
 					},
 				},
-			}, nil, []string{"${spec.deploymentBenabled}"}),
+			}, nil, []string{"${schema.spec.deploymentBenabled}"}),
 			// serviceAccountA - no dependencies
 			generator.WithResource("serviceAccountA", map[string]interface{}{
 				"apiVersion": "v1",
 				"kind":       "ServiceAccount",
 				"metadata": map[string]interface{}{
-					"name": "${spec.name}-a",
+					"name": "${schema.spec.name}-a",
 				},
-			}, nil, []string{"${spec.serviceAccountAenabled}"}),
+			}, nil, []string{"${schema.spec.serviceAccountAenabled}"}),
 			// ServiceAccount - depends on service
 			generator.WithResource("serviceAccountB", map[string]interface{}{
 				"apiVersion": "v1",
@@ -154,7 +154,7 @@ var _ = Describe("Conditions", func() {
 				"metadata": map[string]interface{}{
 					"name": "${serviceA.metadata.name}",
 				},
-			}, nil, []string{"${spec.serviceAccountBenabled}"}),
+			}, nil, []string{"${schema.spec.serviceAccountBenabled}"}),
 			// ServiceA - depends on DeploymentA
 			generator.WithResource("serviceA", map[string]interface{}{
 				"apiVersion": "v1",
@@ -192,7 +192,7 @@ var _ = Describe("Conditions", func() {
 						},
 					},
 				},
-			}, nil, []string{"${spec.serviceBenabled}"}),
+			}, nil, []string{"${schema.spec.serviceBenabled}"}),
 		)
 
 		// Create ResourceGroup

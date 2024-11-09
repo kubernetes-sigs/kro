@@ -63,11 +63,11 @@ var _ = Describe("CRD", func() {
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"metadata": map[string]interface{}{
-						"name": "${spec.field1}",
+						"name": "${schema.spec.field1}",
 					},
 					"data": map[string]interface{}{
 						"key":  "value",
-						"key2": "${spec.field2}",
+						"key2": "${schema.spec.field2}",
 					},
 				}, nil, nil),
 			)

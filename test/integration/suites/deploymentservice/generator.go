@@ -68,7 +68,7 @@ func deploymentDef() map[string]interface{} {
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
 		"metadata": map[string]interface{}{
-			"name": "${spec.name}",
+			"name": "${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
 			"replicas": 1,
@@ -86,11 +86,11 @@ func deploymentDef() map[string]interface{} {
 				"spec": map[string]interface{}{
 					"containers": []interface{}{
 						map[string]interface{}{
-							"name":  "${spec.name}-deployment",
+							"name":  "${schema.spec.name}-deployment",
 							"image": "nginx",
 							"ports": []interface{}{
 								map[string]interface{}{
-									"containerPort": "${spec.port}",
+									"containerPort": "${schema.spec.port}",
 								},
 							},
 						},
@@ -106,7 +106,7 @@ func serviceDef() map[string]interface{} {
 		"apiVersion": "v1",
 		"kind":       "Service",
 		"metadata": map[string]interface{}{
-			"name": "${spec.name}",
+			"name": "${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
 			"selector": map[string]interface{}{
@@ -114,8 +114,8 @@ func serviceDef() map[string]interface{} {
 			},
 			"ports": []interface{}{
 				map[string]interface{}{
-					"port":       "${spec.port}",
-					"targetPort": "${spec.port}",
+					"port":       "${schema.spec.port}",
+					"targetPort": "${schema.spec.port}",
 				},
 			},
 		},

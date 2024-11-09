@@ -179,13 +179,13 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
       metadata:
-        name: ${spec.name}
+        name: ${schema.spec.name}
       spec:
-        name: ${spec.name}
+        name: ${schema.spec.name}
         accessConfig:
           authenticationMode: API_AND_CONFIG_MAP
         roleARN: ${clusterRole.status.ackResourceMetadata.arn}
-        version: ${spec.version}
+        version: ${schema.spec.version}
         resourcesVPCConfig:
           endpointPrivateAccess: false
           endpointPublicAccess: true

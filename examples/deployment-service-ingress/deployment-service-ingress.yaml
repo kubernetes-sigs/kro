@@ -19,43 +19,43 @@ spec:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
         labels:
-          app: ${spec.name}
+          app: ${schema.spec.name}
       spec:
         replicas: 3
         selector:
           matchLabels:
-            app: ${spec.name}
+            app: ${schema.spec.name}
         template:
           metadata:
             labels:
-              app: ${spec.name}
+              app: ${schema.spec.name}
           spec:
             containers:
-            - name: ${spec.name}
-              image: ${spec.image}
+            - name: ${schema.spec.name}
+              image: ${schema.spec.image}
               imagePullPolicy: IfNotPresent
               ports:
-              - containerPort: ${spec.port}
+              - containerPort: ${schema.spec.port}
 
   - name: service
     template:
       apiVersion: v1
       kind: Service
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
         labels:
-          app: ${spec.name}
+          app: ${schema.spec.name}
       spec:
         type: NodePort
         selector:
-          app: ${spec.name}
+          app: ${schema.spec.name}
         ports:
-        - port: ${spec.port}
-          targetPort: ${spec.port}
+        - port: ${schema.spec.port}
+          targetPort: ${schema.spec.port}
           protocol: TCP
 
   - name: ingress
@@ -63,13 +63,13 @@ spec:
       apiVersion: networking.k8s.io/v1
       kind: Ingress
       metadata:
-        name: ${spec.name}
-        namespace: ${spec.namespace}
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
         annotations:
           kubernetes.io/ingress.class: alb
           alb.ingress.kubernetes.io/scheme: internet-facing
         labels:
-          app: ${spec.name}
+          app: ${schema.spec.name}
       spec:
       spec:
         rules:
@@ -79,6 +79,6 @@ spec:
                   pathType: Prefix
                   backend:
                     service:
-                      name: ${spec.name}
+                      name: ${schema.spec.name}
                       port:
-                        number: ${spec.port}
+                        number: ${schema.spec.port}

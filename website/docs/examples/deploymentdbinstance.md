@@ -27,11 +27,11 @@ spec:
         apiVersion: rds.saervices.k8s.aws/v1alpha1
         kind: DBInstance
         metadata:
-          name: ${spec.applicationName}-dbinstance
+          name: ${schema.spec.applicationName}-dbinstance
         spec:
           # need to specify the required fields (e.g masterUsername, masterPassword)
           engine: postgres
-          dbInstanceIdentifier: ${spec.applicationName}-dbinstance
+          dbInstanceIdentifier: ${schema.spec.applicationName}-dbinstance
           allocatedStorage: 20
           dbInstanceClass: db.t3.micro
 
@@ -40,11 +40,11 @@ spec:
         apiVersion: v1
         kind: Pod
         metadata:
-          name: ${spec.applicationName}-pod
+          name: ${schema.spec.applicationName}-pod
         spec:
           containers:
             - name: container1
-              image: ${spec.image}
+              image: ${schema.spec.image}
               env:
                 - name: POSTGRESS_ENDPOINT
                   value: ${dbinstance.status.endpoint.address}

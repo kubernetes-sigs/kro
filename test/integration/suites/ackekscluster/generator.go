@@ -281,16 +281,16 @@ func clusterDef(namespace string) map[string]interface{} {
 		"apiVersion": "eks.services.k8s.aws/v1alpha1",
 		"kind":       "Cluster",
 		"metadata": map[string]interface{}{
-			"name":      "${spec.name}",
+			"name":      "${schema.spec.name}",
 			"namespace": namespace,
 		},
 		"spec": map[string]interface{}{
-			"name": "${spec.name}",
+			"name": "${schema.spec.name}",
 			"accessConfig": map[string]interface{}{
 				"authenticationMode": "API_AND_CONFIG_MAP",
 			},
 			"roleARN": "${clusterRole.status.ackResourceMetadata.arn}",
-			"version": "${spec.version}",
+			"version": "${schema.spec.version}",
 			"resourcesVPCConfig": map[string]interface{}{
 				"endpointPrivateAccess": false,
 				"endpointPublicAccess":  true,

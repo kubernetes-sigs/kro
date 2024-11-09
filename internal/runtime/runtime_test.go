@@ -55,7 +55,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	secret := newTestResource(
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				"name": "${spec.appName}-secret",
+				"name": "${schema.spec.appName}-secret",
 			},
 			"stringData": map[string]interface{}{
 				"DB_URL": "${dburl_expr}",
@@ -65,7 +65,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"spec.appName + '-secret'"},
+					Expressions:          []string{"schema.spec.appName + '-secret'"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -96,7 +96,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"spec.appName + '-config'"},
+					Expressions:          []string{"schema.spec.appName + '-config'"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -104,7 +104,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "data.DB_NAME",
-					Expressions:          []string{"spec.config.dbName"},
+					Expressions:          []string{"schema.spec.config.dbName"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -112,7 +112,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "data.DB_PORT",
-					Expressions:          []string{"spec.config.port"},
+					Expressions:          []string{"schema.spec.config.port"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -123,16 +123,16 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	deployment := newTestResource(
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				"name": "${spec.appName}",
+				"name": "${schema.spec.appName}",
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{
-					"app": "${spec.appName}",
+					"app": "${schema.spec.appName}",
 				},
 				"template": map[string]interface{}{
 					"metadata": map[string]interface{}{
 						"labels": map[string]interface{}{
-							"app": "${spec.appName}",
+							"app": "${schema.spec.appName}",
 						},
 					},
 					"spec": map[string]interface{}{
@@ -155,7 +155,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"spec.appName"},
+					Expressions:          []string{"schema.spec.appName"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -175,7 +175,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	service := newTestResource(
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				"name": "${spec.appName}-svc",
+				"name": "${schema.spec.appName}-svc",
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{
@@ -187,7 +187,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"spec.appName"},
+					Expressions:          []string{"schema.spec.appName"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -381,12 +381,12 @@ func Test_NewResourceGroupRuntime(t *testing.T) {
 	deployment := newTestResource(
 		withObject(map[string]interface{}{
 			"spec": map[string]interface{}{
-				"replicas": "${spec.replicas}",
+				"replicas": "${schema.spec.replicas}",
 				"template": map[string]interface{}{
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
 							map[string]interface{}{
-								"image": "${spec.image}",
+								"image": "${schema.spec.image}",
 							},
 						},
 					},
@@ -397,7 +397,7 @@ func Test_NewResourceGroupRuntime(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "spec.replicas",
-					Expressions:          []string{"spec.replicas"},
+					Expressions:          []string{"schema.spec.replicas"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -405,7 +405,7 @@ func Test_NewResourceGroupRuntime(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "spec.template.spec.containers[0].image",
-					Expressions:          []string{"spec.image"},
+					Expressions:          []string{"schema.spec.image"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -447,8 +447,8 @@ func Test_NewResourceGroupRuntime(t *testing.T) {
 	// Test 1: Check expressionsCache initialization
 	expectedExpressions := map[string]struct{}{
 		"deployment.spec.replicas": {},
-		"spec.replicas":            {},
-		"spec.image":               {},
+		"schema.spec.replicas":     {},
+		"schema.spec.image":        {},
 		"deployment.spec.selector": {},
 	}
 
@@ -1367,14 +1367,14 @@ func Test_evaluateStaticVariables(t *testing.T) {
 			),
 			expressionsCache: map[string]*expressionEvaluationState{
 				"expr1": {
-					Expression: "spec.value",
+					Expression: "schema.spec.value",
 					Kind:       variable.ResourceVariableKindStatic,
 					Resolved:   false,
 				},
 			},
 			wantCache: map[string]*expressionEvaluationState{
 				"expr1": {
-					Expression:    "spec.value",
+					Expression:    "schema.spec.value",
 					Kind:          variable.ResourceVariableKindStatic,
 					Resolved:      true,
 					ResolvedValue: int64(42),
@@ -1392,7 +1392,7 @@ func Test_evaluateStaticVariables(t *testing.T) {
 			),
 			expressionsCache: map[string]*expressionEvaluationState{
 				"expr1": {
-					Expression: "spec.value",
+					Expression: "schema.spec.value",
 					Kind:       variable.ResourceVariableKindStatic,
 					Resolved:   false,
 				},
@@ -1404,7 +1404,7 @@ func Test_evaluateStaticVariables(t *testing.T) {
 			},
 			wantCache: map[string]*expressionEvaluationState{
 				"expr1": {
-					Expression:    "spec.value",
+					Expression:    "schema.spec.value",
 					Kind:          variable.ResourceVariableKindStatic,
 					Resolved:      true,
 					ResolvedValue: int64(42),
@@ -2312,7 +2312,7 @@ func Test_WantToCreateResource(t *testing.T) {
 		{
 			name: "spec based condition",
 			resource: newTestResource(
-				withConditions([]string{"spec.enabled == true"}),
+				withConditions([]string{"schema.spec.enabled == true"}),
 			),
 			instanceSpec: map[string]interface{}{
 				"enabled": true,

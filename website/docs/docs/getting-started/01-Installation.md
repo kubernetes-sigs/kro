@@ -16,9 +16,12 @@ Before you begin, ensure you have the following:
 
 ## Installation Steps
 
-:::info[**Alpha Stage**] KRO is currently in alpha stage. While the images are
-publicly available, please note that the software is still under active
-development and APIs may change. :::
+:::info[**Alpha Stage**]
+
+KRO is currently in alpha stage. While the images are publicly available, please
+note that the software is still under active development and APIs may change.
+
+:::
 
 ### Install KRO using Helm
 
@@ -72,9 +75,12 @@ helm upgrade kro oci://public.ecr.aws/kro/kro \
   --version=${KRO_VERSION}
 ```
 
-:::info Helm does not support updating CRDs, so you may need to manually update
-or remove kro related CRDs. For more information, refer to the Helm
-documentation. :::
+:::info[**CRD Updates**]
+
+Helm does not support updating CRDs, so you may need to manually update or
+remove and re-apply kro related CRDs. For more information, refer to the Helm documentation.
+
+:::
 
 ## Uninstalling KRO
 

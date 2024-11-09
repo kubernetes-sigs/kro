@@ -22,9 +22,9 @@ import (
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	scel "github.com/awslabs/symphony/internal/cel"
-	"github.com/awslabs/symphony/internal/graph/variable"
-	"github.com/awslabs/symphony/internal/runtime/resolver"
+	scel "github.com/awslabs/kro/internal/cel"
+	"github.com/awslabs/kro/internal/graph/variable"
+	"github.com/awslabs/kro/internal/runtime/resolver"
 )
 
 // Compile time proof to ensure that ResourceGroupRuntime implements the

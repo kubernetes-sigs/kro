@@ -33,7 +33,7 @@ func TestGenerateDummyCR(t *testing.T) {
 		{
 			name: "simple schema with basic types",
 			gvk: schema.GroupVersionKind{
-				Group:   "symphony.k8s.aws",
+				Group:   "kro.run",
 				Version: "v1alpha1",
 				Kind:    "SimpleTest",
 			},
@@ -78,7 +78,7 @@ func TestGenerateDummyCR(t *testing.T) {
 		{
 			name: "complex schema with nested objects and arrays",
 			gvk: schema.GroupVersionKind{
-				Group:   "symphony.k8s.aws",
+				Group:   "kro.run",
 				Version: "v1alpha1",
 				Kind:    "ComplexTest",
 			},
@@ -183,7 +183,7 @@ func TestGenerateDummyCR(t *testing.T) {
 		{
 			name: "schema with enum values",
 			gvk: schema.GroupVersionKind{
-				Group:   "symphony.k8s.aws",
+				Group:   "kro.run",
 				Version: "v1alpha1",
 				Kind:    "EnumTest",
 			},
@@ -217,7 +217,7 @@ func TestGenerateDummyCR(t *testing.T) {
 		{
 			name: "schema with number constraints",
 			gvk: schema.GroupVersionKind{
-				Group:   "symphony.k8s.aws",
+				Group:   "kro.run",
 				Version: "v1alpha1",
 				Kind:    "ConstrainedTest",
 			},
@@ -291,7 +291,7 @@ func TestGenerateDummyCR(t *testing.T) {
 				},
 			},
 			gvk: schema.GroupVersionKind{
-				Group:   "symphony.k8s.aws",
+				Group:   "kro.run",
 				Version: "v1alpha1",
 				Kind:    "ArrayTest",
 			},
@@ -327,7 +327,7 @@ func TestGenerateDummyCR(t *testing.T) {
 func TestGenerateDummyCRErrors(t *testing.T) {
 	e := NewEmulator()
 	gvk := schema.GroupVersionKind{
-		Group:   "symphony.k8s.aws",
+		Group:   "kro.run",
 		Version: "v1alpha1",
 		Kind:    "ErrorTest",
 	}

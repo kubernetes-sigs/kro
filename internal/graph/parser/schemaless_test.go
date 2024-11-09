@@ -17,7 +17,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 func areEqualExpressionFields(a, b []variable.FieldDescriptor) bool {

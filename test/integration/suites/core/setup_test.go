@@ -22,8 +22,8 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	ctrlinstance "github.com/awslabs/symphony/internal/controller/instance"
-	"github.com/awslabs/symphony/test/integration/environment"
+	ctrlinstance "github.com/awslabs/kro/internal/controller/instance"
+	"github.com/awslabs/kro/test/integration/environment"
 )
 
 var env *environment.Environment

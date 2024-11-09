@@ -22,8 +22,8 @@ import (
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/metadata"
 )
 
 func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
@@ -50,7 +50,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 
 func (r *ResourceGroupReconciler) extractCRDName(kind string) string {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
-	return fmt.Sprintf("%s.x.%s", pluralKind, v1alpha1.SymphonyDomainName)
+	return fmt.Sprintf("%s.%s", pluralKind, v1alpha1.KroDomainName)
 }
 
 func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {

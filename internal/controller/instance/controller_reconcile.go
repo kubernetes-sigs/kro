@@ -26,9 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/awslabs/symphony/internal/metadata"
-	"github.com/awslabs/symphony/internal/requeue"
-	"github.com/awslabs/symphony/internal/runtime"
+	"github.com/awslabs/kro/internal/metadata"
+	"github.com/awslabs/kro/internal/requeue"
+	"github.com/awslabs/kro/internal/runtime"
 )
 
 // instanceGraphReconciler is responsible for reconciling a single instance and
@@ -264,7 +264,7 @@ func (igr *instanceGraphReconciler) updateResource(
 func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context, resourceStates map[string]*ResourceState) error {
 	instanceUnstructured := igr.runtime.GetInstance()
 
-	igr.log.V(1).Info("Getting all resources created by Symphony")
+	igr.log.V(1).Info("Getting all resources created by KRO")
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
 		_, err := igr.runtime.Synchronize()
 		if err != nil {

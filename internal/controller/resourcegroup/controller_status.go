@@ -25,10 +25,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/controller/resourcegroup/condition"
-	serr "github.com/awslabs/symphony/internal/controller/resourcegroup/errors"
-	"github.com/awslabs/symphony/internal/requeue"
+	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/controller/resourcegroup/condition"
+	serr "github.com/awslabs/kro/internal/controller/resourcegroup/errors"
+	"github.com/awslabs/kro/internal/requeue"
 )
 
 // handleReconcileError will handle errors from reconcile handlers, which
@@ -149,7 +149,7 @@ func (r *ResourceGroupReconciler) setManaged(ctx context.Context, resourcegroup 
 	log := log.FromContext(ctx)
 	log.V(1).Info("setting resourcegroup as managed - adding finalizer")
 
-	newFinalizers := []string{v1alpha1.SymphonyDomainName}
+	newFinalizers := []string{v1alpha1.KroDomainName}
 	dc := resourcegroup.DeepCopy()
 	dc.Finalizers = newFinalizers
 	if len(dc.Finalizers) != len(resourcegroup.Finalizers) {

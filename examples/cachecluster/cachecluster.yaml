@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: redis.x.symphony.k8s.aws
+  name: redis.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
@@ -15,7 +15,7 @@ spec:
   resources:
   - name: networkingStack
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: NetworkingStack
       metadata:
         name: ${spec.name}-networking-stack

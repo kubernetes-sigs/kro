@@ -56,7 +56,7 @@ kubectl get ResourceGroup
 Expected output
 ```
 NAME                              AGE
-microservice.x.symphony.k8s.aws   14m
+microservice.kro.run   14m
 ```
 
 ### Build Lambda function packages
@@ -131,25 +131,25 @@ kubectl get ResourceGroup
 Expected result 
 ```
 NAME                              AGE
-microservice.x.symphony.k8s.aws   35m
+microservice.kro.run   35m
 ```
 
 Describe your resource group, look for errors and events:
 ```
-kubectl describe resourcegroup.x.symphony.k8s.aws/microservice.x.symphony.k8s.aws
+kubectl describe resourcegroup.kro.run/microservice.kro.run
 ```
 Expected result (resource definitions removed for brevity)
 ```
-Name:         microservice.x.symphony.k8s.aws
+Name:         microservice.kro.run
 Namespace:    default
 Labels:       <none>
 Annotations:  <none>
-API Version:  x.symphony.k8s.aws/v1alpha1
+API Version:  kro.run/v1alpha1
 Kind:         ResourceGroup
 Metadata:
   Creation Timestamp:  2024-07-11T15:34:53Z
   Finalizers:
-    symphony.io/finalizer
+    kro.io/finalizer
   Generation:        2
   Resource Version:  462737
   UID:               63729ad1-056c-4c33-a966-3ad8e798ec32
@@ -177,17 +177,17 @@ Status:
     Message:               micro controller is ready
     Reason:                
     Status:                True
-    Type:                  symphony.aws.dev/ReconcilerReady
+    Type:                  kro.aws.dev/ReconcilerReady
     Last Transition Time:  2024-07-11T15:36:38Z
     Message:               Directed Acyclic Graph is synced
     Reason:                
     Status:                True
-    Type:                  symphony.aws.dev/GraphVerified
+    Type:                  kro.aws.dev/GraphVerified
     Last Transition Time:  2024-07-11T15:36:38Z
     Message:               Custom Resource Definition is synced
     Reason:                
     Status:                True
-    Type:                  symphony.aws.dev/CustomResourceDefinitionSynced
+    Type:                  kro.aws.dev/CustomResourceDefinitionSynced
   State:                   ACTIVE
   Topological Order:
     itemsTable
@@ -203,9 +203,9 @@ Status:
 Events:  <none>
 ```
 
-Check logs of the Symphony pod for errors if necessary (this command assumes there is only one Symphony pod available):
+Check logs of the KRO pod for errors if necessary (this command assumes there is only one KRO pod available):
 ```
-kubectl get pods -o custom-columns=":metadata.name" | grep symphony | xargs -I% kubectl logs "%" --since=1h
+kubectl get pods -o custom-columns=":metadata.name" | grep kro | xargs -I% kubectl logs "%" --since=1h
 ```
 
 Check logs of the ACK controller pod for errors if necessary (this command assumes there is only one Lambda controller pod available):
@@ -216,7 +216,7 @@ kubectl get pods -o custom-columns=":metadata.name" | grep "ack-lambda-controlle
 
 Describe your microservice:
 ```
-kubectl describe microservice.x.symphony.k8s.aws/test-microservice
+kubectl describe microservice.kro.run/test-microservice
 ```
 
 Check the state of individual resources if needed, look for the errors and events:

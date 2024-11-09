@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 // Interface defines the main runtime interface for managing and synchronizing

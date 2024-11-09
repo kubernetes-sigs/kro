@@ -20,15 +20,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
 )
 
 // ResourceGroupOption is a functional option for ResourceGroup
-type ResourceGroupOption func(*symphonyv1alpha1.ResourceGroup)
+type ResourceGroupOption func(*krov1alpha1.ResourceGroup)
 
 // NewResourceGroup creates a new ResourceGroup with the given name and options
-func NewResourceGroup(name string, opts ...ResourceGroupOption) *symphonyv1alpha1.ResourceGroup {
-	rg := &symphonyv1alpha1.ResourceGroup{
+func NewResourceGroup(name string, opts ...ResourceGroupOption) *krov1alpha1.ResourceGroup {
+	rg := &krov1alpha1.ResourceGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
@@ -42,7 +42,7 @@ func NewResourceGroup(name string, opts ...ResourceGroupOption) *symphonyv1alpha
 
 // WithNamespace sets the namespace of the ResourceGroup
 func WithNamespace(namespace string) ResourceGroupOption {
-	return func(rg *symphonyv1alpha1.ResourceGroup) {
+	return func(rg *krov1alpha1.ResourceGroup) {
 		rg.Namespace = namespace
 	}
 }
@@ -58,8 +58,8 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 		panic(err)
 	}
 
-	return func(rg *symphonyv1alpha1.ResourceGroup) {
-		rg.Spec.Schema = &symphonyv1alpha1.Schema{
+	return func(rg *krov1alpha1.ResourceGroup) {
+		rg.Spec.Schema = &krov1alpha1.Schema{
 			Kind:       kind,
 			APIVersion: version,
 			Spec: runtime.RawExtension{
@@ -82,12 +82,12 @@ func WithResource(
 	readyWhen []string,
 	includeWhen []string,
 ) ResourceGroupOption {
-	return func(rg *symphonyv1alpha1.ResourceGroup) {
+	return func(rg *krov1alpha1.ResourceGroup) {
 		raw, err := json.Marshal(template)
 		if err != nil {
 			panic(err)
 		}
-		rg.Spec.Resources = append(rg.Spec.Resources, &symphonyv1alpha1.Resource{
+		rg.Spec.Resources = append(rg.Spec.Resources, &krov1alpha1.Resource{
 			Name:        name,
 			ReadyWhen:   readyWhen,
 			IncludeWhen: includeWhen,

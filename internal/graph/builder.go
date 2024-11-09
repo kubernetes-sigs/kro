@@ -28,17 +28,17 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
-	scel "github.com/awslabs/symphony/internal/cel"
-	"github.com/awslabs/symphony/internal/cel/ast"
-	"github.com/awslabs/symphony/internal/graph/crd"
-	"github.com/awslabs/symphony/internal/graph/dag"
-	"github.com/awslabs/symphony/internal/graph/emulator"
-	"github.com/awslabs/symphony/internal/graph/parser"
-	"github.com/awslabs/symphony/internal/graph/schema"
-	"github.com/awslabs/symphony/internal/graph/variable"
-	"github.com/awslabs/symphony/internal/metadata"
-	"github.com/awslabs/symphony/internal/simpleschema"
+	"github.com/awslabs/kro/api/v1alpha1"
+	scel "github.com/awslabs/kro/internal/cel"
+	"github.com/awslabs/kro/internal/cel/ast"
+	"github.com/awslabs/kro/internal/graph/crd"
+	"github.com/awslabs/kro/internal/graph/dag"
+	"github.com/awslabs/kro/internal/graph/emulator"
+	"github.com/awslabs/kro/internal/graph/parser"
+	"github.com/awslabs/kro/internal/graph/schema"
+	"github.com/awslabs/kro/internal/graph/variable"
+	"github.com/awslabs/kro/internal/metadata"
+	"github.com/awslabs/kro/internal/simpleschema"
 )
 
 // NewBuilder creates a new GraphBuilder instance.
@@ -88,7 +88,7 @@ type Builder struct {
 	schemaResolver resolver.SchemaResolver
 	// resourceEmulator is used to emulate the resources. This is used to validate
 	// the CEL expressions in the resources. Because looking up the CEL expressions
-	// isn't enough for Symphony to validate the expressions.
+	// isn't enough for KRO to validate the expressions.
 	//
 	// Maybe there is a better way, if anything probably there is a better way to
 	// validate the CEL expressions. To revisit.
@@ -107,7 +107,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 
 	// There are a few steps to build a resource group:
 	// 1. Validate the naming convention of the resource group and its resources.
-	//    Symphony leverages CEL expressions to allow users to define new types and
+	//    KRO leverages CEL expressions to allow users to define new types and
 	//    express relationships between resources. This means that we need to ensure
 	//    that the names of the resources are valid to be used in CEL expressions.
 	//    for example name-something-something is not a valid name for a resource,
@@ -178,7 +178,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	//
 	// SimpleSchema is a new standard we created to simplify CRD declarations, it is
 	// very useful when we need to define the Spec of a CRD, when it comes to defining
-	// the status of a CRD, we use CEL expressions. Symphony inspects the CEL expressions
+	// the status of a CRD, we use CEL expressions. KRO inspects the CEL expressions
 	// to infer the types of the status fields, and generate the OpenAPI schema for the
 	// status field. The CEL expressions are also used to patch the status field of the
 	// instance.

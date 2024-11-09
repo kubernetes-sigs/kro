@@ -2,10 +2,10 @@
 sidebar_position: 1
 ---
 
-# Installing Symphony
+# Installing KRO
 
-This guide walks you through the process of installing Symphony on your
-Kubernetes cluster using Helm.
+This guide walks you through the process of installing KRO on your Kubernetes
+cluster using Helm.
 
 ## Prerequisites
 
@@ -16,32 +16,32 @@ Before you begin, ensure you have the following:
 
 ## Installation Steps
 
-:::info[**Alpha Stage**] Symphony is currently in alpha stage. While the images
-are publicly available, please note that the software is still under active
+:::info[**Alpha Stage**] KRO is currently in alpha stage. While the images are
+publicly available, please note that the software is still under active
 development and APIs may change. :::
 
-### Install Symphony using Helm
+### Install KRO using Helm
 
-Once authenticated, install Symphony using the Helm chart:
+Once authenticated, install KRO using the Helm chart:
 
 ```sh
 # Fetch the latest release version from GitHub
-export SYMPHONY_VERSION=$(curl -s \
-    https://api.github.com/repos/awslabs/private-symphony/releases/latest | \
+export KRO_VERSION=$(curl -s \
+    https://api.github.com/repos/awslabs/kro/releases/latest | \
     grep '"tag_name":' | \
     sed -E 's/.*"([^"]+)".*/\1/' \
   )
 
-# Install Symphony
-helm install symphony oci://public.ecr.aws/symphony/symphony \
-  --namespace symphony \
+# Install KRO using Helm
+helm install kro oci://public.ecr.aws/kro/kro \
+  --namespace kro \
   --create-namespace \
-  --version=${SYMPHONY_VERSION}
+  --version=${KRO_VERSION}
 ```
 
 ## Verifying the Installation
 
-After running the installation command, verify that Symphony has been installed
+After running the installation command, verify that Kro has been installed
 correctly:
 
 1. Check the Helm release:
@@ -50,40 +50,40 @@ correctly:
    helm list
    ```
 
-   You should see the "symphony" release listed.
+   You should see the "kro" release listed.
 
-2. Check the Symphony pods:
+2. Check the KRO pods:
    ```sh
-   kubectl get pods
+   kubectl get pods -n kro
    ```
-   You should see Symphony-related pods running.
+   You should see kro-related pods running.
 
-## Upgrading Symphony
+## Upgrading KRO
 
-To upgrade to a newer version of Symphony, use the Helm upgrade command:
+To upgrade to a newer version of KRO, use the Helm upgrade command:
 
 ```bash
 # Replace `<new-version>` with the version you want to upgrade to.
-export SYMPHONY_VERSION=<new-version>
+export KRO_VERSION=<new-version>
 
 # Upgrade the controller
-helm upgrade symphony oci://public.ecr.aws/symphony/symphony \
-  --namespace symphony \
-  --version=${SYMPHONY_VERSION}
+helm upgrade kro oci://public.ecr.aws/kro/kro \
+  --namespace kro \
+  --version=${KRO_VERSION}
 ```
 
 :::info Helm does not support updating CRDs, so you may need to manually update
-or remove symphony related CRDs. For more information, refer to the Helm
+or remove kro related CRDs. For more information, refer to the Helm
 documentation. :::
 
-## Uninstalling Symphony
+## Uninstalling KRO
 
-To uninstall Symphony, use the following command:
+To uninstall KRO, use the following command:
 
 ```bash
-helm uninstall symphony
+helm uninstall kro -n kro
 ```
 
-Keep in mind that this command will remove all Symphony resources from your
-cluster, except for the ResourceGroup CRD and any other custom resources you may
-have created.
+Keep in mind that this command will remove all KRO resources from your cluster,
+except for the ResourceGroup CRD and any other custom resources you may have
+created.

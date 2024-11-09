@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: eksclusterwithvpc.x.symphony.k8s.aws
+  name: eksclusterwithvpc.kro.run
   annotations:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-wave: "1"
@@ -24,7 +24,7 @@ spec:
   resources:
   - name: vpc
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: Vpc
       metadata:
         name: ${spec.name}
@@ -39,7 +39,7 @@ spec:
           privateSubnet2Cidr: ${spec.cidr.privateSubnet2Cidr}
   - name: eks
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: EksCluster
       metadata:
         name: ${spec.name}

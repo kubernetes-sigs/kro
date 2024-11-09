@@ -30,11 +30,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	xv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	resourcegroupctrl "github.com/awslabs/symphony/internal/controller/resourcegroup"
-	"github.com/awslabs/symphony/internal/dynamiccontroller"
-	"github.com/awslabs/symphony/internal/graph"
-	"github.com/awslabs/symphony/internal/kubernetes"
+	xv1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	resourcegroupctrl "github.com/awslabs/kro/internal/controller/resourcegroup"
+	"github.com/awslabs/kro/internal/dynamiccontroller"
+	"github.com/awslabs/kro/internal/graph"
+	"github.com/awslabs/kro/internal/kubernetes"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -73,7 +73,7 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow symphony to delete CRDs")
+	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
 	flag.IntVar(&resourceGroupConcurrentReconciles, "resource-group-concurrent-reconciles", 1, "The number of resource group reconciles to run in parallel")
 	flag.IntVar(&dynamicControllerConcurrentReconciles, "dynamic-controller-concurrent-reconciles", 1, "The number of dynamic controller reconciles to run in parallel")
 	// log level flags
@@ -97,7 +97,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "6f0f64a5.symphony.k8s.aws",
+		LeaderElectionID:       "6f0f64a5.kro.run",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

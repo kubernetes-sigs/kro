@@ -1,10 +1,10 @@
-# Symphony
+# KRO
 
 <p align="center">
   <img src="./images/logo/final-blue.svg" />
 </p>
 
-Symphony is a Kubernetes controller that simplifies application management and
+KRO is a Kubernetes controller that simplifies application management and
 deployment. It provides a powerful abstraction layer, allowing you to define
 complex, multi-resource applications as single reusable units.
 

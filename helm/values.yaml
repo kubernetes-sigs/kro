@@ -1,5 +1,5 @@
 image:
-  repository: 095708837592.dkr.ecr.us-west-2.amazonaws.com/symphony
+  repository: 095708837592.dkr.ecr.us-west-2.amazonaws.com/kro
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: "0.1.0"
@@ -69,7 +69,7 @@ resources:
     memory: 128Mi
 
 config:
-  # Allow symphony to delete CRDs
+  # Allow kro to delete CRDs
   allowCRDDeletion: false
   # The address the metric endpoint binds to
   metricsBindAddress: :8078

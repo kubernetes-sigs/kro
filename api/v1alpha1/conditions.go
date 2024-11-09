@@ -22,31 +22,31 @@ type ConditionType string
 
 const (
 	// ResourceGroupConditionTypeGraphSynced indicates the state of the directed
-	// acyclic graph (DAG) that Symphony uses to manage the resources in a
+	// acyclic graph (DAG) that KRO uses to manage the resources in a
 	// ResourceGroup.
-	ResourceGroupConditionTypeGraphVerified ConditionType = "symphony.aws.dev/GraphVerified"
+	ResourceGroupConditionTypeGraphVerified ConditionType = "kro.aws.dev/GraphVerified"
 	// ResourceGroupConditionTypeCustomResourceDefinitionSynced indicates the state of the
-	// CustomResourceDefinition (CRD) that Symphony uses to manage the resources in a
+	// CustomResourceDefinition (CRD) that KRO uses to manage the resources in a
 	// ResourceGroup.
-	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "symphony.aws.dev/CustomResourceDefinitionSynced"
+	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "kro.aws.dev/CustomResourceDefinitionSynced"
 	// ResourceGroupConditionTypeReconcilerReady indicates the state of the reconciler.
-	// Whenever an ResourceGroup resource is created, Symphony will spin up a
+	// Whenever an ResourceGroup resource is created, KRO will spin up a
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
-	ResourceGroupConditionTypeReconcilerReady ConditionType = "symphony.aws.dev/ReconcilerReady"
+	ResourceGroupConditionTypeReconcilerReady ConditionType = "kro.aws.dev/ReconcilerReady"
 )
 
 const (
-	InstanceConditionTypeReady ConditionType = "symphony.aws.dev/Ready"
+	InstanceConditionTypeReady ConditionType = "kro.aws.dev/Ready"
 
 	// Creating Deleting Migrating
-	InstanceConditionTypeProgressing ConditionType = "symphony.aws.dev/Progressing"
+	InstanceConditionTypeProgressing ConditionType = "kro.aws.dev/Progressing"
 
 	// Unexpected situation, behaviour, need human intervention
-	InstanceConditionTypeDegraded ConditionType = "symphony.aws.dev/Degraded"
+	InstanceConditionTypeDegraded ConditionType = "kro.aws.dev/Degraded"
 
 	// Something is wrong but i'm gonna try again
-	InstanceConditionTypeError ConditionType = "symphony.aws.dev/Error"
+	InstanceConditionTypeError ConditionType = "kro.aws.dev/Error"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service

@@ -30,19 +30,19 @@ func (m *mockObject) GetObjectMeta() metav1.Object {
 	return m
 }
 
-func TestIsSymphonyOwned(t *testing.T) {
+func TestIsKroOwned(t *testing.T) {
 	cases := []struct {
 		name     string
 		labels   map[string]string
 		expected bool
 	}{
 		{
-			name:     "owned by Symphony",
+			name:     "owned by Kro",
 			labels:   map[string]string{OwnedLabel: "true"},
 			expected: true,
 		},
 		{
-			name:     "not owned by Symphony",
+			name:     "not owned by Kro",
 			labels:   map[string]string{OwnedLabel: "false"},
 			expected: false,
 		},
@@ -56,13 +56,13 @@ func TestIsSymphonyOwned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.labels}
-			result := IsSymphonyOwned(meta)
+			result := IsKroOwned(meta)
 			assert.Equal(t, tc.expected, result)
 		})
 	}
 }
 
-func TestSetSymphonyOwned(t *testing.T) {
+func TestSetKroOwned(t *testing.T) {
 	cases := []struct {
 		name          string
 		initialLabels map[string]string
@@ -83,13 +83,13 @@ func TestSetSymphonyOwned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetSymphonyOwned(meta)
+			SetKroOwned(meta)
 			assert.Equal(t, tc.expected, meta.Labels)
 		})
 	}
 }
 
-func TestSetSymphonyUnowned(t *testing.T) {
+func TestSetKroUnowned(t *testing.T) {
 	cases := []struct {
 		name          string
 		initialLabels map[string]string
@@ -110,7 +110,7 @@ func TestSetSymphonyUnowned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetSymphonyUnowned(meta)
+			SetKroUnowned(meta)
 			assert.Equal(t, tc.expected, meta.Labels)
 		})
 	}

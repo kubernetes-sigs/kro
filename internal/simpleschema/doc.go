@@ -42,9 +42,9 @@ package simpleschema
 //       message: string
 //       lastTransitionTime: string
 //
-// In Symphony you might see us using CEL expressions to define instructions
+// In KRO you might see us using CEL expressions to define instructions
 // for patch back status fields to CRD instances. This is not part of the schema
-// standard it self but it is a Symphony specific extension. For example
+// standard it self but it is a KRO specific extension. For example
 //
 //  variables:
 //    spec:

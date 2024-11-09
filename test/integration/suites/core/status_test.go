@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 var _ = Describe("Status", func() {
@@ -77,7 +77,7 @@ var _ = Describe("Status", func() {
 
 			// Check conditions
 			g.Expect(rg.Status.Conditions).To(HaveLen(3))
-			g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 
 			for _, cond := range rg.Status.Conditions {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -107,12 +107,12 @@ var _ = Describe("Status", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 
 			// Check specific failure condition
-			var crdCondition *symphonyv1alpha1.Condition
+			var crdCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
 					crdCondition = &cond
 					break
 				}

@@ -21,7 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
 // ResourceState represents the state of a resource.

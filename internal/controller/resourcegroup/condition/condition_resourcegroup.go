@@ -16,7 +16,7 @@ package condition
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	v1alpha1 "github.com/awslabs/kro/api/v1alpha1"
 )
 
 func NewReconcilerReadyCondition(status metav1.ConditionStatus, reason, message string) v1alpha1.Condition {

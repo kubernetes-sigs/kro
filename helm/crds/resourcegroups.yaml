@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.2
-  name: resourcegroups.x.symphony.k8s.aws
+  name: resourcegroups.kro.run
 spec:
-  group: x.symphony.k8s.aws
+  group: kro.run
   names:
     kind: ResourceGroup
     listKind: ResourceGroupList

@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "symphony.fullname" . }}-docs
+  name: {{ include "kro.fullname" . }}-docs
   namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: symphony-docs
+      app: kro-docs
       release: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: symphony-docs
+        app: kro-docs
         release: {{ .Release.Name }}
     spec:
       {{- with .Values.imagePullSecrets }}

@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 var _ = Describe("Topology", func() {
@@ -148,9 +148,9 @@ var _ = Describe("Topology", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify graph is verified
-			var graphCondition *symphonyv1alpha1.Condition
+			var graphCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
 					graphCondition = &cond
 					break
 				}
@@ -214,9 +214,9 @@ var _ = Describe("Topology", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			var graphCondition *symphonyv1alpha1.Condition
+			var graphCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
 					graphCondition = &cond
 					break
 				}
@@ -224,7 +224,7 @@ var _ = Describe("Topology", func() {
 			g.Expect(graphCondition).ToNot(BeNil())
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*graphCondition.Reason).To(ContainSubstring("This would create a cycle"))
-			g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

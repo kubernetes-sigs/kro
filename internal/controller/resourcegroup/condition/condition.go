@@ -16,7 +16,7 @@ package condition
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
+	v1alpha1 "github.com/awslabs/kro/api/v1alpha1"
 )
 
 // NewCondition returns a new Condition instance.

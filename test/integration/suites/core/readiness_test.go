@@ -29,8 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 var _ = Describe("Readiness", func() {
@@ -123,7 +123,7 @@ var _ = Describe("Readiness", func() {
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Verify ResourceGroup is created and becomes ready
-		createdRG := &symphonyv1alpha1.ResourceGroup{}
+		createdRG := &krov1alpha1.ResourceGroup{}
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -145,15 +145,15 @@ var _ = Describe("Readiness", func() {
 			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(2))
 			// Verify conditions
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
-			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeReconcilerReady))
+			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeReconcilerReady))
 			g.Expect(createdRG.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified))
+			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeGraphVerified))
 			g.Expect(createdRG.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(createdRG.Status.Conditions[2].Type).To(
-				Equal(symphonyv1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
+				Equal(krov1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
 			)
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 
 		}, 10*time.Second, time.Second).Should(Succeed())
 
@@ -162,7 +162,7 @@ var _ = Describe("Readiness", func() {
 		// Create instance
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("x.%s/%s", symphonyv1alpha1.SymphonyDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
 				"kind":       "TestReadiness",
 				"metadata": map[string]interface{}{
 					"name":      name,
@@ -251,7 +251,7 @@ var _ = Describe("Readiness", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
-			}, &symphonyv1alpha1.ResourceGroup{})
+			}, &krov1alpha1.ResourceGroup{})
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 	})

@@ -19,7 +19,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
 var (
@@ -35,7 +35,7 @@ var (
 	// kubernetesVersionRegex
 	kubernetesVersionRegex = regexp.MustCompile(`^v\d+(?:(?:alpha|beta)\d+)?$`)
 
-	// reservedKeyWords is a list of reserved words in Symphony.
+	// reservedKeyWords is a list of reserved words in KRO.
 	reservedKeyWords = []string{
 		"apiVersion",
 		"context",
@@ -58,25 +58,25 @@ var (
 		"serviceAccountName",
 		"spec",
 		"status",
-		"symphony",
+		"kro",
 		"variables",
 		"vars",
 		"version",
 	}
 )
 
-// isValidResourceName checks if the given name is a valid Symphony resource name (loawercase)
+// isValidResourceName checks if the given name is a valid KRO resource name (loawercase)
 func isValidResourceName(name string) bool {
 	return lowerCamelCaseRegex.MatchString(name)
 }
 
-// isValidKindName checks if the given name is a valid Symphony kind name (uppercase)
+// isValidKindName checks if the given name is a valid KRO kind name (uppercase)
 func isValidKindName(name string) bool {
 	return upperCamelCaseRegex.MatchString(name)
 }
 
-// isSymphonyReservedWord checks if the given word is a reserved word in Symphony.
-func isSymphonyReservedWord(word string) bool {
+// isKROReservedWord checks if the given word is a reserved word in KRO.
+func isKROReservedWord(word string) bool {
 	for _, w := range reservedKeyWords {
 		if w == word {
 			return true
@@ -89,7 +89,7 @@ func isSymphonyReservedWord(word string) bool {
 // the given resource group.
 func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
 	if !isValidKindName(rg.Spec.Schema.Kind) {
-		return fmt.Errorf("%s: kind '%s' is not a valid Symphony kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Schema.Kind)
+		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Schema.Kind)
 	}
 	err := validateResourceNames(rg)
 	if err != nil {
@@ -100,21 +100,21 @@ func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
 
 // validateResource performs basic validation on a given resourcegroup.
 // It checks that there are no duplicate resource names and that the
-// resource names are conformant to the Symphony naming convention.
+// resource names are conformant to the KRO naming convention.
 //
-// The Symphony naming convention is as follows:
+// The KRO naming convention is as follows:
 // - The name should start with a lowercase letter.
 // - The name should only contain alphanumeric characters.
 // - does not contain any special characters, underscores, or hyphens.
 func validateResourceNames(rg *v1alpha1.ResourceGroup) error {
 	seen := make(map[string]struct{})
 	for _, res := range rg.Spec.Resources {
-		if isSymphonyReservedWord(res.Name) {
-			return fmt.Errorf("name %s is a reserved keyword in Symphony", res.Name)
+		if isKROReservedWord(res.Name) {
+			return fmt.Errorf("name %s is a reserved keyword in KRO", res.Name)
 		}
 
 		if !isValidResourceName(res.Name) {
-			return fmt.Errorf("name %s is not a valid Symphony resource name: must be lower camelCase", res.Name)
+			return fmt.Errorf("name %s is not a valid KRO resource name: must be lower camelCase", res.Name)
 		}
 
 		if _, ok := seen[res.Name]; ok {

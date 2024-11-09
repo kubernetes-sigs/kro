@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: iamcontroller.x.symphony.k8s.aws
+  name: iamcontroller.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
@@ -35,7 +35,7 @@ spec:
   resources:
   - name: iamCRDGroup
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: IAMCRDGroup
       metadata:
         name: ${spec.name}-crd-group

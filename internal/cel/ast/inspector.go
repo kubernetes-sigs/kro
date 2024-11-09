@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	scel "github.com/awslabs/symphony/internal/cel"
+	scel "github.com/awslabs/kro/internal/cel"
 	"github.com/google/cel-go/cel"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
@@ -78,7 +78,7 @@ type ExpressionInspection struct {
 	// UnknownResources lists any resource references that weren't declared
 	UnknownResources []UnknownResource
 	// UnknownFunctions lists any function calls that weren't declared, either
-	// by symphony engine, standard libraries or CEL built-in functions.
+	// by kro engine, standard libraries or CEL built-in functions.
 	UnknownFunctions []UnknownFunction
 }
 

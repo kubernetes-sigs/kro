@@ -18,20 +18,20 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
 var (
-	SymphonyRGOwnerReferenceKind       = "ResourceGroup"
-	SymphonyRGOwnerReferenceAPIVersion = v1alpha1.GroupVersion.String()
+	KRORGOwnerReferenceKind       = "ResourceGroup"
+	KRORGOwnerReferenceAPIVersion = v1alpha1.GroupVersion.String()
 )
 
 // stamped on the CRD and RGIs
 func NewResourceGroupOwnerReference(name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,
-		Kind:       SymphonyRGOwnerReferenceKind,
-		APIVersion: SymphonyRGOwnerReferenceAPIVersion,
+		Kind:       KRORGOwnerReferenceKind,
+		APIVersion: KRORGOwnerReferenceAPIVersion,
 		Controller: &[]bool{false}[0],
 		UID:        uid,
 	}

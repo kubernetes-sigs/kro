@@ -20,26 +20,26 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
-const symphonyFinalizer = v1alpha1.SymphonyDomainName + "/finalizer"
+const kroFinalizer = v1alpha1.KroDomainName + "/finalizer"
 
-// SetResourceGroupFinalizer adds the Symphony finalizer to the object if it's not already present.
+// SetResourceGroupFinalizer adds the Kro finalizer to the object if it's not already present.
 func SetResourceGroupFinalizer(obj metav1.Object) {
 	if !HasResourceGroupFinalizer(obj) {
-		obj.SetFinalizers(append(obj.GetFinalizers(), symphonyFinalizer))
+		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
 	}
 }
 
-// RemoveResourceGroupFinalizer removes the Symphony finalizer from the object.
+// RemoveResourceGroupFinalizer removes the Kro finalizer from the object.
 func RemoveResourceGroupFinalizer(obj metav1.Object) {
-	obj.SetFinalizers(removeString(obj.GetFinalizers(), symphonyFinalizer))
+	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
 }
 
-// HasResourceGroupFinalizer checks if the object has the Symphony finalizer.
+// HasResourceGroupFinalizer checks if the object has the Kro finalizer.
 func HasResourceGroupFinalizer(obj metav1.Object) bool {
-	return containsString(obj.GetFinalizers(), symphonyFinalizer)
+	return containsString(obj.GetFinalizers(), kroFinalizer)
 }
 
 // SetInstanceFinalizer adds an instance-specific finalizer to the object.
@@ -114,7 +114,7 @@ func HasInstanceFinalizerUnstructured(obj *unstructured.Unstructured, uid types.
 // Helper functions
 
 func getInstanceFinalizerName(uid types.UID) string {
-	return fmt.Sprintf("%s.x.%s", string(uid), symphonyFinalizer)
+	return fmt.Sprintf("%s.%s", string(uid), kroFinalizer)
 }
 
 func containsString(slice []string, s string) bool {

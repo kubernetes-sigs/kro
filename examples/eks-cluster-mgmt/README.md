@@ -1,6 +1,6 @@
-# Amazon EKS cluster management using Symphony & ACK
+# Amazon EKS cluster management using KRO & ACK
 
-This example demonstrates how to manage a fleet of EKS clusters using Symphony,
+This example demonstrates how to manage a fleet of EKS clusters using KRO,
 ACK, and ArgoCD -- it creates EKS clusters, and bootstraps them with the
 required add-ons
 
@@ -47,7 +47,7 @@ controllers installation) will be automated via the GitOps flow.
    first (surrounded with`<>`):
 
 ```sh
-export SYMPHONY_REPO_URL="https://github.com/awslabs/private-symphony.git"
+export KRO_REPO_URL="https://github.com/awslabs/kro.git"
 export WORKSPACE_PATH=<workspace-path> #the directory where repos will be cloned e.g. ~/environment/
 export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
 export AWS_REGION=<region> #e.g. us-west-2
@@ -74,7 +74,7 @@ OIDC_PROVIDER=$(aws eks describe-cluster --name $EKS_CLUSTER_NAME --region $AWS_
    - ACK IAM controller
    - ACK EC2 controller
    - ACK EKS controller
-6. Install Symphony on the management cluster. Please note that this example is
+6. Install KRO on the management cluster. Please note that this example is
    tested on 0.1.0-rc.3.
 7. Install EKS pod identity add-on:
 
@@ -84,17 +84,17 @@ aws eks create-addon --cluster-name $CLUSTER_NAME --addon-name eks-pod-identity-
 
 ### Repo
 
-8. Clone Symphony repo:
+8. Clone KRO repo:
 
 ```sh
-git clone $SYMPHONY_REPO_URL $WORKSPACE_PATH/symphony
+git clone $KRO_REPO_URL $WORKSPACE_PATH/kro
 ```
 
 9. Create the GitHub repo `cluster-mgmt` in your organization; it will contain
    the clusters definition, and it will be reconciled to the management cluster
    via the GitOps flow
 
-**NOTE:** Until Symphony is released, make sure the repo you create is private.
+**NOTE:** Until KRO is released, make sure the repo you create is private.
 
 10. Save the URL of the created repo in an environment variable:
 
@@ -111,7 +111,7 @@ git clone $MY_REPO_URL $WORKSPACE_PATH/cluster-mgmt
 12. Populate the repo:
 
 ```sh
-cp -r $WORKSPACE_PATH/symphony/examples/cluster-mgmt/* $WORKSPACE_PATH/cluster-mgmt
+cp -r $WORKSPACE_PATH/kro/examples/cluster-mgmt/* $WORKSPACE_PATH/cluster-mgmt
 find /path/to/directory -type f -exec sed -i "s/search_string/$REPLACE_STRING/g" {} +
 
 find $WORKSPACE_PATH/cluster-mgmt -type f -exec sed -i "s~ACCOUNT_ID~$ACCOUNT_ID~g" {} +
@@ -216,12 +216,12 @@ The initial configuration creates one workload cluster named
 
 ## Known issues
 
-1. You will need to restart the Symphony controller when you add a new workload
+1. You will need to restart the KRO controller when you add a new workload
    cluster due to a bug in the controller. Once the resource group
    `eksclusterwithvpc` is applied, the controller is able to apply the
    corresponding VPC resources, but it is not able to recognize the generated
    ids (e.g. subnet id), and feed that into EKS resources. Refer to
-   [this issue](https://github.com/awslabs/private-symphony/issues/8) for more
+   [this issue](https://github.com/awslabs/kro/issues/8) for more
    details.
 2. Deleting a cluster does not properly clean up all cluster resources i.e.
    subnets, routetables are left strangling. ACK EC2 controller keep reporting
@@ -255,5 +255,5 @@ aws iam delete-role --role-name argocd-hub-role
 aws iam delete-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/argocd-policy
 ```
 
-5. Delete ACK controllers and Symphony
+5. Delete ACK controllers and KRO
 6. Delete the management cluster

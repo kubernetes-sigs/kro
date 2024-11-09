@@ -1,4 +1,4 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: Something
 metadata:
   name: my-instance-will-cel-functions

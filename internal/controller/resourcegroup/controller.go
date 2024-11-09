@@ -22,16 +22,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/dynamiccontroller"
-	"github.com/awslabs/symphony/internal/graph"
-	"github.com/awslabs/symphony/internal/kubernetes"
-	"github.com/awslabs/symphony/internal/metadata"
+	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/dynamiccontroller"
+	"github.com/awslabs/kro/internal/graph"
+	"github.com/awslabs/kro/internal/kubernetes"
+	"github.com/awslabs/kro/internal/metadata"
 )
 
-//+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=x.symphony.k8s.aws,resources=resourcegroups/finalizers,verbs=update
+//+kubebuilder:rbac:groups=kro.run,resources=resourcegroups,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kro.run,resources=resourcegroups/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=kro.run,resources=resourcegroups/finalizers,verbs=update
 
 // ResourceGroupReconciler reconciles a ResourceGroup object
 type ResourceGroupReconciler struct {
@@ -65,7 +65,7 @@ func NewResourceGroupReconciler(
 		crdManager:        crdManager,
 		dynamicController: dynamicController,
 		dynamicClient:     dynamicClient,
-		metadataLabeler:   metadata.NewSymphonyMetaLabeler("dev", "pod-id"),
+		metadataLabeler:   metadata.NewKroMetaLabeler("dev", "pod-id"),
 		rgBuilder:         builder,
 	}
 }

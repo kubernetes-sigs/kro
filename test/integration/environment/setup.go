@@ -31,12 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	ctrlinstance "github.com/awslabs/symphony/internal/controller/instance"
-	ctrlresourcegroup "github.com/awslabs/symphony/internal/controller/resourcegroup"
-	"github.com/awslabs/symphony/internal/dynamiccontroller"
-	"github.com/awslabs/symphony/internal/graph"
-	"github.com/awslabs/symphony/internal/kubernetes"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	ctrlinstance "github.com/awslabs/kro/internal/controller/instance"
+	ctrlresourcegroup "github.com/awslabs/kro/internal/controller/resourcegroup"
+	"github.com/awslabs/kro/internal/dynamiccontroller"
+	"github.com/awslabs/kro/internal/graph"
+	"github.com/awslabs/kro/internal/kubernetes"
 )
 
 type Environment struct {
@@ -90,8 +90,8 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 	env.Config = cfg
 
 	// Setup scheme
-	if err := symphonyv1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		return nil, fmt.Errorf("adding symphony scheme: %w", err)
+	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, fmt.Errorf("adding kro scheme: %w", err)
 	}
 
 	// Initialize clients

@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 func TestGetValueFromPath(t *testing.T) {

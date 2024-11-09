@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/awslabs/symphony/internal/graph/fieldpath"
-	"github.com/awslabs/symphony/internal/graph/variable"
+	"github.com/awslabs/kro/internal/graph/fieldpath"
+	"github.com/awslabs/kro/internal/graph/variable"
 )
 
 // ResolutionResult represents the result of resolving a single expression.
@@ -40,7 +40,7 @@ type ResolutionSummary struct {
 
 // Resolver handles the resolution of CEL expressions in Kubernetes resources.
 type Resolver struct {
-	// The orginal resource to be resolved. In symphony, this will typically
+	// The original resource to be resolved. In kro, this will typically
 	// be a Kubernetes resource with some fields containing CEL expressions.
 	resource map[string]interface{}
 	// The data to be used for resolving the expressions. Other systems are

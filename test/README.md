@@ -1,12 +1,12 @@
-# Testing strategy for Symphony
+# Testing strategy for KRO
 
-This document outlines the testing strategy for Symphony, focusing on **integration tests**
+This document outlines the testing strategy for KRO, focusing on **integration tests**
 and **end-to-end testing**. It defines the purpose, approach and boundaries of each type
 of testing, providing clear guidelines for contributors and maintainers.
 
-Symphony is a complex controller that interacts with multiple Kubernetes resources and
+KRO is a complex controller that interacts with multiple Kubernetes resources and
 depends on various Kubernetes features, such as custom resources, custom controllers,
-informers, and client-go. The testing strategy aims to ensure that Symphony works as
+informers, and client-go. The testing strategy aims to ensure that KRO works as
 expected in a Kubernetes environment, and that it can be safely deployed in production
 clusters.
 
@@ -14,7 +14,7 @@ clusters.
 
 1. Use existing Kubernetes testing frameworks (when possible): Don't reinvent the wheel. 
     If a feature is not covered by existing frameworks, contribute to them.
-3. Focus on Symphony's logic, not on other controllers or Kubernetes components. e.g
+3. Focus on KRO's logic, not on other controllers or Kubernetes components. e.g
    avoid testing native controllers, ACK or Karpenter's behaviour...
 4. Prioritize integration tests, validate with end to end tests.
 5. Maintain seperation of concerns, controller logic, integration tests, and e2e tests
@@ -23,8 +23,8 @@ clusters.
 
 ## Directory structure
 
-- `integration/`: Contains integration test suites for Symphony.
-- `e2e/`: Contains e2e test suites for Symphony.
+- `integration/`: Contains integration test suites for KRO.
+- `e2e/`: Contains e2e test suites for KRO.
 - `testdata/`: Directory for test data, such as Kubernetes manifests, resourcegroups ...
 
 ## Integration tests
@@ -56,22 +56,22 @@ you should:
 
 ## E2e tests
 
-E2E tests for Symphony should focus on validating the entire system's behavior
-in a real Kubernetes environment. These tests ensure that Symphony works correctly
+E2E tests for KRO should focus on validating the entire system's behavior
+in a real Kubernetes environment. These tests ensure that KRO works correctly
 with actual Kubernetes resources and other controllers. The approach for E2E tests
 should:
 
 1. Use a real Kubernetes cluster (e.g. kind, minikube, or EKS)
-2. Deploy Symphony controller and it's CRDs
-3. Deploy other controllers or resources that will interact with Symphony
+2. Deploy KRO controller and it's CRDs
+3. Deploy other controllers or resources that will interact with KRO
    resources.
-4. Create Symphony ResourceGroups and ResourceGroupInstances and verify
+4. Create KRO ResourceGroups and ResourceGroupInstances and verify
    their full lifecycle.
 
 ### E2e test example
 
-1. Deploy Symphony controller and CRDs
-2. Deploy a sample application that uses Symphony
+1. Deploy KRO controller and CRDs
+2. Deploy a sample application that uses KRO
 3. Create a `ResourceGroup` custom resource
 4. Verify that the corresponding CRD is created in the cluster
 5. Create an instance of the `ResourceGroup`
@@ -88,12 +88,12 @@ should:
 
 1. Cross namespace resource management
 2. Scaling testing: Create a large number of ResourceGroups and 
-   ResourceGroup instances to test Symphony at scale.
+   ResourceGroup instances to test KRO at scale.
 3. Failure recovery: Simulate failures in the controller or the Kubernetes
-   API server and verify that Symphony recovers correctly
-4. Controller upgrade testing: Deploy a new version of Symphony and verify that it
+   API server and verify that KRO recovers correctly
+4. Controller upgrade testing: Deploy a new version of KRO and verify that it
    can handle existing `ResourceGroups` and `ResourceGroup` instances
 5. ResourceGroup conflict testing: Create multiple `ResourceGroups` with conflicting
-   resources and verify that Symphony handles the conflicts correctly
+   resources and verify that KRO handles the conflicts correctly
 6. Integration with other controllers: Deploy other controllers that interact with
-   Symphony resources and verify that they work correctly together
+   KRO resources and verify that they work correctly together

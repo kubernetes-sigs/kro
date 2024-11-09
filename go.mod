@@ -1,4 +1,4 @@
-module github.com/awslabs/symphony
+module github.com/awslabs/kro
 
 go 1.22.0
 

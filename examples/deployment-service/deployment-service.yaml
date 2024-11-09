@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: deploymentservice.x.symphony.k8s.aws
+  name: deploymentservice.kro.run
 spec:
   schema:
     apiVersion: v1alpha1

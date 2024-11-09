@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: ec2controller.x.symphony.k8s.aws
+  name: ec2controller.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
@@ -19,7 +19,7 @@ spec:
         iamRole:
           maxSessionDuration: integer | default=3600
           oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EC2 controller deployement on EKS cluster using Symphony Resource group
+          roleDescription: string | default=IRSA role for ACK EC2 controller deployement on EKS cluster using KRO Resource group
         image:
           deletePolicy: string | default=delete
           repository: string | default=public.ecr.aws/aws-controllers-k8s/ec2-controller
@@ -39,7 +39,7 @@ spec:
   resources:
   - name: ec2CRDGroup
     template:
-      apiVersion: x.symphony.k8s.aws/v1alpha1
+      apiVersion: kro.run/v1alpha1
       kind: EC2CRDGroup
       metadata:
         name: ${spec.name}-crd-group

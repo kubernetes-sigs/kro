@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 var _ = Describe("CRD", func() {
@@ -78,12 +78,12 @@ var _ = Describe("CRD", func() {
 			crd := &apiextensionsv1.CustomResourceDefinition{}
 			Eventually(func(g Gomega) {
 				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: "testresources.x.symphony.k8s.aws",
+					Name: "testresources.kro.run",
 				}, crd)
 				g.Expect(err).ToNot(HaveOccurred())
 
 				// Verify CRD spec
-				g.Expect(crd.Spec.Group).To(Equal("x.symphony.k8s.aws"))
+				g.Expect(crd.Spec.Group).To(Equal("kro.run"))
 				g.Expect(crd.Spec.Names.Kind).To(Equal("TestResource"))
 				g.Expect(crd.Spec.Names.Plural).To(Equal("testresources"))
 
@@ -116,7 +116,7 @@ var _ = Describe("CRD", func() {
 			crd := &apiextensionsv1.CustomResourceDefinition{}
 			Eventually(func() error {
 				return env.Client.Get(ctx, types.NamespacedName{
-					Name: "testupdates.x.symphony.k8s.aws",
+					Name: "testupdates.kro.run",
 				}, crd)
 			}, 10*time.Second, time.Second).Should(Succeed())
 
@@ -141,7 +141,7 @@ var _ = Describe("CRD", func() {
 			// Verify CRD is updated
 			Eventually(func(g Gomega) {
 				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: "testupdates.x.symphony.k8s.aws",
+					Name: "testupdates.kro.run",
 				}, crd)
 				g.Expect(err).ToNot(HaveOccurred())
 
@@ -166,7 +166,7 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 			// Wait for CRD creation
-			crdName := "testdeletes.x.symphony.k8s.aws"
+			crdName := "testdeletes.kro.run"
 			Eventually(func() error {
 				return env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})

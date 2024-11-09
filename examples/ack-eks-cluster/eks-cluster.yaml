@@ -1,7 +1,7 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: ekscluster.x.symphony.k8s.aws
+  name: ekscluster.kro.run
 spec:
   # CRD Schema
   schema:
@@ -25,7 +25,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
       metadata:
-        name: symphony-cluster-vpc
+        name: kro-cluster-vpc
       spec:
         cidrBlocks:
         - 192.168.0.0/16
@@ -36,14 +36,14 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
       metadata:
-        name: symphony-cluster-eip
+        name: kro-cluster-eip
       spec: {}
   - name: clusterInternetGateway
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
       metadata:
-        name: symphony-cluster-igw
+        name: kro-cluster-igw
       spec:
         vpc: ${clusterVPC.status.vpcID}
   - name: clusterRouteTable
@@ -51,7 +51,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
       metadata:
-        name: symphony-cluster-public-route-table
+        name: kro-cluster-public-route-table
       spec:
         vpcID: ${clusterVPC.status.vpcID}
         routes:
@@ -64,7 +64,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: symphony-cluster-public-subnet1
+        name: kro-cluster-public-subnet1
       spec:
         availabilityZone: us-west-2a
         cidrBlock: 192.168.0.0/18
@@ -77,7 +77,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
       metadata:
-        name: symphony-cluster-public-subnet2
+        name: kro-cluster-public-subnet2
       spec:
         availabilityZone: us-west-2b
         cidrBlock: 192.168.64.0/18
@@ -90,7 +90,7 @@ spec:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
       metadata:
-        name: symphony-cluster-natgateway1
+        name: kro-cluster-natgateway1
       spec:
         subnetID: ${clusterSubnetB.status.subnetID}
         allocationID: ${clusterElasticIPAddress.status.allocationID}
@@ -99,10 +99,10 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: symphony-cluster-role
+        name: kro-cluster-role
       spec:
-        name: symphony-cluster-role
-        description: "Symphony created cluster cluster role"
+        name: kro-cluster-role
+        description: "KRO created cluster cluster role"
         policies:
           - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
         assumeRolePolicyDocument: |
@@ -123,10 +123,10 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: symphony-cluster-node-role
+        name: kro-cluster-node-role
       spec:
-        name: symphony-cluster-node-role
-        description: "Symphony created cluster node role"
+        name: kro-cluster-node-role
+        description: "KRO created cluster node role"
         policies:
           - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
           - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
@@ -149,10 +149,10 @@ spec:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
       metadata:
-        name: symphony-cluster-pia-role
+        name: kro-cluster-pia-role
       spec:
-        name: symphony-cluster-pia-role
-        description: "Symphony created cluster admin pia role"
+        name: kro-cluster-pia-role
+        description: "KRO created cluster admin pia role"
         policies:
           - arn:aws:iam::aws:policy/AdministratorAccess
         assumeRolePolicyDocument: |
@@ -197,9 +197,9 @@ spec:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
       metadata:
-        name: symphony-cluster-nodegroup
+        name: kro-cluster-nodegroup
       spec:
-        name: symphony-cluster-ng
+        name: kro-cluster-ng
         diskSize: 100
         clusterName: ${cluster.spec.name}
         subnets:

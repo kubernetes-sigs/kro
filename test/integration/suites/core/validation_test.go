@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	symphonyv1alpha1 "github.com/awslabs/symphony/api/v1alpha1"
-	"github.com/awslabs/symphony/internal/testutil/generator"
+	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/testutil/generator"
 )
 
 var _ = Describe("Validation", func() {
@@ -70,7 +70,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
@@ -109,12 +109,12 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 
 					// Verify validation condition
-					var condition *symphonyv1alpha1.Condition
+					var condition *krov1alpha1.Condition
 					for _, cond := range rg.Status.Conditions {
-						if cond.Type == symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified {
+						if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
 							condition = &cond
 							break
 						}
@@ -148,12 +148,12 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 
 				// Verify validation condition
-				var condition *symphonyv1alpha1.Condition
+				var condition *krov1alpha1.Condition
 				for _, cond := range rg.Status.Conditions {
-					if cond.Type == symphonyv1alpha1.ResourceGroupConditionTypeGraphVerified {
+					if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
 						condition = &cond
 						break
 					}
@@ -193,7 +193,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
@@ -249,7 +249,7 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -284,7 +284,7 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateActive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -319,7 +319,7 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -353,7 +353,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(symphonyv1alpha1.ResourceGroupStateInactive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
 				g.Expect(rg.Status.TopologicalOrder).To(BeEmpty())
 			}, 10*time.Second, time.Second).Should(Succeed())
 

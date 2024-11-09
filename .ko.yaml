@@ -4,3 +4,6 @@ defaultBaseImage: public.ecr.aws/eks-distro-build-tooling/eks-distro-minimal-bas
 defaultPlatforms:
   - linux/arm64
   - linux/amd64
+defaultLdflags:
+  - -s
+  - -w

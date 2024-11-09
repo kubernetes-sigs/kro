@@ -8,17 +8,17 @@ Instances are a fundamental concept in **KRO** that represent instances of
 ResourceGroups. They define the desired state of a set of resources, which KRO
 continuously works to maintain.
 
-## What is a Instance?
+## What is an Instance?
 
-A Instance is a Kubernetes custom resource that:
+An Instance is a Kubernetes custom resource that:
 
 - References a specific ResourceGroup
 - Provides values for the parameters defined in the ResourceGroup
 - Represents the desired state of a set of Kubernetes resources
 
-## Anatomy of a Instance
+## Anatomy of an Instance
 
-Here's an example of a Instance for a `WebApplication` ResourceGroup:
+Here's an example of an Instance for a `WebApplication` ResourceGroup:
 
 ```yaml
 apiVersion: kro.run/v1alpha1
@@ -37,7 +37,7 @@ spec:
     LOG_LEVEL: debug
 ```
 
-:::tip The spec fields of a Instance correspond to the parameters defined in the
+:::tip The spec fields of an Instance correspond to the parameters defined in the
 ResourceGroup. :::
 
 ## The reconciliation loop

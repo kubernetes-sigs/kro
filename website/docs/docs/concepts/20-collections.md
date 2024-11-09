@@ -61,7 +61,7 @@ based on the `podCount` parameter.
 
 ## Using Collections in Instances
 
-When creating a instance, users can specify the count for the collection:
+When creating an instance, users can specify the count for the collection:
 
 ```yaml
 apiVersion: kro.run/v1alpha1

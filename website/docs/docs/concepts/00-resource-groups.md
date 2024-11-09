@@ -128,7 +128,7 @@ changes, updating the corresponding CRD and micro-controller as necessary.
 ## **ResourceGroup** Instance Example
 
 After the **ResourceGroup** is processed, users can create instances of it.
-Here's an example of how a instance for the `SimpleWebApp` might look:
+Here's an example of how an instance for the `SimpleWebApp` might look:
 
 ```yaml title="my-web-app-instance.yaml"
 apiVersion: kro.run/v1alpha1

@@ -43,13 +43,12 @@ Definition (CRD) called **ResourceGroup (RG)**. The **Platform**, **Security**,
 and **Compliance** teams, can collaborate to create custom APIs by defining
 Custom Resources for the ResourceGroup CRD.
 
-In the depicted example, the **Platform Team** has created an **Application
-Stack RG** that encapsulates the necessary resources, along with any additional
-logic, abstractions, and security best practices. This empowers the Developers
-to interact with an API when managing their applications. The Developers no
-longer need to directly manage the underlying infrastructure complexities, as
-the custom API handles the deployment and configuration of the required
-resources.
+In the depicted example, the **Platform Team** has created a **RG** with arbitrary name
+"Application Stack" that encapsulates the necessary resources, along with any additional
+logic, abstractions, and security best practices. When the RG is applied to the cluster,
+a new API of kind ApplicationStack is created and available for Developer to interact with.
+The Developers no longer need to directly manage the underlying infrastructure complexities, 
+as the custom API handles the deployment and configuration of the required resources.
 
 <div align="center">
 

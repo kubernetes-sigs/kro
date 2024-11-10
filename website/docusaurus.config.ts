@@ -38,6 +38,8 @@ const config: Config = {
       "classic",
       {
         docs: {
+          routeBasePath: "/",
+
           sidebarPath: "./sidebars.ts",
           versions: {
             current: {
@@ -124,7 +126,7 @@ const config: Config = {
           items: [
             {
               label: "Tutorial",
-              to: "/docs/docs/overview",
+              to: "/docs/overview",
             },
           ],
         },

@@ -66,9 +66,6 @@ type Schema struct {
 	// that the resourcegroup is managing. This is adhering to the
 	// SimpleSchema spec.
 	Status runtime.RawExtension `json:"status,omitempty"`
-	// Types are custom types that are used to simplify the spec and
-	// status.
-	Types runtime.RawExtension `json:"types,omitempty"`
 	// Validation is a list of validation rules that are applied to the
 	// resourcegroup.
 	// Not implemented yet.

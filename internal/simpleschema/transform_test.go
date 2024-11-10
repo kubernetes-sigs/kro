@@ -21,10 +21,10 @@ import (
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
-	transformer := NewTransformer()
+	transformer := newTransformer()
 
 	// Load pre-defined types
-	err := transformer.LoadPreDefinedTypes(map[string]interface{}{
+	err := transformer.loadPreDefinedTypes(map[string]interface{}{
 		"Address": map[string]interface{}{
 			"street":  "string",
 			"city":    "string",
@@ -283,7 +283,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := transformer.BuildOpenAPISchema(tt.obj)
+			got, err := transformer.buildOpenAPISchema(tt.obj)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("BuildOpenAPISchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -296,7 +296,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 }
 
 func TestLoadPreDefinedTypes(t *testing.T) {
-	transformer := NewTransformer()
+	transformer := newTransformer()
 
 	preDefinedTypes := map[string]interface{}{
 		"Person": map[string]interface{}{
@@ -313,7 +313,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 		},
 	}
 
-	err := transformer.LoadPreDefinedTypes(preDefinedTypes)
+	err := transformer.loadPreDefinedTypes(preDefinedTypes)
 	if err != nil {
 		t.Fatalf("LoadPreDefinedTypes() error = %v", err)
 	}

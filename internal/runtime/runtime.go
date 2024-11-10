@@ -22,7 +22,7 @@ import (
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	scel "github.com/awslabs/kro/internal/cel"
+	krocel "github.com/awslabs/kro/internal/cel"
 	"github.com/awslabs/kro/internal/graph/variable"
 	"github.com/awslabs/kro/internal/runtime/resolver"
 )
@@ -302,7 +302,7 @@ func (rt *ResourceGroupRuntime) resourceVariablesResolved(resource string) bool 
 // depending only on the initial configuration. This function is usually
 // called once during runtime initialization to set up the baseline state
 func (rt *ResourceGroupRuntime) evaluateStaticVariables() error {
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{"schema"}))
 	if err != nil {
 		return err
 	}
@@ -346,7 +346,7 @@ func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
 	// and are resolved after all the dependencies are resolved.
 
 	resolvedResources := maps.Keys(rt.resolvedResources)
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resolvedResources))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resolvedResources))
 	if err != nil {
 		return err
 	}
@@ -474,7 +474,7 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{resourceID}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{resourceID}))
 	if err != nil {
 		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
@@ -530,7 +530,7 @@ func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, e
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{"schema"}))
 	if err != nil {
 		return false, nil
 	}
@@ -572,7 +572,7 @@ func evaluateExpression(env *cel.Env, context map[string]interface{}, expression
 		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
 	}
 
-	return scel.GoNativeType(val)
+	return krocel.GoNativeType(val)
 }
 
 // containsAllElements checks if all elements in the inner slice are present

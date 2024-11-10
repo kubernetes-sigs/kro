@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/awslabs/kro/api/v1alpha1"
-	scel "github.com/awslabs/kro/internal/cel"
+	krocel "github.com/awslabs/kro/internal/cel"
 	"github.com/awslabs/kro/internal/cel/ast"
 	"github.com/awslabs/kro/internal/graph/crd"
 	"github.com/awslabs/kro/internal/graph/dag"
@@ -356,7 +356,7 @@ func (b *Builder) buildDependencyGraph(
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "schema")
 
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -465,7 +465,7 @@ func (b *Builder) buildInstanceResource(
 	}
 
 	resourceNames := maps.Keys(resources)
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -552,7 +552,7 @@ func buildStatusSchema(
 	// Inspection of the CEL expressions to infer the types of the status fields.
 	resourceNames := maps.Keys(resources)
 
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -682,7 +682,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	resourceNames = append(resourceNames, "schema")
 	conditionFieldNames := []string{"schema"}
 
-	env, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
 	if err != nil {
 		return fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -731,7 +731,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			// I would also suggest separating the dryRuns of readyWhenExpressions
 			// and the resourceExpressions.
 			for _, readyWhenExpression := range resource.readyWhenExpressions {
-				fieldEnv, err := scel.DefaultEnvironment(scel.WithResourceNames([]string{resource.id}))
+				fieldEnv, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{resource.id}))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
@@ -756,13 +756,13 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				if err != nil {
 					return fmt.Errorf("failed to dry-run expression %s: %w", readyWhenExpression, err)
 				}
-				if !scel.IsBoolType(output) {
+				if !krocel.IsBoolType(output) {
 					return fmt.Errorf("output of readyWhen expression %s can only be of type bool", readyWhenExpression)
 				}
 			}
 
 			for _, includeWhenExpression := range resource.includeWhenExpressions {
-				instanceEnv, err := scel.DefaultEnvironment(scel.WithResourceNames(resourceNames))
+				instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
@@ -786,7 +786,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				if err != nil {
 					return fmt.Errorf("failed to dry-run expression %s: %w", includeWhenExpression, err)
 				}
-				if !scel.IsBoolType(output) {
+				if !krocel.IsBoolType(output) {
 					return fmt.Errorf("output of condition expression %s can only be of type bool", includeWhenExpression)
 				}
 			}

@@ -1,11 +1,10 @@
-apiVersion: x.symphony.k8s.aws/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: App
 metadata:
-  name: s3demo
-  namespace: default
+  name: test-app
 spec:
-  name: s3demo
-  image: candonov/s3-demo-app
-  s3bucket: s3demo-11112222
+  name: test-app
+  port: 80 # nginx default port is 80
   ingress:
     enabled: true
+  service: {}

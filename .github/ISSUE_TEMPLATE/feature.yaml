@@ -1,0 +1,24 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels:
+  - kind/feature
+  - needs-triage
+body:
+  - type: textarea
+    attributes:
+      label: Feature Description
+      value: |
+        **Problem Statement**:
+        <!-- What problem are you trying to solve? -->
+
+        **Proposed Solution**:
+        <!-- Describe your proposed solution -->
+
+        **Alternatives Considered**:
+        <!-- What alternatives have you considered? -->
+
+        **Additional Context**:
+        <!-- Add any other context about the feature request here -->
+
+        * Please vote on this issue by adding a 👍 [reaction](https://blog.github.com/2016-03-10-add-reactions-to-pull-requests-issues-and-comments/) to the original issue
+        * If you are interested in working on this feature, please leave a comment

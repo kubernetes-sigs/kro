@@ -28,8 +28,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/awslabs/kro/api/v1alpha1"
+	kroclient "github.com/awslabs/kro/internal/client"
 	"github.com/awslabs/kro/internal/graph"
-	"github.com/awslabs/kro/internal/kubernetes"
 	"github.com/awslabs/kro/internal/metadata"
 )
 
@@ -74,8 +74,8 @@ type Controller struct {
 	// gvr represents the Group, Version, and Resource of the custom resource
 	// this controller is responsible for.
 	gvr schema.GroupVersionResource
-	// client is a dynamic client for interacting with the Kubernetes API server.
-	client dynamic.Interface
+	// client holds the dynamic client to use for interacting with the Kubernetes API.
+	clientSet *kroclient.Set
 	// rg is a read-only reference to the ResourceGroup that the controller is
 	// managing instances for.
 	// TODO: use a read-only interface for the ResourceGroup
@@ -96,14 +96,14 @@ func NewController(
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
 	rg *graph.Graph,
-	client dynamic.Interface,
+	clientSet *kroclient.Set,
 	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
 		log:                    log,
 		gvr:                    gvr,
-		client:                 client,
+		clientSet:              clientSet,
 		rg:                     rg,
 		instanceLabeler:        instanceLabeler,
 		reconcileConfig:        reconcileConfig,
@@ -117,7 +117,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 
 	log := c.log.WithValues("namespace", namespace, "name", name)
 
-	instance, err := c.client.Resource(c.gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	instance, err := c.clientSet.Dynamic().Resource(c.gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("Instance not found, it may have been deleted")
@@ -189,7 +189,7 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 	// if no service accounts are specified, use the default client
 	if len(c.defaultServiceAccounts) == 0 {
 		c.log.V(1).Info("no service accounts configured, using default client")
-		return c.client, nil
+		return c.clientSet.Dynamic(), nil
 	}
 
 	timer := prometheus.NewTimer(impersonationDuration.WithLabelValues(namespace, ""))
@@ -203,14 +203,14 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 			return nil, fmt.Errorf("invalid service account configuration: %w", err)
 		}
 
-		client, err := kubernetes.NewDynamicClient(userName)
+		pivotedClient, err := c.clientSet.WithImpersonation(userName)
 		if err != nil {
 			c.handleImpersonateError(namespace, sa, err)
 			return nil, fmt.Errorf("failed to create impersonated client: %w", err)
 		}
 
 		impersonationTotal.WithLabelValues(namespace, sa, "success").Inc()
-		return client, nil
+		return pivotedClient.Dynamic(), nil
 	}
 
 	// Check for default service account (marked by "*")
@@ -221,19 +221,19 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 			return nil, fmt.Errorf("invalid default service account configuration: %w", err)
 		}
 
-		client, err := kubernetes.NewDynamicClient(userName)
+		pivotedClient, err := c.clientSet.WithImpersonation(userName)
 		if err != nil {
 			c.handleImpersonateError(namespace, defaultSA, err)
 			return nil, fmt.Errorf("failed to create impersonated client with default SA: %w", err)
 		}
 
 		impersonationTotal.WithLabelValues(namespace, defaultSA, "success").Inc()
-		return client, nil
+		return pivotedClient.Dynamic(), nil
 	}
 
 	impersonationTotal.WithLabelValues(namespace, "", "default").Inc()
 	// Fallback to the default client
-	return c.client, nil
+	return c.clientSet.Dynamic(), nil
 }
 
 // handleImpersonateError logs the error and records the error in the metrics

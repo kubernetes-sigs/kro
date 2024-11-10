@@ -17,15 +17,14 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
-	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/awslabs/kro/api/v1alpha1"
+	kroclient "github.com/awslabs/kro/internal/client"
 	"github.com/awslabs/kro/internal/dynamiccontroller"
 	"github.com/awslabs/kro/internal/graph"
-	"github.com/awslabs/kro/internal/kubernetes"
 	"github.com/awslabs/kro/internal/metadata"
 )
 
@@ -35,36 +34,41 @@ import (
 
 // ResourceGroupReconciler reconciles a ResourceGroup object
 type ResourceGroupReconciler struct {
+	log        logr.Logger
+	rootLogger logr.Logger
+
+	allowCRDDeletion bool
+
 	client.Client
-	rootLogger        logr.Logger
-	log               logr.Logger
-	dynamicClient     dynamic.Interface
-	allowCRDDeletion  bool
-	crdManager        kubernetes.CRDManager
-	dynamicController *dynamiccontroller.DynamicController
-	rgBuilder         *graph.Builder
+	clientSet  *kroclient.Set
+	crdManager kroclient.CRDClient
+
 	metadataLabeler   metadata.Labeler
+	rgBuilder         *graph.Builder
+	dynamicController *dynamiccontroller.DynamicController
 }
 
 func NewResourceGroupReconciler(
 	log logr.Logger,
 	mgrClient client.Client,
-	dynamicClient dynamic.Interface,
+	clientSet *kroclient.Set,
 	allowCRDDeletion bool,
-	crdManager kubernetes.CRDManager,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
 ) *ResourceGroupReconciler {
+	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{
+		Log: log,
+	})
 	rgLogger := log.WithName("controller.resourceGroup")
 
 	return &ResourceGroupReconciler{
 		rootLogger:        log,
 		log:               rgLogger,
+		clientSet:         clientSet,
 		Client:            mgrClient,
 		allowCRDDeletion:  allowCRDDeletion,
-		crdManager:        crdManager,
+		crdManager:        crdWrapper,
 		dynamicController: dynamicController,
-		dynamicClient:     dynamicClient,
 		metadataLabeler:   metadata.NewKroMetaLabeler("dev", "pod-id"),
 		rgBuilder:         builder,
 	}

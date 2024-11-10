@@ -31,10 +31,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	xv1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	kroclient "github.com/awslabs/kro/internal/client"
 	resourcegroupctrl "github.com/awslabs/kro/internal/controller/resourcegroup"
 	"github.com/awslabs/kro/internal/dynamiccontroller"
 	"github.com/awslabs/kro/internal/graph"
-	"github.com/awslabs/kro/internal/kubernetes"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -90,7 +90,14 @@ func main() {
 
 	ctrl.SetLogger(rootLogger)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	set, err := kroclient.NewSet(kroclient.Config{})
+	if err != nil {
+		setupLog.Error(err, "unable to create client set")
+		os.Exit(1)
+	}
+	restConfig := set.RESTConfig()
+
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
@@ -115,23 +122,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	kConfig, _, dynamicClient, crdClient, err := kubernetes.NewClients()
-	if err != nil {
-		setupLog.Error(err, "unable to create clients")
-		os.Exit(1)
-	}
-	crdManager := kubernetes.NewCRDClient(crdClient, rootLogger)
-
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers: dynamicControllerConcurrentReconciles,
 		// TODO(a-hilaly): expose these as flags
 		ShutdownTimeout: 60 * time.Second,
 		ResyncPeriod:    10 * time.Hour,
 		QueueMaxRetries: 20,
-	}, dynamicClient)
+	}, set.Dynamic())
 
 	resourceGroupGraphBuilder, err := graph.NewBuilder(
-		kConfig,
+		restConfig,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource group graph builder")
@@ -141,9 +141,8 @@ func main() {
 	reconciler := resourcegroupctrl.NewResourceGroupReconciler(
 		rootLogger,
 		mgr.GetClient(),
-		dynamicClient,
+		set,
 		allowCRDDeletion,
-		crdManager,
 		dc,
 		resourceGroupGraphBuilder,
 	)

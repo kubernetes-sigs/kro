@@ -4,6 +4,7 @@ metadata:
   name: test-app
 spec:
   name: test-app
+  port: 80 # nginx default port is 80
   ingress:
     enabled: true
   service: {}

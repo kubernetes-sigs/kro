@@ -79,7 +79,7 @@ func (igr *instanceGraphReconciler) prepareConditions(status map[string]interfac
 		))
 	}
 
-	conditionType := "ResourceSynced"
+	/* conditionType := "ResourceSynced"
 	// Add conditions for each resource
 	for resourceID, resourceState := range resourceStates {
 		if resourceState.Err != nil {
@@ -99,7 +99,7 @@ func (igr *instanceGraphReconciler) prepareConditions(status map[string]interfac
 				generation,
 			))
 		}
-	}
+	} */
 
 	return conditions
 }

@@ -52,11 +52,13 @@ type Schema struct {
 	// and create the CRD for the resourcegroup.
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
 	// The APIVersion of the resourcegroup. This is used to generate
 	// and create the CRD for the resourcegroup.
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
 	// The spec of the resourcegroup. Typically, this is the spec of
 	// the CRD that the resourcegroup is managing. This is adhering

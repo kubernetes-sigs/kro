@@ -105,8 +105,8 @@ type ResourceGroupStatus struct {
 // ResourceInformation defines the information about a resource
 // in the resourcegroup
 type ResourceInformation struct {
-	// Name represents the name of the resources we're providing information for
-	Name string `json:"name,omitempty"`
+	// ID represents the id of the resources we're providing information for
+	ID string `json:"id,omitempty"`
 	// Dependencies represents the resource dependencies of a resource group
 	Dependencies []Dependency `json:"dependencies,omitempty"`
 }
@@ -114,8 +114,8 @@ type ResourceInformation struct {
 // Dependency defines the dependency a resource has observed
 // from the resources it points to based on expressions
 type Dependency struct {
-	// Name represents the name of the dependency resource
-	Name string `json:"name,omitempty"`
+	// ID represents the id of the dependency resource
+	ID string `json:"id,omitempty"`
 }
 
 // +kubebuilder:object:root=true

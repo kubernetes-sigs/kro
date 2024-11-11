@@ -199,15 +199,14 @@ spec:
                           Dependency defines the dependency a resource has observed
                           from the resources it points to based on expressions
                         properties:
-                          name:
-                            description: Name represents the name of the dependency
-                              resource
+                          id:
+                            description: ID represents the id of the dependency resource
                             type: string
                         type: object
                       type: array
-                    name:
-                      description: Name represents the name of the resources we're
-                        providing information for
+                    id:
+                      description: ID represents the id of the resources we're providing
+                        information for
                       type: string
                   type: object
                 type: array

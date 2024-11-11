@@ -71,6 +71,8 @@ func main() {
 	var shutdownTimeout int
 	// var dynamicControllerDefaultResyncPeriod int
 	var logLevel int
+	var qps float64
+	var burst int
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8079", "The address the probe endpoint binds to.")
@@ -89,6 +91,10 @@ func main() {
 		"maximum duration to wait for the controller to gracefully shutdown, in seconds")
 	// log level flags
 	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")
+	// qps and burst
+	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
+	flag.IntVar(&burst, "client-burst", 150,
+		"The number of requests that can be stored for processing before the server starts enforcing the QPS limit")
 
 	flag.Parse()
 
@@ -101,7 +107,10 @@ func main() {
 
 	ctrl.SetLogger(rootLogger)
 
-	set, err := kroclient.NewSet(kroclient.Config{})
+	set, err := kroclient.NewSet(kroclient.Config{
+		QPS:   float32(qps),
+		Burst: burst,
+	})
 	if err != nil {
 		setupLog.Error(err, "unable to create client set")
 		os.Exit(1)

@@ -20,13 +20,6 @@ import (
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
-const (
-	// defaultQPS is the default QPS for the client
-	defaultQPS = 100
-	// defaultBurst is the default burst for the client
-	defaultBurst = 150
-)
-
 // Set provides a unified interface for different Kubernetes clients
 type Set struct {
 	config          *rest.Config
@@ -39,6 +32,8 @@ type Set struct {
 type Config struct {
 	RestConfig      *rest.Config
 	ImpersonateUser string
+	QPS             float32
+	Burst           int
 }
 
 // NewSet creates a new client Set with the given config
@@ -62,10 +57,10 @@ func NewSet(cfg Config) (*Set, error) {
 
 	// Set default QPS and burst
 	if config.QPS == 0 {
-		config.QPS = defaultQPS
+		config.QPS = cfg.QPS
 	}
 	if config.Burst == 0 {
-		config.Burst = defaultBurst
+		config.Burst = cfg.Burst
 	}
 
 	c := &Set{config: config}

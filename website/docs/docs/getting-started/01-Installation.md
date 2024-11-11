@@ -63,7 +63,6 @@ correctly:
    ```
     NAME	NAMESPACE	REVISION	STATUS  
     kro 	kro      	1       	deployed
-   
    ```
 
 2. Check the kro pods:

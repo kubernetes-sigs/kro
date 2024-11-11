@@ -24,40 +24,66 @@ import (
 
 	"github.com/awslabs/kro/api/v1alpha1"
 	instancectrl "github.com/awslabs/kro/internal/controller/instance"
-	"github.com/awslabs/kro/internal/controller/resourcegroup/errors"
 	"github.com/awslabs/kro/internal/dynamiccontroller"
 	"github.com/awslabs/kro/internal/graph"
 	"github.com/awslabs/kro/internal/metadata"
 )
 
+// reconcileResourceGroup orchestrates the reconciliation of a ResourceGroup by:
+// 1. Processing the resource graph
+// 2. Ensuring CRDs are present
+// 3. Setting up and starting the microcontroller
 func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg *v1alpha1.ResourceGroup) ([]string, []v1alpha1.ResourceInformation, error) {
 	log, _ := logr.FromContext(ctx)
 
-	log.V(1).Info("Reconciling resource group graph")
-	processedRG, resourcesInformation, err := r.reconcileResourceGroupGraph(ctx, rg)
+	// Process resource group graph first to validate structure
+	log.V(1).Info("reconciling resource group graph")
+	processedRG, resourcesInfo, err := r.reconcileResourceGroupGraph(ctx, rg)
 	if err != nil {
-		return nil, nil, errors.NewReconcileGraphError(err)
+		return nil, nil, err
 	}
 
-	log.V(1).Info("Reconciling resource group CRD")
-	err = r.reconcileResourceGroupCRD(ctx, processedRG.Instance.GetCRD())
-	if err != nil {
-		return processedRG.TopologicalOrder, resourcesInformation, err
+	// Ensure CRD exists and is up to date
+	log.V(1).Info("reconciling resource group CRD")
+	if err := r.reconcileResourceGroupCRD(ctx, processedRG.Instance.GetCRD()); err != nil {
+		return processedRG.TopologicalOrder, resourcesInfo, err
 	}
 
-	rgLabeler := metadata.NewResourceGroupLabeler(rg)
-	// Merge the ResourceGroupLabeler with the KroLabeler
-	graphExecLabeler, err := r.metadataLabeler.Merge(rgLabeler)
+	// Setup metadata labeling
+	graphExecLabeler, err := r.setupLabeler(rg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to merge labelers: %w", err)
+		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
+	// Setup and start microcontroller
 	gvr := processedRG.Instance.GetGroupVersionResource()
-	//id := fmt.Sprintf("%s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
-	instanceLogger := r.rootLogger.WithName("controller." + gvr.Resource)
-	// instanceLogger = instanceLogger.WithValues("gvr", id)
+	controller := r.setupMicroController(gvr, processedRG, rg.Spec.DefaultServiceAccounts, graphExecLabeler)
 
-	graphexecController := instancectrl.NewController(
+	log.V(1).Info("reconciling resource group micro controller")
+	if err := r.reconcileResourceGroupMicroController(ctx, &gvr, controller.Reconcile); err != nil {
+		return processedRG.TopologicalOrder, resourcesInfo, err
+	}
+
+	return processedRG.TopologicalOrder, resourcesInfo, nil
+}
+
+// setupLabeler creates and merges the required labelers for the resource group
+func (r *ResourceGroupReconciler) setupLabeler(rg *v1alpha1.ResourceGroup) (metadata.Labeler, error) {
+	rgLabeler := metadata.NewResourceGroupLabeler(rg)
+	return r.metadataLabeler.Merge(rgLabeler)
+}
+
+// setupMicroController creates a new controller instance with the required configuration
+func (r *ResourceGroupReconciler) setupMicroController(
+	gvr schema.GroupVersionResource,
+	processedRG *graph.Graph,
+	defaultSVCs map[string]string,
+	labeler metadata.Labeler,
+) *instancectrl.Controller {
+
+	instanceLogger := r.rootLogger.WithName("controller." + gvr.Resource)
+
+	return instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
 			DefaultRequeueDuration:    3 * time.Second,
@@ -67,52 +93,77 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 		gvr,
 		processedRG,
 		r.clientSet,
-		rg.Spec.DefaultServiceAccounts,
-		graphExecLabeler,
+		defaultSVCs,
+		labeler,
 	)
-
-	log.V(1).Info("Reconcile resource group micro controller")
-	err = r.reconcileResourceGroupMicroController(ctx, &gvr, graphexecController.Reconcile)
-	if err != nil {
-		return processedRG.TopologicalOrder, resourcesInformation, err
-	}
-
-	return processedRG.TopologicalOrder, resourcesInformation, nil
 }
 
+// reconcileResourceGroupGraph processes the resource group to build a dependency graph
+// and extract resource information
 func (r *ResourceGroupReconciler) reconcileResourceGroupGraph(_ context.Context, rg *v1alpha1.ResourceGroup) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	processedRG, err := r.rgBuilder.NewResourceGroup(rg)
 	if err != nil {
-		return nil, nil, errors.NewReconcileGraphError(err)
+		return nil, nil, newGraphError(err)
 	}
 
-	resourcesInformation := make([]v1alpha1.ResourceInformation, 0, len(processedRG.Resources))
-
+	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRG.Resources))
 	for name, resource := range processedRG.Resources {
-		if len(resource.GetDependencies()) > 0 {
-			d := make([]v1alpha1.Dependency, 0, len(resource.GetDependencies()))
-			for _, dependency := range resource.GetDependencies() {
-				d = append(d, v1alpha1.Dependency{Name: dependency})
-			}
-			resourcesInformation = append(resourcesInformation, v1alpha1.ResourceInformation{
-				Name:         name,
-				Dependencies: d,
-			})
+		deps := resource.GetDependencies()
+		if len(deps) > 0 {
+			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))
 		}
 	}
 
-	return processedRG, resourcesInformation, nil
+	return processedRG, resourcesInfo, nil
 }
 
-func (r *ResourceGroupReconciler) reconcileResourceGroupCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	err := r.crdManager.Ensure(ctx, *crd)
-	if err != nil {
-		return errors.NewReconcileCRDError(err)
+// buildResourceInfo creates a ResourceInformation struct from name and dependencies
+func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation {
+	dependencies := make([]v1alpha1.Dependency, 0, len(deps))
+	for _, dep := range deps {
+		dependencies = append(dependencies, v1alpha1.Dependency{Name: dep})
 	}
+	return v1alpha1.ResourceInformation{
+		Name:         name,
+		Dependencies: dependencies,
+	}
+}
 
+// reconcileResourceGroupCRD ensures the CRD is present and up to date in the cluster
+func (r *ResourceGroupReconciler) reconcileResourceGroupCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
+	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
+		return newCRDError(err)
+	}
 	return nil
 }
 
+// reconcileResourceGroupMicroController starts the microcontroller for handling the resources
 func (r *ResourceGroupReconciler) reconcileResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler) error {
-	return r.dynamicController.StartServingGVK(ctx, *gvr, handler)
+	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler)
+	if err != nil {
+		return newMicroControllerError(err)
+	}
+	return nil
 }
+
+// Error types for the resourcegroup controller
+type (
+	graphError           struct{ err error }
+	crdError             struct{ err error }
+	microControllerError struct{ err error }
+)
+
+// Error interface implementation
+func (e *graphError) Error() string           { return e.err.Error() }
+func (e *crdError) Error() string             { return e.err.Error() }
+func (e *microControllerError) Error() string { return e.err.Error() }
+
+// Unwrap interface implementation
+func (e *graphError) Unwrap() error           { return e.err }
+func (e *crdError) Unwrap() error             { return e.err }
+func (e *microControllerError) Unwrap() error { return e.err }
+
+// Error constructors
+func newGraphError(err error) error           { return &graphError{err} }
+func newCRDError(err error) error             { return &crdError{err} }
+func newMicroControllerError(err error) error { return &microControllerError{err} }

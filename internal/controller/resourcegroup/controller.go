@@ -81,28 +81,16 @@ func (r *ResourceGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the ResourceGroup object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *ResourceGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	rlog := r.log.WithValues("resourcegroup", req.NamespacedName)
 	ctx = log.IntoContext(ctx, rlog)
 
 	var resourcegroup v1alpha1.ResourceGroup
-	err := r.Get(ctx, req.NamespacedName, &resourcegroup)
-	if err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &resourcegroup); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// reconcile resourcegroup fiesta
-	err = r.reconcile(ctx, &resourcegroup)
-	if err != nil {
+	if err := r.reconcile(ctx, &resourcegroup); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -111,18 +99,15 @@ func (r *ResourceGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 func (r *ResourceGroupReconciler) reconcile(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup) error {
 	log, _ := logr.FromContext(ctx)
-	// if deletion timestamp is set, call cleanupResourceGroup
+
 	if !resourcegroup.DeletionTimestamp.IsZero() {
 		log.V(1).Info("ResourceGroup is being deleted")
-		err := r.cleanupResourceGroup(ctx, resourcegroup)
-		if err != nil {
+		if err := r.cleanupResourceGroup(ctx, resourcegroup); err != nil {
 			return err
 		}
 
 		log.V(1).Info("Setting resourcegroup as unmanaged")
-		// remove finalizer
-		err = r.setUnmanaged(ctx, resourcegroup)
-		if err != nil {
+		if err := r.setUnmanaged(ctx, resourcegroup); err != nil {
 			return err
 		}
 
@@ -130,9 +115,7 @@ func (r *ResourceGroupReconciler) reconcile(ctx context.Context, resourcegroup *
 	}
 
 	log.V(1).Info("Setting resource group as managed")
-	// set finalizer
-	err := r.setManaged(ctx, resourcegroup)
-	if err != nil {
+	if err := r.setManaged(ctx, resourcegroup); err != nil {
 		return err
 	}
 
@@ -140,10 +123,9 @@ func (r *ResourceGroupReconciler) reconcile(ctx context.Context, resourcegroup *
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGroup(ctx, resourcegroup)
 
 	log.V(1).Info("Setting resourcegroup status")
-	// set status
-	err = r.setResourceGroupStatus(ctx, resourcegroup, topologicalOrder, resourcesInformation, reconcileErr)
-	if err != nil {
+	if err := r.setResourceGroupStatus(ctx, resourcegroup, topologicalOrder, resourcesInformation, reconcileErr); err != nil {
 		return err
 	}
+
 	return nil
 }

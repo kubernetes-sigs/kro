@@ -16,165 +16,169 @@ package resourcegroup
 import (
 	"context"
 	"errors"
+	"fmt"
 
-	"github.com/go-logr/logr"
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrl "sigs.k8s.io/controller-runtime"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/internal/controller/resourcegroup/condition"
-	serr "github.com/awslabs/kro/internal/controller/resourcegroup/errors"
-	"github.com/awslabs/kro/internal/requeue"
+	"github.com/awslabs/kro/internal/metadata"
+	"github.com/go-logr/logr"
 )
 
-// handleReconcileError will handle errors from reconcile handlers, which
-// respects runtime errors.
-func (r *ResourceGroupReconciler) handleReconcileError(ctx context.Context, err error) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-
-	var requeueNeededAfter *requeue.RequeueNeededAfter
-	if errors.As(err, &requeueNeededAfter) {
-		after := requeueNeededAfter.Duration()
-		log.Info(
-			"requeue needed after error",
-			"error", requeueNeededAfter.Unwrap(),
-			"after", after,
-		)
-		return ctrl.Result{RequeueAfter: after}, nil
-	}
-
-	var requeueNeeded *requeue.RequeueNeeded
-	if errors.As(err, &requeueNeeded) {
-		log.Info(
-			"requeue needed error",
-			"error", requeueNeeded.Unwrap(),
-		)
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	var noRequeue *requeue.NoRequeue
-	if errors.As(err, &noRequeue) {
-		return ctrl.Result{}, nil
-	}
-
-	return ctrl.Result{}, err
+// StatusProcessor handles the processing of ResourceGroup status updates
+type StatusProcessor struct {
+	conditions []v1alpha1.Condition
+	state      v1alpha1.ResourceGroupState
 }
 
-func (r *ResourceGroupReconciler) setResourceGroupStatus(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup, topologicalOrder []string, resources []v1alpha1.ResourceInformation, reconcileErr error) error {
-	log, _ := logr.FromContext(ctx)
+// NewStatusProcessor creates a new StatusProcessor with default active state
+func NewStatusProcessor() *StatusProcessor {
+	return &StatusProcessor{
+		conditions: []v1alpha1.Condition{},
+		state:      v1alpha1.ResourceGroupStateActive,
+	}
+}
 
+// setDefaultConditions sets the default conditions for an active resource group
+func (sp *StatusProcessor) setDefaultConditions() {
+	sp.conditions = []v1alpha1.Condition{
+		newReconcilerReadyCondition(metav1.ConditionTrue, ""),
+		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
+	}
+}
+
+// processGraphError handles graph-related errors
+func (sp *StatusProcessor) processGraphError(err error) {
+	sp.conditions = []v1alpha1.Condition{
+		newGraphVerifiedCondition(metav1.ConditionFalse, err.Error()),
+		newReconcilerReadyCondition(metav1.ConditionUnknown, "Faulty Graph"),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, "Faulty Graph"),
+	}
+	sp.state = v1alpha1.ResourceGroupStateInactive
+}
+
+// processCRDError handles CRD-related errors
+func (sp *StatusProcessor) processCRDError(err error) {
+	sp.conditions = []v1alpha1.Condition{
+		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, err.Error()),
+		newReconcilerReadyCondition(metav1.ConditionUnknown, "CRD not-synced"),
+	}
+	sp.state = v1alpha1.ResourceGroupStateInactive
+}
+
+// processMicroControllerError handles microcontroller-related errors
+func (sp *StatusProcessor) processMicroControllerError(err error) {
+	sp.conditions = []v1alpha1.Condition{
+		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
+		newReconcilerReadyCondition(metav1.ConditionFalse, err.Error()),
+	}
+	sp.state = v1alpha1.ResourceGroupStateInactive
+}
+
+// setResourceGroupStatus calculates the ResourceGroup status and updates it
+// in the API server.
+func (r *ResourceGroupReconciler) setResourceGroupStatus(
+	ctx context.Context,
+	resourcegroup *v1alpha1.ResourceGroup,
+	topologicalOrder []string,
+	resources []v1alpha1.ResourceInformation,
+	reconcileErr error,
+) error {
+	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource group status and conditions")
 
-	dc := resourcegroup.DeepCopy()
+	processor := NewStatusProcessor()
 
-	// set conditions
-	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewReconcilerReadyCondition(metav1.ConditionTrue, "", "micro controller is ready"),
-	)
-	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
-	)
-	dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-		condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "", "Custom Resource Definition is synced"),
-	)
-	dc.Status.State = v1alpha1.ResourceGroupStateActive
-	dc.Status.TopologicalOrder = topologicalOrder
-	dc.Status.Resources = resources
+	if reconcileErr == nil {
+		processor.setDefaultConditions()
+	} else {
+		log.V(1).Info("processing reconciliation error", "error", reconcileErr)
 
-	if reconcileErr != nil {
-		log.V(1).Info("Error occurred during reconcile", "error", reconcileErr)
+		var graphErr *graphError
+		var crdErr *crdError
+		var microControllerErr *microControllerError
 
-		// if the error is graph error, graph condition should be false and the rest should be unknown
-		var reconcielGraphErr *serr.ReconcileGraphError
-		if errors.As(reconcileErr, &reconcielGraphErr) {
-			log.V(1).Info("Processing reconcile graph error", "error", reconcileErr)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(metav1.ConditionFalse, reconcileErr.Error(), "Directed Acyclic Graph is synced"),
-			)
-
-			reason := "Faulty Graph"
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(metav1.ConditionUnknown, reason, "micro controller is ready"),
-			)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, reason, "Custom Resource Definition is synced"),
-			)
+		switch {
+		case errors.As(reconcileErr, &graphErr):
+			processor.processGraphError(reconcileErr)
+		case errors.As(reconcileErr, &crdErr):
+			processor.processCRDError(reconcileErr)
+		case errors.As(reconcileErr, &microControllerErr):
+			processor.processMicroControllerError(reconcileErr)
+		default:
+			log.Error(reconcileErr, "unhandled reconciliation error type")
+			return fmt.Errorf("unhandled reconciliation error: %w", reconcileErr)
 		}
-
-		// if the error is crd error, crd condition should be false, graph condition should be true and the rest should be unknown
-		var reconcileCRDErr *serr.ReconcileCRDError
-		if errors.As(reconcileErr, &reconcileCRDErr) {
-			log.V(1).Info("Processing reconcile crd error", "error", reconcileErr)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
-			)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, reconcileErr.Error(), "Custom Resource Definition is synced"),
-			)
-			reason := "CRD not-synced"
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(metav1.ConditionUnknown, reason, "micro controller is ready"),
-			)
-		}
-
-		// if the error is micro controller error, micro controller condition should be false, graph condition should be true and the rest should be unknown
-		var reconcileMicroController *serr.ReconcileMicroControllerError
-		if errors.As(reconcileErr, &reconcileMicroController) {
-			log.V(1).Info("Processing reconcile micro controller error", "error", reconcileErr)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewGraphVerifiedCondition(metav1.ConditionTrue, "", "Directed Acyclic Graph is synced"),
-			)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "", "Custom Resource Definition is synced"),
-			)
-			dc.Status.Conditions = condition.SetCondition(dc.Status.Conditions,
-				condition.NewReconcilerReadyCondition(metav1.ConditionFalse, reconcileErr.Error(), "micro controller is ready"),
-			)
-		}
-
-		log.V(1).Info("Setting resource group status to INACTIVE", "error", reconcileErr)
-		dc.Status.State = v1alpha1.ResourceGroupStateInactive
 	}
 
-	log.V(1).Info("Setting resource group status", "status", dc.Status)
-	patch := client.MergeFrom(resourcegroup.DeepCopy())
-	return r.Status().Patch(ctx, dc.DeepCopy(), patch)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Get fresh copy to avoid conflicts
+		current := &v1alpha1.ResourceGroup{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(resourcegroup), current); err != nil {
+			return fmt.Errorf("failed to get current resource group: %w", err)
+		}
+
+		// Update status
+		dc := current.DeepCopy()
+		dc.Status.Conditions = processor.conditions
+		dc.Status.State = processor.state
+		dc.Status.TopologicalOrder = topologicalOrder
+		dc.Status.Resources = resources
+
+		log.V(1).Info("updating resource group status",
+			"state", dc.Status.State,
+			"conditions", len(dc.Status.Conditions),
+		)
+
+		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
+	})
 }
 
-func (r *ResourceGroupReconciler) setManaged(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("setting resourcegroup as managed - adding finalizer")
+// setManaged sets the resourcegroup as managed, by adding the
+// default finalizer if it doesn't exist.
+func (r *ResourceGroupReconciler) setManaged(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
+	log, _ := logr.FromContext(ctx)
+	log.V(1).Info("setting resourcegroup as managed")
 
-	newFinalizers := []string{v1alpha1.KroDomainName}
-	dc := resourcegroup.DeepCopy()
-	dc.Finalizers = newFinalizers
-	if len(dc.Finalizers) != len(resourcegroup.Finalizers) {
-		patch := client.MergeFrom(resourcegroup.DeepCopy())
-		return r.Patch(ctx, dc.DeepCopy(), patch)
+	// Skip if finalizer already exists
+	if metadata.HasResourceGroupFinalizer(rg) {
+		return nil
 	}
-	return nil
+
+	dc := rg.DeepCopy()
+	metadata.SetResourceGroupFinalizer(dc)
+	return r.Patch(ctx, dc, client.MergeFrom(rg))
 }
 
-func (r *ResourceGroupReconciler) setUnmanaged(ctx context.Context, resourcegroup *v1alpha1.ResourceGroup) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("setting resourcegroup as unmanaged - removing finalizer")
+// setUnmanaged sets the resourcegroup as unmanaged, by removing the
+// default finalizer if it exists.
+func (r *ResourceGroupReconciler) setUnmanaged(ctx context.Context, rg *v1alpha1.ResourceGroup) error {
+	log, _ := logr.FromContext(ctx)
+	log.V(1).Info("setting resourcegroup as unmanaged")
 
-	newFinalizers := []string{}
-	dc := resourcegroup.DeepCopy()
-	dc.Finalizers = newFinalizers
-	patch := client.MergeFrom(resourcegroup.DeepCopy())
-	return r.Patch(ctx, dc.DeepCopy(), patch)
-}
-
-func getGVR(customRD *v1.CustomResourceDefinition) *schema.GroupVersionResource {
-	return &schema.GroupVersionResource{
-		Group: customRD.Spec.Group,
-		// Deal with complex versioning later on
-		Version:  customRD.Spec.Versions[0].Name,
-		Resource: customRD.Spec.Names.Plural,
+	// Skip if finalizer already removed
+	if !metadata.HasResourceGroupFinalizer(rg) {
+		return nil
 	}
+
+	dc := rg.DeepCopy()
+	metadata.RemoveResourceGroupFinalizer(dc)
+	return r.Patch(ctx, dc, client.MergeFrom(rg))
+}
+
+func newReconcilerReadyCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
+	return v1alpha1.NewCondition(v1alpha1.ResourceGroupConditionTypeReconcilerReady, status, reason, "micro controller is ready")
+}
+
+func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
+	return v1alpha1.NewCondition(v1alpha1.ResourceGroupConditionTypeGraphVerified, status, reason, "Directed Acyclic Graph is synced")
+}
+
+func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
+	return v1alpha1.NewCondition(v1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced, status, reason, "Custom Resource Definition is synced")
 }

@@ -15,20 +15,20 @@ kro is Kubernetes native and integrates seamlessly with existing tools to preser
 
 ## Documentation
 
-| Title                                       | Description                       |
-| ------------------------------------------- | --------------------------------- |
-| [Introduction](kro-overview)                | An introduction to kro |
-| [Getting started](kro-getting-started)      | Deploy your first ResourceGroup |
-| [Concepts](kro-concepts)                    | Learn more about kro concepts |
-| [Examples](kro-examples)                    | Example resources |
-| [API reference](kro-api)                    | API documentation |
-| [Contributions](CONTRIBUTING.md)            | How to get involved |
+| Title                                  | Description                     |
+| -------------------------------------- | ------------------------------- |
+| [Introduction](kro-overview)           | An introduction to kro          |
+| [Installation](kro-installation)       | Install kro on your cluster     |
+| [Getting started](kro-getting-started) | Deploy your first ResourceGroup |
+| [Concepts](kro-concepts)               | Learn more about kro concepts   |
+| [Examples](kro-examples)               | Example resources               |
+| [Contributions](CONTRIBUTING.md)       | How to get involved             |
 
 [kro-overview]: https://kro.run/docs/overview
-[kro-getting-started]: https://kro.run/docs/category/getting-started
-[kro-concepts]: https://kro.run/docs/category/concepts
-[kro-examples]: https://kro.run/docs/category/examples
-[kro-api]: https://kro.run/docs/api/out
+[kro-installation]: https://kro.run/docs/getting-started/Installation
+[kro-getting-started]: https://kro.run/docs/getting-started/deploy-a-resource-group
+[kro-concepts]: https://kro.run/docs/concepts/resource-groups/
+[kro-examples]: https://kro.run/docs/examples/
 
 ## FAQ
 

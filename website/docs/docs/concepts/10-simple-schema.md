@@ -2,7 +2,7 @@
 sidebar_position: 2
 ---
 
-# 2. Simple Schema
+# Simple Schema
 
 KRO's Simple Schema provides a powerful yet intuitive way to define the
 structure of your ResourceGroup. Here is comprehensive example:
@@ -173,13 +173,14 @@ Common condition types include:
 
 ### 2. State
 
-The `state` field provides a high-level summary of the instance's current status.
+The `state` field provides a high-level summary of the instance's current
+status.
 
 ```yaml
 status:
   state: string | enum="Ready,Progressing,Degraded,Error,Terminating,Unknown"
 ```
 
-> These default status fields are automatically added to every instance's status,
-> providing a consistent way to check the health and state of resources across
-> different **ResourceGroups**.
+> These default status fields are automatically added to every instance's
+> status, providing a consistent way to check the health and state of resources
+> across different **ResourceGroups**.

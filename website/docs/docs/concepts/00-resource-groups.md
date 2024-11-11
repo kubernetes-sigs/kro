@@ -2,7 +2,7 @@
 sidebar_position: 1
 ---
 
-# 1. ResourceGroups
+# ResourceGroups
 
 **ResourceGroups** are the fundamental building blocks in KRO. They provide a
 way to define, organize, and manage sets of related Kubernetes resources as a

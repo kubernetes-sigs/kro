@@ -2,7 +2,7 @@
 sidebar_position: 15
 ---
 
-# 3. Instances
+# Instances
 
 Instances are a fundamental concept in **KRO** that represent instances of
 ResourceGroups. They define the desired state of a set of resources, which KRO
@@ -37,8 +37,12 @@ spec:
     LOG_LEVEL: debug
 ```
 
-:::tip The spec fields of an Instance correspond to the parameters defined in the
-ResourceGroup. :::
+:::
+
+tip The spec fields of an Instance correspond to the parameters defined in the
+ResourceGroup.
+
+:::
 
 ## The reconciliation loop
 
@@ -53,8 +57,8 @@ KRO manages Instances through a continuous reconciliation process:
 - **State Reconciliation**: KRO takes necessary actions to align the current
   state with the desired state. This may involve creating, updating, or deleting
   resources as needed.
-- **Status Updates**: The Instance's status is updated to reflect the current state
-  of reconciliation and any issues encountered.
+- **Status Updates**: The Instance's status is updated to reflect the current
+  state of reconciliation and any issues encountered.
 - **Continuous Loop**: This process repeats regularly, ensuring the cluster
   state always converges towards the desired state defined in the Instance.
 
@@ -69,16 +73,18 @@ KRO manages Instances through a continuous reconciliation process:
 - **Auditability**: The Instance serves as a single source of truth for the
   application's desired state.
 
-:::tip Best Practices
+:::tip[Best Practices]
 
-- Treat instances as declarative definitions of your application's desired state.
-  Use version control for your Instances to track changes over time.
+- Treat instances as declarative definitions of your application's desired
+  state. Use version control for your Instances to track changes over time.
 - Leverage labels and annotations in Instances for organization and filtering.
 - Regularly review Instances to ensure they reflect current requirements.
 - Use KRO's dry-run feature to preview reconciliation actions before applying
   changes to Instances.
-- Monitor Instance statuses to understand the current state of your applications.
-  :::
+- Monitor Instance statuses to understand the current state of your
+  applications.
+
+:::
 
 ## Common Status Fields
 
@@ -93,8 +99,8 @@ detailed status information. Each condition represents a specific aspect of the
 instance's state. Common conditions include:
 
 - **Ready**: Indicates whether the instance is fully reconciled and operational.
-- **Progressing**: Shows if the instance is in the process of reaching the desired
-  state.
+- **Progressing**: Shows if the instance is in the process of reaching the
+  desired state.
 - **Degraded**: Signals that the instance is operational but not functioning
   optimally.
 - **Error**: Indicates that an error has occurred during reconciliation.
@@ -121,8 +127,8 @@ status:
 
 ### 2. State
 
-The State field provides a high-level summary of the instance's current status. It
-is typically one of the following values:
+The State field provides a high-level summary of the instance's current status.
+It is typically one of the following values:
 
 - **Pending**: The instance is being processed, but resources are not yet fully
   created or configured.
@@ -140,6 +146,6 @@ status:
 ```
 
 These common status fields provide users with a consistent and informative way
-to check the health and state of their instances across different ResourceGroups.
-They are essential for monitoring, troubleshooting, and automating operations
-based on the status of KRO-managed resources.
+to check the health and state of their instances across different
+ResourceGroups. They are essential for monitoring, troubleshooting, and
+automating operations based on the status of KRO-managed resources.

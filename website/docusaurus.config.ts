@@ -46,6 +46,7 @@ const config: Config = {
               label: "latest",
             },
           },
+          // sidebarCollapsed: false,
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
@@ -65,7 +66,7 @@ const config: Config = {
     docs: {
       sidebar: {
         hideable: false,
-        autoCollapseCategories: true,
+        autoCollapseCategories: false,
       },
     },
     navbar: {
@@ -160,8 +161,8 @@ const config: Config = {
       textColor: "white",
     }, */
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.github,
+      theme: prismThemes.oneLight,
+      darkTheme: prismThemes.oneDark,
       additionalLanguages: ["bash", "yaml"],
     },
   } satisfies Preset.ThemeConfig,

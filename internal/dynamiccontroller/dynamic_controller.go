@@ -427,6 +427,9 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 
 	_, exists := dc.informers.Load(gvr)
 	if exists {
+		// Even thought the informer is already registered, we should still
+		// still update the handler, as it might have changed.
+		dc.handlers.Store(gvr, handler)
 		return nil
 	}
 

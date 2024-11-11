@@ -17,6 +17,11 @@ export default function FooterWrapper(props) {
           &ensp;at AWS</p>
       </section>
       <Footer {...props} />
+      <script 
+        defer
+        src='https://static.cloudflareinsights.com/beacon.min.js'
+        data-cf-beacon='{"token": "85e669833a874cdd938772c6e459b33e"}'
+      ></script>
     </>
   );
 }

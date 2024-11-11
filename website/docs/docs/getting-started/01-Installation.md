@@ -13,6 +13,16 @@ Before you begin, ensure you have the following:
 
 1. `Helm` 3.x installed
 2. `kubectl` installed and configured to interact with your Kubernetes cluster
+3. `awscli` installed
+
+Log in to public ecr:
+```
+aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+```
+Expected result:
+```
+Login Succeeded
+```
 
 ## Installation Steps
 
@@ -27,17 +37,23 @@ note that the software is still under active development and APIs may change.
 
 Once authenticated, install kro using the Helm chart:
 
+Fetch the latest release version from GitHub
 ```sh
-# Fetch the latest release version from GitHub
 export KRO_VERSION=$(curl -s \
     https://api.github.com/repos/awslabs/kro/releases/latest | \
     grep '"tag_name":' | \
     sed -E 's/.*"([^"]+)".*/\1/' \
   )
-
-# Install kro using Helm
+```
+Validate `KRO_VERSION` populated with a version
+```
+echo $KRO_VERSION
+```
+Install kro using Helm
+```
 helm install kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
+  --set nameOverride=kro
   --create-namespace \
   --version=${KRO_VERSION}
 ```
@@ -50,28 +66,39 @@ correctly:
 1. Check the Helm release:
 
    ```sh
-   helm list
+   helm -n kro list
    ```
 
-   You should see the "kro" release listed.
+   Expected result: You should see the "kro" release listed.
+   ```
+    NAME	NAMESPACE	REVISION	STATUS  
+    kro 	kro      	1       	deployed
+   ```
 
 2. Check the kro pods:
    ```sh
    kubectl get pods -n kro
    ```
-   You should see kro-related pods running.
+   Expected result: You should see kro-related pods running.
+   ```
+    NAME                        READY   STATUS             RESTARTS   AGE
+    kro-7d98bc6f46-jvjl5        1/1     Running            0           1s 
+   ```
 
 ## Upgrading kro
 
 To upgrade to a newer version of kro, use the Helm upgrade command:
 
+Replace `<new-version>` with the version you want to upgrade to.
 ```bash
-# Replace `<new-version>` with the version you want to upgrade to.
 export KRO_VERSION=<new-version>
+```
 
-# Upgrade the controller
+Upgrade the controller
+```
 helm upgrade kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
+  --set nameOverride=kro
   --version=${KRO_VERSION}
 ```
 

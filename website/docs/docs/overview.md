@@ -4,14 +4,17 @@ sidebar_position: 1
 
 # What is kro?
 
-**kro** (Kube Resource Orchestrator) is an open-source project that allows you
-to define custom **Kubernetes APIs** using simple and straightforward
-configuration. With kro, you can easily configure new custom APIs that create a
-group of Kubernetes objects and the logical operations between them. kro
-automatically calculates the order in which objects should be created. You can
-pass values from one object to another, set default values for fields in the API
-specification, and incorporate conditionals into your custom API definitions.
-End users can easily call these custom APIs to create grouped resources.
+**kro** (Kube Resource Orchestrator) is an open-source, Kubernetes-native project 
+that allows you to define custom **Kubernetes APIs** using simple and straightforward 
+configuration. With kro, you can easily configure new custom APIs that create a 
+group of Kubernetes objects and the logical operations between them. kro leverages 
+[CEL (Common Expression Language)](https://github.com/google/cel-spec), the same 
+language used by Kubernetes webhooks, for logical operations. Using CEL expressions,
+you can easily pass values from one object to another and incorporate conditionals into
+your custom API definitions. Based on the CEL expressions, kro automatically calculates 
+the order in which objects should be created. You can define default values for fields 
+in the API specification, streamlining the process for end users who can then 
+effortlessly invoke these custom APIs to create grouped resources.
 
 # How does kro work?
 
@@ -110,4 +113,4 @@ involved, check out our
 For bugs or feature requests, feel free to
 [submit an issue](https://github.com/awslabs/kro/issues). You’re also invited to
 join our
-[community meeting](https://github.com/awslabs/kro?tab=readme-ov-file#kro).
+[community](https://github.com/awslabs/kro?tab=readme-ov-file#community-participation).

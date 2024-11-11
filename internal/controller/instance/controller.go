@@ -157,10 +157,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
 		reconcileConfig:             c.reconcileConfig,
+		// Fresh instance state at each reconciliation loop.
+		state: newInstanceState(),
 	}
 	return instanceGraphReconciler.reconcile(ctx)
 }
 
+// getNamespaceName extracts the namespace and name from the request.
 func getNamespaceName(req ctrl.Request) (string, string) {
 	parts := strings.Split(req.Name, "/")
 	name := parts[len(parts)-1]

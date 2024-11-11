@@ -22,45 +22,57 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/awslabs/kro/internal/requeue"
 )
 
-// ResourceState represents the state of a resource.
-type ResourceState struct {
-	State string
-	Err   error
+func createCondition(conditionType v1alpha1.ConditionType, status corev1.ConditionStatus, reason, message string, generation int64) map[string]interface{} {
+	return map[string]interface{}{
+		"type":               string(conditionType),
+		"status":             string(status),
+		"reason":             reason,
+		"message":            message,
+		"lastTransitionTime": time.Now().Format(time.RFC3339),
+		"observedGeneration": generation,
+	}
 }
 
-func (igr *instanceGraphReconciler) prepareStatus(instanceState string, reconcileErr error, resourceStates map[string]*ResourceState) map[string]interface{} {
-	// Get what ever is resolved in the status
-	instanceStatus := igr.getResolvedStatus()
+// prepareStatus creates the status object for the instance based on current state.
+func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
+	status := igr.getResolvedStatus()
 	generation := igr.runtime.GetInstance().GetGeneration()
 
-	// Update the instance status with the current state and conditions
-	instanceStatus["state"] = instanceState
-	instanceStatus["conditions"] = igr.prepareConditions(instanceStatus, reconcileErr, resourceStates, generation)
-	return instanceStatus
+	status["state"] = igr.state.State
+	status["conditions"] = igr.prepareConditions(igr.state.ReconcileErr, generation)
+
+	return status
 }
 
+// getResolvedStatus retrieves the current status while preserving non-condition fields.
 func (igr *instanceGraphReconciler) getResolvedStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"conditions": []interface{}{},
 	}
 
-	resolvedStatus, ok := igr.runtime.GetInstance().Object["status"].(map[string]interface{})
-	if !ok {
-		return status
+	if existingStatus, ok := igr.runtime.GetInstance().Object["status"].(map[string]interface{}); ok {
+		// Copy existing status but reset conditions
+		for k, v := range existingStatus {
+			if k != "conditions" {
+				status[k] = v
+			}
+		}
 	}
 
-	// clear conditions
-	resolvedStatus["conditions"] = []interface{}{}
-
-	return resolvedStatus
+	return status
 }
 
-func (igr *instanceGraphReconciler) prepareConditions(status map[string]interface{}, reconcileErr error, resourceStates map[string]*ResourceState, generation int64) []interface{} {
-	conditions := status["conditions"].([]interface{})
+// prepareConditions creates the conditions array for the instance status.
+func (igr *instanceGraphReconciler) prepareConditions(
+	reconcileErr error,
+	generation int64,
+) []interface{} {
+	var conditions []interface{}
 
-	// Add overall reconciliation condition
+	// Add primary reconciliation condition
 	if reconcileErr != nil {
 		conditions = append(conditions, createCondition(
 			"InstanceSynced",
@@ -79,49 +91,35 @@ func (igr *instanceGraphReconciler) prepareConditions(status map[string]interfac
 		))
 	}
 
-	/* conditionType := "ResourceSynced"
-	// Add conditions for each resource
-	for resourceID, resourceState := range resourceStates {
-		if resourceState.Err != nil {
-			conditions = append(conditions, createCondition(
-				v1alpha1.ConditionType(conditionType),
-				corev1.ConditionFalse,
-				"Resource sync failed",
-				fmt.Sprintf("Resource %s sync failed: %v", resourceID, resourceState.Err),
-				generation,
-			))
-		} else {
-			conditions = append(conditions, createCondition(
-				v1alpha1.ConditionType(conditionType),
-				corev1.ConditionTrue,
-				"Resource synced successfully",
-				fmt.Sprintf("Resource %s synced successfully. status: %s", resourceID, resourceState.State),
-				generation,
-			))
-		}
-	} */
-
 	return conditions
 }
 
+// patchInstanceStatus updates the status subresource of the instance.
 func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, status map[string]interface{}) error {
-	instanceUnstructuredCopy := igr.runtime.GetInstance().DeepCopy()
-	instanceUnstructuredCopy.Object["status"] = status
+	instance := igr.runtime.GetInstance().DeepCopy()
+	instance.Object["status"] = status
 
-	_, err := igr.client.Resource(igr.gvr).Namespace(instanceUnstructuredCopy.GetNamespace()).UpdateStatus(ctx, instanceUnstructuredCopy, metav1.UpdateOptions{})
+	_, err := igr.client.Resource(igr.gvr).
+		Namespace(instance.GetNamespace()).
+		UpdateStatus(ctx, instance, metav1.UpdateOptions{})
+
 	if err != nil {
 		return fmt.Errorf("failed to update instance status: %w", err)
 	}
 	return nil
 }
 
-func createCondition(conditionType v1alpha1.ConditionType, status corev1.ConditionStatus, reason, message string, generation int64) map[string]interface{} {
-	return map[string]interface{}{
-		"type":               string(conditionType),
-		"status":             string(status),
-		"reason":             reason,
-		"message":            message,
-		"lastTransitionTime": time.Now().Format(time.RFC3339),
-		"observedGeneration": generation,
+// updateInstanceState updates the instance state based on reconciliation results
+func (igr *instanceGraphReconciler) updateInstanceState() {
+	switch igr.state.ReconcileErr.(type) {
+	case *requeue.NoRequeue, *requeue.RequeueNeeded, *requeue.RequeueNeededAfter:
+		// Keep current state for requeue errors
+		return
+	default:
+		if igr.state.ReconcileErr != nil {
+			igr.state.State = InstanceStateError
+		} else if igr.state.State != InstanceStateDeleting {
+			igr.state.State = InstanceStateActive
+		}
 	}
 }

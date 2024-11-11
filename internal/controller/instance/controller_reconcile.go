@@ -16,7 +16,6 @@ package instance
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,195 +52,189 @@ type instanceGraphReconciler struct {
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
+	// state holds the current state of the instance and its sub-resources.
+	state *InstanceState
 }
 
 // reconcile performs the reconciliation of the instance and its sub-resources.
+// It manages the full lifecycle of the instance including creation, updates,
+// and deletion.
 func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
-	var reconcileErr error
-	isDeleteEvent := !instance.GetDeletionTimestamp().IsZero()
-	instanceState := "IN_PROGRESS"
-	if isDeleteEvent {
-		instanceState = "DELETING"
+	igr.state = newInstanceState()
+
+	// Handle instance deletion if marked for deletion
+	if !instance.GetDeletionTimestamp().IsZero() {
+		igr.state.State = "DELETING"
+		return igr.handleReconciliation(ctx, igr.handleInstanceDeletion)
 	}
-	resourceStates := make(map[string]*ResourceState)
 
+	return igr.handleReconciliation(ctx, igr.reconcileInstance)
+}
+
+// handleReconciliation provides a common wrapper for reconciliation operations,
+// handling status updates and error management.
+func (igr *instanceGraphReconciler) handleReconciliation(ctx context.Context, reconcileFunc func(context.Context) error) error {
 	defer func() {
-		// if a requeue error is returned, we should leave the instance in IN_PROGRESS state
-		switch reconcileErr.(type) {
-		case *requeue.NoRequeue, *requeue.RequeueNeeded, *requeue.RequeueNeededAfter:
-			// do nothing
-		default:
-			if reconcileErr != nil {
-				instanceState = "ERROR"
-			} else {
-				instanceState = "ACTIVE"
-			}
-		}
+		// Update instance state based on reconciliation result
+		igr.updateInstanceState()
 
-		status := igr.prepareStatus(instanceState, reconcileErr, resourceStates)
-		if err := igr.patchInstanceStatus(ctx, status); err != nil &&
-			// Ignore the error if the has been deleted. This is possible because the instance
-			// may have been deleted before the status is patched.
-			!(isDeleteEvent && reconcileErr == nil) {
-			igr.log.Error(err, "Failed to patch instance status")
+		// Prepare and patch status
+		status := igr.prepareStatus()
+		if err := igr.patchInstanceStatus(ctx, status); err != nil {
+			// Only log error if instance still exists
+			if !apierrors.IsNotFound(err) {
+				igr.log.Error(err, "Failed to patch instance status")
+			}
 		}
 	}()
 
-	// handle deletion case
-	if isDeleteEvent {
-		igr.log.V(1).Info("Handling instance deletion", "deletionTimestamp", instance.GetDeletionTimestamp())
-		reconcileErr = igr.handleInstanceDeletion(ctx, resourceStates)
-		return reconcileErr
-	}
-
-	igr.log.V(1).Info("Reconciling instance", "instance", instance)
-	reconcileErr = igr.reconcileInstance(ctx, resourceStates)
-	if reconcileErr == nil {
-		instanceState = "ACTIVE"
-	}
-	return reconcileErr
+	igr.state.ReconcileErr = reconcileFunc(ctx)
+	return igr.state.ReconcileErr
 }
 
-func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context, resourceStates map[string]*ResourceState) error {
+// reconcileInstance handles the reconciliation of an active instance
+func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 
-	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
-	if err != nil {
-		return fmt.Errorf("failed to set managed: %w", err)
+	// Set managed state and handle instance labels
+	if err := igr.setupInstance(ctx, instance); err != nil {
+		return fmt.Errorf("failed to setup instance: %w", err)
 	}
 
-	if patched != nil {
-		instance.Object = patched.Object
-	}
-
-	igr.log.V(1).Info("Reconciling individual resources [following topological order]")
-
-	// Set all resources to PENDING state
+	// Initialize resource states
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		resourceStates[resourceID] = &ResourceState{State: "PENDING"}
+		igr.state.ResourceStates[resourceID] = &ResourceState{State: "PENDING"}
 	}
 
+	// Reconcile resources in topological order
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		if err := igr.reconcileResource(ctx, resourceID, resourceStates); err != nil {
+		if err := igr.reconcileResource(ctx, resourceID); err != nil {
 			return err
 		}
-		// If the resource reconciled successfully, we can now resolve dynamic variables
-		// for the next resources.
-		_, err := igr.runtime.Synchronize()
-		if err != nil {
-			return fmt.Errorf("failed to synchronize resources: %w", err)
+
+		// Synchronize runtime state after each resource
+		if _, err := igr.runtime.Synchronize(); err != nil {
+			return fmt.Errorf("failed to synchronize reconciling resource %s: %w", resourceID, err)
 		}
+	}
+
+	return nil
+}
+
+// setupInstance prepares an instance for reconciliation by setting up necessary
+// labels and managed state.
+func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance *unstructured.Unstructured) error {
+	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
+	if err != nil {
+		return err
+	}
+	if patched != nil {
+		instance.Object = patched.Object
 	}
 	return nil
 }
 
-func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) string {
-	instance := igr.runtime.GetInstance()
-	resource, _ := igr.runtime.GetResource(resourceID)
-
-	// Use the resource namespace if it is set
-	namespace := resource.GetNamespace()
-	if namespace == "" {
-		// Use the instance namespace if the resource namespace is not set
-		namespace = instance.GetNamespace()
-	}
-	if namespace == "" {
-		// Use the default namespace if the instance namespace is not set
-		namespace = metav1.NamespaceDefault
-	}
-	return namespace
-}
-
-func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
+// reconcileResource handles the reconciliation of a single resource within the instance
+func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string) error {
 	log := igr.log.WithValues("resourceID", resourceID)
-	log.V(1).Info("Reconciling resource")
-
 	resourceState := &ResourceState{State: "IN_PROGRESS"}
-	resourceStates[resourceID] = resourceState
+	igr.state.ResourceStates[resourceID] = resourceState
 
+	// Check if resource should be created
 	if want, err := igr.runtime.WantToCreateResource(resourceID); err != nil || !want {
-		// TODO(michaelhtm) parse error to decide whether to set terminal error
-		// or move forward
 		log.V(1).Info("Skipping resource creation", "reason", err)
 		resourceState.State = "SKIPPED"
 		igr.runtime.IgnoreResource(resourceID)
 		return nil
 	}
 
-	rUnstructured, state := igr.runtime.GetResource(resourceID)
+	// Get and validate resource state
+	resource, state := igr.runtime.GetResource(resourceID)
 	if state != runtime.ResourceStateResolved {
-		return igr.delayedRequeue(fmt.Errorf("resource %s is not resolved: %v", resourceID, state))
+		return igr.delayedRequeue(fmt.Errorf("resource %s not resolved: state=%v", resourceID, state))
 	}
 
-	descriptor := igr.runtime.ResourceDescriptor(resourceID)
-	gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
+	// Handle resource reconciliation
+	return igr.handleResourceReconciliation(ctx, resourceID, resource, resourceState)
+}
 
-	var rc dynamic.ResourceInterface
-	var namespace string
-	if descriptor.IsNamespaced() {
-		namespace = igr.getResourceNamespace(resourceID)
-		rc = igr.client.Resource(gvr).Namespace(namespace)
-	} else {
-		rc = igr.client.Resource(gvr)
-	}
+// handleResourceReconciliation manages the reconciliation of a specific resource,
+// including creation, updates, and readiness checks.
+func (igr *instanceGraphReconciler) handleResourceReconciliation(
+	ctx context.Context,
+	resourceID string,
+	resource *unstructured.Unstructured,
+	resourceState *ResourceState,
+) error {
+	log := igr.log.WithValues("resourceID", resourceID)
 
-	log.V(1).Info("Checking resource existence", "namespace", namespace, "name", rUnstructured.GetName())
-	observed, err := rc.Get(ctx, rUnstructured.GetName(), metav1.GetOptions{})
+	// Get resource client and namespace
+	rc := igr.getResourceClient(resourceID)
+
+	// Check if resource exists
+	observed, err := rc.Get(ctx, resource.GetName(), metav1.GetOptions{})
 	if err != nil {
-		if apierrors.IsNotFound(err) || strings.Contains(err.Error(), "the server could not find the requested resource") {
-			log.V(1).Info("Resource not found", "resource", resourceID, "err", err, "namespace", namespace, "name", rUnstructured.GetName())
-
-			err := igr.createResource(ctx, rc, rUnstructured, resourceID, resourceState)
-			if err != nil {
-				return err
-			}
-			// Requeue for the next reconciliation loop
-			return igr.delayedRequeue(fmt.Errorf("resource created"))
+		if apierrors.IsNotFound(err) {
+			return igr.handleResourceCreation(ctx, rc, resource, resourceID, resourceState)
 		}
 		resourceState.State = "ERROR"
 		resourceState.Err = fmt.Errorf("failed to get resource: %w", err)
 		return resourceState.Err
 	}
 
+	// Update runtime with observed state
 	igr.runtime.SetResource(resourceID, observed)
 
+	// Check resource readiness
 	if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
 		log.V(1).Info("Resource not ready", "reason", reason, "error", err)
-		resourceState.State = "WaitingForReadiness"
-		// TODO(michaelhtm) parse error to ensure we have terminal/nonTerminal errors
-		resourceState.Err = fmt.Errorf("resource not ready, reason: %s, error: %w", reason, err)
+		resourceState.State = "WAITING_FOR_READINESS"
+		resourceState.Err = fmt.Errorf("resource not ready: %s: %w", reason, err)
 		return igr.delayedRequeue(resourceState.Err)
 	}
 
 	resourceState.State = "SYNCED"
-	return igr.updateResource(ctx, rc, rUnstructured, observed, resourceID, resourceState)
+	return igr.updateResource(ctx, rc, resource, observed, resourceID, resourceState)
 }
 
-func (igr *instanceGraphReconciler) createResource(ctx context.Context, rc dynamic.ResourceInterface, resource *unstructured.Unstructured, resourceID string, resourceState *ResourceState) error {
+// getResourceClient returns the appropriate dynamic client and namespace for a resource
+func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic.ResourceInterface {
+	descriptor := igr.runtime.ResourceDescriptor(resourceID)
+	gvr := descriptor.GetGroupVersionResource()
+	namespace := igr.getResourceNamespace(resourceID)
+
+	if descriptor.IsNamespaced() {
+		return igr.client.Resource(gvr).Namespace(namespace)
+	}
+	return igr.client.Resource(gvr)
+}
+
+// handleResourceCreation manages the creation of a new resource
+func (igr *instanceGraphReconciler) handleResourceCreation(
+	ctx context.Context,
+	rc dynamic.ResourceInterface,
+	resource *unstructured.Unstructured,
+	resourceID string,
+	resourceState *ResourceState,
+) error {
+	igr.log.V(1).Info("Creating new resource", "resourceID", resourceID)
+
+	// Apply labels and create resource
 	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
-	/* 	resource.SetOwnerReferences([]metav1.OwnerReference{
-		k8smetadata.NewInstanceOwnerReference(
-			igr.runtime.Instance.GroupVersionKind(),
-			igr.runtime.Instance.GetName(),
-			igr.runtime.Instance.GetUID(),
-		),
-	}) */
-
-	igr.log.V(1).Info("Creating resource", "resource", resourceID)
-
 	if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {
 		resourceState.State = "ERROR"
 		resourceState.Err = fmt.Errorf("failed to create resource: %w", err)
 		return resourceState.Err
 	}
 
-	igr.log.V(1).Info("Resource created", "resource", resourceID)
 	resourceState.State = "CREATED"
-	resourceState.Err = nil
-	return nil
+	return igr.delayedRequeue(fmt.Errorf("awaiting resource creation completion"))
 }
 
+// updateResource handles updates to an existing resource.
+// Currently performs basic state management, but could be extended to include
+// more sophisticated update logic and diffing.
 func (igr *instanceGraphReconciler) updateResource(
 	_ context.Context,
 	_ dynamic.ResourceInterface,
@@ -249,173 +242,216 @@ func (igr *instanceGraphReconciler) updateResource(
 	resourceID string,
 	resourceState *ResourceState,
 ) error {
-	igr.log.V(1).Info("Updating resource", "resource", resourceID)
+	igr.log.V(1).Info("Processing potential resource update", "resourceID", resourceID)
 
-	// TODO: Implement some kind of diffing mechanism to determine if the resource needs to be updated
-	// There are two ways to do this:
-	// 1. DFS traversal of the resource data structure and compare each field
-	// 2. Use some kind of hash function to hash the resource and compare the hash
+	// TODO: Implement resource diffing logic
+	// TODO: Add update strategy options (e.g., server-side apply)
 
-	// resourceState.State = "UPDATED"
-	resourceState.Err = nil
+	resourceState.State = "SYNCED"
 	return nil
 }
 
-func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context, resourceStates map[string]*ResourceState) error {
-	instanceUnstructured := igr.runtime.GetInstance()
+// handleInstanceDeletion manages the deletion of an instance and its resources
+// following the reverse topological order to respect dependencies.
+func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) error {
+	igr.log.V(1).Info("Beginning instance deletion process")
 
-	igr.log.V(1).Info("Getting all resources created by kro")
+	// Initialize deletion state for all resources
+	if err := igr.initializeDeletionState(); err != nil {
+		return fmt.Errorf("failed to initialize deletion state: %w", err)
+	}
+
+	// Delete resources in reverse order
+	if err := igr.deleteResourcesInOrder(ctx); err != nil {
+		return err
+	}
+
+	// Check if all resources are deleted and cleanup instance
+	return igr.finalizeDeletion(ctx)
+}
+
+// initializeDeletionState prepares resources for deletion by checking their
+// current state and marking them appropriately.
+func (igr *instanceGraphReconciler) initializeDeletionState() error {
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		_, err := igr.runtime.Synchronize()
-		if err != nil {
-			return fmt.Errorf("failed to synchronize resources: %w", err)
+		if _, err := igr.runtime.Synchronize(); err != nil {
+			return fmt.Errorf("failed to synchronize during deletion state initialization: %w", err)
 		}
 
 		resource, state := igr.runtime.GetResource(resourceID)
 		if state != runtime.ResourceStateResolved {
+			igr.state.ResourceStates[resourceID] = &ResourceState{
+				State: "SKIPPED",
+			}
 			continue
 		}
 
-		gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
-
-		rname := resource.GetName()
-
-		rc := igr.client.Resource(gvr).Namespace(igr.getResourceNamespace(resourceID))
-		igr.log.V(1).Info("Checking if resource exists", "resource", resourceID)
-		observed, err := rc.Get(ctx, rname, metav1.GetOptions{})
+		// Check if resource exists
+		rc := igr.getResourceClient(resourceID)
+		observed, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				igr.log.V(1).Info("Resource not found", "resource", resourceID)
-				resourceStates[resourceID] = &ResourceState{
+				igr.state.ResourceStates[resourceID] = &ResourceState{
 					State: "DELETED",
-					Err:   nil,
 				}
 				continue
 			}
-			igr.log.Error(err, "Failed to get resource")
-			resourceStates[resourceID] = &ResourceState{
-				State: "ERROR",
-				Err:   fmt.Errorf("failed to get resource %s: %w", resourceID, err),
-			}
-			return resourceStates[resourceID].Err
+			return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
 		}
 
 		igr.runtime.SetResource(resourceID, observed)
-		resourceStates[resourceID] = &ResourceState{
+		igr.state.ResourceStates[resourceID] = &ResourceState{
 			State: "PENDING_DELETION",
-			Err:   nil,
 		}
 	}
+	return nil
+}
 
-	// Delete resources in reverse order
-	for i := len(igr.runtime.TopologicalOrder()) - 1; i >= 0; i-- {
-		resourceID := igr.runtime.TopologicalOrder()[i]
-		if resourceStates[resourceID] == nil {
+// deleteResourcesInOrder processes resource deletion in reverse topological order
+// to respect dependencies between resources.
+func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) error {
+	// Process resources in reverse order
+	resources := igr.runtime.TopologicalOrder()
+	for i := len(resources) - 1; i >= 0; i-- {
+		resourceID := resources[i]
+		resourceState := igr.state.ResourceStates[resourceID]
+
+		if resourceState == nil || resourceState.State != "PENDING_DELETION" {
 			continue
 		}
-		if resourceStates[resourceID].State == "PENDING_DELETION" {
-			if err := igr.deleteResource(ctx, resourceID, resourceStates); err != nil {
-				return err
-			}
-		}
-	}
 
-	// Check if all resources are deleted
-	allResourcesDeleted := true
-	for _, resourceState := range resourceStates {
-		if resourceState.State != "DELETED" {
-			allResourcesDeleted = false
-			break
-		}
-	}
-
-	if allResourcesDeleted {
-		// Remove finalizer
-		patched, err := igr.setUnmanaged(ctx, instanceUnstructured, instanceUnstructured.GetUID())
-		if err != nil {
+		if err := igr.deleteResource(ctx, resourceID); err != nil {
 			return err
 		}
-		igr.runtime.SetInstance(patched)
-		return nil
-	} else {
-		// Requeue for continued deletion
-		return igr.delayedRequeue(fmt.Errorf("deletion in progress"))
 	}
+	return nil
 }
 
-func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resourceID string, resourceStates map[string]*ResourceState) error {
-	igr.log.V(1).Info("Deleting resource", "resource", resourceID)
+// deleteResource handles the deletion of a single resource and updates its state.
+func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resourceID string) error {
+	igr.log.V(1).Info("Deleting resource", "resourceID", resourceID)
 
-	gvr := igr.runtime.ResourceDescriptor(resourceID).GetGroupVersionResource()
-	rUnstructured, _ := igr.runtime.GetResource(resourceID)
+	resource, _ := igr.runtime.GetResource(resourceID)
+	rc := igr.getResourceClient(resourceID)
 
-	err := igr.client.Resource(gvr).Namespace(igr.getResourceNamespace(resourceID)).Delete(ctx, rUnstructured.GetName(), metav1.DeleteOptions{})
+	// Attempt to delete the resource
+	err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			resourceStates[resourceID] = &ResourceState{
-				State: "DELETED",
-				Err:   nil,
-			}
+			igr.state.ResourceStates[resourceID].State = "DELETED"
 			return nil
 		}
-		resourceStates[resourceID] = &ResourceState{
-			State: "ERROR",
-			Err:   fmt.Errorf("failed to delete resource: %w", err),
+		igr.state.ResourceStates[resourceID].State = InstanceStateError
+		igr.state.ResourceStates[resourceID].Err = fmt.Errorf("failed to delete resource: %w", err)
+		return igr.state.ResourceStates[resourceID].Err
+	}
+
+	igr.state.ResourceStates[resourceID].State = InstanceStateDeleting
+	return igr.delayedRequeue(fmt.Errorf("resource deletion in progress"))
+}
+
+// finalizeDeletion checks if all resources are deleted and removes the instance finalizer
+// if appropriate.
+func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error {
+	// Check if all resources are deleted
+	for _, resourceState := range igr.state.ResourceStates {
+		if resourceState.State != "DELETED" && resourceState.State != "SKIPPED" {
+			return igr.delayedRequeue(fmt.Errorf("waiting for resource deletion completion"))
 		}
-		return resourceStates[resourceID].Err
 	}
 
-	resourceStates[resourceID] = &ResourceState{
-		State: "DELETING",
-		Err:   nil,
-	}
-	return igr.delayedRequeue(fmt.Errorf("deletion in progress"))
-}
-
-func (igr *instanceGraphReconciler) setManaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
-	// if the instance is already managed, do nothing
-	if exist, _ := metadata.HasInstanceFinalizerUnstructured(uObj, uid); exist {
-		return uObj, nil
-	}
-
-	igr.log.V(1).Info("Setting managed", "resource", uObj.GetName(), "namespace", uObj.GetNamespace())
-
-	dc := uObj.DeepCopy()
-	if err := metadata.SetInstanceFinalizerUnstructured(dc, uid); err != nil {
-		return nil, fmt.Errorf("failed to set instance finalizer: %w", err)
-	}
-
-	igr.instanceLabeler.ApplyLabels(dc)
-
-	patched, err := igr.client.Resource(igr.gvr).Namespace(uObj.GetNamespace()).Update(ctx, dc, metav1.UpdateOptions{})
+	// Remove finalizer from instance
+	instance := igr.runtime.GetInstance()
+	patched, err := igr.setUnmanaged(ctx, instance, instance.GetUID())
 	if err != nil {
-		return nil, fmt.Errorf("failed to update object: %w", err)
+		return fmt.Errorf("failed to remove instance finalizer: %w", err)
 	}
 
-	return patched, nil
+	igr.runtime.SetInstance(patched)
+	return nil
 }
 
-func (igr *instanceGraphReconciler) setUnmanaged(ctx context.Context, uObj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
-	// if the instance is already unmanaged, do nothing
-	if exist, _ := metadata.HasInstanceFinalizerUnstructured(uObj, uid); !exist {
-		return uObj, nil
+// setManaged ensures the instance has the necessary finalizer and labels.
+func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
+	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj, uid); exist {
+		return obj, nil
 	}
 
-	igr.log.V(1).Info("Setting unmanaged", "resource", uObj.GetName(), "namespace", uObj.GetNamespace())
+	igr.log.V(1).Info("Setting managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
 
-	dc := uObj.DeepCopy()
-	if err := metadata.RemoveInstanceFinalizerUnstructured(dc, uid); err != nil {
-		return nil, fmt.Errorf("failed to remove instance finalizer: %w", err)
+	copy := obj.DeepCopy()
+	if err := metadata.SetInstanceFinalizerUnstructured(copy, uid); err != nil {
+		return nil, fmt.Errorf("failed to set finalizer: %w", err)
 	}
 
-	patched, err := igr.client.Resource(igr.gvr).Namespace(uObj.GetNamespace()).Update(ctx, dc, metav1.UpdateOptions{})
+	igr.instanceLabeler.ApplyLabels(copy)
+
+	updated, err := igr.client.Resource(igr.gvr).
+		Namespace(obj.GetNamespace()).
+		Update(ctx, copy, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to update object: %w", err)
+		return nil, fmt.Errorf("failed to update managed state: %w", err)
 	}
 
-	return patched, nil
+	return updated, nil
 }
 
+// setUnmanaged removes the finalizer from the instance.
+func (igr *instanceGraphReconciler) setUnmanaged(ctx context.Context, obj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
+	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj, uid); !exist {
+		return obj, nil
+	}
+
+	igr.log.V(1).Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
+
+	copy := obj.DeepCopy()
+	if err := metadata.RemoveInstanceFinalizerUnstructured(copy, uid); err != nil {
+		return nil, fmt.Errorf("failed to remove finalizer: %w", err)
+	}
+
+	updated, err := igr.client.Resource(igr.gvr).
+		Namespace(obj.GetNamespace()).
+		Update(ctx, copy, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update unmanaged state: %w", err)
+	}
+
+	return updated, nil
+}
+
+// delayedRequeue wraps an error with requeue information for the controller runtime.
 func (igr *instanceGraphReconciler) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, igr.reconcileConfig.DefaultRequeueDuration)
+}
+
+// getResourceNamespace determines the appropriate namespace for a resource.
+// It follows this precedence order:
+// 1. Resource's explicitly specified namespace
+// 2. Instance's namespace
+// 3. Default namespace
+func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) string {
+	instance := igr.runtime.GetInstance()
+	resource, _ := igr.runtime.GetResource(resourceID)
+
+	// First check if resource has an explicitly specified namespace
+	if ns := resource.GetNamespace(); ns != "" {
+		igr.log.V(2).Info("Using resource-specified namespace",
+			"resourceID", resourceID,
+			"namespace", ns)
+		return ns
+	}
+
+	// Then use instance namespace
+	if ns := instance.GetNamespace(); ns != "" {
+		igr.log.V(2).Info("Using instance namespace",
+			"resourceID", resourceID,
+			"namespace", ns)
+		return ns
+	}
+
+	// Finally fall back to default namespace
+	igr.log.V(2).Info("Using default namespace",
+		"resourceID", resourceID,
+		"namespace", metav1.NamespaceDefault)
+	return metav1.NamespaceDefault
 }

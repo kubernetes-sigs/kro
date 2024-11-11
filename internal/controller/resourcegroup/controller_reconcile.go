@@ -121,10 +121,10 @@ func (r *ResourceGroupReconciler) reconcileResourceGroupGraph(_ context.Context,
 func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation {
 	dependencies := make([]v1alpha1.Dependency, 0, len(deps))
 	for _, dep := range deps {
-		dependencies = append(dependencies, v1alpha1.Dependency{Name: dep})
+		dependencies = append(dependencies, v1alpha1.Dependency{ID: dep})
 	}
 	return v1alpha1.ResourceInformation{
-		Name:         name,
+		ID:           name,
 		Dependencies: dependencies,
 	}
 }

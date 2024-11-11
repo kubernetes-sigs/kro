@@ -150,7 +150,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `© ${new Date().getFullYear()} Amazon.com, Inc. or its affiliates. All rights reserved.`,
+      copyright: "kro.run",
     },
     /* announcementBar: {
       id: `beta announcement`,

@@ -18,7 +18,7 @@ body:
         **Reproduction Steps** (Please include `ResourceGroup` and `Instances` files):
 
         **Versions**:
-        - KRO Version:
+        - kro version:
         - Kubernetes Version (`kubectl version`):
 
         **Involved Controllers**:

@@ -4,8 +4,8 @@ sidebar_position: 1
 
 # ResourceGroups
 
-**ResourceGroups** are the fundamental building blocks in KRO. They provide a
-way to define, organize, and manage sets of related Kubernetes resources as a
+**ResourceGroups** are the fundamental building blocks in **kro**. They provide
+a way to define, organize, and manage sets of related Kubernetes resources as a
 single, reusable unit.
 
 ## What is a **ResourceGroup**?
@@ -86,7 +86,7 @@ can be set when instantiating this ResourceGroup.
 
 ## **ResourceGroup** Processing
 
-When a **ResourceGroup** is submitted to the Kubernetes API server, the KRO
+When a **ResourceGroup** is submitted to the Kubernetes API server, the kro
 controller processes it as follows:
 
 1. **Formal Verification**: The controller performs a comprehensive analysis of
@@ -106,7 +106,7 @@ controller processes it as follows:
 3. **CRD Registration**: It registers the newly generated CRD with the
    Kubernetes API server, making it available for use in the cluster.
 
-4. **Micro-Controller Deployment**: KRO deploys a dedicated micro-controller for
+4. **Micro-Controller Deployment**: kro deploys a dedicated micro-controller for
    this ResourceGroup. This micro-controller will listen for **"instance"
    events** - instances of the CRD created in step 2. It will be responsible for
    managing the **lifecycle of resources** defined in the ResourceGroup for each
@@ -122,7 +122,7 @@ the web application with customizable parameters. The deployed micro-controller
 would then manage all **SimpleWebApps instances**, creating and managing the
 associated **Deployments** and **Services** as defined in the ResourceGroup.
 
-The **KRO** controller continues to monitor the **ResourceGroup** for any
+The **kro** controller continues to monitor the **ResourceGroup** for any
 changes, updating the corresponding CRD and micro-controller as necessary.
 
 ## **ResourceGroup** Instance Example

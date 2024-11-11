@@ -4,8 +4,8 @@ sidebar_position: 15
 
 # Instances
 
-Instances are a fundamental concept in **KRO** that represent instances of
-ResourceGroups. They define the desired state of a set of resources, which KRO
+Instances are a fundamental concept in **kro** that represent instances of
+ResourceGroups. They define the desired state of a set of resources, which kro
 continuously works to maintain.
 
 ## What is an Instance?
@@ -46,15 +46,15 @@ ResourceGroup.
 
 ## The reconciliation loop
 
-KRO manages Instances through a continuous reconciliation process:
+kro manages Instances through a continuous reconciliation process:
 
-- **Desired state detection**: KRO observes the Instance, which represents the
+- **Desired state detection**: kro observes the Instance, which represents the
   desired state of resources.
-- **Current state assessment**: KRO talks to the api-server and checks the
+- **Current state assessment**: kro talks to the api-server and checks the
   current state of resources in the cluster related to the Instance.
 - **Difference identification**: Any differences between the desired state
   (Instance) and the current state are identified.
-- **State Reconciliation**: KRO takes necessary actions to align the current
+- **State Reconciliation**: kro takes necessary actions to align the current
   state with the desired state. This may involve creating, updating, or deleting
   resources as needed.
 - **Status Updates**: The Instance's status is updated to reflect the current
@@ -79,7 +79,7 @@ KRO manages Instances through a continuous reconciliation process:
   state. Use version control for your Instances to track changes over time.
 - Leverage labels and annotations in Instances for organization and filtering.
 - Regularly review Instances to ensure they reflect current requirements.
-- Use KRO's dry-run feature to preview reconciliation actions before applying
+- Use kro's dry-run feature to preview reconciliation actions before applying
   changes to Instances.
 - Monitor Instance statuses to understand the current state of your
   applications.
@@ -88,13 +88,13 @@ KRO manages Instances through a continuous reconciliation process:
 
 ## Common Status Fields
 
-KRO automatically injects two common fields into the status of all instances:
+kro automatically injects two common fields into the status of all instances:
 **Conditions** and **State**. These fields provide crucial information about the
 current status of the instance and its associated resources.
 
 ### 1. Conditions
 
-Conditions are a standard Kubernetes concept that KRO leverages to provide
+Conditions are a standard Kubernetes concept that kro leverages to provide
 detailed status information. Each condition represents a specific aspect of the
 instance's state. Common conditions include:
 
@@ -148,4 +148,4 @@ status:
 These common status fields provide users with a consistent and informative way
 to check the health and state of their instances across different
 ResourceGroups. They are essential for monitoring, troubleshooting, and
-automating operations based on the status of KRO-managed resources.
+automating operations based on the status of kro-managed resources.

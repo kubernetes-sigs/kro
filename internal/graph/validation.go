@@ -35,7 +35,7 @@ var (
 	// kubernetesVersionRegex
 	kubernetesVersionRegex = regexp.MustCompile(`^v\d+(?:(?:alpha|beta)\d+)?$`)
 
-	// reservedKeyWords is a list of reserved words in KRO.
+	// reservedKeyWords is a list of reserved words in kro.
 	reservedKeyWords = []string{
 		"apiVersion",
 		"context",

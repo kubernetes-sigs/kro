@@ -1,4 +1,4 @@
-# KRO Application example
+# kro Application example
 
 This example creates a ResourceGroup called `App` and then instaciates it with
 the default nginx container image.

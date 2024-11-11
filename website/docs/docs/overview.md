@@ -2,18 +2,18 @@
 sidebar_position: 1
 ---
 
-# What is KRO?
+# What is kro?
 
-**KRO** (Kube Resource Orchesrtator) is an open-source project that allows you
+**kro** (Kube Resource Orchestrator) is an open-source project that allows you
 to define custom **Kubernetes APIs** using simple and straightforward
-configuration. With KRO, you can easily configure new custom APIs that create a
-group of Kubernetes objects and the logical operations between them. KRO
+configuration. With kro, you can easily configure new custom APIs that create a
+group of Kubernetes objects and the logical operations between them. kro
 automatically calculates the order in which objects should be created. You can
 pass values from one object to another, set default values for fields in the API
 specification, and incorporate conditionals into your custom API definitions.
 End users can easily call these custom APIs to create grouped resources.
 
-# How does KRO work?
+# How does kro work?
 
 ### Developer interface
 
@@ -43,12 +43,13 @@ Definition (CRD) called **ResourceGroup (RG)**. The **Platform**, **Security**,
 and **Compliance** teams, can collaborate to create custom APIs by defining
 Custom Resources for the ResourceGroup CRD.
 
-In the depicted example, the **Platform Team** has created a **RG** with arbitrary name
-"Application Stack" that encapsulates the necessary resources, along with any additional
-logic, abstractions, and security best practices. When the RG is applied to the cluster,
-a new API of kind ApplicationStack is created and available for Developer to interact with.
-The Developers no longer need to directly manage the underlying infrastructure complexities, 
-as the custom API handles the deployment and configuration of the required resources.
+In the depicted example, the **Platform Team** has created a **RG** with
+arbitrary name "Application Stack" that encapsulates the necessary resources,
+along with any additional logic, abstractions, and security best practices. When
+the RG is applied to the cluster, a new API of kind ApplicationStack is created
+and available for Developer to interact with. The Developers no longer need to
+directly manage the underlying infrastructure complexities, as the custom API
+handles the deployment and configuration of the required resources.
 
 <div align="center">
 
@@ -75,11 +76,11 @@ _Fugure 3: ResourceGroup Instance (RGI)_
 
 </div>
 
-# Why KRO?
+# Why kro?
 
 ### Manage any group of resources as one unit
 
-Using **KRO**, the **Platform Team** can enable Developer teams to quickly
+Using **kro**, the **Platform Team** can enable Developer teams to quickly
 deploy and manage applications and their dependencies as one unit, handling the
 entire lifecycle from deployment to maintenance. The new APIs integrate
 seamlessly with developers' existing CD tools, preserving familiar processes and
@@ -88,7 +89,7 @@ interfaces to simplify adoption.
 ### Collaborate
 
 Transform **Kubernetes** into your unified platform configuration framework
-using **KRO**. Platform, Compliance, and Security teams work together to develop
+using **kro**. Platform, Compliance, and Security teams work together to develop
 APIs that standardize and streamline configurations, making it easier for
 Developer teams to adopt secure, compliant practices. This collaboration lets
 you build your organizational standards directly into the APIs, ensuring every

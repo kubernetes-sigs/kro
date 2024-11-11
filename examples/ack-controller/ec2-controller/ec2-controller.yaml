@@ -19,7 +19,7 @@ spec:
         iamRole:
           maxSessionDuration: integer | default=3600
           oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EC2 controller deployement on EKS cluster using KRO Resource group
+          roleDescription: string | default=IRSA role for ACK EC2 controller deployement on EKS cluster using kro Resource group
         image:
           deletePolicy: string | default=delete
           repository: string | default=public.ecr.aws/aws-controllers-k8s/ec2-controller

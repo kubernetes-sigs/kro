@@ -29,7 +29,7 @@
 //     the performance or functionality of others.
 //
 //  4. Minimalism: Unlike controller-runtime, this implementation
-//     is tailored specifically for KRO's needs, avoiding unnecessary
+//     is tailored specifically for kro's needs, avoiding unnecessary
 //     dependencies and overhead.
 //
 //  5. Future Extensibility: It allows for future enhancements such as
@@ -39,14 +39,14 @@
 // Why not use k8s.io/controller-runtime:
 //
 //  1. Staticc nature: controller-runtime is optimized for statically defined
-//     controllers, however KRO requires runtime creation and management
+//     controllers, however kro requires runtime creation and management
 //     of controllers for various GVRs.
 //
 //  2. Overhead reduction: by not including unused features like leader election
 //     and certain metrics, this implementation remains minimalistic and efficient.
 //
 //  3. Customization: this design allows for deep customization and
-//     optimization specific to KRO's unique requirements for managing
+//     optimization specific to kro's unique requirements for managing
 //     multiple GVRs dynamically.
 //
 // This implementation aims to provide a reusable, efficient, and flexible
@@ -105,7 +105,7 @@ type Config struct {
 // cluster without requiring restarts or pod redeployments.
 //
 // It is mainly inspired by native Kubernetes controllers but designed for more
-// flexible and lightweight operation. DC serves as the core component of KRO's
+// flexible and lightweight operation. DC serves as the core component of kro's
 // dynamic resource management system. Its primary purpose is to create and manage
 // "micro" controllers for custom resources defined by users at runtime (via the
 // ResourceGroup CRs).

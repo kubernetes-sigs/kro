@@ -3,7 +3,7 @@ import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: "KRO",
+  title: "kro",
   tagline: "Kube Resources Orchestrator",
   // The Melodious Kubernetes Integrator
   // Cementing Your Kubernetes Infrastructure
@@ -70,7 +70,7 @@ const config: Config = {
       },
     },
     navbar: {
-      title: "KRO",
+      title: "kro",
       hideOnScroll: true,
       /* logo: {
         alt: "KRO Logo",

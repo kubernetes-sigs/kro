@@ -22,15 +22,15 @@ type ConditionType string
 
 const (
 	// ResourceGroupConditionTypeGraphSynced indicates the state of the directed
-	// acyclic graph (DAG) that KRO uses to manage the resources in a
+	// acyclic graph (DAG) that kro uses to manage the resources in a
 	// ResourceGroup.
 	ResourceGroupConditionTypeGraphVerified ConditionType = "kro.aws.dev/GraphVerified"
 	// ResourceGroupConditionTypeCustomResourceDefinitionSynced indicates the state of the
-	// CustomResourceDefinition (CRD) that KRO uses to manage the resources in a
+	// CustomResourceDefinition (CRD) that kro uses to manage the resources in a
 	// ResourceGroup.
 	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "kro.aws.dev/CustomResourceDefinitionSynced"
 	// ResourceGroupConditionTypeReconcilerReady indicates the state of the reconciler.
-	// Whenever an ResourceGroup resource is created, KRO will spin up a
+	// Whenever an ResourceGroup resource is created, kro will spin up a
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
 	ResourceGroupConditionTypeReconcilerReady ConditionType = "kro.aws.dev/ReconcilerReady"

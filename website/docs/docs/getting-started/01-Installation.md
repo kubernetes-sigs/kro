@@ -2,9 +2,9 @@
 sidebar_position: 1
 ---
 
-# Installing KRO
+# Installing kro
 
-This guide walks you through the process of installing KRO on your Kubernetes
+This guide walks you through the process of installing kro on your Kubernetes
 cluster using Helm.
 
 ## Prerequisites
@@ -18,14 +18,14 @@ Before you begin, ensure you have the following:
 
 :::info[**Alpha Stage**]
 
-KRO is currently in alpha stage. While the images are publicly available, please
+kro is currently in alpha stage. While the images are publicly available, please
 note that the software is still under active development and APIs may change.
 
 :::
 
-### Install KRO using Helm
+### Install kro using Helm
 
-Once authenticated, install KRO using the Helm chart:
+Once authenticated, install kro using the Helm chart:
 
 ```sh
 # Fetch the latest release version from GitHub
@@ -35,7 +35,7 @@ export KRO_VERSION=$(curl -s \
     sed -E 's/.*"([^"]+)".*/\1/' \
   )
 
-# Install KRO using Helm
+# Install kro using Helm
 helm install kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
   --create-namespace \
@@ -55,15 +55,15 @@ correctly:
 
    You should see the "kro" release listed.
 
-2. Check the KRO pods:
+2. Check the kro pods:
    ```sh
    kubectl get pods -n kro
    ```
    You should see kro-related pods running.
 
-## Upgrading KRO
+## Upgrading kro
 
-To upgrade to a newer version of KRO, use the Helm upgrade command:
+To upgrade to a newer version of kro, use the Helm upgrade command:
 
 ```bash
 # Replace `<new-version>` with the version you want to upgrade to.
@@ -78,18 +78,19 @@ helm upgrade kro oci://public.ecr.aws/kro/kro \
 :::info[**CRD Updates**]
 
 Helm does not support updating CRDs, so you may need to manually update or
-remove and re-apply kro related CRDs. For more information, refer to the Helm documentation.
+remove and re-apply kro related CRDs. For more information, refer to the Helm
+documentation.
 
 :::
 
-## Uninstalling KRO
+## Uninstalling kro
 
-To uninstall KRO, use the following command:
+To uninstall kro, use the following command:
 
 ```bash
 helm uninstall kro -n kro
 ```
 
-Keep in mind that this command will remove all KRO resources from your cluster,
+Keep in mind that this command will remove all kro resources from your cluster,
 except for the ResourceGroup CRD and any other custom resources you may have
 created.

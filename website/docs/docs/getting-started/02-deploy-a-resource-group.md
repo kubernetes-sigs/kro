@@ -4,19 +4,19 @@ sidebar_position: 2
 
 # Deploy Your First ResourceGroup
 
-This guide will walk you through creating your first Resource Group in **KRO**.
-We'll create a simple `ResourceGroup` that demonstrates key KRO features.
+This guide will walk you through creating your first Resource Group in **kro**.
+We'll create a simple `ResourceGroup` that demonstrates key kro features.
 
 ## What is a **ResourceGroup**?
 
 A `ResourceGroup` lets you create new Kubernetes APIs that deploy multiple
-resources together as a single, reusable unit. In this example, we’ll create a 
-`ResourceGroup` that packages a reusable set of resources, including a `Deployment`, `Service`, 
-and `Ingress`. These resources are available in any Kubernetes cluster.
-Users can then call the API to deploy resources as a single unit, ensuring they're
-always created together with the right configuration.
+resources together as a single, reusable unit. In this example, we’ll create a
+`ResourceGroup` that packages a reusable set of resources, including a
+`Deployment`, `Service`, and `Ingress`. These resources are available in any
+Kubernetes cluster. Users can then call the API to deploy resources as a single
+unit, ensuring they're always created together with the right configuration.
 
-Under the hood, when you create a `ResourceGroup`, KRO:
+Under the hood, when you create a `ResourceGroup`, kro:
 
 1. Treats your resources as a Directed Acyclic Graph (DAG) to understand their
    dependencies
@@ -26,9 +26,10 @@ Under the hood, when you create a `ResourceGroup`, KRO:
 
 :::tip[info]
 
-**KRO** is a Kubernetes-native tool that speaks **Kubernetes**! All you need
-to get started is a Kubernetes cluster that supports CRDs, version 1.16 or later. 
-KRO understands native Kubernetes resource as well as any custom resources your cluster supports.
+**kro** is a Kubernetes-native tool that speaks **Kubernetes**! All you need to
+get started is a Kubernetes cluster that supports CRDs, version 1.16 or later.
+kro understands native Kubernetes resource as well as any custom resources your
+cluster supports.
 
 :::
 
@@ -36,7 +37,7 @@ KRO understands native Kubernetes resource as well as any custom resources your 
 
 Before you begin, make sure you have the following:
 
-- **KRO** [installed](./01-Installation.md) and running in your Kubernetes
+- **kro** [installed](./01-Installation.md) and running in your Kubernetes
   cluster.
 - `kubectl` installed and configured to interact with your Kubernetes cluster.
 
@@ -51,7 +52,7 @@ kind: ResourceGroup
 metadata:
   name: my-application
 spec:
-  # KRO uses this simple schema to create your CRD schema and apply it
+  # kro uses this simple schema to create your CRD schema and apply it
   # The schema defines what users can provide when they instantiate the RG (create an instance).
   schema:
     apiVersion: v1alpha1
@@ -161,7 +162,7 @@ spec:
 
 ### Create your Application Instance
 
-Now that your `ResourceGroup` is created, KRO has generated a new API
+Now that your `ResourceGroup` is created, kro has generated a new API
 (Application) that orchestrates creation of the a `Deployment`, a `Service`, and
 an `Ingress`. Let's use it!
 
@@ -223,7 +224,7 @@ an `Ingress`. Let's use it!
 
 ### Delete the Application instance
 
-KRO can also help you clean up resources when you're done with them.
+kro can also help you clean up resources when you're done with them.
 
 1. **Delete the Application instance**: Clean up the resources by deleting the
    Application instance:

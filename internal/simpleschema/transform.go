@@ -34,7 +34,7 @@ func newTransformer() *transformer {
 // loadPreDefinedTypes loads pre-defined types into the transformer.
 // The pre-defined types are used to resolve references in the schema.
 //
-// As of today, KRO doesn't support custom types in the schema - do
+// As of today, kro doesn't support custom types in the schema - do
 // not use this function.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	t.preDefinedTypes = make(map[string]extv1.JSONSchemaProps)

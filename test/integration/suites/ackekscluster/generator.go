@@ -190,7 +190,7 @@ func clusterRoleDef(namespace string) map[string]interface{} {
 		},
 		"spec": map[string]interface{}{
 			"name":        "kro-cluster-role",
-			"description": "KRO created cluster cluster role",
+			"description": "kro created cluster cluster role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
 			},
@@ -220,7 +220,7 @@ func nodeRoleDef(namespace string) map[string]interface{} {
 		},
 		"spec": map[string]interface{}{
 			"name":        "kro-cluster-node-role",
-			"description": "KRO created cluster node role",
+			"description": "kro created cluster node role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
 				"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
@@ -252,7 +252,7 @@ func adminRoleDef(namespace string) map[string]interface{} {
 		},
 		"spec": map[string]interface{}{
 			"name":        "kro-cluster-pia-role",
-			"description": "KRO created cluster admin pia role",
+			"description": "kro created cluster admin pia role",
 			"policies": []interface{}{
 				"arn:aws:iam::aws:policy/AdministratorAccess",
 			},

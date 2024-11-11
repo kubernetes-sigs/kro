@@ -41,7 +41,7 @@ export default function Home(): JSX.Element {
   const { siteConfig } = useDocusaurusContext();
   return (
     <Layout
-      title={`Powerful Abstractions for Kuberentes`}
+      title={`Powerful Abstractions for Kubernetes`}
       description="Description will go into a meta tag in <head />"
     >
       <HomepageHeader />

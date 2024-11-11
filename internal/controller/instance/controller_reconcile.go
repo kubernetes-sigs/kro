@@ -264,7 +264,7 @@ func (igr *instanceGraphReconciler) updateResource(
 func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context, resourceStates map[string]*ResourceState) error {
 	instanceUnstructured := igr.runtime.GetInstance()
 
-	igr.log.V(1).Info("Getting all resources created by KRO")
+	igr.log.V(1).Info("Getting all resources created by kro")
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
 		_, err := igr.runtime.Synchronize()
 		if err != nil {

@@ -175,13 +175,13 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 
 .PHONY: image
-build-image: ## Build the KRO controller images using ko build
+build-image: ## Build the kro controller images using ko build
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/kro" \
 		ko build --bare github.com/awslabs/kro/cmd/controller \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
-publish-image: ## Publish the KRO controller images to ECR
+publish-image: ## Publish the kro controller images to ECR
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/kro" \
 		ko publish --bare github.com/awslabs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none

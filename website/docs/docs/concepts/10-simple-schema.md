@@ -4,7 +4,7 @@ sidebar_position: 2
 
 # Simple Schema
 
-KRO's Simple Schema provides a powerful yet intuitive way to define the
+kro's Simple Schema provides a powerful yet intuitive way to define the
 structure of your ResourceGroup. Here is comprehensive example:
 
 ```yaml
@@ -124,7 +124,7 @@ include value markers:
   be dynamically obtained from another resource. The value is a CEL expression
   that is validated at ResourceGroup processing time and evaluated at runtime.
 
-:::tip Note that the value marker is a KRO extension to the OpenAPISchema and is
+:::tip Note that the value marker is a kro extension to the OpenAPISchema and is
 not part of the official OpenAPISchema specification. :::
 
 Example:
@@ -136,19 +136,19 @@ status:
 
 ## Default status fields
 
-**KRO** automatically injects two common fields into the status of all instances
+**kro** automatically injects two common fields into the status of all instances
 generated from **ResourceGroups**: `conditions` and `state`. These fields
 provide essential information about the current status of the instance and its
 associated resources.
 
 :::tip `conditions` and `state` are reserved words in the status section. If a
-user defines these fields in their **ResourceGroup**'s status schema, KRO will
+user defines these fields in their **ResourceGroup**'s status schema, kro will
 override them with its own values. :::
 
 ### 1. Conditions
 
 The `conditions` field is an array of condition objects, each representing a
-specific aspect of the instance's state. KRO automatically manages this field.
+specific aspect of the instance's state. kro automatically manages this field.
 
 ```yaml
 status:

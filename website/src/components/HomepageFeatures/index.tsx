@@ -35,7 +35,7 @@ const FeatureList: FeatureItem[] = [
     scale: 0.6,
     description: (
       <>
-        KRO streamlines Kubernetes complexity, allowing you to manage resources
+        kro streamlines Kubernetes complexity, allowing you to manage resources
         intuitively and focus on developing your application, not wrestling with
         YAML files.
       </>
@@ -49,7 +49,7 @@ const FeatureList: FeatureItem[] = [
     Svg: require("@site/static/img/expand-arrows.svg").default,
     description: (
       <>
-        KRO effortlessly scales your resource management from simple deployments
+        kro effortlessly scales your resource management from simple deployments
         to complex, multi-service architectures.
       </>
     ),

@@ -1,8 +1,8 @@
-# Amazon EKS cluster management using KRO & ACK
+# Amazon EKS cluster management using kro & ACK
 
-This example demonstrates how to manage a fleet of EKS clusters using KRO,
-ACK, and ArgoCD -- it creates EKS clusters, and bootstraps them with the
-required add-ons
+This example demonstrates how to manage a fleet of EKS clusters using kro, ACK,
+and ArgoCD -- it creates EKS clusters, and bootstraps them with the required
+add-ons
 
 A hub-spoke model is used in this example; a management cluster (hub) is created
 as part of the initial setup and the controllers needed for provisioning and
@@ -74,7 +74,7 @@ OIDC_PROVIDER=$(aws eks describe-cluster --name $EKS_CLUSTER_NAME --region $AWS_
    - ACK IAM controller
    - ACK EC2 controller
    - ACK EKS controller
-6. Install KRO on the management cluster. Please note that this example is
+6. Install kro on the management cluster. Please note that this example is
    tested on 0.1.0-rc.3.
 7. Install EKS pod identity add-on:
 
@@ -84,7 +84,7 @@ aws eks create-addon --cluster-name $CLUSTER_NAME --addon-name eks-pod-identity-
 
 ### Repo
 
-8. Clone KRO repo:
+8. Clone kro repo:
 
 ```sh
 git clone $KRO_REPO_URL $WORKSPACE_PATH/kro
@@ -94,7 +94,7 @@ git clone $KRO_REPO_URL $WORKSPACE_PATH/kro
    the clusters definition, and it will be reconciled to the management cluster
    via the GitOps flow
 
-**NOTE:** Until KRO is released, make sure the repo you create is private.
+**NOTE:** Until kro is released, make sure the repo you create is private.
 
 10. Save the URL of the created repo in an environment variable:
 
@@ -216,13 +216,12 @@ The initial configuration creates one workload cluster named
 
 ## Known issues
 
-1. You will need to restart the KRO controller when you add a new workload
+1. You will need to restart the kro controller when you add a new workload
    cluster due to a bug in the controller. Once the resource group
    `eksclusterwithvpc` is applied, the controller is able to apply the
    corresponding VPC resources, but it is not able to recognize the generated
    ids (e.g. subnet id), and feed that into EKS resources. Refer to
-   [this issue](https://github.com/awslabs/kro/issues/8) for more
-   details.
+   [this issue](https://github.com/awslabs/kro/issues/8) for more details.
 2. Deleting a cluster does not properly clean up all cluster resources i.e.
    subnets, routetables are left strangling. ACK EC2 controller keep reporting
    dependencies preventing deletion. To work around this issue, attempt restart
@@ -255,5 +254,5 @@ aws iam delete-role --role-name argocd-hub-role
 aws iam delete-policy --policy-arn arn:aws:iam::$ACCOUNT_ID:policy/argocd-policy
 ```
 
-5. Delete ACK controllers and KRO
+5. Delete ACK controllers and kro
 6. Delete the management cluster

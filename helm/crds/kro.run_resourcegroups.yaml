@@ -17,10 +17,10 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.apiVersion
+    - jsonPath: .spec.schema.apiVersion
       name: APIVERSION
       type: string
-    - jsonPath: .spec.kind
+    - jsonPath: .spec.schema.kind
       name: KIND
       type: string
     - jsonPath: .status.state
@@ -28,6 +28,7 @@ spec:
       type: string
     - jsonPath: .status.topologicalOrder
       name: TOPOLOGICALORDER
+      priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: AGE
@@ -57,43 +58,87 @@ spec:
           spec:
             description: ResourceGroupSpec defines the desired state of ResourceGroup
             properties:
-              apiVersion:
-                type: string
-              definition:
+              defaultServiceAccounts:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ServiceAccount configuration for controller impersonation.
+                  Key is the namespace, value is the service account name to use.
+                  Special key "*" defines the default service account for any
+                  namespace not explicitly mapped.
+                type: object
+              resources:
+                description: The resources that are part of the resourcegroup.
+                items:
+                  properties:
+                    id:
+                      type: string
+                    includeWhen:
+                      items:
+                        type: string
+                      type: array
+                    readyWhen:
+                      items:
+                        type: string
+                      type: array
+                    template:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - id
+                  - template
+                  type: object
+                type: array
+              schema:
+                description: |-
+                  The schema of the resourcegroup, which includes the
+                  apiVersion, kind, spec, status, types, and some validation
+                  rules.
                 properties:
+                  apiVersion:
+                    description: |-
+                      The APIVersion of the resourcegroup. This is used to generate
+                      and create the CRD for the resourcegroup.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: apiVersion is immutable
+                      rule: self == oldSelf
+                  kind:
+                    description: |-
+                      The kind of the resourcegroup. This is used to generate
+                      and create the CRD for the resourcegroup.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: kind is immutable
+                      rule: self == oldSelf
                   spec:
+                    description: |-
+                      The spec of the resourcegroup. Typically, this is the spec of
+                      the CRD that the resourcegroup is managing. This is adhering
+                      to the SimpleSchema spec
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   status:
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  types:
+                    description: |-
+                      The status of the resourcegroup. This is the status of the CRD
+                      that the resourcegroup is managing. This is adhering to the
+                      SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   validation:
+                    description: |-
+                      Validation is a list of validation rules that are applied to the
+                      resourcegroup.
+                      Not implemented yet.
                     items:
                       type: string
                     type: array
+                required:
+                - apiVersion
+                - kind
                 type: object
-              kind:
-                type: string
-              resources:
-                items:
-                  properties:
-                    definition:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    name:
-                      type: string
-                  required:
-                  - definition
-                  - name
-                  type: object
-                type: array
             required:
-            - apiVersion
-            - definition
-            - kind
+            - schema
             type: object
           status:
             description: ResourceGroupStatus defines the observed state of ResourceGroup
@@ -136,6 +181,34 @@ spec:
                   required:
                   - status
                   - type
+                  type: object
+                type: array
+              resources:
+                description: Resources represents the resources, and their information
+                  (dependencies for now)
+                items:
+                  description: |-
+                    ResourceInformation defines the information about a resource
+                    in the resourcegroup
+                  properties:
+                    dependencies:
+                      description: Dependencies represents the resource dependencies
+                        of a resource group
+                      items:
+                        description: |-
+                          Dependency defines the dependency a resource has observed
+                          from the resources it points to based on expressions
+                        properties:
+                          name:
+                            description: Name represents the name of the dependency
+                              resource
+                            type: string
+                        type: object
+                      type: array
+                    name:
+                      description: Name represents the name of the resources we're
+                        providing information for
+                      type: string
                   type: object
                 type: array
               state:

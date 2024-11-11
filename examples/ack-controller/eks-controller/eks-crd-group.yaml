@@ -9,7 +9,7 @@ spec:
     spec:
       name: string | default=eksCRDGroup
   resources:
-  - name: accessEntryCRD
+  - id: accessEntryCRD
     template: 
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -273,7 +273,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: addonsCRD
+  - id: addonsCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -592,7 +592,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: clusterCRD
+  - id: clusterCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1028,7 +1028,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: fargateProfilesCRD
+  - id: fargateProfilesCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1279,7 +1279,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: identityProviderCRD
+  - id: identityProviderCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1456,7 +1456,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: nodeGroupsCRD
+  - id: nodeGroupsCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1929,7 +1929,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: podIdentityAssociationCRD
+  - id: podIdentityAssociationCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition

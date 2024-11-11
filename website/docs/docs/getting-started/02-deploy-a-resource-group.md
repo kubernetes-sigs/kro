@@ -61,7 +61,7 @@ spec:
 
   # Define the resources this API will manage.
   resources:
-    - name: deployment
+    - id: deployment
       template:
         apiVersion: apps/v1
         kind: Deployment
@@ -83,7 +83,7 @@ spec:
                   ports:
                     - containerPort: 80
 
-    - name: service
+    - id: service
       template:
         apiVersion: v1
         kind: Service
@@ -96,7 +96,7 @@ spec:
               port: 80
               targetPort: 80
 
-    - name: ingress
+    - id: ingress
       includeWhen:
         - ${schema.spec.ingress.enabled} # Only include if the user wants to create an Ingress
       template:

@@ -62,7 +62,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "schema not found",
 		},
 		{
-			name: "invalid resource name with operator",
+			name: "invalid resource id with operator",
 			resourceGroupOpts: []generator.ResourceGroupOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -71,7 +71,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					},
 					nil,
 				),
-				generator.WithResource("vpc-1", map[string]interface{}{ // Invalid name with operator
+				generator.WithResource("vpc-1", map[string]interface{}{ // Invalid id with operator
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
 					"metadata": map[string]interface{}{

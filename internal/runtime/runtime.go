@@ -57,7 +57,7 @@ func NewResourceGroupRuntime(
 	}
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
-	for name, resource := range resources {
+	for id, resource := range resources {
 		// Process the resource variables.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
@@ -66,7 +66,7 @@ func NewResourceGroupRuntime(
 					// NOTE(a-hilaly): This strikes me as an early optimization, but
 					// it's a good one, i believe... We can always remove it if it's
 					// too magical.
-					r.runtimeVariables[name] = append(r.runtimeVariables[name], ec)
+					r.runtimeVariables[id] = append(r.runtimeVariables[id], ec)
 					continue
 				}
 				ees := &expressionEvaluationState{
@@ -74,7 +74,7 @@ func NewResourceGroupRuntime(
 					Dependencies: variable.Dependencies,
 					Kind:         variable.Kind,
 				}
-				r.runtimeVariables[name] = append(r.runtimeVariables[name], ees)
+				r.runtimeVariables[id] = append(r.runtimeVariables[id], ees)
 				r.expressionsCache[expr] = ees
 			}
 		}
@@ -92,7 +92,7 @@ func NewResourceGroupRuntime(
 	for _, variable := range instance.GetVariables() {
 		for _, expr := range variable.Expressions {
 			if ec, seen := r.expressionsCache[expr]; seen {
-				// It is validated at the Graph level that the resource names
+				// It is validated at the Graph level that the resource ids
 				// can't be `instance`. This is why.
 				r.runtimeVariables["instance"] = append(r.runtimeVariables["instance"], ec)
 				continue
@@ -142,7 +142,7 @@ type ResourceGroupRuntime struct {
 	// been successfully reconciled with the cluster state.
 	resolvedResources map[string]*unstructured.Unstructured
 
-	// runtimeVariables maps resource names to their associated variables.
+	// runtimeVariables maps resource ids to their associated variables.
 	// These variables are used in the synchronization process to resolve
 	// dependencies and compute derived values for resources.
 	runtimeVariables map[string][]*expressionEvaluationState
@@ -173,30 +173,30 @@ func (rt *ResourceGroupRuntime) TopologicalOrder() []string {
 	return rt.topologicalOrder
 }
 
-// ResourceDescriptor returns the descriptor for a given resource name.
+// ResourceDescriptor returns the descriptor for a given resource id.
 //
-// It is the responsibility of the caller to ensure that the resource name
+// It is the responsibility of the caller to ensure that the resource id
 // exists in the runtime. a.k.a the caller should use the TopologicalOrder
-// to get the resource names.
-func (rt *ResourceGroupRuntime) ResourceDescriptor(name string) ResourceDescriptor {
-	return rt.resources[name]
+// to get the resource ids.
+func (rt *ResourceGroupRuntime) ResourceDescriptor(id string) ResourceDescriptor {
+	return rt.resources[id]
 }
 
 // GetResource returns a resource so that it's either created or updated in
 // the cluster, it also returns the runtime state of the resource. Indicating
 // whether the resource variables are resolved or not, and whether the resource
 // readiness conditions are met or not.
-func (rt *ResourceGroupRuntime) GetResource(name string) (*unstructured.Unstructured, ResourceState) {
+func (rt *ResourceGroupRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
 	// Did the user set the resource?
-	r, ok := rt.resolvedResources[name]
+	r, ok := rt.resolvedResources[id]
 	if ok {
 		return r, ResourceStateResolved
 	}
 
 	// If not, can we process the resource?
-	resolved := rt.canProcessResource(name)
+	resolved := rt.canProcessResource(id)
 	if resolved {
-		return rt.resources[name].Unstructured(), ResourceStateResolved
+		return rt.resources[id].Unstructured(), ResourceStateResolved
 	}
 
 	return nil, ResourceStateWaitingOnDependencies
@@ -204,8 +204,8 @@ func (rt *ResourceGroupRuntime) GetResource(name string) (*unstructured.Unstruct
 
 // SetResource updates or sets a resource in the runtime. This is typically
 // called after a resource has been created or updated in the cluster.
-func (rt *ResourceGroupRuntime) SetResource(name string, resource *unstructured.Unstructured) {
-	rt.resolvedResources[name] = resource
+func (rt *ResourceGroupRuntime) SetResource(id string, resource *unstructured.Unstructured) {
+	rt.resolvedResources[id] = resource
 }
 
 // GetInstance returns the main instance object managed by this runtime.
@@ -258,12 +258,12 @@ func (rt *ResourceGroupRuntime) Synchronize() (bool, error) {
 // propagateResourceVariables iterates over all resources and evaluates their
 // variables if all dependencies are resolved.
 func (rt *ResourceGroupRuntime) propagateResourceVariables() error {
-	for name := range rt.resources {
-		if rt.canProcessResource(name) {
+	for id := range rt.resources {
+		if rt.canProcessResource(id) {
 			// evaluate the resource variables
-			err := rt.evaluateResourceExpressions(name)
+			err := rt.evaluateResourceExpressions(id)
 			if err != nil {
-				return fmt.Errorf("failed to evaluate resource variables for %s: %w", name, err)
+				return fmt.Errorf("failed to evaluate resource variables for %s: %w", id, err)
 			}
 		}
 	}
@@ -302,7 +302,7 @@ func (rt *ResourceGroupRuntime) resourceVariablesResolved(resource string) bool 
 // depending only on the initial configuration. This function is usually
 // called once during runtime initialization to set up the baseline state
 func (rt *ResourceGroupRuntime) evaluateStaticVariables() error {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 	if err != nil {
 		return err
 	}
@@ -346,7 +346,7 @@ func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
 	// and are resolved after all the dependencies are resolved.
 
 	resolvedResources := maps.Keys(rt.resolvedResources)
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resolvedResources))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
 	if err != nil {
 		return err
 	}
@@ -474,7 +474,7 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{resourceID}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resourceID}))
 	if err != nil {
 		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
@@ -530,7 +530,7 @@ func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, e
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 	if err != nil {
 		return false, nil
 	}

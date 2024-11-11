@@ -2463,7 +2463,7 @@ func Test_areDependenciesIgnored(t *testing.T) {
 }
 
 func setupTestEnv(names []string) (*cel.Env, error) {
-	return krocel.DefaultEnvironment(krocel.WithResourceNames(names))
+	return krocel.DefaultEnvironment(krocel.WithResourceIDs(names))
 }
 
 func Test_evaluateExpression(t *testing.T) {

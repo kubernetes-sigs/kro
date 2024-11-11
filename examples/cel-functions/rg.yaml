@@ -13,7 +13,7 @@ spec:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas * 10}
   resources:
-  - name: deployment
+  - id: deployment
     template:
       apiVersion: apps/v1
       kind: Deployment
@@ -41,7 +41,7 @@ spec:
                 value: ${schema.spec.fullDNSName.split('.')[0]}
               - name: DNS_PARTIALS
                 value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
-  - name: service
+  - id: service
     template:
       apiVersion: v1
       kind: Service

@@ -99,7 +99,7 @@ var _ = Describe("Recovery", func() {
 			// Add resources with circular dependency
 			rg.Spec.Resources = append(rg.Spec.Resources,
 				&krov1alpha1.Resource{
-					Name: "serviceA",
+					ID: "serviceA",
 					Template: toRawExtension(map[string]interface{}{
 						"apiVersion": "v1",
 						"kind":       "Service",
@@ -109,7 +109,7 @@ var _ = Describe("Recovery", func() {
 					}),
 				},
 				&krov1alpha1.Resource{
-					Name: "serviceB",
+					ID: "serviceB",
 					Template: toRawExtension(map[string]interface{}{
 						"apiVersion": "v1",
 						"kind":       "Service",
@@ -145,7 +145,7 @@ var _ = Describe("Recovery", func() {
 			// Replace with new valid resource
 			rg.Spec.Resources = []*krov1alpha1.Resource{
 				{
-					Name: "itsapodnow",
+					ID: "itsapodnow",
 					Template: toRawExtension(map[string]interface{}{
 						"apiVersion": "apps/v1",
 						"kind":       "Deployment",

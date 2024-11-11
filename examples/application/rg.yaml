@@ -23,7 +23,7 @@ spec:
       availableReplicas: ${deployment.status.availableReplicas}
 
   resources:
-  - name: deployment
+  - id: deployment
     readyWhen:
       - ${deployment.spec.replicas == deployment.status.availableReplicas}
     template:
@@ -65,7 +65,7 @@ spec:
                 value: ${schema.spec.s3bucket}
             restartPolicy: Always
 
-  - name: serviceaccount
+  - id: serviceaccount
     template:
       apiVersion: v1
       kind: ServiceAccount
@@ -73,7 +73,7 @@ spec:
         name: ${schema.spec.name}
         namespace: ${schema.spec.namespace}
 
-  - name: service
+  - id: service
     includeWhen:
     - ${schema.spec.service.enabled}  
     template:
@@ -91,7 +91,7 @@ spec:
           port: 80
           targetPort: ${schema.spec.port}
 
-  - name: ingress
+  - id: ingress
     includeWhen:
     - ${schema.spec.ingress.enabled}  
     template:

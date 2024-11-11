@@ -47,7 +47,7 @@ spec:
         serviceAccount:
           name: string | default=eks-controller-sa
   resources:
-  - name: eksCRDGroup
+  - id: eksCRDGroup
     template:
       apiVersion: kro.run/v1alpha1
       kind: EKSCRDGroup
@@ -55,7 +55,7 @@ spec:
         name: ${schema.spec.name}-crd-group
       spec:
         name: ${schema.spec.name}-crd-group
-  - name: eksControllerIamPolicy
+  - id: eksControllerIamPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -82,7 +82,7 @@ spec:
               }
             ]
           }
-  - name: eksControllerIamRole
+  - id: eksControllerIamRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -107,7 +107,7 @@ spec:
               }
             }]
           }
-  - name: serviceAccount
+  - id: serviceAccount
     template:
       apiVersion: v1
       kind: ServiceAccount
@@ -116,7 +116,7 @@ spec:
         namespace: ${schema.spec.namespace}
         annotations:
           eks.amazonaws.com/role-arn : ${eksControllerIamRole.status.ackResourceMetadata.arn}
-  - name: deployment
+  - id: deployment
     template:
       apiVersion: apps/v1
       kind: Deployment
@@ -175,7 +175,7 @@ spec:
                 value: ${schema.spec.values.log.level}
               ports:
               - containerPort: 80
-  - name: clusterRoleBinding
+  - id: clusterRoleBinding
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -189,7 +189,7 @@ spec:
       - kind: ServiceAccount
         name: ${serviceAccount.metadata.name}
         namespace: ${serviceAccount.metadata.namespace}
-  - name: clusterRole
+  - id: clusterRole
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole

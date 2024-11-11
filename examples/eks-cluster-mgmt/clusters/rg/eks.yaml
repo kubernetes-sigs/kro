@@ -23,7 +23,7 @@ spec:
       k8sVersion: string
       nodesCount: integer
   resources:
-  - name: clusterRole
+  - id: clusterRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -47,7 +47,7 @@ spec:
               }
             ]
           }
-  - name: nodeRole
+  - id: nodeRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -73,7 +73,7 @@ spec:
               }
             ]
           }
-  - name: ekscluster
+  - id: ekscluster
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Cluster
@@ -92,7 +92,7 @@ spec:
             - ${schema.spec.subnets.controlplane.subnet1ID}
             - ${schema.spec.subnets.controlplane.subnet2ID}
         #version: ${schema.spec.k8sVersion} a bug needs to be fixed for this to work
-  - name: nodegroup
+  - id: nodegroup
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: Nodegroup
@@ -112,7 +112,7 @@ spec:
           minSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
           maxSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
           desiredSize: 3 #${schema.spec.nodesCount} a bug needs to be fixed for this to work
-  - name: argocdRole
+  - id: argocdRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -136,7 +136,7 @@ spec:
               }
             ]
           }
-  - name: argocdSecret
+  - id: argocdSecret
     template:
       apiVersion: v1
       kind: Secret
@@ -164,7 +164,7 @@ spec:
               "caData": "${ekscluster.status.certificateAuthority.data}"
             }
           }
-  - name: accessEntry
+  - id: accessEntry
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: AccessEntry
@@ -178,7 +178,7 @@ spec:
             type: "cluster"
           policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
         principalARN: "${argocdRole.status.ackResourceMetadata.arn}"
-  - name: oidcProvider
+  - id: oidcProvider
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: OpenIDConnectProvider

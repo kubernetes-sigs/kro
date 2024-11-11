@@ -32,7 +32,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"eksCluster"},
 			expression: `eksCluster.status.state == "ACTIVE"`,
 			wantResources: []ResourceDependency{
-				{Name: "eksCluster", Path: "eksCluster.status.state"},
+				{ID: "eksCluster", Path: "eksCluster.status.state"},
 			},
 		},
 		{
@@ -40,9 +40,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"bucket"},
 			expression: `bucket.spec.name == "my-bucket" && bucket.metadata.name == bucket.spec.name`,
 			wantResources: []ResourceDependency{
-				{Name: "bucket", Path: "bucket.metadata.name"},
-				{Name: "bucket", Path: "bucket.spec.name"},
-				{Name: "bucket", Path: "bucket.spec.name"},
+				{ID: "bucket", Path: "bucket.metadata.name"},
+				{ID: "bucket", Path: "bucket.spec.name"},
+				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 		},
 
@@ -52,7 +52,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{"toLower"},
 			expression: `toLower(bucket.name)`,
 			wantResources: []ResourceDependency{
-				{Name: "bucket", Path: "bucket.name"},
+				{ID: "bucket", Path: "bucket.name"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "toLower"},
@@ -64,7 +64,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{"max"},
 			expression: `max(deployment.spec.replicas, 5)`,
 			wantResources: []ResourceDependency{
-				{Name: "deployment", Path: "deployment.spec.replicas"},
+				{ID: "deployment", Path: "deployment.spec.replicas"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "max"},
@@ -76,8 +76,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{},
 			expression: `list[0] || flags["enabled"]`,
 			wantResources: []ResourceDependency{
-				{Name: "list", Path: "list"},
-				{Name: "flags", Path: "flags"},
+				{ID: "list", Path: "list"},
+				{ID: "flags", Path: "flags"},
 			},
 			wantFunctions: []FunctionCall{},
 		},
@@ -102,9 +102,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{"validate"},
 			expression: `validate(conditions.ready || conditions.initialized && list[3])`,
 			wantResources: []ResourceDependency{
-				{Name: "list", Path: "list"},
-				{Name: "conditions", Path: "conditions.ready"},
-				{Name: "conditions", Path: "conditions.initialized"},
+				{ID: "list", Path: "list"},
+				{ID: "conditions", Path: "conditions.ready"},
+				{ID: "conditions", Path: "conditions.initialized"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "validate", Arguments: []string{
@@ -117,8 +117,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"eksCluster", "nodeGroup"},
 			expression: `eksCluster.spec.version == nodeGroup.spec.version`,
 			wantResources: []ResourceDependency{
-				{Name: "eksCluster", Path: "eksCluster.spec.version"},
-				{Name: "nodeGroup", Path: "nodeGroup.spec.version"},
+				{ID: "eksCluster", Path: "eksCluster.spec.version"},
+				{ID: "nodeGroup", Path: "nodeGroup.spec.version"},
 			},
 		},
 		{
@@ -126,8 +126,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 			resources:  []string{"deployment", "eksCluster"},
 			expression: `deployment.metadata.namespace == "default" && eksCluster.spec.version == "1.31"`,
 			wantResources: []ResourceDependency{
-				{Name: "deployment", Path: "deployment.metadata.namespace"},
-				{Name: "eksCluster", Path: "eksCluster.spec.version"},
+				{ID: "deployment", Path: "deployment.metadata.namespace"},
+				{ID: "eksCluster", Path: "eksCluster.spec.version"},
 			},
 		},
 		{
@@ -136,8 +136,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{"concat", "toLower"},
 			expression: `concat(toLower(eksCluster.spec.name), "-", bucket.spec.name)`,
 			wantResources: []ResourceDependency{
-				{Name: "eksCluster", Path: "eksCluster.spec.name"},
-				{Name: "bucket", Path: "bucket.spec.name"},
+				{ID: "eksCluster", Path: "eksCluster.spec.name"},
+				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "concat"},
@@ -150,7 +150,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{"count"},
 			expression: `count(instances) > 0`,
 			wantResources: []ResourceDependency{
-				{Name: "instances", Path: "instances"},
+				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "count"},
@@ -164,9 +164,9 @@ func TestInspector_InspectionResults(t *testing.T) {
                 count(fargateProfile.spec.selectors) <= 5 && 
                 eksCluster.status.state == "ACTIVE"`,
 			wantResources: []ResourceDependency{
-				{Name: "fargateProfile", Path: "fargateProfile.spec.subnets"},
-				{Name: "fargateProfile", Path: "fargateProfile.spec.selectors"},
-				{Name: "eksCluster", Path: "eksCluster.status.state"},
+				{ID: "fargateProfile", Path: "fargateProfile.spec.subnets"},
+				{ID: "fargateProfile", Path: "fargateProfile.spec.selectors"},
+				{ID: "eksCluster", Path: "eksCluster.status.state"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "contains"},
@@ -182,9 +182,9 @@ func TestInspector_InspectionResults(t *testing.T) {
                     contains(map(r.ipRanges, range, concat(range.cidr, "/", range.description)), 
                         "0.0.0.0/0"))`,
 			wantResources: []ResourceDependency{
-				{Name: "securityGroup", Path: "securityGroup.spec.vpcID"},
-				{Name: "securityGroup", Path: "securityGroup.spec.rules"},
-				{Name: "vpc", Path: "vpc.status.vpcID"},
+				{ID: "securityGroup", Path: "securityGroup.spec.vpcID"},
+				{ID: "securityGroup", Path: "securityGroup.spec.rules"},
+				{ID: "vpc", Path: "vpc.status.vpcID"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "concat"},
@@ -205,11 +205,11 @@ func TestInspector_InspectionResults(t *testing.T) {
 				contains(map(iamRole.policies, p, p.actions), "eks:*") && 
 				size(vpc.subnets.filter(s, s.isPrivate)) >= 2`,
 			wantResources: []ResourceDependency{
-				{Name: "eksCluster", Path: "eksCluster.status.state"},
-				{Name: "eksCluster", Path: "eksCluster.status.createdAt"},
-				{Name: "nodeGroups", Path: "nodeGroups"},
-				{Name: "iamRole", Path: "iamRole.policies"},
-				{Name: "vpc", Path: "vpc.subnets"},
+				{ID: "eksCluster", Path: "eksCluster.status.state"},
+				{ID: "eksCluster", Path: "eksCluster.status.createdAt"},
+				{ID: "nodeGroups", Path: "nodeGroups"},
+				{ID: "iamRole", Path: "iamRole.policies"},
+				{ID: "vpc", Path: "vpc.subnets"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "contains"},
@@ -232,13 +232,13 @@ func TestInspector_InspectionResults(t *testing.T) {
 				validateAddress(customer.shippingAddress) &&
 				calculateTax(order.total, customer.address.zipCode) > 0 || true`,
 			wantResources: []ResourceDependency{
-				{Name: "order", Path: "order.total"},
-				{Name: "order", Path: "order.total"},
-				{Name: "order", Path: "order.items"},
-				{Name: "product", Path: "product.id"},
-				{Name: "inventory", Path: "inventory.stock"},
-				{Name: "customer", Path: "customer.shippingAddress"},
-				{Name: "customer", Path: "customer.address.zipCode"},
+				{ID: "order", Path: "order.total"},
+				{ID: "order", Path: "order.total"},
+				{ID: "order", Path: "order.items"},
+				{ID: "product", Path: "product.id"},
+				{ID: "inventory", Path: "inventory.stock"},
+				{ID: "customer", Path: "customer.shippingAddress"},
+				{ID: "customer", Path: "customer.address.zipCode"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "validateAddress"},
@@ -252,7 +252,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			functions:  []string{},
 			expression: `pods.filter(p, p.status == "Running")`,
 			wantResources: []ResourceDependency{
-				{Name: "pods", Path: "pods"},
+				{ID: "pods", Path: "pods"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "map"},
@@ -372,7 +372,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{Name: "unknownResource.someMethod"},
 			},
 			wantUnknownRes: []UnknownResource{
-				{Name: "unknownResource", Path: "unknownResource"},
+				{ID: "unknownResource", Path: "unknownResource"},
 			},
 		},
 		{
@@ -385,7 +385,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{Name: "unknown.method1().method2"},
 			},
 			wantUnknownRes: []UnknownResource{
-				{Name: "unknown", Path: "unknown"},
+				{ID: "unknown", Path: "unknown"},
 			},
 		},
 		{
@@ -398,7 +398,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
                 i.type == 't2.micro'
             )`,
 			wantResources: []ResourceDependency{
-				{Name: "instances", Path: "instances"},
+				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "map"},
@@ -412,8 +412,8 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 					i.state == 'running'
 				)`,
 			wantResources: []ResourceDependency{
-				{Name: "i", Path: "i.status"},
-				{Name: "instances", Path: "instances"},
+				{ID: "i", Path: "i.status"},
+				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "map"},
@@ -426,7 +426,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			functions:  []string{"processItems", "validate"},
 			expression: `processItems(bucket).validate()`,
 			wantResources: []ResourceDependency{
-				{Name: "bucket", Path: "bucket"},
+				{ID: "bucket", Path: "bucket"},
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "processItems"},
@@ -444,7 +444,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{Name: "result.unknownFn().anotherUnknownFn"},
 			},
 			wantUnknownRes: []UnknownResource{
-				{Name: "result", Path: "result"},
+				{ID: "result", Path: "result"},
 			},
 		},
 	}

@@ -81,7 +81,7 @@ type Validation struct {
 
 type Resource struct {
 	// +kubebuilder:validation:Required
-	Name string `json:"name,omitempty"`
+	ID string `json:"id,omitempty"`
 	// +kubebuilder:validation:Required
 	Template runtime.RawExtension `json:"template,omitempty"`
 	// +kubebuilder:validation:Optional

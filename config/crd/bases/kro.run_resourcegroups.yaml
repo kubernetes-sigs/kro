@@ -100,11 +100,17 @@ spec:
                       The APIVersion of the resourcegroup. This is used to generate
                       and create the CRD for the resourcegroup.
                     type: string
+                    x-kubernetes-validations:
+                    - message: apiVersion is immutable
+                      rule: self == oldSelf
                   kind:
                     description: |-
                       The kind of the resourcegroup. This is used to generate
                       and create the CRD for the resourcegroup.
                     type: string
+                    x-kubernetes-validations:
+                    - message: kind is immutable
+                      rule: self == oldSelf
                   spec:
                     description: |-
                       The spec of the resourcegroup. Typically, this is the spec of

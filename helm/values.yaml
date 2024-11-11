@@ -1,5 +1,5 @@
 image:
-  repository: 095708837592.dkr.ecr.us-west-2.amazonaws.com/kro
+  repository: public.ecr.aws/kro
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: "0.1.0"
@@ -63,7 +63,8 @@ resources:
   # resources, such as Minikube. If you do want to specify resources, uncomment the following
   # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
   limits:
-    memory: 1000Mi
+    cpu: 1000m
+    memory: 1024Mi
   requests:
     cpu: 256m
     memory: 128Mi

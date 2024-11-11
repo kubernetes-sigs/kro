@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
@@ -122,5 +123,148 @@ var _ = Describe("Status", func() {
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegroup"))
 		}, 10*time.Second, time.Second).Should(Succeed())
+	})
+
+	It("should have correct resources state when instance is created", func() {
+		rg := generator.NewResourceGroup("test-resoure-status",
+			generator.WithNamespace(namespace),
+			generator.WithSchema(
+				"TestResourceState", "v1alpha1",
+				map[string]interface{}{
+					"name":           "string",
+					"serviceEnabled": "boolean",
+				},
+				nil,
+			),
+			generator.WithResource("deployment", map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+				"spec": map[string]interface{}{
+					"replicas": 1,
+					"selector": map[string]interface{}{
+						"matchLabels": map[string]interface{}{
+							"app": "${schema.spec.name}",
+						},
+					},
+					"template": map[string]interface{}{
+						"metadata": map[string]interface{}{
+							"labels": map[string]interface{}{
+								"app": "${schema.spec.name}",
+							},
+						},
+						"spec": map[string]interface{}{
+							"containers": []map[string]interface{}{
+								{
+									"name":  "nginx",
+									"image": "nginx",
+								},
+							},
+						},
+					},
+				},
+			}, nil, nil),
+			generator.WithResource("serviceAccount", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ServiceAccount",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+			}, nil, nil),
+			generator.WithResource("service", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Service",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+				"spec": map[string]interface{}{
+					"selector": map[string]interface{}{
+						"app": "${schema.spec.name}",
+					},
+					"ports": []map[string]interface{}{
+						{
+							"protocol":   "TCP",
+							"port":       80,
+							"targetPort": 80,
+						},
+					},
+				},
+			}, nil, []string{"${schema.spec.serviceEnabled}"}),
+			generator.WithResource("ingress", map[string]interface{}{
+				"apiVersion": "networking.k8s.io/v1",
+				"kind":       "Ingress",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+				"spec": map[string]interface{}{
+					"rules": []map[string]interface{}{
+						{
+							"http": map[string]interface{}{
+								"paths": []map[string]interface{}{
+									{
+										"path":     "/",
+										"pathType": "Prefix",
+										"backend": map[string]interface{}{
+											"service": map[string]interface{}{
+												"name": "${service.metadata.name}",
+												"port": map[string]interface{}{
+													"number": 80,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}, nil, nil),
+		)
+
+		// Create ResourceGroup
+		Expect(env.Client.Create(ctx, rg)).To(Succeed())
+
+		// Verify ResourceGroup is created and becomes ready
+		createdRG := &krov1alpha1.ResourceGroup{}
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      rg.Name,
+				Namespace: namespace,
+			}, createdRG)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+		}, 10*time.Second, time.Second).Should(Succeed())
+
+		name := "test-resource-state"
+		// Create instance
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
+				"kind":       "TestResourceState",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name":           name,
+					"serviceEnabled": false,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		// Check if instance is created and status matches expected
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object["status"]).ToNot(BeNil())
+			g.Expect(instance.Object["status"].(map[string]interface{})["resources"]).ToNot(BeNil())
+			g.Expect(instance.Object["status"].(map[string]interface{})["resources"]).To(HaveLen(2))
+		}, 20*time.Second, time.Second).Should(Succeed())
 	})
 })

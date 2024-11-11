@@ -2365,10 +2365,10 @@ func Test_WantToCreateResource(t *testing.T) {
 				},
 			}
 
-			got, err := rt.WantToCreateResource("test")
+			got, err := rt.WantToIncludeResource("test")
 			if tt.wantErr {
 				if err == nil {
-					t.Error("WantToCreateResource() expected error, got none")
+					t.Error("WantToIncludeResource() expected error, got none")
 				}
 				return
 			}

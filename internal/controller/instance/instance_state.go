@@ -19,6 +19,15 @@ const (
 	InstanceStateActive     = "ACTIVE"
 	InstanceStateDeleting   = "DELETING"
 	InstanceStateError      = "ERROR"
+
+	ResourceStateSkipped             = "SKIPPED"
+	ResourceStateWaitingForReadiness = "WAITING_FOR_READINESS"
+	ResourceStateInProgress          = "IN_PROGRESS"
+	ResourceStatePending             = "PENDING"
+	ResourceStateSynced              = "SYNCED"
+	ResourceStateDeleted             = "DELETED"
+	ResourceStatePendingDeletion     = "PENDING_DELETION"
+	ResourceStateDeleting            = "DELETING"
 )
 
 // newInstanceState creates a new InstanceState with initialized fields

@@ -61,9 +61,9 @@ type Interface interface {
 	// IsResourceReady returns true if the resource is ready, and false otherwise.
 	IsResourceReady(resourceID string) (bool, string, error)
 
-	// WantToCreateResource returns true if all the condition expressions return true
+	// WantToIncludeResource returns true if all the condition expressions return true
 	// if not it will add itself to the ignored resources
-	WantToCreateResource(resourceID string) (bool, error)
+	WantToIncludeResource(resourceID string) (bool, error)
 
 	// IgnoreResource ignores resource that has a condition expressison that evaluated
 	// to false

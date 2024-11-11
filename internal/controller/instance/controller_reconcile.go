@@ -65,7 +65,7 @@ func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 
 	// Handle instance deletion if marked for deletion
 	if !instance.GetDeletionTimestamp().IsZero() {
-		igr.state.State = "DELETING"
+		igr.state.State = ResourceStateDeleting
 		return igr.handleReconciliation(ctx, igr.handleInstanceDeletion)
 	}
 
@@ -104,11 +104,19 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	// Initialize resource states
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		igr.state.ResourceStates[resourceID] = &ResourceState{State: "PENDING"}
+		igr.state.ResourceStates[resourceID] = &ResourceState{State: ResourceStatePending}
+		if want, err := igr.runtime.WantToIncludeResource(resourceID); err != nil || !want {
+			igr.log.V(1).Info("Skipping resource creation", "reason", err)
+			igr.state.ResourceStates[resourceID].State = ResourceStateSkipped
+			igr.runtime.IgnoreResource(resourceID)
+		}
 	}
 
 	// Reconcile resources in topological order
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
+		if igr.state.ResourceStates[resourceID].State == ResourceStateSkipped {
+			continue
+		}
 		if err := igr.reconcileResource(ctx, resourceID); err != nil {
 			return err
 		}
@@ -137,17 +145,8 @@ func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance 
 
 // reconcileResource handles the reconciliation of a single resource within the instance
 func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string) error {
-	log := igr.log.WithValues("resourceID", resourceID)
 	resourceState := &ResourceState{State: "IN_PROGRESS"}
 	igr.state.ResourceStates[resourceID] = resourceState
-
-	// Check if resource should be created
-	if want, err := igr.runtime.WantToCreateResource(resourceID); err != nil || !want {
-		log.V(1).Info("Skipping resource creation", "reason", err)
-		resourceState.State = "SKIPPED"
-		igr.runtime.IgnoreResource(resourceID)
-		return nil
-	}
 
 	// Get and validate resource state
 	resource, state := igr.runtime.GetResource(resourceID)
@@ -189,12 +188,12 @@ func (igr *instanceGraphReconciler) handleResourceReconciliation(
 	// Check resource readiness
 	if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
 		log.V(1).Info("Resource not ready", "reason", reason, "error", err)
-		resourceState.State = "WAITING_FOR_READINESS"
+		resourceState.State = ResourceStateWaitingForReadiness
 		resourceState.Err = fmt.Errorf("resource not ready: %s: %w", reason, err)
 		return igr.delayedRequeue(resourceState.Err)
 	}
 
-	resourceState.State = "SYNCED"
+	resourceState.State = ResourceStateSynced
 	return igr.updateResource(ctx, rc, resource, observed, resourceID, resourceState)
 }
 
@@ -247,7 +246,7 @@ func (igr *instanceGraphReconciler) updateResource(
 	// TODO: Implement resource diffing logic
 	// TODO: Add update strategy options (e.g., server-side apply)
 
-	resourceState.State = "SYNCED"
+	resourceState.State = ResourceStateSynced
 	return nil
 }
 
@@ -281,7 +280,7 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 		resource, state := igr.runtime.GetResource(resourceID)
 		if state != runtime.ResourceStateResolved {
 			igr.state.ResourceStates[resourceID] = &ResourceState{
-				State: "SKIPPED",
+				State: ResourceStateSkipped,
 			}
 			continue
 		}
@@ -292,7 +291,7 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				igr.state.ResourceStates[resourceID] = &ResourceState{
-					State: "DELETED",
+					State: ResourceStateDeleted,
 				}
 				continue
 			}
@@ -301,7 +300,7 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 
 		igr.runtime.SetResource(resourceID, observed)
 		igr.state.ResourceStates[resourceID] = &ResourceState{
-			State: "PENDING_DELETION",
+			State: ResourceStatePendingDeletion,
 		}
 	}
 	return nil
@@ -316,7 +315,7 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 		resourceID := resources[i]
 		resourceState := igr.state.ResourceStates[resourceID]
 
-		if resourceState == nil || resourceState.State != "PENDING_DELETION" {
+		if resourceState == nil || resourceState.State != ResourceStatePendingDeletion {
 			continue
 		}
 
@@ -338,7 +337,7 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 	err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			igr.state.ResourceStates[resourceID].State = "DELETED"
+			igr.state.ResourceStates[resourceID].State = ResourceStateDeleted
 			return nil
 		}
 		igr.state.ResourceStates[resourceID].State = InstanceStateError
@@ -355,7 +354,7 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error {
 	// Check if all resources are deleted
 	for _, resourceState := range igr.state.ResourceStates {
-		if resourceState.State != "DELETED" && resourceState.State != "SKIPPED" {
+		if resourceState.State != ResourceStateDeleted && resourceState.State != ResourceStateSkipped {
 			return igr.delayedRequeue(fmt.Errorf("waiting for resource deletion completion"))
 		}
 	}

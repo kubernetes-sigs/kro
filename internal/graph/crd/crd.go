@@ -17,10 +17,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/awslabs/kro/api/v1alpha1"
 	"github.com/gobuffalo/flect"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/awslabs/kro/api/v1alpha1"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
@@ -75,6 +76,9 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 		}
 		if _, ok := status.Properties["conditions"]; !ok {
 			status.Properties["conditions"] = defaultConditionsType
+		}
+		if _, ok := status.Properties["resources"]; !ok {
+			status.Properties["resources"] = defaultResourceStatesType
 		}
 	}
 

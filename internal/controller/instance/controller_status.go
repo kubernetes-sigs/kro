@@ -19,6 +19,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/awslabs/kro/api/v1alpha1"
@@ -43,6 +44,7 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 
 	status["state"] = igr.state.State
 	status["conditions"] = igr.prepareConditions(igr.state.ReconcileErr, generation)
+	status["resources"] = igr.prepareResourcesState()
 
 	return status
 }
@@ -63,6 +65,29 @@ func (igr *instanceGraphReconciler) getResolvedStatus() map[string]interface{} {
 	}
 
 	return status
+}
+
+func (igr *instanceGraphReconciler) prepareResourcesState() []interface{} {
+	var resources []interface{}
+
+	for resourceID, resourceState := range igr.state.ResourceStates {
+		if resourceState.Err != nil {
+			resources = append(resources, map[string]interface{}{
+				"id":    resourceID,
+				"state": resourceState.State,
+				"error": resourceState.Err,
+			})
+		} else {
+			if resourceState.State != ResourceStateSkipped {
+				resources = append(resources, map[string]interface{}{
+					"id":    resourceID,
+					"state": resourceState.State,
+				})
+			}
+		}
+	}
+
+	return resources
 }
 
 // prepareConditions creates the conditions array for the instance status.
@@ -99,6 +124,14 @@ func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, sta
 	instance := igr.runtime.GetInstance().DeepCopy()
 	instance.Object["status"] = status
 
+	if igr.state.State == InstanceStateDeleting {
+		_, err := igr.client.Resource(igr.gvr).
+			Namespace(instance.GetNamespace()).
+			Get(ctx, instance.GetName(), metav1.GetOptions{})
+		if err != nil && apierrors.IsNotFound(err) {
+			return nil
+		}
+	}
 	_, err := igr.client.Resource(igr.gvr).
 		Namespace(instance.GetNamespace()).
 		UpdateStatus(ctx, instance, metav1.UpdateOptions{})

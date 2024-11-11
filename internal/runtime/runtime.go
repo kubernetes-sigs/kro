@@ -516,9 +516,9 @@ func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
 	return false
 }
 
-// WantToCreateResource returns true if all the condition expressions return true
+// WantToIncludeResource returns true if all the condition expressions return true
 // if not it will add itself to the ignored resources
-func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, error) {
+func (rt *ResourceGroupRuntime) WantToIncludeResource(resourceID string) (bool, error) {
 	if rt.areDependenciesIgnored(resourceID) {
 		return false, nil
 	}

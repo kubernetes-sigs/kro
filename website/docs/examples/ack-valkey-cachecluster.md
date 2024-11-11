@@ -1,3 +1,10 @@
+---
+sidebar_position: 10
+---
+
+# Valkey cluster
+
+```yaml title="valkey-cachecluster.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
@@ -66,3 +73,4 @@ spec:
           port: 6379
           securityGroupIDs:
             - ${sg.status.id}
+```

@@ -24,15 +24,6 @@ Under the hood, when you create a `ResourceGroup`, kro:
 3. Creates a new API (CRD) in your cluster
 4. Configures itself to watch and serve instances of this API
 
-:::tip[info]
-
-**kro** is a Kubernetes-native tool that speaks **Kubernetes**! All you need to
-get started is a Kubernetes cluster that supports CRDs, version 1.16 or later.
-kro understands native Kubernetes resource as well as any custom resources your
-cluster supports.
-
-:::
-
 ## Prerequisites
 
 Before you begin, make sure you have the following:

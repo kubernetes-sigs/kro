@@ -4,131 +4,156 @@ sidebar_position: 1
 
 # ResourceGroups
 
-**ResourceGroups** are the fundamental building blocks in **kro**. They provide
-a way to define, organize, and manage sets of related Kubernetes resources as a
+ResourceGroups are the fundamental building blocks in **kro**. They provide a
+way to define, organize, and manage sets of related Kubernetes resources as a
 single, reusable unit.
 
-## What is a **ResourceGroup**?
+## What is a ResourceGroup?
 
-A **ResourceGroup** is a custom resource that serves as a blueprint for creating
-and managing a collection of Kubernetes resources. It allows you to:
+A **ResourceGroup** is a custom resource that lets you create new Kubernetes
+APIs for deploying multiple resources together. It acts as a blueprint,
+defining:
 
-- Define multiple resources in a single, cohesive unit
-- Establish relationships and dependencies between resources
-- Create high-level abstractions of complex Kubernetes configurations
-- Promote reusability and consistency across your infrastructure
+- What users can configure (schema)
+- What resources to create (resources)
+- How resources reference each other (dependencies)
+- When resources should be included (conditions)
+- What status to expose (status)
 
-## Anatomy of a **ResourceGroup**
+When you create a **ResourceGroup**, kro generates a new API (a.k.a Custom
+Resource Defintion) in your cluster that others can use to deploy resources in a
+consistent, controlled way.
 
-A **ResourceGroup**, like any Kubernetes resource, consists of three main parts:
+## Anatomy of a ResourceGroup
 
-1. **Metadata**: Name, namespace, labels, etc.
+A ResourceGroup, like any Kubernetes resource, consists of three main parts:
+
+1. **Metadata**: name, namespace, labels, etc.
 2. **Spec**: Defines the structure and properties of the ResourceGroup
 3. **Status**: Reflects the current state of the ResourceGroup
 
-The `spec` section of a ResourceGroup typically includes:
+The `spec` section of a ResourceGroup contains two main components:
 
-- **Parameters**: Define the customizable aspects of the ResourceGroup
-- **Resources**: Specify the Kubernetes resources to be created
-- The **kind** and **apiVersion** fields within the spec define the CRD that
-  will be generated for this ResourceGroup. Here's a simple example of a
-  ResourceGroup:
+- **Schema**: Defines what an instance of your API looks like:
+  - What users can configure during creation and update
+  - What status information they can view
+  - Default values and validation rules
+- **Resources**: Specifies the Kubernetes resources to create:
+  - Resource templates
+  - Dependencies between resources
+  - Conditions for inclusion
+  - Readiness criteria
 
-```yaml text title="simple-web-app.yaml"
-apiVersion: kro.run/v1
+This structure translates to YAML as follows:
+
+```yaml
+apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: simple-web-app
+  name: my-resourcegroup # Metadata section
 spec:
-  kind: SimpleWebApp
-  apiVersion: v1alpha1
-  parameters:
-    appName: string
-    image: string
-    replicas: int
+  schema: # Define your API
+    apiVersion: v1alpha1 # API version
+    kind: MyAPI # API kind
+    spec: {} # fields users can configure
+    status: {} # fields kro will populate
+
+  # Define the resources kro will manage
   resources:
-    - name: deployment
-      definition:
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: ${schema.spec.appName}-deployment
-        spec:
-          replicas: ${schema.spec.replicas}
-          selector:
-            matchLabels:
-              app: ${schema.spec.appName}
-          template:
-            metadata:
-              labels:
-                app: ${schema.spec.appName}
-            spec:
-              containers:
-                - name: ${schema.spec.appName}-container
-                  image: ${schema.spec.image}
-    - name: service
-      definition:
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: ${schema.spec.appName}-service
-        spec:
-          selector:
-            app: ${schema.spec.appName}
-          ports:
-            - port: 80
-              targetPort: 80
+    - name: resource1
+      # declare your resources along with default values and variables
+      template: {}
 ```
 
-In this example, the **ResourceGroup** defines a simple web application with a
-Deployment and a Service. The appName, image, and replicas are parameters that
-can be set when instantiating this ResourceGroup.
+Let's look at each component in detail...
 
-## **ResourceGroup** Processing
+## Understanding the Schema
 
-When a **ResourceGroup** is submitted to the Kubernetes API server, the kro
-controller processes it as follows:
+The schema section defines your new API's structure. It determines:
 
-1. **Formal Verification**: The controller performs a comprehensive analysis of
-   the ResourceGroup definition. This includes:
+- What fields users can configure when creating instances
+- What status information they can view
+- Type validation and default values
 
-   - **Syntax checking**: Ensuring all fields are correctly formatted.
-   - **Type checking**: Validating that parameter types match their definitions.
-   - **Semantic validation**: Verifying that resource relationships and
-     dependencies are logically sound.
-   - **Dry-run validation**: Simulating the creation of resources to detect
-     potential issues.
+Here's an example schema:
 
-2. **CRD Generation**: The controller automatically generates a new **Custom
-   Resource Definition (CRD)** based on the ResourceGroup's specification. This
-   CRD represents the type for instances of this ResourceGroup.
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: WebApplication # This becomes your new API type
+  spec:
+    # Fields users can configure using a simple, straightforward syntax
+    name: string
+    image: string | default="nginx"
+    replicas: integer | default=3
+    ingress:
+      enabled: boolean | default=false
 
-3. **CRD Registration**: It registers the newly generated CRD with the
-   Kubernetes API server, making it available for use in the cluster.
+  status:
+    # Fields kro will populate automatically from your resources
+    # Types are inferred from these CEL expressions
+    availableReplicas: ${deployment.status.availableReplicas}
+    conditions: ${deployment.status.conditions}
+```
 
-4. **Micro-Controller Deployment**: kro deploys a dedicated micro-controller for
-   this ResourceGroup. This micro-controller will listen for **"instance"
-   events** - instances of the CRD created in step 2. It will be responsible for
-   managing the **lifecycle of resources** defined in the ResourceGroup for each
-   instance.
+**kro** follows a different approach for defining your API schema and shapes. It
+leverages a human-friendly and readable syntax that is OpenAPI spec compatible.
+No need to write complex OpenAPI schemas - just define your fields and types in
+a straightforward way. For the complete specification of this format, check out
+the [Simple Schema specification](./10-simple-schema.md). Status fields use CEL
+expressions to reference fields from resources defined in your ResourceGroup.
+kro automatically:
 
-5. **Status Update**: The controller updates the status of the ResourceGroup to
-   reflect that the corresponding CRD has been created and registered.
+- Infers the correct types from your expressions
+- Validates that referenced resources exist
+- Updates these fields as your resources change
 
-For example, given our `simple-web-app` ResourceGroup, the controller would
-create and register a CRD named `SimpleWebApps` (plural form of the
-ResourceGroup name). This CRD defines the structure for creating instances of
-the web application with customizable parameters. The deployed micro-controller
-would then manage all **SimpleWebApps instances**, creating and managing the
-associated **Deployments** and **Services** as defined in the ResourceGroup.
+## ResourceGroup Processing
 
-The **kro** controller continues to monitor the **ResourceGroup** for any
-changes, updating the corresponding CRD and micro-controller as necessary.
+When you create a **ResourceGroup**, kro processes it in several steps to ensure
+correctness and set up the necessary components:
 
-## **ResourceGroup** Instance Example
+1. **Validation**: kro validates your **ResourceGroup** to ensure it's well
+   formed and follows the correct syntax, maximizing the chances of successful
+   deployment, and catching as many errors as possible early on. It:
 
-After the **ResourceGroup** is processed, users can create instances of it.
-Here's an example of how an instance for the `SimpleWebApp` might look:
+   - Validates your schema definition follows the simple schema format
+   - Ensures all resource templates are valid Kubernetes manifests
+   - Checks that referenced values exist and are of the correct type
+   - Confirms resource dependencies form a valid Directed Acycled Graph(DAG)
+     without cycles
+   - Validates all CEL expressions in status fields and conditions
+
+2. **API Generation**: kro generates and registers a new CRD in your cluster
+   based on your schema. For example, if your **ResourceGroup** defines a
+   `WebApplication` API, kro creates a CRD that:
+
+   - Provides API validation based on your schema definition
+   - Automatically applies default values you've defined
+   - Makes status information available to users and other systems
+   - Integrates seamlessly with kubectl and other Kubernetes tools
+
+3. **Controller Configuration**: kro configures itself to watch for instances of
+   your new API and:
+
+   - Creates all required resources following the dependency order
+   - Manages references and value passing between resources
+   - Handles the complete lifecycle for create, update, and delete operations
+   - Keeps status information up to date based on actual resource states
+
+For instance, when you create a `WebApplication` ResourceGroup, kro generates
+the `webapplications.kro.run` CRD. When users create instances of this API, kro
+manages all the underlying resources (Deployments, Services, Custom Resources,
+etc.) automatically.
+
+kro continuously monitors your ResourceGroup for changes, updating the API and
+its behavior accordingly.
+
+## ResourceGroup Instance Example
+
+After the **ResourceGroup** is validated and registered in the cluster, users
+can can create instances of it. Here's an example of how an instance for the
+`SimpleWebApp` might look:
 
 ```yaml title="my-web-app-instance.yaml"
 apiVersion: kro.run/v1alpha1
@@ -140,6 +165,3 @@ spec:
   image: nginx:latest
   replicas: 3
 ```
-
-In the next section, we'll explore the `parameters` and `resources` sections of
-a **ResourceGroup** in more detail.

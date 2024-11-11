@@ -90,12 +90,12 @@ const config: Config = {
           position: "left",
           label: "Examples",
         },
-        {
+        /* {
           type: "docSidebar",
           sidebarId: "apisSidebar",
           position: "left",
           label: "API Reference",
-        },
+        }, */
         {
           type: "docsVersionDropdown",
           position: "right",

@@ -1,8 +1,8 @@
 ---
-sidebar_position: 1
+sidebar_position: 10
 ---
 
-# DeploymentService
+# Web Application
 
 ```yaml title="deploymentservice-rg.yaml"
 apiVersion: kro.run/v1alpha1

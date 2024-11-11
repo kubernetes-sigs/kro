@@ -4,8 +4,9 @@ sidebar_position: 2
 
 # Simple Schema
 
-kro's Simple Schema provides a powerful yet intuitive way to define the
-structure of your ResourceGroup. Here is comprehensive example:
+**kro** follows a different approach for defining your API schema and shapes. It
+leverages a human-friendly and readable syntax that is OpenAPI specification
+compatible. Here's a comprehensive example:
 
 ```yaml
 apiVersion: kro.run/v1alpha1
@@ -13,174 +14,181 @@ kind: ResourceGroup
 metadata:
   name: web-application
 spec:
-  apiVersion: v1alpha1
-  kind: WebApplication
-  parameters:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebApplication
     spec:
-      name: string | required=true description="Name of the web application"
-      replicas: integer | default=1 minimum=1 maximum=10
+      # Basic types
+      name: string | required=true description="My Name"
+      replicas: integer | default=1 minimum=1 maximum=100
       image: string | required=true
-      ports:
-        - port: integer | required=true
-          targetPort: integer
-      env: 'map[string]string'
-      config: ConfigType
-      configArray: []ConfigType
-    customTypes:
-      ConfigType:
-        logLevel: string | enum="debug,info,warn,error" default="info"
-        maxConnections: integer | minimum=1 maximum=1000
+
+      # Structured type
+      ingress:
+        enabled: boolean | default=false
+        host: string | default="example.com"
+        path: string | default="/"
+
+      # Array type
+      ports: "[]integer"
+
+      # Map type
+      env: "map[string]string"
+
     status:
-      url: ${service.status.loadBalancer.ingress[0].hostname}"
-  resources: []
+      # Status fields with auto-inferred types
+      availableReplicas: ${deployment.status.availableReplicas}
+      serviceEndpoint: ${service.status.loadBalancer.ingress[0].hostname}
 ```
 
-## Simple Schema Features Explained
+## Type Definitions
 
-### 1. Spec Field Definition
+### Basic Types
 
-#### Basic Types
+kro supports these foundational types:
 
-- `string`: Basic string type
-- `integer`: Whole number
-- `boolean`: True/False value
+- `string`: Text values
+- `integer`: Whole numbers
+- `boolean`: True/False values
+- `number`: Decimal numbers
 
-for example to define a field that is a string, you can define it as follows:
+For example:
 
 ```yaml
 name: string
 age: integer
+enabled: boolean
+price: number
 ```
 
-#### Structure types
+### Structure Types
 
-Structure types or object types are defined by specifying the fields within the
-object. The fields can be of basic types or other structure types.
-
-for example to define a structure type for a person with name and age fields,
-you can define it as follows:
+You can create complex objects by nesting fields. Each field can use any type,
+including other structures:
 
 ```yaml
-person:
+# Simple structure
+address:
+  street: string
+  city: string
+  zipcode: string
+
+# Nested structures
+user:
   name: string
-  age: integer
+  address: # Nested object
+    street: string
+    city: string
+  contacts: "[]string" # Array of strings
 ```
 
-#### Map Types
+### Array Types
 
-- Arrays: Denoted by `[]`, e.g., `'[]string'`
-- Maps: Denoted by `map[keyType]valueType`, e.g., `'map[string]string'` and
-  `'map[string]Person'`
+Arrays are denoted using `[]` syntax:
 
-### 2. Validation and Documentation Markers
+- Basic arrays: `[]string`, `[]integer`, `[]boolean`
 
-In addition to the type, fields can also have markers for validation,
-documentation and other purposes that are OpenAPISchema compatible.
-
-For example to define a field that is required, has a default value and a
-description, you can define it as follows:
+Examples:
 
 ```yaml
-person:
-  name:
-    string | required=true default="Kylian Mbappé" description="Name of the
-    person"
+tags: []string
+ports: []integer
 ```
 
-Currently supported markers include:
+### Map Types
+
+Maps are key-value pairs denoted as `map[keyType]valueType`:
+
+- `map[string]string`: String to string mapping
+- `map[string]integer`: String to integer mapping
+
+Examples:
+
+```yaml
+labels: "map[string]string"
+metrics: "map[string]number"
+```
+
+## Validation and Documentation
+
+Fields can have multiple markers for validation and documentation:
+
+```yaml
+name: string | required=true default="app" description="Application name"
+replicas: integer | default=3 minimum=1 maximum=10
+mode: string | enum="debug,info,warn,error" default="info"
+```
+
+### Supported Markers
 
 - `required=true`: Field must be provided
-- `default=value`: Default value if not provided
-- `description="..."`: Provides documentation for the field
-- `enum="value1,value2,..."`: Restricts to a set of values **NOT IMPLEMENTED**
-- `minimum=value` and `maximum=value`: For numeric constraints **NOT
-  IMPLEMENTED**
+- `default=value`: Default value if not specified
+- `description="..."`: Field documentation
+- `enum="value1,value2"`: Allowed values
+- `minimum=value`: Minimum value for numbers
+- `maximum=value`: Maximum value for numbers
 
-### 3. Custom Types Definition
+Multiple markers can be combined using the `|` separator.
 
-Custom types are defined in the `customTypes` section, allowing for reusable
-complex structures. They can be referenced by name in the spec or status fields.
-
-Example:
+For example:
 
 ```yaml
-customTypes:
-  ConfigType:
-    logLevel: string | enum="debug,info,warn,error" default="info"
-    maxConnections: integer | minimum=1 maximum=1000
-spec:
-  config: ConfigType | required=true
+name: string | required=true default="app" description="Application name"
 ```
 
-### 4. Status Field Definition
+## Status Fields
 
-Status fields are defined similarly to spec fields and can include validation
-and documentation markers. However on top of that, status fields can also
-include value markers:
+Status fields use CEL expressions to reference values from resources. kro
+automatically:
 
-#### Value Marker **NOT IMPLEMENTED**
-
-- `value="${resource.status.field}"`: Specifies that this field's value should
-  be dynamically obtained from another resource. The value is a CEL expression
-  that is validated at ResourceGroup processing time and evaluated at runtime.
-
-:::tip Note that the value marker is a kro extension to the OpenAPISchema and is
-not part of the official OpenAPISchema specification. :::
-
-Example:
+- Infers the correct types from the expressions
+- Validates that referenced resources exist
+- Updates values when the underlying resources change
 
 ```yaml
 status:
-  url: string | value="${service.status.loadBalancer.ingress[0].hostname}"
+  # Types are inferred from the referenced fields
+  availableReplicas: ${deployment.status.availableReplicas}
+  endpoint: ${service.status.loadBalancer.ingress[0].hostname}
 ```
 
-## Default status fields
+## Default Status Fields
 
-**kro** automatically injects two common fields into the status of all instances
-generated from **ResourceGroups**: `conditions` and `state`. These fields
-provide essential information about the current status of the instance and its
-associated resources.
-
-:::tip `conditions` and `state` are reserved words in the status section. If a
-user defines these fields in their **ResourceGroup**'s status schema, kro will
-override them with its own values. :::
+kro automatically injects two fields to every instance's status:
 
 ### 1. Conditions
 
-The `conditions` field is an array of condition objects, each representing a
-specific aspect of the instance's state. kro automatically manages this field.
+An array of condition objects tracking the instance's state:
 
 ```yaml
 status:
-  conditions: "[]condition"
-customTypes:
-  condition:
-    type: string
-    status: string | enum="True,False,Unknown"
-    lastTransitionTime: string
-    reason: string
-    message: string
+  conditions:
+    - type: string # e.g., "Ready", "Progressing"
+      status: string # "True", "False", "Unknown"
+      lastTransitionTime: string
+      reason: string
+      message: string
 ```
 
-Common condition types include:
+Common condition types:
 
-- `Ready`: Indicates whether the instance is fully reconciled and operational.
-- `Progressing`: Shows if the instance is in the process of reaching the desired
-  state.
-- `Degraded`: Signals that the instance is operational but not functioning
-  optimally.
-- `Error`: Indicates that an error has occurred during reconciliation.
+- `Ready`: Instance is fully reconciled
+- `Progressing`: Working towards desired state
+- `Degraded`: Operational but not optimal
+- `Error`: Reconciliation error occurred
 
 ### 2. State
 
-The `state` field provides a high-level summary of the instance's current
-status.
+A high-level summary of the instance's status:
 
 ```yaml
 status:
-  state: string | enum="Ready,Progressing,Degraded,Error,Terminating,Unknown"
+  state: string # Ready, Progressing, Degraded, Unknown, Deleting
 ```
 
-> These default status fields are automatically added to every instance's
-> status, providing a consistent way to check the health and state of resources
-> across different **ResourceGroups**.
+:::tip
+
+`conditions` and `state` are reserved words. If defined in your schema, kro will
+override them with its own values.
+
+:::

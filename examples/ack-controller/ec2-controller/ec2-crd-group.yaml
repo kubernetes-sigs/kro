@@ -9,7 +9,7 @@ spec:
     spec:
       name: string | default=ec2CRDGroup
   resources:
-  - name: dhcpOptionsCRD
+  - id: dhcpOptionsCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -192,7 +192,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: elasticIPAddressCRD
+  - id: elasticIPAddressCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -378,7 +378,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: flowLogsCRD
+  - id: flowLogsCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -645,7 +645,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: instanceCRD
+  - id: instanceCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1525,7 +1525,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: internetGatewayCRD
+  - id: internetGatewayCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -1727,7 +1727,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: natGatewayCRD
+  - id: natGatewayCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -2029,7 +2029,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: networkAclCRD
+  - id: networkAclCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -2265,7 +2265,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: routeTableCRD
+  - id: routeTableCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -2611,7 +2611,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: securityGroupCRD
+  - id: securityGroupCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -3039,7 +3039,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: subnetCRD
+  - id: subnetCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -3351,7 +3351,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: transitGatewayCRD
+  - id: transitGatewayCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -3533,7 +3533,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: vpcEndpointCRD
+  - id: vpcEndpointCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -3876,7 +3876,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: vpcEndpointServiceConfigurationCRD
+  - id: vpcEndpointServiceConfigurationCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -4103,7 +4103,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: vpcPeeringConnectionCRD
+  - id: vpcPeeringConnectionCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -4431,7 +4431,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: vpcCRD
+  - id: vpcCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -4723,7 +4723,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: adoptedResourceCRD
+  - id: adoptedResourceCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition
@@ -4978,7 +4978,7 @@ spec:
           storage: true
           subresources:
             status: {}
-  - name: fieldExportCRD
+  - id: fieldExportCRD
     template:
       apiVersion: apiextensions.k8s.io/v1
       kind: CustomResourceDefinition

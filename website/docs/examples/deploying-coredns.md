@@ -47,7 +47,7 @@ spec:
         serviceAccount:
           secrets: 'map[string]string | default={"name": "coredns-token-pvcnf"}'
   resources:
-  - name: clusterRole
+  - id: clusterRole
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole
@@ -78,7 +78,7 @@ spec:
         - nodes
         verbs:
         - get
-  - name: clusterRoleBinding
+  - id: clusterRoleBinding
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -94,7 +94,7 @@ spec:
       - kind: ServiceAccount
         name: ${serviceAccount.metadata.name}
         namespace: ${serviceAccount.metadata.namespace}
-  - name: configMap
+  - id: configMap
     template:
       apiVersion: v1
       kind: ConfigMap
@@ -117,7 +117,7 @@ spec:
               reload
               loadbalance
           }
-  - name: deployment
+  - id: deployment
     template:
       apiVersion: apps/v1
       kind: Deployment
@@ -149,7 +149,7 @@ spec:
                   items:
                   - key: Corefile
                     path: Corefile
-  - name: service
+  - id: service
     template:
       apiVersion: v1
       kind: Service
@@ -176,7 +176,7 @@ spec:
         selector:
          k8s-app: kube-dns
         sessionAffinity: None
-  - name: serviceAccount
+  - id: serviceAccount
     template:
       apiVersion: v1
       kind: ServiceAccount

@@ -13,7 +13,7 @@ spec:
       csgARN: ${cacheSubnetGroup.status.ackResourceMetadata.arn}
       subnets: ${cacheSubnetGroup.status.subnets}
   resources:
-    - name: cacheSubnetGroup
+    - id: cacheSubnetGroup
       template:
         apiVersion: elasticache.services.k8s.aws/v1alpha1
         kind: CacheSubnetGroup

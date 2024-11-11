@@ -25,7 +25,7 @@ spec:
         securityGroup: ${securityGroup.status.id}
   # resources
   resources:
-    - name: vpc
+    - id: vpc
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: VPC
@@ -36,7 +36,7 @@ spec:
             - 192.168.0.0/16
           enableDNSHostnames: false
           enableDNSSupport: true
-    - name: subnetAZA
+    - id: subnetAZA
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -46,7 +46,7 @@ spec:
           availabilityZone: us-west-2a
           cidrBlock: 192.168.0.0/18
           vpcID: ${vpc.status.vpcID}
-    - name: subnetAZB
+    - id: subnetAZB
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -56,7 +56,7 @@ spec:
           availabilityZone: us-west-2b
           cidrBlock: 192.168.64.0/18
           vpcID: ${vpc.status.vpcID}
-    - name: subnetAZC
+    - id: subnetAZC
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -66,7 +66,7 @@ spec:
           availabilityZone: us-west-2c
           cidrBlock: 192.168.128.0/18
           vpcID: ${vpc.status.vpcID}
-    - name: securityGroup
+    - id: securityGroup
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: SecurityGroup

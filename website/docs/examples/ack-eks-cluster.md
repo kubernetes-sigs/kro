@@ -25,7 +25,7 @@ spec:
       clusterARN: ${cluster.status.ackResourceMetadata.arn}
   # resources
   resources:
-    - name: clusterVPC
+    - id: clusterVPC
       readyWhen:
         - ${clusterVPC.status.state == "available"}
       template:
@@ -38,14 +38,14 @@ spec:
             - 192.168.0.0/16
           enableDNSSupport: true
           enableDNSHostnames: true
-    - name: clusterElasticIPAddress
+    - id: clusterElasticIPAddress
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: ElasticIPAddress
         metadata:
           name: kro-cluster-eip
         spec: {}
-    - name: clusterInternetGateway
+    - id: clusterInternetGateway
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: InternetGateway
@@ -53,7 +53,7 @@ spec:
           name: kro-cluster-igw
         spec:
           vpc: ${clusterVPC.status.vpcID}
-    - name: clusterRouteTable
+    - id: clusterRouteTable
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: RouteTable
@@ -64,7 +64,7 @@ spec:
           routes:
             - destinationCIDRBlock: 0.0.0.0/0
               gatewayID: ${clusterInternetGateway.status.internetGatewayID}
-    - name: clusterSubnetA
+    - id: clusterSubnetA
       readyWhen:
         - ${clusterSubnetA.status.state == "available"}
       template:
@@ -79,7 +79,7 @@ spec:
           routeTables:
             - ${clusterRouteTable.status.routeTableID}
           mapPublicIPOnLaunch: true
-    - name: clusterSubnetB
+    - id: clusterSubnetB
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -92,7 +92,7 @@ spec:
           routeTables:
             - ${clusterRouteTable.status.routeTableID}
           mapPublicIPOnLaunch: true
-    - name: clusterNATGateway
+    - id: clusterNATGateway
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: NATGateway
@@ -101,7 +101,7 @@ spec:
         spec:
           subnetID: ${clusterSubnetB.status.subnetID}
           allocationID: ${clusterElasticIPAddress.status.allocationID}
-    - name: clusterRole
+    - id: clusterRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
         kind: Role
@@ -125,7 +125,7 @@ spec:
                 }
               ]
             }
-    - name: clusterNodeRole
+    - id: clusterNodeRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
         kind: Role
@@ -151,7 +151,7 @@ spec:
                 }
               ]
             }
-    - name: clusterAdminRole
+    - id: clusterAdminRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
         kind: Role
@@ -179,7 +179,7 @@ spec:
                     }
                 ]
             }
-    - name: cluster
+    - id: cluster
       readyWhen:
         - ${cluster.status.status == "ACTIVE"}
       template:
@@ -199,7 +199,7 @@ spec:
             subnetIDs:
               - ${clusterSubnetA.status.subnetID}
               - ${clusterSubnetB.status.subnetID}
-    - name: clusterNodeGroup
+    - id: clusterNodeGroup
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: Nodegroup

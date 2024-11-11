@@ -25,10 +25,10 @@ import (
 
 // ResourceDependency represents a resource and its accessed path within a CEL expression.
 // For example, in the expression "deployment.spec.replicas > 0",
-// Name would be "deployment" and Path would be "deployment.spec.replicas"
+// ID would be "deployment" and Path would be "deployment.spec.replicas"
 type ResourceDependency struct {
-	// Name is the root resource identifier (e.g "deployment", "service", "pod")
-	Name string
+	// ID is the root resource identifier (e.g "deployment", "service", "pod")
+	ID string
 	// Path is the full access path including nested fields
 	// For example: "deployment.spec.replicas" or "service.metadata.name"
 	Path string
@@ -51,10 +51,10 @@ type FunctionCall struct {
 
 // UnknownResource represents a resource reference in the expression that wasn't
 // declared in the known resources list. This helps identify potentially missing
-// or misspelled resource names.
+// or misspelled resource ids.
 type UnknownResource struct {
-	// Name is the undeclared resource identifier that was referenced
-	Name string
+	// ID is the undeclared resource identifier that was referenced
+	ID string
 	// Path is the full access path that was attempted with this unknown resource
 	// For example: "unknown_resource.field.subfield"
 	Path string
@@ -89,7 +89,7 @@ type Inspector struct {
 	// env is the CEL evaluation environment containing type definitions and functions
 	env *cel.Env
 
-	// resources is a set of known resource names that can be referenced in expressions
+	// resources is a set of known resource ids that can be referenced in expressions
 	resources map[string]struct{}
 
 	// functions is a set of known function names that can be called in expressions
@@ -256,7 +256,7 @@ func (a *Inspector) inspectIdent(ident *exprpb.Expr_Ident, currentPath string) E
 		}
 		return ExpressionInspection{
 			ResourceDependencies: []ResourceDependency{{
-				Name: ident.Name,
+				ID:   ident.Name,
 				Path: fullPath,
 			}},
 		}
@@ -269,7 +269,7 @@ func (a *Inspector) inspectIdent(ident *exprpb.Expr_Ident, currentPath string) E
 		}
 		return ExpressionInspection{
 			UnknownResources: []UnknownResource{{
-				Name: ident.Name,
+				ID:   ident.Name,
 				Path: path,
 			}},
 		}

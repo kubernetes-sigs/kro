@@ -145,9 +145,9 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	for _, rgResource := range rg.Spec.Resources {
 		r, err := b.buildRGResource(rgResource, namespacedResources)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build resource '%v': %v", rgResource.Name, err)
+			return nil, fmt.Errorf("failed to build resource '%v': %v", rgResource.ID, err)
 		}
-		resources[rgResource.Name] = r
+		resources[rgResource.ID] = r
 	}
 
 	// At this stage we have a superficial understanding of the resources that are
@@ -251,25 +251,25 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 	resourceObject := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.Name, err)
+		return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 	}
 
 	// 1. Check if it looks like a valid Kubernetes resource.
 	err = validateKubernetesObjectStructure(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.Name, err)
+		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
 	}
 
 	// 2. Based the GVK, we need to load the OpenAPI schema for the resource.
 	gvk, err := metadata.ExtractGVKFromUnstructured(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.Name, err)
+		return nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
 	}
 
 	// 3. Load the OpenAPI schema for the resource.
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.Name, err)
+		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
 	var emulatedResource *unstructured.Unstructured
@@ -280,10 +280,10 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		celExpressions, err := parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.Name, err)
+			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
 		}
 		if len(celExpressions) > 0 {
-			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.Name)
+			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.ID)
 		}
 	} else {
 
@@ -291,13 +291,13 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		//    CEL expressions.
 		emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.Name, err)
+			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.ID, err)
 		}
 
 		// 5. Extract CEL fieldDescriptors from the schema.
 		fieldDescriptors, err := parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.Name, err)
+			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
 		for _, fieldDescriptor := range fieldDescriptors {
 			resourceVariables = append(resourceVariables, &variable.ResourceField{
@@ -324,7 +324,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 
 	// Note that at this point we don't inject the dependencies into the resource.
 	return &Resource{
-		id:                     rgResource.Name,
+		id:                     rgResource.ID,
 		gvr:                    metadata.GVKtoGVR(gvk),
 		schema:                 resourceSchema,
 		emulatedObject:         emulatedResource,
@@ -356,7 +356,7 @@ func (b *Builder) buildDependencyGraph(
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "schema")
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -465,7 +465,7 @@ func (b *Builder) buildInstanceResource(
 	}
 
 	resourceNames := maps.Keys(resources)
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -552,7 +552,7 @@ func buildStatusSchema(
 	// Inspection of the CEL expressions to infer the types of the status fields.
 	resourceNames := maps.Keys(resources)
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -602,8 +602,8 @@ func validateCELExpressionContext(env *cel.Env, expression string, resources []s
 	}
 	// make sure that the expression refers to the resources defined in the resource group.
 	for _, resource := range inspectionResult.ResourceDependencies {
-		if !slices.Contains(resources, resource.Name) {
-			return fmt.Errorf("expression refers to unknown resource: %s", resource.Name)
+		if !slices.Contains(resources, resource.ID) {
+			return fmt.Errorf("expression refers to unknown resource: %s", resource.ID)
 		}
 	}
 	return nil
@@ -654,9 +654,9 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	isStatic := true
 	dependencies := make([]string, 0)
 	for _, resource := range inspectionResult.ResourceDependencies {
-		if resource.Name != "schema" && !slices.Contains(dependencies, resource.Name) {
+		if resource.ID != "schema" && !slices.Contains(dependencies, resource.ID) {
 			isStatic = false
-			dependencies = append(dependencies, resource.Name)
+			dependencies = append(dependencies, resource.ID)
 		}
 	}
 	if len(inspectionResult.UnknownResources) > 0 {
@@ -682,7 +682,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	resourceNames = append(resourceNames, "schema")
 	conditionFieldNames := []string{"schema"}
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
 	if err != nil {
 		return fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -731,7 +731,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			// I would also suggest separating the dryRuns of readyWhenExpressions
 			// and the resourceExpressions.
 			for _, readyWhenExpression := range resource.readyWhenExpressions {
-				fieldEnv, err := krocel.DefaultEnvironment(krocel.WithResourceNames([]string{resource.id}))
+				fieldEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
@@ -762,7 +762,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			}
 
 			for _, includeWhenExpression := range resource.includeWhenExpressions {
-				instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceNames(resourceNames))
+				instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}

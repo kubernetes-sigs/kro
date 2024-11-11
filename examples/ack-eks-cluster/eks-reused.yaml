@@ -15,7 +15,7 @@ spec:
       clusterARN2: ${cluster2.status.clusterARN}
   # resources
   resources:
-  - name: cluster1
+  - id: cluster1
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster
@@ -24,7 +24,7 @@ spec:
       spec:
         name: cluster1-${schema.spec.name}
         version: ${spc.version}
-  - name: cluster2
+  - id: cluster2
     template:
       apiVersion: eks.services.k8s.aws/v1alpha1
       kind: EKSCluster

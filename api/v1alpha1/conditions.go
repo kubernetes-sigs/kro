@@ -24,29 +24,29 @@ const (
 	// ResourceGroupConditionTypeGraphSynced indicates the state of the directed
 	// acyclic graph (DAG) that kro uses to manage the resources in a
 	// ResourceGroup.
-	ResourceGroupConditionTypeGraphVerified ConditionType = "kro.aws.dev/GraphVerified"
+	ResourceGroupConditionTypeGraphVerified ConditionType = "GraphVerified"
 	// ResourceGroupConditionTypeCustomResourceDefinitionSynced indicates the state of the
 	// CustomResourceDefinition (CRD) that kro uses to manage the resources in a
 	// ResourceGroup.
-	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "kro.aws.dev/CustomResourceDefinitionSynced"
+	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "CustomResourceDefinitionSynced"
 	// ResourceGroupConditionTypeReconcilerReady indicates the state of the reconciler.
 	// Whenever an ResourceGroup resource is created, kro will spin up a
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
-	ResourceGroupConditionTypeReconcilerReady ConditionType = "kro.aws.dev/ReconcilerReady"
+	ResourceGroupConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
 )
 
 const (
-	InstanceConditionTypeReady ConditionType = "kro.aws.dev/Ready"
+	InstanceConditionTypeReady ConditionType = "Ready"
 
 	// Creating Deleting Migrating
-	InstanceConditionTypeProgressing ConditionType = "kro.aws.dev/Progressing"
+	InstanceConditionTypeProgressing ConditionType = "Progressing"
 
 	// Unexpected situation, behaviour, need human intervention
-	InstanceConditionTypeDegraded ConditionType = "kro.aws.dev/Degraded"
+	InstanceConditionTypeDegraded ConditionType = "Degraded"
 
 	// Something is wrong but i'm gonna try again
-	InstanceConditionTypeError ConditionType = "kro.aws.dev/Error"
+	InstanceConditionTypeError ConditionType = "Error"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service

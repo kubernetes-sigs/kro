@@ -120,7 +120,7 @@ var _ = Describe("Status", func() {
 
 			g.Expect(crdCondition).ToNot(BeNil())
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(*crdCondition.Reason).To(ContainSubstring("Error"))
+			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegroup"))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

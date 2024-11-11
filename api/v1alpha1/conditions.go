@@ -73,3 +73,37 @@ type Condition struct {
 	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
+
+// NewCondition returns a new Condition instance.
+func NewCondition(t ConditionType, status metav1.ConditionStatus, reason, message string) Condition {
+	return Condition{
+		Type:               t,
+		Status:             status,
+		LastTransitionTime: &metav1.Time{Time: metav1.Now().Time},
+		Reason:             &reason,
+		Message:            &message,
+	}
+}
+
+func GetCondition(conditions []Condition, t ConditionType) *Condition {
+	for _, c := range conditions {
+		if c.Type == t {
+			return &c
+		}
+	}
+	return nil
+}
+
+func SetCondition(conditions []Condition, condition Condition) []Condition {
+	for i, c := range conditions {
+		if c.Type == condition.Type {
+			conditions[i] = condition
+			return conditions
+		}
+	}
+	return append(conditions, condition)
+}
+
+func HasCondition(conditions []Condition, t ConditionType) bool {
+	return GetCondition(conditions, t) != nil
+}

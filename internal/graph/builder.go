@@ -198,7 +198,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 		resources,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build resourcegroup %v: %w", err, nil)
+		return nil, fmt.Errorf("failed to build resourcegroup '%v': %w", rg.Name, err)
 	}
 
 	// Before getting into the dependency graph, we need to validate the CEL expressions

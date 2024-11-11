@@ -65,6 +65,10 @@ func main() {
 	var allowCRDDeletion bool
 	var resourceGroupConcurrentReconciles int
 	var dynamicControllerConcurrentReconciles int
+	// reconciler parameters
+	var resyncPeriod int
+	var queueMaxRetries int
+	var shutdownTimeout int
 	// var dynamicControllerDefaultResyncPeriod int
 	var logLevel int
 
@@ -76,6 +80,13 @@ func main() {
 	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
 	flag.IntVar(&resourceGroupConcurrentReconciles, "resource-group-concurrent-reconciles", 1, "The number of resource group reconciles to run in parallel")
 	flag.IntVar(&dynamicControllerConcurrentReconciles, "dynamic-controller-concurrent-reconciles", 1, "The number of dynamic controller reconciles to run in parallel")
+	// reconciler parametes
+	flag.IntVar(&resyncPeriod, "resync-period", 10,
+		"interval at which the controller will re list resources even with no changes, in hours")
+	flag.IntVar(&queueMaxRetries, "queue-max-retries", 20,
+		"maximum number of retries for an item in the queue will be retried before being dropped")
+	flag.IntVar(&shutdownTimeout, "shutdown-timeout", 60,
+		"maximum duration to wait for the controller to gracefully shutdown, in seconds")
 	// log level flags
 	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")
 
@@ -125,9 +136,9 @@ func main() {
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers: dynamicControllerConcurrentReconciles,
 		// TODO(a-hilaly): expose these as flags
-		ShutdownTimeout: 60 * time.Second,
-		ResyncPeriod:    10 * time.Hour,
-		QueueMaxRetries: 20,
+		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
+		ResyncPeriod:    time.Duration(resyncPeriod) * time.Hour,
+		QueueMaxRetries: queueMaxRetries,
 	}, set.Dynamic())
 
 	resourceGroupGraphBuilder, err := graph.NewBuilder(

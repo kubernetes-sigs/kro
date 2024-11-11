@@ -26,46 +26,46 @@ func TestValidateRGResourceNames(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name: "Valid resource group resource names",
+			name: "Valid resource group resource ids",
 			rg: &v1alpha1.ResourceGroup{
 				Spec: v1alpha1.ResourceGroupSpec{
 					Resources: []*v1alpha1.Resource{
-						{Name: "validName1"},
-						{Name: "validName2"},
+						{ID: "validID1"},
+						{ID: "validID2"},
 					},
 				},
 			},
 			expectError: false,
 		},
 		{
-			name: "Duplicate resource names",
+			name: "Duplicate resource ids",
 			rg: &v1alpha1.ResourceGroup{
 				Spec: v1alpha1.ResourceGroupSpec{
 					Resources: []*v1alpha1.Resource{
-						{Name: "duplicateName"},
-						{Name: "duplicateName"},
+						{ID: "duplicateID"},
+						{ID: "duplicateID"},
 					},
 				},
 			},
 			expectError: true,
 		},
 		{
-			name: "Invalid resource name",
+			name: "Invalid resource ID",
 			rg: &v1alpha1.ResourceGroup{
 				Spec: v1alpha1.ResourceGroupSpec{
 					Resources: []*v1alpha1.Resource{
-						{Name: "Invalid_Name"},
+						{ID: "Invalid_ID"},
 					},
 				},
 			},
 			expectError: true,
 		},
 		{
-			name: "Reserved word as resource name",
+			name: "Reserved word as resource id",
 			rg: &v1alpha1.ResourceGroup{
 				Spec: v1alpha1.ResourceGroupSpec{
 					Resources: []*v1alpha1.Resource{
-						{Name: "spec"},
+						{ID: "spec"},
 					},
 				},
 			},
@@ -75,9 +75,9 @@ func TestValidateRGResourceNames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateResourceNames(tt.rg)
+			err := validateResourceIDs(tt.rg)
 			if (err != nil) != tt.expectError {
-				t.Errorf("validateRGResourceNames() error = %v, expectError %v", err, tt.expectError)
+				t.Errorf("validateRGResourceIDs() error = %v, expectError %v", err, tt.expectError)
 			}
 		})
 	}
@@ -118,7 +118,7 @@ func TestIsValidResourceName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isValidResourceName(tt.name); got != tt.expected {
+			if got := isValidResourceID(tt.name); got != tt.expected {
 				t.Errorf("isValidResourceName(%q) = %v, want %v", tt.name, got, tt.expected)
 			}
 		})

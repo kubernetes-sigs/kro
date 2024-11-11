@@ -71,12 +71,12 @@ spec:
                 description: The resources that are part of the resourcegroup.
                 items:
                   properties:
+                    id:
+                      type: string
                     includeWhen:
                       items:
                         type: string
                       type: array
-                    name:
-                      type: string
                     readyWhen:
                       items:
                         type: string
@@ -85,7 +85,7 @@ spec:
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
                   required:
-                  - name
+                  - id
                   - template
                   type: object
                 type: array

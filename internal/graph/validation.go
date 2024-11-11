@@ -65,9 +65,9 @@ var (
 	}
 )
 
-// isValidResourceName checks if the given name is a valid KRO resource name (loawercase)
-func isValidResourceName(name string) bool {
-	return lowerCamelCaseRegex.MatchString(name)
+// isValidResourceID checks if the given id is a valid KRO resource id (loawercase)
+func isValidResourceID(id string) bool {
+	return lowerCamelCaseRegex.MatchString(id)
 }
 
 // isValidKindName checks if the given name is a valid KRO kind name (uppercase)
@@ -91,7 +91,7 @@ func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
 	if !isValidKindName(rg.Spec.Schema.Kind) {
 		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rg.Spec.Schema.Kind)
 	}
-	err := validateResourceNames(rg)
+	err := validateResourceIDs(rg)
 	if err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
 	}
@@ -99,28 +99,28 @@ func validateResourceGroupNamingConventions(rg *v1alpha1.ResourceGroup) error {
 }
 
 // validateResource performs basic validation on a given resourcegroup.
-// It checks that there are no duplicate resource names and that the
-// resource names are conformant to the KRO naming convention.
+// It checks that there are no duplicate resource ids and that the
+// resource ids are conformant to the KRO naming convention.
 //
 // The KRO naming convention is as follows:
-// - The name should start with a lowercase letter.
-// - The name should only contain alphanumeric characters.
+// - The id should start with a lowercase letter.
+// - The id should only contain alphanumeric characters.
 // - does not contain any special characters, underscores, or hyphens.
-func validateResourceNames(rg *v1alpha1.ResourceGroup) error {
+func validateResourceIDs(rg *v1alpha1.ResourceGroup) error {
 	seen := make(map[string]struct{})
 	for _, res := range rg.Spec.Resources {
-		if isKROReservedWord(res.Name) {
-			return fmt.Errorf("name %s is a reserved keyword in KRO", res.Name)
+		if isKROReservedWord(res.ID) {
+			return fmt.Errorf("id %s is a reserved keyword in KRO", res.ID)
 		}
 
-		if !isValidResourceName(res.Name) {
-			return fmt.Errorf("name %s is not a valid KRO resource name: must be lower camelCase", res.Name)
+		if !isValidResourceID(res.ID) {
+			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID)
 		}
 
-		if _, ok := seen[res.Name]; ok {
-			return fmt.Errorf("found duplicate resource name %s", res.Name)
+		if _, ok := seen[res.ID]; ok {
+			return fmt.Errorf("found duplicate resource IDs %s", res.ID)
 		}
-		seen[res.Name] = struct{}{}
+		seen[res.ID] = struct{}{}
 	}
 	return nil
 }

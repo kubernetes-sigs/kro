@@ -25,7 +25,7 @@ spec:
       privateSubnet1ID: ${privateSubnet1.status.subnetID}
       privateSubnet2ID: ${privateSubnet2.status.subnetID}
   resources: # how to publish a field in the RG claim e.g. vpcID
-  - name: vpc
+  - id: vpc
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: VPC
@@ -40,7 +40,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-vpc
-  - name: internetGateway
+  - id: internetGateway
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: InternetGateway
@@ -52,7 +52,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-igw
-  - name: natGateway1
+  - id: natGateway1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
@@ -65,7 +65,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-nat-gateway1
-  - name: natGateway2
+  - id: natGateway2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: NATGateway
@@ -78,7 +78,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-nat-gateway2
-  - name: eip1
+  - id: eip1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
@@ -89,7 +89,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-eip1
-  - name: eip2
+  - id: eip2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: ElasticIPAddress
@@ -100,7 +100,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-eip2
-  - name: publicRoutetable
+  - id: publicRoutetable
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
@@ -115,7 +115,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-public-routetable
-  - name: privateRoutetable1
+  - id: privateRoutetable1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
@@ -130,7 +130,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-private-routetable1
-  - name: privateRoutetable2
+  - id: privateRoutetable2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: RouteTable
@@ -145,7 +145,7 @@ spec:
         tags:
           - key: "Name"
             value: ${schema.spec.name}-private-routetable2
-  - name: publicSubnet1
+  - id: publicSubnet1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
@@ -164,7 +164,7 @@ spec:
             value: ${schema.spec.name}-public-subnet1
           - key: kubernetes.io/role/elb
             value: '1'
-  - name: publicSubnet2
+  - id: publicSubnet2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
@@ -183,7 +183,7 @@ spec:
             value: ${schema.spec.name}-public-subnet2
           - key: kubernetes.io/role/elb
             value: '1'
-  - name: privateSubnet1
+  - id: privateSubnet1
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet
@@ -201,7 +201,7 @@ spec:
             value: ${schema.spec.name}-private-subnet1
           - key: kubernetes.io/role/internal-elb
             value: '1'
-  - name: privateSubnet2
+  - id: privateSubnet2
     template:
       apiVersion: ec2.services.k8s.aws/v1alpha1
       kind: Subnet

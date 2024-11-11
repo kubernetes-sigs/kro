@@ -45,7 +45,7 @@ var _ = Describe("Validation", func() {
 		})).To(Succeed())
 	})
 
-	Context("Resource Names", func() {
+	Context("Resource IDs", func() {
 		It("should validate correct resource naming conventions", func() {
 			rg := generator.NewResourceGroup("test-validation",
 				generator.WithNamespace(namespace),
@@ -74,7 +74,7 @@ var _ = Describe("Validation", func() {
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
-		It("should reject invalid resource names", func() {
+		It("should reject invalid resource IDs", func() {
 			invalidNames := []string{
 				"MyResource",  // Uppercase first letter
 				"my_resource", // Contains underscore
@@ -126,7 +126,7 @@ var _ = Describe("Validation", func() {
 			}
 		})
 
-		It("should reject duplicate resource names", func() {
+		It("should reject duplicate resource IDs", func() {
 			rg := generator.NewResourceGroup("test-validation-dup",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
@@ -160,7 +160,7 @@ var _ = Describe("Validation", func() {
 				}
 				g.Expect(condition).ToNot(BeNil())
 				g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(*condition.Reason).To(ContainSubstring("found duplicate resource name"))
+				g.Expect(*condition.Reason).To(ContainSubstring("found duplicate resource IDs"))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 	})

@@ -77,7 +77,7 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 // WithResource adds a resource to the ResourceGroup with the given name and definition
 // readyWhen and includeWhen expressions are optional.
 func WithResource(
-	name string,
+	id string,
 	template map[string]interface{},
 	readyWhen []string,
 	includeWhen []string,
@@ -88,7 +88,7 @@ func WithResource(
 			panic(err)
 		}
 		rg.Spec.Resources = append(rg.Spec.Resources, &krov1alpha1.Resource{
-			Name:        name,
+			ID:          id,
 			ReadyWhen:   readyWhen,
 			IncludeWhen: includeWhen,
 			Template: runtime.RawExtension{

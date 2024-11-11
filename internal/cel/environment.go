@@ -23,19 +23,19 @@ type EnvOption func(*envOptions)
 
 // envOptions holds all the configuration for the CEL environment.
 type envOptions struct {
-	// resourceNames will be converted to CEL variable declarations
+	// resourceIDs will be converted to CEL variable declarations
 	// of type 'any'.
 	//
 	// TODO(a-hilaly): Add support for custom types.
-	resourceNames []string
+	resourceIDs []string
 	// customDeclarations will be added to the CEL environment.
 	customDeclarations []cel.EnvOption
 }
 
-// WithResourceNames adds resource names that will be declared as CEL variables.
-func WithResourceNames(names []string) EnvOption {
+// WithResourceIDs adds resource ids that will be declared as CEL variables.
+func WithResourceIDs(ids []string) EnvOption {
 	return func(opts *envOptions) {
-		opts.resourceNames = append(opts.resourceNames, names...)
+		opts.resourceIDs = append(opts.resourceIDs, ids...)
 	}
 }
 
@@ -59,7 +59,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		ext.Strings(),
 	}
 
-	for _, name := range opts.resourceNames {
+	for _, name := range opts.resourceIDs {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
 	return cel.NewEnv(declarations...)

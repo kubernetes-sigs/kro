@@ -60,7 +60,7 @@ spec:
 
   # Define the resources kro will manage
   resources:
-    - name: resource1
+    - id: resource1
       # declare your resources along with default values and variables
       template: {}
 ```

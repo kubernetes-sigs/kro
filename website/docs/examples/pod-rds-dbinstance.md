@@ -22,7 +22,7 @@ spec:
 
   # Resources
   resources:
-    - name: dbinstance
+    - id: dbinstance
       definition:
         apiVersion: rds.saervices.k8s.aws/v1alpha1
         kind: DBInstance
@@ -35,7 +35,7 @@ spec:
           allocatedStorage: 20
           dbInstanceClass: db.t3.micro
 
-    - name: pod
+    - id: pod
       definition:
         apiVersion: v1
         kind: Pod

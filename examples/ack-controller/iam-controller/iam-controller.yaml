@@ -33,7 +33,7 @@ spec:
           name: string | default=ack-iam-controller-sa
           roleArn: string | required=true
   resources:
-  - name: iamCRDGroup
+  - id: iamCRDGroup
     template:
       apiVersion: kro.run/v1alpha1
       kind: IAMCRDGroup
@@ -41,7 +41,7 @@ spec:
         name: ${schema.spec.name}-crd-group
       spec:
         name: ${schema.spec.name}-crd-group
-  - name: serviceAccount
+  - id: serviceAccount
     template:
       apiVersion: v1
       kind: ServiceAccount
@@ -50,7 +50,7 @@ spec:
         namespace: ${schema.spec.namespace}
         annotations:
           eks.amazonaws.com/role-arn: ${schema.spec.values.serviceAccount.roleArn}
-  - name: deployment
+  - id: deployment
     template:
       apiVersion: apps/v1
       kind: Deployment
@@ -109,7 +109,7 @@ spec:
                 value: ${schema.spec.values.log.level}              
               ports:
               - containerPort: 80
-  - name: clusterRoleBinding
+  - id: clusterRoleBinding
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRoleBinding
@@ -123,7 +123,7 @@ spec:
       - kind: ServiceAccount
         name: ${serviceAccount.metadata.name}
         namespace: ${serviceAccount.metadata.namespace}
-  - name: clusterRole
+  - id: clusterRole
     template:
       apiVersion: rbac.authorization.k8s.io/v1
       kind: ClusterRole

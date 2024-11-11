@@ -24,7 +24,7 @@ spec:
 
   resources:
 # Business logic data store (Amazon DynamoDB table) along with the permissiosn to access it (to be used by the AWS Lambda function that implements business logic)
-  - name: itemsTable
+  - id: itemsTable
     template:
       apiVersion: dynamodb.services.k8s.aws/v1alpha1
       kind: Table
@@ -39,7 +39,7 @@ spec:
             attributeType: S
         billingMode: PAY_PER_REQUEST
         tableName: ${schema.spec.namePrefix}-items-table
-  - name: lambdaDDBAccessPolicy
+  - id: lambdaDDBAccessPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -74,7 +74,7 @@ spec:
           }
 
 # Policy to be used by all AWS Lambda functions that allows publishing logs to Amazon CloudWatch
-  - name: lambdaBasicPolicy
+  - id: lambdaBasicPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -99,7 +99,7 @@ spec:
           }
 
 # Business logics Lambda
-  - name: logicLambdaRole
+  - id: logicLambdaRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -125,7 +125,7 @@ spec:
         policies:
           - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
           - ${lambdaDDBAccessPolicy.status.ackResourceMetadata.arn}
-  - name: logicLambda
+  - id: logicLambda
     template:
       apiVersion: lambda.services.k8s.aws/v1alpha1
       kind: Function
@@ -145,7 +145,7 @@ spec:
         role: ${logicLambdaRole.status.ackResourceMetadata.arn}
 
 # Lambda authorizer along with permissions required to retrieve password from AWS Secrets Manager
-  - name: lambdaSecretsAccessPolicy
+  - id: lambdaSecretsAccessPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -168,7 +168,7 @@ spec:
               }
             ]
           }
-  - name: authorizerLambdaRole
+  - id: authorizerLambdaRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -194,7 +194,7 @@ spec:
         policies:
           - ${lambdaBasicPolicy.status.ackResourceMetadata.arn}
           - ${lambdaSecretsAccessPolicy.status.ackResourceMetadata.arn}
-  - name: authorizerLambda
+  - id: authorizerLambda
     template:
       apiVersion: lambda.services.k8s.aws/v1alpha1
       kind: Function
@@ -215,7 +215,7 @@ spec:
 
 # ACK Lambda controller does not support Lambda resource policies typically used by API Gateway - https://github.com/aws-controllers-k8s/community/issues/1405
 # API Gateway has to use role based permissions instead
-  - name: apigwLogicLambdaExecutionPolicy
+  - id: apigwLogicLambdaExecutionPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -236,7 +236,7 @@ spec:
               }
             ]
           }
-  - name: apigwLogicLambdaExecutionRole
+  - id: apigwLogicLambdaExecutionRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -261,7 +261,7 @@ spec:
           }
         policies:
           - ${apigwLogicLambdaExecutionPolicy.status.ackResourceMetadata.arn}
-  - name: apigwAuthorizerLambdaExecutionPolicy
+  - id: apigwAuthorizerLambdaExecutionPolicy
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Policy
@@ -282,7 +282,7 @@ spec:
               }
             ]
           }
-  - name: apigwAuthorizerLambdaExecutionRole
+  - id: apigwAuthorizerLambdaExecutionRole
     template:
       apiVersion: iam.services.k8s.aws/v1alpha1
       kind: Role
@@ -309,7 +309,7 @@ spec:
           - ${apigwAuthorizerLambdaExecutionPolicy.status.ackResourceMetadata.arn}
 
 # Amazon API Gateway HTTP API and associated resources
-  - name: apigw
+  - id: apigw
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: API
@@ -318,7 +318,7 @@ spec:
       spec:
         name: ${schema.spec.namePrefix}-${schema.spec.api.apiName}
         protocolType: HTTP
-  - name: apigwLambdaIntegration
+  - id: apigwLambdaIntegration
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Integration
@@ -331,7 +331,7 @@ spec:
         integrationURI: "arn:aws:apigateway:${schema.spec.region}:lambda:path/2015-03-31/functions/${logicLambda.status.ackResourceMetadata.arn}/invocations"
         integrationMethod: POST
         payloadFormatVersion: "2.0"
-  - name: apigwItemsIdRoute
+  - id: apigwItemsIdRoute
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Route
@@ -343,7 +343,7 @@ spec:
         target: integrations/${apigwLambdaIntegration.status.integrationID}
         authorizationType: CUSTOM
         authorizerID: ${apigwAuthorizer.status.authorizerID}
-  - name: apigwItemsRoute
+  - id: apigwItemsRoute
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Route
@@ -355,7 +355,7 @@ spec:
         target: integrations/${apigwLambdaIntegration.status.integrationID}
         authorizationType: CUSTOM
         authorizerID: ${apigwAuthorizer.status.authorizerID}
-  - name: apigwDefaultStage
+  - id: apigwDefaultStage
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Stage
@@ -365,7 +365,7 @@ spec:
         apiID: ${apigw.status.apiID}
         stageName: "$default"
         autoDeploy: true
-  - name: apigwAuthorizer
+  - id: apigwAuthorizer
     template:
       apiVersion: apigatewayv2.services.k8s.aws/v1alpha1
       kind: Authorizer

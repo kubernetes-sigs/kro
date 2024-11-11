@@ -20,7 +20,7 @@ spec:
       subnets: ${cacheSubnetGroup.status.subnets}
       clusterARN: ${valkey.status.ackResourceMetadata.arn}
   resources:
-    - name: networkingStack
+    - id: networkingStack
       template:
         apiVersion: kro.run/v1alpha1
         kind: NetworkingStack
@@ -28,7 +28,7 @@ spec:
           name: ${schema.spec.name}-networking-stack
         spec:
           name: ${schema.spec.name}-networking-stack
-    - name: cacheSubnetGroup
+    - id: cacheSubnetGroup
       template:
         apiVersion: elasticache.services.k8s.aws/v1alpha1
         kind: CacheSubnetGroup
@@ -41,7 +41,7 @@ spec:
             - ${networkingStack.status.networkingInfo.subnetAZA}
             - ${networkingStack.status.networkingInfo.subnetAZB}
             - ${networkingStack.status.networkingInfo.subnetAZC}
-    - name: sg
+    - id: sg
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: SecurityGroup
@@ -57,7 +57,7 @@ spec:
               ipProtocol: tcp
               ipRanges:
                 - cidrIP: 0.0.0.0/0
-    - name: valkey
+    - id: valkey
       template:
         apiVersion: elasticache.services.k8s.aws/v1alpha1
         kind: CacheCluster

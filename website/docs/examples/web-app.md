@@ -16,7 +16,7 @@ spec:
     spec:
       name: string
   resources:
-    - name: deployment
+    - id: deployment
       definition:
         apiVersion: apps/v1
         kind: Deployment
@@ -37,7 +37,7 @@ spec:
                   image: nginx
                   ports:
                     - containerPort: 80
-    - name: service
+    - id: service
       definition:
         apiVersion: v1
         kind: Service

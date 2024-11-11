@@ -108,6 +108,77 @@ kro automatically:
 - Validates that referenced resources exist
 - Updates these fields as your resources change
 
+## Understanding Resources
+
+In Resources, you can define the resources you want to manage with KRO.
+Each resource requires a uniqueue ID, which will be used as a CEL entrypoint
+to access fields in that resource. The template is where users can define a CR,
+given its CRD is already installed in the cluster. In the template, users can
+also reference a field in another resource by its ID, or a field in schema.
+
+
+Here's an example of a resource:
+```yaml
+resources:
+- id: serviceAccount
+  template:
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata: 
+      name: ${schema.spec.name}
+```
+
+A resource can also have an **includeWhen** and a **readyWhen**, wich are a list
+of user defined CEL expressions that must evaluate to a boolean.
+
+When all **includeWhen** conditions evaluate to true, the resource will be managed 
+by the controller (created, updated), if any are false, the resource will not be 
+managed (ignored, deleted), and all the resources that depend on it will be ignored.
+includeWhen condition variables can only reference fields defined in the schema of the
+ResourceGroup
+
+Here's an example
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: WebApplication
+  spec:
+    name: string
+    serviceAccount:
+      enabled: true
+resources:
+- id: serviceAccount
+  includeWhen:
+  - ${schema.spec.serviceAccount.enabled}
+  template:
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata: 
+      name: ${schema.spec.name}
+```
+
+When all **readyWhen** conditions evaluate to true, the controller moves to the next
+resource to create/update in the topological order. readyWhen CEL variables can only
+reference fields in their own template.
+
+Here's an example:
+```yaml
+- id: cluster
+  readyWhen:
+    - ${cluster.status.status == "ACTIVE"}
+  template:
+    apiVersion: eks.services.k8s.aws/v1alpha1
+    kind: Cluster
+    metadata:
+      name: ${schema.spec.name}
+    ...
+- id: nodegroup
+  ...
+```
+In the example above, if we were to create a nodegroup right after cluster, we first ensure
+that the cluster is active.
+
+
 ## ResourceGroup Processing
 
 When you create a **ResourceGroup**, kro processes it in several steps to ensure

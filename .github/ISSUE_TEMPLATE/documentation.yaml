@@ -1,0 +1,24 @@
+name: Documentation
+description: Report documentation issues or suggest improvements
+labels:
+  - kind/documentation
+  - needs-triage
+body:
+  - type: textarea
+    attributes:
+      label: Documentation Issue
+      value: |
+        <!-- Please craft a detailed description of the documentation issue or suggestion -->
+        <!-- Below are some suggestions but feel free to modify or remove them -->
+
+        **Location**:
+        <!-- Specify where the documentation issue is (URL, file path, etc.) -->
+
+        **Current State**:
+        <!-- What does the current documentation say? -->
+
+        **Suggested Changes**:
+        <!-- How should it be improved? -->
+
+        **Additional Context**:
+        <!-- Any additional information that might be helpful -->

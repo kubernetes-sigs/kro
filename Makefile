@@ -2,13 +2,12 @@
 AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text)
 AWS_REGION ?= us-west-2
 RELEASE_VERSION ?= dev-$(shell git rev-parse --short HEAD)
-ECR_REPO ?= ${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com
+ECR_REPO ?= public.ecr.aws/kro
 
-CONTROLLER_IMAGE ?= ${ECR_REPO}/kro:${RELEASE_VERSION}
-HELM_IMAGE ?= ${ECR_REPO}/kro-chart:${RELEASE_VERSION}
-DOCS_IMAGE ?= ${ECR_REPO}/kro-docs:${RELEASE_VERSION}
-
+CONTROLLER_IMAGE ?= ${ECR_REPO}/controller:${RELEASE_VERSION}
+HELM_IMAGE ?= ${ECR_REPO}
 KO_DOCKER_REPO ?= ${ECR_REPO}/kro
+
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
 
@@ -177,13 +176,13 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 
 .PHONY: image
 build-image: ## Build the kro controller images using ko build
-	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/kro" \
+	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="public.ecr.aws/kro/controller" \
 		ko build --bare github.com/awslabs/kro/cmd/controller \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
 publish-image: ## Publish the kro controller images to ECR
-	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="095708837592.dkr.ecr.us-west-2.amazonaws.com/kro" \
+	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO="public.ecr.aws/kro/controller" \
 		ko publish --bare github.com/awslabs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
@@ -197,7 +196,7 @@ package-helm: ## Package Helm chart
 
 .PHONY: publish-helm
 publish-helm: ## Helm publish
-	helm push ./kro-chart-${RELEASE_VERSION}.tgz oci://${ECR_REPO}
+	helm push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm

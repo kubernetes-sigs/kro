@@ -1,8 +1,8 @@
 image:
-  repository: public.ecr.aws/kro
+  repository: public.ecr.aws/kro/controller
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.1.0"
+  tag: "0.1.0-rc.3"
 
 imagePullSecrets: []
 nameOverride: ""

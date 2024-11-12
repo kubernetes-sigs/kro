@@ -27,6 +27,7 @@ Dockerfile.cross
 
 kro-controller
 kro-chart*
+kro-*
 cover.html
 .read
 .snapshots

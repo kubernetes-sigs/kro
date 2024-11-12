@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # What is kro?
 
-**kro** (Kube Resource Orchestrator) is an open-source, Kubernetes-native project 
+**kro** (Kube Resources Orchestrator) is an open-source, Kubernetes-native project 
 that allows you to define custom **Kubernetes APIs** using simple and straightforward 
 configuration. With kro, you can easily configure new custom APIs that create a 
 group of Kubernetes objects and the logical operations between them. kro leverages 

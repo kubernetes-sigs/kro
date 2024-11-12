@@ -83,11 +83,11 @@ func main() {
 	flag.IntVar(&resourceGroupConcurrentReconciles, "resource-group-concurrent-reconciles", 1, "The number of resource group reconciles to run in parallel")
 	flag.IntVar(&dynamicControllerConcurrentReconciles, "dynamic-controller-concurrent-reconciles", 1, "The number of dynamic controller reconciles to run in parallel")
 	// reconciler parametes
-	flag.IntVar(&resyncPeriod, "resync-period", 10,
+	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 10,
 		"interval at which the controller will re list resources even with no changes, in hours")
-	flag.IntVar(&queueMaxRetries, "queue-max-retries", 20,
+	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
-	flag.IntVar(&shutdownTimeout, "shutdown-timeout", 60,
+	flag.IntVar(&shutdownTimeout, "dynamic-controller-default-shutdown-timeout", 60,
 		"maximum duration to wait for the controller to gracefully shutdown, in seconds")
 	// log level flags
 	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")

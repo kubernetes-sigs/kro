@@ -69,7 +69,7 @@ func NewResourceGroupReconciler(
 		allowCRDDeletion:  allowCRDDeletion,
 		crdManager:        crdWrapper,
 		dynamicController: dynamicController,
-		metadataLabeler:   metadata.NewKroMetaLabeler("dev", "pod-id"),
+		metadataLabeler:   metadata.NewKroMetaLabeler("0.1.0", "kro-pod"),
 		rgBuilder:         builder,
 	}
 }

@@ -53,7 +53,7 @@ Install kro using Helm
 ```
 helm install kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
-  --set nameOverride=kro
+  --set nameOverride=kro \
   --create-namespace \
   --version=${KRO_VERSION}
 ```
@@ -98,7 +98,7 @@ Upgrade the controller
 ```
 helm upgrade kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
-  --set nameOverride=kro
+  --set nameOverride=kro \
   --version=${KRO_VERSION}
 ```
 

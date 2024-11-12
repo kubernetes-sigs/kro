@@ -13,16 +13,6 @@ Before you begin, ensure you have the following:
 
 1. `Helm` 3.x installed
 2. `kubectl` installed and configured to interact with your Kubernetes cluster
-3. `awscli` installed
-
-Log in to public ecr:
-```
-aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
-```
-Expected result:
-```
-Login Succeeded
-```
 
 ## Installation Steps
 
@@ -53,7 +43,6 @@ Install kro using Helm
 ```
 helm install kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
-  --set nameOverride=kro \
   --create-namespace \
   --version=${KRO_VERSION}
 ```
@@ -98,7 +87,6 @@ Upgrade the controller
 ```
 helm upgrade kro oci://public.ecr.aws/kro/kro \
   --namespace kro \
-  --set nameOverride=kro \
   --version=${KRO_VERSION}
 ```
 

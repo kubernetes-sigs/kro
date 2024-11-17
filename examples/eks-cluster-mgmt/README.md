@@ -8,6 +8,8 @@ A hub-spoke model is used in this example; a management cluster (hub) is created
 as part of the initial setup and the controllers needed for provisioning and
 bootstrapping workload clusters (spokes) are installed on top.
 
+![EKS cluster management using kro & ACK](docs/eks-cluster-mgmt-central.drawio.png)
+
 **NOTE:** As this example evolves, some of the instructions below will be
 detailed further (e.g. the creation of the management cluster), others (e.g.
 controllers installation) will be automated via the GitOps flow.
@@ -48,7 +50,7 @@ controllers installation) will be automated via the GitOps flow.
 
 ```sh
 export KRO_REPO_URL="https://github.com/awslabs/kro.git"
-export WORKSPACE_PATH=<workspace-path> #the directory where repos will be cloned e.g. ~/environment/
+export WORKSPACE_PATH=<workspace-path> #the directory where repos will be cloned e.g. ~/environment
 export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
 export AWS_REGION=<region> #e.g. us-west-2
 export CLUSTER_NAME=mgmt
@@ -67,15 +69,26 @@ eksctl utils associate-iam-oidc-provider --cluster $CLUSTER_NAME --approve
 4. Save OIDC provider URL in an environment variable:
 
 ```sh
-OIDC_PROVIDER=$(aws eks describe-cluster --name $EKS_CLUSTER_NAME --region $AWS_REGION --query "cluster.identity.oidc.issuer" --output text | sed -e "s/^https:\/\///")
+OIDC_PROVIDER=$(aws eks describe-cluster --name $CLUSTER_NAME --region $AWS_REGION --query "cluster.identity.oidc.issuer" --output text | sed -e "s/^https:\/\///")
 ```
 
 5. Install the following ACK controllers on the management cluster:
    - ACK IAM controller
    - ACK EC2 controller
    - ACK EKS controller
+
+   **NOTES:** 
+   - Make sure to enable CARMv2 by setting the feature flags `ServiceLevelCARM` and `TeamLevelCARM` to true.
+   - Make sure to grant IAM permissions to assume role in workload cluster accounts
+
 6. Install kro on the management cluster. Please note that this example is
-   tested on 0.1.0-rc.3.
+   tested on 0.1.0.
+```sh
+helm install kro oci://public.ecr.aws/kro/kro \
+  --namespace kro \
+  --create-namespace \
+  --version=0.1.0
+```
 7. Install EKS pod identity add-on:
 
 ```sh
@@ -94,8 +107,6 @@ git clone $KRO_REPO_URL $WORKSPACE_PATH/kro
    the clusters definition, and it will be reconciled to the management cluster
    via the GitOps flow
 
-**NOTE:** Until kro is released, make sure the repo you create is private.
-
 10. Save the URL of the created repo in an environment variable:
 
 ```sh
@@ -111,8 +122,7 @@ git clone $MY_REPO_URL $WORKSPACE_PATH/cluster-mgmt
 12. Populate the repo:
 
 ```sh
-cp -r $WORKSPACE_PATH/kro/examples/cluster-mgmt/* $WORKSPACE_PATH/cluster-mgmt
-find /path/to/directory -type f -exec sed -i "s/search_string/$REPLACE_STRING/g" {} +
+cp -r $WORKSPACE_PATH/kro/examples/eks-cluster-mgmt/* $WORKSPACE_PATH/cluster-mgmt
 
 find $WORKSPACE_PATH/cluster-mgmt -type f -exec sed -i "s~ACCOUNT_ID~$ACCOUNT_ID~g" {} +
 find $WORKSPACE_PATH/cluster-mgmt -type f -exec sed -i "s~MY_REPO_URL~$MY_REPO_URL~g" {} +
@@ -202,30 +212,12 @@ kubectl apply -f $WORKSPACE_PATH/cluster-mgmt/gitops/bootstrap.yaml
 
 ### Adding workload clusters
 
-The initial configuration creates one workload cluster named
-`workload-cluster1`.
-
-**TODO:** add steps for cluster/account mapping
-
-18. Add a workload cluster by adding a manifest for it under `clusters/`. Refer
-    to `clusters/workload-cluster1.yaml` as an example.
-19. Include the new cluster manifest in `clusters/kustomization.yaml`.
-20. Add the cluster name and corresponding account number in
+18. Add the cluster name and corresponding account number in
     `charts-values/ack-multi-account/values.yaml`.
-21. Commit/push the changes to Git.
-
-## Known issues
-
-1. You will need to restart the kro controller when you add a new workload
-   cluster due to a bug in the controller. Once the resource group
-   `eksclusterwithvpc` is applied, the controller is able to apply the
-   corresponding VPC resources, but it is not able to recognize the generated
-   ids (e.g. subnet id), and feed that into EKS resources. Refer to
-   [this issue](https://github.com/awslabs/kro/issues/8) for more details.
-2. Deleting a cluster does not properly clean up all cluster resources i.e.
-   subnets, routetables are left strangling. ACK EC2 controller keep reporting
-   dependencies preventing deletion. To work around this issue, attempt restart
-   ACK EC2 controller, and/or manually deleting the resources.
+19. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI.
+20. Add a workload cluster by adding a manifest for it under `clusters/`. Refer to `clusters/workload-cluster1.yaml` as an example.
+21. Include the new cluster manifest in `clusters/kustomization.yaml`.
+22. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI. Finally, log on to the workload cluster account to confirm that the cluster is created as expected.
 
 ## Clean-up
 

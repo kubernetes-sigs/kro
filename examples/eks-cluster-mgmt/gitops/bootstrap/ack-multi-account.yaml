@@ -11,7 +11,7 @@ spec:
     namespace: default
   project: default
   source:
-    repoURL: https://github.com/iamahgoub/argocd-test.git
+    repoURL: MY_REPO_URL
     targetRevision: HEAD
     path: charts/ack-multi-account
     helm:

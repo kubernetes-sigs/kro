@@ -17,6 +17,8 @@ spec:
   template:
     metadata:
       name: '{{.name}}-karpenter' # 'name' field of the Secret
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io/foreground
     spec:
       project: default
       source:

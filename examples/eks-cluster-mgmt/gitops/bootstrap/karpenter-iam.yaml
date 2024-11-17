@@ -17,6 +17,8 @@ spec:
   template:
     metadata:
       name: '{{.name}}-karpenter-iam' # 'name' field of the Secret
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io/foreground
     spec:
       project: default
       source:
@@ -35,7 +37,7 @@ spec:
               value: '{{trimPrefix "https://" .metadata.annotations.oidcProvider}}'
       destination:
         server: 'https://kubernetes.default.svc'
-        namespace: argocd
+        namespace: '{{.name}}'
       syncPolicy:
         automated:
           prune: true

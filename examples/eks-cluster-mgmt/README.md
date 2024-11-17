@@ -215,7 +215,7 @@ kubectl apply -f $WORKSPACE_PATH/cluster-mgmt/gitops/bootstrap.yaml
 18. Add the cluster name and corresponding account number in
     `charts-values/ack-multi-account/values.yaml`.
 19. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI.
-20. Add a workload cluster by adding a manifest for it under `clusters/`. Refer to `clusters/workload-cluster1.yaml` as an example.
+20. Add a workload cluster by adding a manifest for it under `clusters/`. Refer to `clusters/workload1.yaml` as an example.
 21. Include the new cluster manifest in `clusters/kustomization.yaml`.
 22. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI. Finally, log on to the workload cluster account to confirm that the cluster is created as expected.
 

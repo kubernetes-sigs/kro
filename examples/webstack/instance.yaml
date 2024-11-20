@@ -9,5 +9,5 @@ spec:
     enabled: true
     access: write
   ingress:
-    enabled: true
+    enabled: true # this will expose unathenticated alb
   service: {}

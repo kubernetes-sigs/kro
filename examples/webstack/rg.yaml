@@ -1,0 +1,70 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: webstack.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebStack
+    spec:
+      name: string
+      clusterName: string | default="kro"
+      image: string | default=nginx
+      port: integer | default=8080
+      replicas: integer | default=1
+      service:
+        enabled: boolean | default=true
+      ingress:
+        enabled: boolean | default=false
+      s3bucket:
+        enabled: boolean | default=false
+        access: string | default=write
+    status:
+      deploymentConditions: ${webapp.status.conditions}
+      availableReplicas: ${webapp.status.availableReplicas}
+      s3ARN: ${s3bucket.status.s3ARN}
+
+
+  resources:
+  - id: webapp
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: WebApp
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        image: ${schema.spec.image}
+        port: ${schema.spec.port}
+        replicas: ${schema.spec.replicas}
+        serviceAccount: ${podidentity.status.serviceAccount}
+        service:
+          enabled: ${schema.spec.service.enabled}
+        ingress:
+          enabled: ${schema.spec.ingress.enabled}
+        s3bucketName: ${s3bucket.status.s3ARN.substring(13)}
+          
+  # s3bucket creates s3bucket and policy
+  - id: s3bucket
+    includeWhen:
+    - ${schema.spec.s3bucket.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: S3Bucket
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        access: ${schema.spec.s3bucket.access}
+        
+  - id: podidentity
+    includeWhen:
+    - ${schema.spec.s3bucket.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: PodIdentity
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        policyARN: ${s3bucket.status.s3PolicyARN}

@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: PodIdentity
+metadata:
+  name: krodemo
+  namespace: default
+spec:
+  name: krodemo-11223344

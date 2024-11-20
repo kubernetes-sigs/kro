@@ -1,15 +1,14 @@
 apiVersion: kro.run/v1alpha1
 kind: ResourceGroup
 metadata:
-  name: app.kro.run
+  name: webapp.kro.run
 spec:
   schema:
     apiVersion: v1alpha1
-    kind: App
+    kind: WebApp
     spec:
       name: string
       namespace: string | default=default
-      region: string | default=us-west-2
       image: string | default=nginx
       port: integer | default=8080
       replicas: integer | default=1
@@ -17,7 +16,8 @@ spec:
         enabled: boolean | default=true
       ingress:
         enabled: boolean | default=false
-      s3bucket: string | default=""
+      serviceAccount: string | default=default
+      s3bucketName: string | default=""
     status:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas}
@@ -46,7 +46,7 @@ spec:
               app.kubernetes.io/name: ${schema.spec.name}
               app: ${schema.spec.name}
           spec:
-            serviceAccountName: ${serviceaccount.metadata.name}
+            serviceAccountName: ${schema.spec.serviceAccount}
             containers:
             - name: s3-demo
               image: ${schema.spec.image}
@@ -62,16 +62,8 @@ spec:
                   cpu: "1"
               env:
               - name: S3_BUCKET_NAME
-                value: ${schema.spec.s3bucket}
+                value: ${schema.spec.s3bucketName}
             restartPolicy: Always
-
-  - id: serviceaccount
-    template:
-      apiVersion: v1
-      kind: ServiceAccount
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
 
   - id: service
     includeWhen:

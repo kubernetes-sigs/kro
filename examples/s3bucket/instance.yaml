@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: S3Bucket
+metadata:
+  name: s3demo
+  namespace: default
+spec:
+  name: s3demo-11223344

@@ -1,0 +1,13 @@
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: test-app
+spec:
+  name: test-app-11223344
+  image: candonov/s3-demo-app
+  s3bucket:
+    enabled: true
+    access: write
+  ingress:
+    enabled: true
+  service: {}

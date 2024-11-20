@@ -1,5 +1,5 @@
 apiVersion: kro.run/v1alpha1
-kind: App
+kind: WebApp
 metadata:
   name: test-app
 spec:

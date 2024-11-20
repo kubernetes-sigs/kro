@@ -5,7 +5,6 @@ metadata:
 spec:
   name: $WEB_STACK_NAME
   image: candonov/s3-demo-app
-  port: 8080
   s3bucket:
     enabled: true
     access: write

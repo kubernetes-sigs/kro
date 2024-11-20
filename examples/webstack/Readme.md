@@ -33,14 +33,23 @@ webstack.kro.run      v1alpha1     WebStack      Active    7m
 ```
 
 ### Create an Instance of kind WebStack
-
-Edit the spec.name in `webstack/instance.yaml`. The name of the spec will be the
-name of your S3 bucket and S3 bucket should be unique, you can just add
-a few random numbers to `test-app-11223344`.
+Create an environment variable with uniquie name, that will be the name of your S3 Bucket.
 ```
-vi webstack/instance.yaml
+export WEB_STACK_NAME=<test-app-11223344-random-string>
 ```
-Apply the updated `webstack/instance.yaml` 
+Validate the variable populated:
+```
+echo $WEB_STACK_NAME
+```
+Expected result:
+```
+```
+Run the following command to replace the `$WEB_STACK_NAME` variable in `instance-tmpl.yaml` file and create
+a new file called instance.yaml. 
+```shell
+envsubst < "webstack/instance-tmpl.yaml" > "webstack/instance.yaml"
+```
+Apply the `webstack/instance.yaml` 
 
 ```
 kubectl apply -f webstack/instance.yaml
@@ -61,16 +70,16 @@ test-app   ACTIVE   True     16m
 
 ### Validate the app is working
 
-Get the ingress url:
+Get the URL:
 
 ```
-kubectl get ingress test-app-11223344 -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+echo "http://$(kubectl get ingress $WEB_STACK_NAME -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
 ```
 
 Either navigate in the browser at `/health` or curl it:
 
 ```
-curl -s $(kubectl get ingress test-app-11223344 -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')/health
+curl -s http://$(kubectl get ingress $WEB_STACK_NAME -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')/health
 ```
 
 Expected result:

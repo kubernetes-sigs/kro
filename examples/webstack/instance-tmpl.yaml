@@ -3,8 +3,9 @@ kind: WebStack
 metadata:
   name: test-app
 spec:
-  name: test-app-11223344 # update me to unique S3 bucket name
+  name: $WEB_STACK_NAME
   image: candonov/s3-demo-app
+  port: 8080
   s3bucket:
     enabled: true
     access: write

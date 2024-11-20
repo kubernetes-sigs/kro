@@ -3,7 +3,7 @@
 This example creates a ResourceGroup called `WebStack` comprised of
 three other RGs: `WebApp`, `S3Bucket`, and `PodIdentity`
 
-![Netsted RG Instance](../../../images/architecture-diagrams/kro-WebStack.png)
+![Netsted RG Instance](../../images/architecture-diagrams/kro-WebStack.png)
 _Fugure 1: Nested RG Example_
 
 ### Create ResourceGroups

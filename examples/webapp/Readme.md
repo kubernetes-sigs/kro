@@ -1,9 +1,9 @@
-# kro Application example
+# kro WebApp example
 
-This example creates a ResourceGroup called `App` and then instaciates it with
+This example creates a ResourceGroup called `WebApp` and then instaciates it with
 the default nginx container image.
 
-### Create ResourceGroup called App
+### Create ResourceGroup called WebApp
 
 Apply the RG to your cluster:
 

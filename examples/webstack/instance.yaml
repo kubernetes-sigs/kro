@@ -3,7 +3,7 @@ kind: WebStack
 metadata:
   name: test-app
 spec:
-  name: test-app-11223344
+  name: test-app-11223344 # update me to unique S3 bucket name
   image: candonov/s3-demo-app
   s3bucket:
     enabled: true

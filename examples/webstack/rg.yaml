@@ -23,9 +23,12 @@ spec:
       deploymentConditions: ${webapp.status.conditions}
       availableReplicas: ${webapp.status.availableReplicas}
       s3ARN: ${s3bucket.status.s3ARN}
+      url: ${webapp.status.url}
 
 
   resources:
+  # webapp creates deployment, and conditionally service and ingress
+  # and returns url, availableReplicas, and deploymentConditions
   - id: webapp
     template:
       apiVersion: kro.run/v1alpha1
@@ -45,6 +48,7 @@ spec:
         s3bucketName: ${s3bucket.status.s3ARN.substring(13)}
           
   # s3bucket creates s3bucket and policy
+  # and returns s3ARN and s3PolicyARN
   - id: s3bucket
     includeWhen:
     - ${schema.spec.s3bucket.enabled}
@@ -57,6 +61,8 @@ spec:
         name: ${schema.spec.name}
         access: ${schema.spec.s3bucket.access}
         
+  # podidentity creates role, serviceaccount, and podidentityassosiation
+  # and returns serviceaccount name
   - id: podidentity
     includeWhen:
     - ${schema.spec.s3bucket.enabled}

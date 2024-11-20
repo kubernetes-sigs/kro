@@ -21,6 +21,7 @@ spec:
     status:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas}
+      url: ${ingress.status.loadBalancer.ingress[0].hostname}
 
   resources:
   - id: deployment

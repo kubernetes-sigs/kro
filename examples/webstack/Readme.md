@@ -35,17 +35,17 @@ webstack.kro.run      v1alpha1     WebStack      Active    7m
 ### Create an Instance of kind WebStack
 Create an environment variable with uniquie name, that will be the name of your S3 Bucket.
 ```
-export WEB_STACK_NAME=<test-app-11223344-replace-me-with-random-string>
+export RESOURCES_NAME=<test-app-11223344-replace-me-with-random-string>
 ```
 Validate the variable populated:
 ```
-echo $WEB_STACK_NAME
+echo $RESOURCES_NAME
 ```
 Expected result:
 ```
 <test-app-11223344-my-random-string>
 ```
-Run the following command to replace the `$WEB_STACK_NAME` variable in `instance-tmpl.yaml` file and create
+Run the following command to replace the `$RESOURCES_NAME` variable in `instance-tmpl.yaml` file and create
 a new file called instance.yaml. 
 ```shell
 envsubst < "webstack/instance-tmpl.yaml" > "webstack/instance.yaml"
@@ -74,13 +74,13 @@ test-app   ACTIVE   True     16m
 Get the URL:
 
 ```
-echo "http://$(kubectl get ingress $WEB_STACK_NAME -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+echo "http://$(kubectl get webstack test-app -o jsonpath='{.status.url}')"
 ```
 
 Either navigate in the browser at `/health` or curl it:
 
 ```
-curl -s http://$(kubectl get ingress $WEB_STACK_NAME -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')/health
+curl -s http://$(kubectl get webstack test-app -o jsonpath='{.status.url}')/health
 ```
 
 Expected result:

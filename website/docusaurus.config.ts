@@ -136,7 +136,7 @@ const config: Config = {
           items: [
             {
               label: "Slack",
-              href: "https://github.com/awslabs/kro",
+              href: "https://kubernetes.slack.com/archives/C081TMY9D6Y",
             },
           ],
         },

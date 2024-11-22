@@ -1,0 +1,678 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: eda-eks-data-processor.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EdaEksDataProcessor
+    spec:
+      namePrefix: string | default="data-processor"
+      environment:
+        accountId: string | required=true
+        region: string | required=true
+        eksClusterName: string | default="eks-eda"
+        oidcProvider: string | required=true
+        emrVirtualClusterNamespace: string | default="emr-ns"
+      input:
+        bucket: string | default=""
+        prefix: string | default="input"
+        tempPrefix: string | default="temp"
+      script:
+        bucket: string | required=true
+        prefix: string | default="scripts"
+        name: string | default="process_data.py" 
+      lake:
+        bucket: string | required=true
+        prefix: string | default="lake"
+        inputDataPrefix: string | default="data"
+        scriptOutputPrefix: string | default="summaries"
+      notifications:
+        email: string | default="me@example.com"
+  resources:
+  # Kubernetes namespace for the stack
+    - id: stackNamespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.namePrefix}
+  # Pod role setup for EMR on EKS job execution
+    - id: podRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-podrole
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-podrole
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                },
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "ec2.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                },
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${schema.spec.environment.accountId}:oidc-provider/${schema.spec.environment.oidcProvider}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringLike": {
+                      "${schema.spec.environment.oidcProvider}:sub": "system:serviceaccount:${schema.spec.namePrefix}:emr-containers-sa-*-*-${schema.spec.environment.accountId}-*"
+                    }
+                  }
+                }
+              ]
+            }
+          inlinePolicies:
+            s3-policy: |
+              {
+                  "Version" : "2012-10-17",
+                  "Statement" : [
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:PutObject",
+                        "s3:GetObject",
+                        "s3:ListBucket",
+                        "s3:DeleteObject"
+                    ],
+                    "Resource": [
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.prefix}/*",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.prefix}",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.tempPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.tempPrefix}",
+                        "arn:aws:s3:::${schema.spec.script.bucket}/${schema.spec.script.prefix}/${schema.spec.script.name}",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.inputDataPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.inputDataPrefix}",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.scriptOutputPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.scriptOutputPrefix}"
+                    ]
+                  }
+                  ]
+                  }
+    - id: serviceAccount
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${schema.spec.namePrefix}-serviceaccount
+          namespace: ${stackNamespace.metadata.name}
+    - id: podIdentityAssociation
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.namePrefix}-podidentityassociation
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          clusterName: ${schema.spec.environment.eksClusterName}
+          namespace: ${stackNamespace.metadata.name}
+          roleARN: ${podRole.status.ackResourceMetadata.arn}
+          serviceAccount: ${schema.spec.namePrefix}-serviceaccount
+  # S3 bucket for data/script input for processing
+    - id: inputBucket
+      template:
+        apiVersion: s3.services.k8s.aws/v1alpha1
+        kind: Bucket
+        metadata:
+          name: ${schema.spec.namePrefix}-bucket
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.input.bucket}
+  # DynamoDB table to store processed data summaries
+    - id: dataProcessingResultsTable
+      template:
+        apiVersion: dynamodb.services.k8s.aws/v1alpha1
+        kind: Table
+        metadata:
+          name: ${schema.spec.namePrefix}-data-processing-results
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+            keySchema:
+              - attributeName: id
+                keyType: HASH
+            attributeDefinitions:
+              - attributeName: id
+                attributeType: S
+            billingMode: PAY_PER_REQUEST
+            tableName: ${schema.spec.namePrefix}-data-processing-results
+  # EMR on EKS virtual cluster for data processing
+    - id: emrRbacRole
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-emr-containers
+          namespace: ${stackNamespace.metadata.name}
+        rules:
+          - apiGroups: [""]
+            resources: ["namespaces"]
+            verbs: ["get"]
+          - apiGroups: [""]
+            resources: ["serviceaccounts", "services", "configmaps", "events", "pods", "pods/log"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "deletecollection", "annotate", "patch", "label"]
+          - apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["create", "patch", "delete", "watch"]
+          - apiGroups: ["apps"]
+            resources: ["statefulsets", "deployments"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
+          - apiGroups: ["batch"]
+            resources: ["jobs"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
+          - apiGroups: ["extensions", "networking.k8s.io"]
+            resources: ["ingresses"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "annotate", "patch", "label"]
+          - apiGroups: ["rbac.authorization.k8s.io"]
+            resources: ["roles", "rolebindings"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete", "deletecollection", "annotate", "patch", "label"]
+          - apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "watch", "describe", "create", "edit", "delete",  "deletecollection", "annotate", "patch", "label"]
+    - id: roleBinding
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: emr-containers
+          namespace: ${stackNamespace.metadata.name}
+        subjects:
+        - kind: User
+          name: emr-containers
+          apiGroup: rbac.authorization.k8s.io
+        roleRef:
+          kind: Role
+          name: ${schema.spec.namePrefix}-emr-containers
+          apiGroup: rbac.authorization.k8s.io    
+    - id: dataProcessingVirtualCluster
+      template:
+        apiVersion: emrcontainers.services.k8s.aws/v1alpha1
+        kind: VirtualCluster
+        metadata:
+          name: ${schema.spec.namePrefix}-emr-vc
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-emr-vc
+          containerProvider:
+            id: ${schema.spec.environment.eksClusterName}
+            type_: EKS
+            info:
+              eksInfo:
+                namespace: ${stackNamespace.metadata.name}
+  # SNS topic for data processing notifications
+    - id: dataProcessingNotificationsSNSTopic
+      template:
+        apiVersion: sns.services.k8s.aws/v1alpha1
+        kind: Topic
+        metadata:
+          name: ${schema.spec.namePrefix}-notifications-topic
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-notifications-topic
+          policy: |
+            {
+            "Version": "2008-10-17",
+            "Statement": [
+                {
+                "Sid": "default_statement",
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "*"
+                },
+                "Action": [
+                    "SNS:GetTopicAttributes",
+                    "SNS:SetTopicAttributes",
+                    "SNS:AddPermission",
+                    "SNS:RemovePermission",
+                    "SNS:DeleteTopic",
+                    "SNS:Subscribe",
+                    "SNS:ListSubscriptionsByTopic",
+                    "SNS:Publish"
+                ],
+                "Resource": "arn:aws:sns:${schema.spec.environment.region}:${schema.spec.environment.accountId}:${schema.spec.namePrefix}-notifications-topic",
+                "Condition": {
+                    "StringEquals": {
+                    "AWS:SourceOwner": "${schema.spec.environment.accountId}"
+                    }
+                }
+                },
+                {
+                "Sid": "${schema.spec.namePrefix}-events-publishing-to-topicpolicy",
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "events.amazonaws.com"
+                },
+                "Action": "sns:Publish",
+                "Resource": "arn:aws:sns:${schema.spec.environment.region}:${schema.spec.environment.accountId}:${schema.spec.namePrefix}-notifications-topic"
+                }
+            ]
+            }
+  # SNS email subscription for status notifications
+    - id: dataProcessingNotificationEmailSubsription
+      template:
+        apiVersion: sns.services.k8s.aws/v1alpha1
+        kind: Subscription
+        metadata:
+          name: ${schema.spec.namePrefix}-notifications-subscription
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          topicARN: ${dataProcessingNotificationsSNSTopic.status.ackResourceMetadata.arn}
+          protocol: email-json
+          endpoint: ${schema.spec.notifications.email}
+  # EventBridge bus for data processing events
+    - id: ebStatusBus
+      template:
+        apiVersion: eventbridge.services.k8s.aws/v1alpha1
+        kind: EventBus
+        metadata:
+          name: ${schema.spec.namePrefix}-eb-bus
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-eb-bus
+  # EventBridge permissions
+    - id: ebIamRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-eb-role
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-eb-role
+          assumeRolePolicyDocument: |
+            {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": [
+                    "events.amazonaws.com"
+                    ]
+                },
+                "Action": "sts:AssumeRole"
+                }
+            ]
+            }
+          inlinePolicies:
+            eb-policy: |
+              {
+                  "Version" : "2012-10-17",
+                  "Statement" : [
+                      {
+                      "Effect" : "Allow",
+                      "Action" : "states:StartExecution",
+                      "Resource" : [
+                          "${stepFunctionsWorkflow.status.ackResourceMetadata.arn}"
+                      ]
+                      },
+                      {
+                      "Effect" : "Allow",
+                      "Action": "sns:Publish",
+                      "Resource": "${dataProcessingNotificationsSNSTopic.status.ackResourceMetadata.arn}"
+                      }
+                  ]
+                  }
+  # EventBridge rules
+    - id: ebS3ObjectRule
+      template:
+        apiVersion: eventbridge.services.k8s.aws/v1alpha1
+        kind: Rule
+        metadata:
+          name: ${schema.spec.namePrefix}-eb-rule-input
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-eb-rule-input
+          description: "EventBridge rule to start Step Functions execution when data comes in"
+          eventPattern: |    
+            {
+              "source": ["aws.s3"],
+              "detail-type": ["Object Created"],
+              "detail": {
+                "bucket": {
+                  "name": ["${schema.spec.input.bucket}"]    
+                },
+                "object": {
+                  "key": [{
+                    "prefix": "${schema.spec.input.prefix}/"
+                  }]
+                }
+              }
+            }
+          targets:
+            - arn: ${stepFunctionsWorkflow.status.ackResourceMetadata.arn}
+              id: ${schema.spec.namePrefix}-sfn-data-processing
+              roleARN: ${ebIamRole.status.ackResourceMetadata.arn}
+    - id: ebProcessingFinishedRule
+      template:
+        apiVersion: eventbridge.services.k8s.aws/v1alpha1
+        kind: Rule
+        metadata:
+          name: ${schema.spec.namePrefix}-eb-rule-finished
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-eb-rule-finished
+          eventBusName: ${ebStatusBus.spec.name}
+          description: "Notify subscribers once input data processing finishes"
+          eventPattern: |    
+            {
+              "source": ["${schema.spec.namePrefix}"],
+              "detail-type": ["InputDataProcessed"]
+            }
+          targets:
+            - arn: ${dataProcessingNotificationsSNSTopic.status.ackResourceMetadata.arn}
+              id: ${schema.spec.namePrefix}-sfn-data-processed
+  # StepFunctions permissions
+    - id: stepFunctionsRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.namePrefix}-sfn-role
+          namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-sfn-role
+          assumeRolePolicyDocument: |
+            {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": [
+                    "states.amazonaws.com"
+                    ]
+                },
+                "Action": "sts:AssumeRole"
+                }
+            ]
+            }
+          inlinePolicies:
+            sfn-policy: |
+              {
+                  "Version" : "2012-10-17",
+                  "Statement" : [
+                  {
+                    "Effect" : "Allow",
+                    "Action" : [
+                        "emr-containers:StartJobRun",
+                        "emr-containers:DescribeJobRun",
+                        "emr-containers:CancelJobRun"
+                    ],
+                    "Resource" : "*"
+                  },
+                  {
+                    "Effect" : "Allow",
+                    "Action" : [
+                        "logs:CreateLogDelivery",
+                        "logs:GetLogDelivery",
+                        "logs:UpdateLogDelivery",
+                        "logs:DeleteLogDelivery",
+                        "logs:ListLogDeliveries",
+                        "logs:PutResourcePolicy",
+                        "logs:DescribeResourcePolicies",
+                        "logs:DescribeLogGroups"
+                    ],
+                    "Resource" : "*"
+                  },
+                  {
+                  "Action" : "iam:PassRole",
+                  "Effect" : "Allow",
+                  "Resource" : "*"
+                  },
+                  {
+                    "Effect" : "Allow",
+                    "Action" : [
+                        "xray:PutTraceSegments",
+                        "xray:PutTelemetryRecords",
+                        "xray:GetSamplingRules",
+                        "xray:GetSamplingTargets"
+                    ],
+                    "Resource" : "*"
+                  },
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:PutObject",
+                        "s3:GetObject",
+                        "s3:ListBucket",
+                        "s3:DeleteObject"
+                    ],
+                    "Resource": [
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.prefix}/*",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.prefix}",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.tempPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.input.bucket}/${schema.spec.input.tempPrefix}",
+                        "arn:aws:s3:::${schema.spec.script.bucket}/${schema.spec.script.prefix}/${schema.spec.script.name}",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.inputDataPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.inputDataPrefix}",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.scriptOutputPrefix}/*",
+                        "arn:aws:s3:::${schema.spec.lake.bucket}/${schema.spec.lake.prefix}/${schema.spec.lake.scriptOutputPrefix}"
+                    ]
+                  },
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                        "dynamodb:*"
+                    ],
+                    "Resource": [
+                      "${dataProcessingResultsTable.status.ackResourceMetadata.arn}",
+                      "${dataProcessingResultsTable.status.ackResourceMetadata.arn}/index/*"
+                    ]
+                  },
+                  {
+                    "Effect": "Allow",
+                    "Action": "events:PutEvents",
+                    "Resource": "${ebStatusBus.status.ackResourceMetadata.arn}"
+                  }
+                  ]
+                  }
+  # StepFunctions workflow
+    - id: stepFunctionsWorkflow
+      template:
+        apiVersion: sfn.services.k8s.aws/v1alpha1
+        kind: StateMachine
+        metadata:
+            name: ${schema.spec.namePrefix}-sfn
+            namespace: ${stackNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.namePrefix}-sfn
+          roleARN: "${stepFunctionsRole.status.ackResourceMetadata.arn}"
+          definition: |
+            {
+              "Comment": "S3 data processing using EMR on EKS",
+              "StartAt": "Prepare configuration",
+              "States": {
+                "Prepare configuration": {
+                  "Type": "Pass",
+                  "Next": "Process input data",
+                  "Parameters": {
+                    "stack": "${schema.spec.namePrefix}",
+                    "objectName.$": "States.ArrayGetItem(States.StringSplit($.object.key, '/'), States.MathAdd(States.ArrayLength(States.StringSplit($.object.key, '/')),-1))",
+                    "inputBucketName.$": "$.bucket.name",
+                    "inputPrefix": "${schema.spec.input.prefix}",
+                    "outputBucketName": "${schema.spec.input.bucket}",
+                    "outputPrefix": "${schema.spec.input.tempPrefix}",
+                    "scriptBucketName": "${schema.spec.script.bucket}",
+                    "scriptPrefix": "${schema.spec.script.prefix}",
+                    "scriptName": "${schema.spec.script.name}",
+                    "lakeBucketName": "${schema.spec.lake.bucket}",
+                    "lakePrefix": "${schema.spec.lake.prefix}",
+                    "lakeInputDataPrefix": "${schema.spec.lake.inputDataPrefix}",
+                    "lakeScriptOutputPrefix": "${schema.spec.lake.scriptOutputPrefix}"
+                  },
+                  "InputPath": "$.detail"
+                },
+                "Process input data": {
+                  "Type": "Parallel",
+                  "Branches": [
+                    {
+                      "StartAt": "Summarize data",
+                      "States": {
+                        "Summarize data": {
+                          "Type": "Task",
+                          "Resource": "arn:aws:states:::emr-containers:startJobRun.sync",
+                          "Parameters": {
+                            "VirtualClusterId": "${dataProcessingVirtualCluster.status.id}",
+                            "ExecutionRoleArn": "${podRole.status.ackResourceMetadata.arn}",
+                            "ReleaseLabel": "emr-7.2.0-latest",
+                            "JobDriver": {
+                              "SparkSubmitJobDriver": {
+                                "EntryPoint.$": "States.Format('s3://{}/{}/{}', $.scriptBucketName, $.scriptPrefix, $.scriptName)",
+                                "EntryPointArguments.$": "States.Array($.inputBucketName,States.Format('/{}/{}', $.inputPrefix, $.objectName),$.outputBucketName,States.Format('{}/{}.json', $.outputPrefix, $.objectName))"
+                              }
+                            }
+                          },
+                          "Next": "Process data summary",
+                          "ResultPath": null
+                        },
+                        "Process data summary": {
+                          "Type": "Parallel",
+                          "Branches": [
+                            {
+                              "StartAt": "Read summary from S3",
+                              "States": {
+                                "Read summary from S3": {
+                                  "Type": "Task",
+                                  "Parameters": {
+                                    "Bucket.$": "$.outputBucketName",
+                                    "Key.$": "States.Format('{}/{}.json', $.outputPrefix, $.objectName)"
+                                  },
+                                  "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+                                  "Next": "Update summary in DynamoDB",
+                                  "ResultSelector": {
+                                    "Body.$": "States.StringToJson($.Body)"
+                                  },
+                                  "ResultPath": "$.SummaryTaskOutput"
+                                },
+                                "Update summary in DynamoDB": {
+                                  "Type": "Task",
+                                  "Resource": "arn:aws:states:::dynamodb:updateItem",
+                                  "Parameters": {
+                                    "TableName": "${dataProcessingResultsTable.spec.tableName}",
+                                    "Key": {
+                                      "id": {
+                                        "S.$": "$.SummaryTaskOutput.Body.data_file"
+                                      }
+                                    },
+                                    "UpdateExpression": "SET summary = :summary, top_10_most_expensive_trips= :top_trips, payments_distribution= :payments",
+                                    "ExpressionAttributeValues": {
+                                      ":summary": {
+                                        "S.$": "States.JsonToString($.SummaryTaskOutput.Body.data_summary)"
+                                      },
+                                      ":top_trips": {
+                                        "S.$": "States.JsonToString($.SummaryTaskOutput.Body.top_10_most_expensive_trips)"
+                                      },
+                                      ":payments": {
+                                        "S.$": "States.JsonToString($.SummaryTaskOutput.Body.payment_types)"
+                                      }
+                                    }
+                                  },
+                                  "ResultPath": null,
+                                  "Next": "Discard summary data"
+                                },
+                                "Discard summary data": {
+                                  "Type": "Task",
+                                  "Parameters": {
+                                    "Bucket.$": "$.outputBucketName",
+                                    "Key.$": "States.Format('{}/{}.json', $.outputPrefix, $.objectName)"
+                                  },
+                                  "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+                                  "ResultPath": null,
+                                  "End": true
+                                }
+                              }
+                            },
+                            {
+                              "StartAt": "Add summary to the data lake",
+                              "States": {
+                                "Add summary to the data lake": {
+                                  "Type": "Task",
+                                  "Parameters": {
+                                    "Bucket.$": "$.lakeBucketName",
+                                    "CopySource.$": "States.Format('/{}/{}/{}.json', $.outputBucketName, $.outputPrefix, $.objectName)",
+                                    "Key.$": "States.Format('{}/{}/{}.json', $.lakePrefix, $.lakeScriptOutputPrefix, $.objectName)"
+                                  },
+                                  "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+                                  "ResultPath": null,
+                                  "End": true
+                                }
+                              }
+                            }
+                          ],
+                          "End": true,
+                          "ResultPath": null
+                        }
+                      }
+                    },
+                    {
+                      "StartAt": "Add input to the data lake",
+                      "States": {
+                        "Add input to the data lake": {
+                          "Type": "Task",
+                          "Parameters": {
+                            "Bucket.$": "$.lakeBucketName",
+                            "CopySource.$": "States.Format('/{}/{}/{}', $.inputBucketName, $.inputPrefix, $.objectName)",
+                            "Key.$": "States.Format('{}/{}/{}', $.lakePrefix, $.lakeInputDataPrefix, $.objectName)"
+                          },
+                          "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+                          "ResultPath": null,
+                          "End": true
+                        }
+                      }
+                    }
+                  ],
+                  "Next": "Discard input data"
+                },
+                "Discard input data": {
+                  "Type": "Task",
+                  "Parameters": {
+                    "Bucket.$": "$$.Execution.Input.detail.bucket.name",
+                    "Key.$": "$$.Execution.Input.detail.object.key"
+                  },
+                  "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+                  "Next": "Publish data processing finished event",
+                  "ResultPath": null
+                },
+                "Publish data processing finished event": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::events:putEvents",
+                  "Parameters": {
+                    "Entries": [
+                      {
+                        "Detail": {
+                          "message": "Data processed",
+                          "executionId.$": "$$.Execution.Id",
+                          "inputBucket.$": "$$.Execution.Input.detail.bucket.name",
+                          "inputObject.$": "$$.Execution.Input.detail.object.key"
+                        },
+                        "DetailType": "InputDataProcessed",
+                        "EventBusName": "${ebStatusBus.spec.name}",
+                        "Source.$": "$.[0].stack"
+                      }
+                    ]
+                  },
+                  "End": true
+                }
+              }
+            }
+

@@ -1,0 +1,27 @@
+## Workload stack
+apiVersion: kro.run/v1alpha1
+kind: EdaEksDataProcessor
+metadata:
+  name: $WORKLOAD_NAME
+spec:
+  namePrefix: $WORKLOAD_NAME
+  environment:
+    region: $AWS_REGION
+    accountId: "$AWS_ACCOUNT_ID"
+    eksClusterName: $EKS_CLUSTER_NAME
+    oidcProvider: $OIDC_PROVIDER
+  input:
+    bucket: $INPUT_BUCKET_NAME
+    prefix: input
+    tempPrefix: temp
+  script:
+    bucket: $SCRIPTS_BUCKET_NAME
+    prefix: scripts
+    name: process_data.py
+  lake:
+    bucket: $LAKE_BUCKET_NAME
+    prefix: lake
+    inputDataPrefix: data
+    scriptOutputPrefix: summaries
+  notifications:
+    email: "me@example.com"

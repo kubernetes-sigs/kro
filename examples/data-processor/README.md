@@ -1,6 +1,6 @@
 # Event Driven Architectures with Amazon EKS and AWS Controllers for Kubernetes
 
-This data processing example uses event-driven approach for data ingestion and process orchestration, along with Amazon EMR on EKS for data processing implementation. 
+This data processing example uses event-driven approach for data ingestion and process orchestration, along with Amazon EMR on EKS for data processing implementation. This example uses [New York City taxi data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page).
 ## Architecture
 
 Following diagram illustrates flow of the example and services used:
@@ -83,10 +83,9 @@ List all resources in the stack namespace (it will take some time to get all res
 ```shell
 kubectl api-resources --verbs=list --namespaced -o name | xargs -n 1 kubectl get --show-kind --ignore-not-found -n $WORKLOAD_NAME
 ```
-
+Copy sample data for processing (for example `yellow_tripdata_2024-05.parquet`):
 ```shell
-# Make sure to change your sample data bucket name
-aws s3 cp s3://eks-eda-sample-data/yellow_tripdata_2024-05.parquet s3://$BUCKET_NAME/input/yellow_tripdata_2024-05.parquet
+aws s3 cp <your-sample-data-file-folder>/yellow_tripdata_2024-05.parquet s3://$BUCKET_NAME/input/yellow_tripdata_2024-05.parquet
 ```
 
 ## Clean up

@@ -74,7 +74,7 @@ aws s3api put-bucket-notification-configuration --bucket $BUCKET_NAME --notifica
 ```
 ### Spark data processing script upload
 ```bash
-aws s3 cp ../scripts s3://$BUCKET_NAME/scripts --recursive
+aws s3 cp ./scripts s3://$BUCKET_NAME/scripts --recursive
 ```
 
 ## Test

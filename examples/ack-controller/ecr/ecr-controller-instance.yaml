@@ -1,0 +1,24 @@
+apiVersion: kro.run/v1alpha1
+kind: ECRController
+metadata:
+  name: my-kro-ecr-controller
+  namespace: kro
+spec:
+  name: ack-ecr-controller
+  namespace: kro
+  values: 
+    aws:
+      accountID: "xxxxxxxxxxx"
+      region: us-west-2
+    deployment: {}
+    iamRole:
+      oidcProvider: oidc.eks.us-west-2.amazonaws.com/id/xxxxxxxxxxxxxx
+    iamPolicy: {}
+    image:
+      resources:
+        requests: {}
+        limits: {}
+    log:
+      enabled: true
+      level: debug
+    serviceAccount: {}

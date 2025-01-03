@@ -39,6 +39,32 @@ To send us a pull request, please:
 GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
 [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 
+## Setting Up a Local Development Environment
+To test and run the project with your local changes, follow these steps to set up a development environment:
+
+1. Install Dependencies: Ensure you have the necessary dependencies installed, including:
+    - [Go](https://golang.org/doc/install) (version specified in `go.mod`).
+    - [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) for interacting with Kubernetes clusters.
+    - A local Kubernetes cluster such as [kind](https://kind.sigs.k8s.io/).
+
+2. Create a Local Kubernetes Cluster: If you don't already have a cluster, create one with your preferred tool. For example, with `kind`:
+    ```bash
+    kind create cluster
+    ```
+
+3. Install the Custom Resource Definitions (CRDs): Apply the latest CRDs to your cluster:
+    ```bash
+    make generate
+    kubectl apply -k ./config/crd
+    ```
+
+4. Run the kro Controller Locally: Execute the controller with your changes:
+    ```bash
+    go run ./cmd/controller --log-level 2
+    ```
+    This will connect to the default Kubernetes context in your local kubeconfig (`~/.kube/config`). Ensure the context is pointing to your local cluster.
+
+By following these steps, you can setup a local environment to test your contributions before submitting a pull request.
 
 ## Finding contributions to work on
 Looking at the existing issues is a great way to find something to contribute on. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.

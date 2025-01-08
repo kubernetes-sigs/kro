@@ -84,13 +84,11 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		if len(schema.Properties) > 0 {
 			return e.generateObject(schema)
 		}
-		// Check if it's a oneOf schema
+
+		// Check if it's a oneOf or anyOf schema
 		if len(schema.OneOf) > 0 {
 			return e.generateValue(&schema.OneOf[e.rand.Intn(len(schema.OneOf))])
-		}
-
-		// Check if its anyOf schema
-		if len(schema.AnyOf) > 0 {
+		} else if len(schema.AnyOf) > 0 {
 			return e.generateValue(&schema.AnyOf[e.rand.Intn(len(schema.AnyOf))])
 		}
 

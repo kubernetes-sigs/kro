@@ -24,6 +24,7 @@ import (
 
 const (
 	xKubernetesPreserveUnknownFields = "x-kubernetes-preserve-unknown-fields"
+	Any                              = "any"
 )
 
 // ParseResource extracts CEL expressions from a resource based on
@@ -41,6 +42,15 @@ func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema)
 // from a resource. It uses a depthh first search to traverse the resource and
 // extract expressions from string fields
 func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("schema is nil for path %s", path)
+	}
+
+	// recursively handle cases where anyOf is used
+	if len(schema.AnyOf) > 0 {
+		return parseAnyOf(resource, schema, path)
+	}
+
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -65,26 +75,40 @@ func validateSchema(schema *spec.Schema, path string) error {
 	if schema == nil {
 		return fmt.Errorf("schema is nil for path %s", path)
 	}
-	if len(schema.Type) != 1 {
-		if len(schema.OneOf) > 0 {
-			schema.Type = []string{schema.OneOf[0].Type[0]}
-		} else {
-			return fmt.Errorf("found schema type that is not a single type: %v", schema.Type)
-		}
+	if len(schema.Type) == 1 {
+		return nil
+	}
+
+	if len(schema.OneOf) > 0 {
+		schema.Type = []string{schema.OneOf[0].Type[0]}
+		return nil
+	}
+
+	if len(schema.AnyOf) > 0 {
+		return nil
 	}
 	return nil
 }
 
 func getExpectedType(schema *spec.Schema) string {
+	//handle empty slice
+	if len(schema.Type) == 0 {
+		if schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
+			return Any
+		}
+		return ""
+	}
+
 	if schema.Type[0] != "" {
 		return schema.Type[0]
 	}
+
 	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
 		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
 		// in the future; just haven't really thought about it yet.
 		// Basically "any" means that the field can be of any type, and we have to check
 		// the ExpectedSchema field.
-		return "any"
+		return Any
 	}
 	return ""
 }
@@ -163,7 +187,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 		}}, nil
 	}
 
-	if expectedType != "string" && expectedType != "any" {
+	if expectedType != "string" && expectedType != Any {
 		return nil, fmt.Errorf("expected string type or AdditionalProperties for path %s, got %v", path, field)
 	}
 
@@ -182,7 +206,7 @@ func parseString(field string, schema *spec.Schema, path, expectedType string) (
 }
 
 func parseScalarTypes(field interface{}, _ *spec.Schema, path, expectedType string) ([]variable.FieldDescriptor, error) {
-	if expectedType == "any" {
+	if expectedType == Any {
 		return nil, nil
 	}
 	// perform type checks for scalar types
@@ -258,4 +282,23 @@ func joinPathAndFieldName(path, fieldName string) string {
 		return fieldName
 	}
 	return fmt.Sprintf("%s.%s", path, fieldName)
+}
+
+// parseAnyOf attempts to parse the given resource against each sub-schema in
+// schema.AnyOf. If any one of the sub-schemas succeeds (no error), accept
+// that branch and return its parse results immediately. If all sub-schemas
+// fail, aggregate the last error and return it.
+func parseAnyOf(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+	var lastErr error
+	for i, subSchema := range schema.AnyOf {
+		subCopy := subSchema
+
+		results, err := parseResource(resource, &subCopy, path)
+		if err == nil {
+			return results, nil
+		}
+		lastErr = fmt.Errorf("branch #%d in anyOf failed: %v", i, err)
+	}
+
+	return nil, fmt.Errorf("none of the anyOf branches matched for path %s. Last error: %v", path, lastErr)
 }

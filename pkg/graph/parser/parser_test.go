@@ -663,6 +663,171 @@ func TestParserEdgeCases(t *testing.T) {
 			}},
 			expectedError: "",
 		},
+		{
+			name: "Schema with anyOf - string or integer (resource is string -> no error)",
+			resource: map[string]interface{}{
+				"field": "Hello",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"field": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+									{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "Schema with anyOf - string or integer (resource is integer -> no error)",
+			resource: map[string]interface{}{
+				"field": 42,
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"field": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+									{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: "",
+		},
+		{
+			name: "Schema with anyOf - string or integer (resource is bool -> error)",
+			resource: map[string]interface{}{
+				"field": true,
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"field": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+									{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: "none of the anyOf branches matched for path field. Last error: branch #1 in anyOf failed: expected integer type for path field, got bool",
+		},
+		{
+			name: "Schema with anyOf - complex nested schema (valid resource)",
+			resource: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": "some-annotation",
+				},
+				"spec": "some-spec-string",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"metadata": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											Properties: map[string]spec.Schema{
+												"annotations": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+											},
+											AdditionalProperties: &spec.SchemaOrBool{
+												Allows: true,
+											},
+										},
+									},
+									{
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"string"},
+										},
+									},
+								},
+							},
+						},
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+									{
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											Properties: map[string]spec.Schema{
+												"someKey": {
+													SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+												},
+											},
+										},
+									},
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			// expect no error: "metadata" matched the 'object' branch; "spec" matched the 'string'
+			expectedError: "",
+		},
+		{
+			name: "Schema with anyOf - complex nested schema (invalid resource)",
+			resource: map[string]interface{}{
+				"metadata": true,
+				"spec":     []interface{}{"x"},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"metadata": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"object"}}},
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								},
+							},
+						},
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								AnyOf: []spec.Schema{
+									{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+									{
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											Properties: map[string]spec.Schema{
+												"someKey": {
+													SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+												},
+											},
+										},
+									},
+									{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedError: "none of the anyOf branches matched for path metadata. Last error: branch #1 in anyOf failed: unexpected type for path metadata: bool",
+		},
 	}
 
 	for _, tc := range testCases {

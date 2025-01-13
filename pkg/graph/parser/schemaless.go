@@ -58,7 +58,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 		if ok {
 			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
 				Expressions:          []string{strings.Trim(field, "${}")},
-				ExpectedType:         "any",
+				ExpectedTypes:        []string{"any"},
 				Path:                 path,
 				StandaloneExpression: true,
 			})
@@ -69,9 +69,9 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			}
 			if len(expressions) > 0 {
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:  expressions,
-					ExpectedType: "any",
-					Path:         path,
+					Expressions:   expressions,
+					ExpectedTypes: []string{"any"},
+					Path:          path,
 				})
 			}
 		}

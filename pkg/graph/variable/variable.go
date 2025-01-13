@@ -32,7 +32,7 @@ type FieldDescriptor struct {
 	// Expressions is a list of CEL expressions in the field.
 	Expressions []string
 	// ExpectedType is the expected type of the field.
-	ExpectedType string
+	ExpectedTypes []string
 	// ExpectedSchema is the expected schema of the field if it is a complex type.
 	// This is only set if the field is a OneShotCEL expression, and the schema
 	// is expected to be a complex type (object or array).

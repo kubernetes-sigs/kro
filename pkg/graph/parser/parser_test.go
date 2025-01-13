@@ -130,21 +130,21 @@ func TestParseResource(t *testing.T) {
 		}
 
 		expectedExpressions := []variable.FieldDescriptor{
-			{Path: "stringField", Expressions: []string{"string.value"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "intField", Expressions: []string{"int.value"}, ExpectedType: "integer", StandaloneExpression: true},
-			{Path: "boolField", Expressions: []string{"bool.value"}, ExpectedType: "boolean", StandaloneExpression: true},
-			{Path: "nestedObject.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, ExpectedType: "string", StandaloneExpression: false},
-			{Path: "simpleArray[0]", Expressions: []string{"array[0]"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "simpleArray[1]", Expressions: []string{"array[1]"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "mapField.key1", Expressions: []string{"map.key1"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "mapField.key2", Expressions: []string{"map.key2"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "specialCharacters.simpleAnnotation", Expressions: []string{"simpleannotation"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedType: "string", StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedType: "string", StandaloneExpression: true},
+			{Path: "stringField", Expressions: []string{"string.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "intField", Expressions: []string{"int.value"}, ExpectedTypes: []string{"integer"}, StandaloneExpression: true},
+			{Path: "boolField", Expressions: []string{"bool.value"}, ExpectedTypes: []string{"boolean"}, StandaloneExpression: true},
+			{Path: "nestedObject.nestedString", Expressions: []string{"nested.string"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, ExpectedTypes: []string{"string"}, StandaloneExpression: false},
+			{Path: "simpleArray[0]", Expressions: []string{"array[0]"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "simpleArray[1]", Expressions: []string{"array[1]"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "mapField.key1", Expressions: []string{"map.key1"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "mapField.key2", Expressions: []string{"map.key2"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "specialCharacters.simpleAnnotation", Expressions: []string{"simpleannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
 		}
 
 		expressions, err := ParseResource(resource, schema)
@@ -456,12 +456,12 @@ func TestParseWithExpectedSchema(t *testing.T) {
 	}
 
 	expectedExpressions := map[string]variable.FieldDescriptor{
-		"stringField":                               {Path: "stringField", Expressions: []string{"string.value"}, ExpectedType: "string", ExpectedSchema: &stringFieldSchema, StandaloneExpression: true},
-		"objectField":                               {Path: "objectField", Expressions: []string{"object.value"}, ExpectedType: "object", ExpectedSchema: &objectFieldSchema, StandaloneExpression: true},
-		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedType: "string", ExpectedSchema: &nestedObjectNestedStringSchema, StandaloneExpression: true},
-		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedType: "string", ExpectedSchema: &deepNestedSchema, StandaloneExpression: true},
-		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: []string{"array[0]"}, ExpectedType: "object", ExpectedSchema: arrayFieldSchema.Items.Schema, StandaloneExpression: true},
-		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedType: "string", ExpectedSchema: &objectInArraySchema, StandaloneExpression: true},
+		"stringField":                               {Path: "stringField", Expressions: []string{"string.value"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &stringFieldSchema, StandaloneExpression: true},
+		"objectField":                               {Path: "objectField", Expressions: []string{"object.value"}, ExpectedTypes: []string{"object"}, ExpectedSchema: &objectFieldSchema, StandaloneExpression: true},
+		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &nestedObjectNestedStringSchema, StandaloneExpression: true},
+		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &deepNestedSchema, StandaloneExpression: true},
+		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: []string{"array[0]"}, ExpectedTypes: []string{"object"}, ExpectedSchema: arrayFieldSchema.Items.Schema, StandaloneExpression: true},
+		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &objectInArraySchema, StandaloneExpression: true},
 	}
 
 	if len(expressions) != len(expectedExpressions) {
@@ -478,8 +478,8 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		if !reflect.DeepEqual(expr.Expressions, expected.Expressions) {
 			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, expected.Expressions, expr.Expressions)
 		}
-		if expr.ExpectedType != expected.ExpectedType {
-			t.Errorf("Path %s: expected type %s, got %s", expr.Path, expected.ExpectedType, expr.ExpectedType)
+		if !compareUnorderedSlices(expr.ExpectedTypes, expected.ExpectedTypes) {
+			t.Errorf("Path %s: expected type %s, got %s", expr.Path, expected.ExpectedTypes, expr.ExpectedTypes)
 		}
 		if expr.StandaloneExpression != expected.StandaloneExpression {
 			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.StandaloneExpression, expr.StandaloneExpression)
@@ -714,11 +714,11 @@ func TestJoinPathAndFieldName(t *testing.T) {
 func TestPartScalerTypesShortSpecTypes(t *testing.T) {
 	tests := []struct {
 		name          string
-		shortSpecType string
+		shortSpecType []string
 		field         interface{}
 	}{
-		{"int short type for integer", "int", 42},
-		{"bool short type for boolean", "bool", true},
+		{"int short type for integer", []string{"int"}, 42},
+		{"bool short type for boolean", []string{"bool"}, true},
 	}
 
 	dummySchema := &spec.Schema{}
@@ -780,7 +780,7 @@ func TestXKubernetesIntOrString(t *testing.T) {
 				"myField": true,
 			},
 			wantErr:    true,
-			wantErrMsg: "found `xKubernetesIntOrString` extension but field value is neither a string nor an integer: true",
+			wantErrMsg: "expected integer type for path myField, got bool",
 		},
 	}
 
@@ -861,7 +861,7 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 					},
 				},
 				wantErr:       true,
-				expectedError: "found `xKubernetesIntOrString` extension but field value is neither a string nor an integer: true",
+				expectedError: "expected integer type for path outerObject.nestedField, got bool",
 			},
 		}
 

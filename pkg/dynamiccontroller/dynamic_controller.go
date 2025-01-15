@@ -79,6 +79,17 @@ import (
 	"github.com/awslabs/kro/pkg/requeue"
 )
 
+// ObjectIdentifiers is a struct that holds the namespaced key and the GVR of the object.
+//
+// Since we are handling all the resources using the same handlerFunc, we need to know
+// what GVR we're dealing with - so that we can use the appropriate workflow operator.
+type ObjectIdentifiers struct {
+	// NamespacedKey is the namespaced key of the object. Typically in the format
+	// `namespace/name`.
+	NamespacedKey string
+	GVR           schema.GroupVersionResource
+}
+
 // Config holds the configuration for DynamicController
 type Config struct {
 	// Workers specifies the number of workers processing items from the queue
@@ -109,30 +120,72 @@ type Config struct {
 // dynamic resource management system. Its primary purpose is to create and manage
 // "micro" controllers for custom resources defined by users at runtime (via the
 // ResourceGroup CRs).
+//
+// The controller manages the lifecycle of watches through a combination of sync.Map
+// for thread safe state storage and per GVR mutexes for synchronizing configuration
+// changes.
 type DynamicController struct {
+	// config holds the controller's configuration including worker count,
+	// default resync periods, and shutdown timeouts
 	config Config
 
-	// kubeClient is the dynamic client used to create the informers
+	// kubeClient is used to interact with the Kubernetes API server
+	// and create dynamic informers for different GVRs
 	kubeClient dynamic.Interface
-	// informers is a safe map of GVR to informers. Each informer is responsible
-	// for watching a specific GVR.
-	informers sync.Map
 
-	// handlers is a safe map of GVR to workflow operators. Each
-	// handler is responsible for managing a specific GVR.
-	handlers sync.Map
+	// watchMutexes stores per GVR locks used to synchronize watch configuration
+	// changes, including updates to handlers and watch configs, as well as
+	// informer restarts
+	// watchMutexes sync.Map // map[schema.GroupVersionResource]*sync.RWMutex
 
-	// queue is the workqueue used to process items
+	// informers stores the active informer for each watched GVR along with its
+	// cancellation function
+	informers sync.Map // map[schema.GroupVersionResource]*informerWrapper
+
+	// handlers stores the active handler for each watched GVR, including its
+	// implementation, hash, and associated ResourceGroup revision
+	handlers sync.Map // map[schema.GroupVersionResource]*Handler
+
+	// cancels stores the context cancellation functions for each watched GVR.
+	// These functions must be called when stopping a watch to properly clean up
+	// the associated informer goroutines.
+	cancels sync.Map // map[schema.GroupVersionResource]context.CancelFunc
+
+	// watches stores the watch configuration for each GVR, such as resync period
+	watches sync.Map // map[schema.GroupVersionResource]*WatchConfig
+
+	// queue is the rate-limited work queue that handles processing of all
+	// watch events across all GVRs
 	queue workqueue.RateLimitingInterface
 
+	// log is the logger instance used for controller-wide logging
 	log logr.Logger
 }
 
-type Handler func(ctx context.Context, req ctrl.Request) error
+// WatchConfig holds the configuration for a specific GVR watch.
+// Currently, it only contains the resync period configuration,
+// but may be extended with additional parameters in the future.
+type WatchConfig struct {
+	// ResyncPeriod determines how often the informer will perform
+	// a full resync of all resources, even if there haven't been
+	// any changes. A value of 0 means no automatic resyncs.
+	ResyncPeriod time.Duration
+}
 
-type informerWrapper struct {
-	informer dynamicinformer.DynamicSharedInformerFactory
-	shutdown func()
+// WatchStatus represents the current state of a GVR watch
+type WatchStatus struct {
+	// ResourceGroupRevision indicates which version of the ResourceGroup CR
+	// produced the current configuration
+	ResourceGroupRevision int64
+
+	// HandlerHash uniquely identifies the handler function implementation
+	HandlerHash string
+
+	// ResyncPeriod is the current resync interval for the watch
+	ResyncPeriod time.Duration
+
+	// IsWatching indicates if the GVR is currently being watched
+	IsWatching bool
 }
 
 // NewDynamicController creates a new DynamicController instance.
@@ -221,7 +274,7 @@ func (dc *DynamicController) Run(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
-	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
+	return dc.gracefulShutdown(context.Background(), dc.config.ShutdownTimeout)
 }
 
 // worker processes items from the queue.
@@ -309,11 +362,11 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 	}
 
 	// this is worth a panic if it fails...
-	handlerFunc, ok := genericHandler.(Handler)
+	handler, ok := genericHandler.(*Handler)
 	if !ok {
 		return fmt.Errorf("invalid handler type for GVR: %s", gvrKey)
 	}
-	err := handlerFunc(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
+	err := handler.Func(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
 	if err != nil {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
@@ -321,19 +374,19 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 }
 
 // gracefulShutdown performs a graceful shutdown of the controller.
-func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
+func (dc *DynamicController) gracefulShutdown(ctx context.Context, timeout time.Duration) error {
 	dc.log.Info("Starting graceful shutdown")
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	dc.informers.Range(func(key, value interface{}) bool {
+	dc.cancels.Range(func(key, value interface{}) bool {
 		wg.Add(1)
-		go func(informer *informerWrapper) {
+		go func(c func()) {
 			defer wg.Done()
-			informer.informer.Shutdown()
-		}(value.(*informerWrapper))
+			c()
+		}(value.(func()))
 		return true
 	})
 
@@ -353,17 +406,6 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 	}
 
 	return nil
-}
-
-// ObjectIdentifiers is a struct that holds the namespaced key and the GVR of the object.
-//
-// Since we are handling all the resources using the same handlerFunc, we need to know
-// what GVR we're dealing with - so that we can use the appropriate workflow operator.
-type ObjectIdentifiers struct {
-	// NamespacedKey is the namespaced key of the object. Typically in the format
-	// `namespace/name`.
-	NamespacedKey string
-	GVR           schema.GroupVersionResource
 }
 
 // updateFunc is the update event handler for the GVR informers
@@ -421,112 +463,203 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	dc.queue.Add(objectIdentifiers)
 }
 
-// StartServingGVK registers a new GVK to the informers map safely.
-func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
-	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
-
-	_, exists := dc.informers.Load(gvr)
-	if exists {
-		// Even thought the informer is already registered, we should still
-		// still update the handler, as it might have changed.
-		dc.handlers.Store(gvr, handler)
-		return nil
+// WatchGVRWithConfig starts watching a GVR using the provided handler and configuration.
+// If the GVR is already being watched, this method will panic as it indicates
+// incorrect usage of the controller.
+func (dc *DynamicController) WatchGVRWithConfig(
+	ctx context.Context,
+	gvr schema.GroupVersionResource,
+	handler Handler,
+	resync time.Duration,
+) error {
+	// Check if already watching this GVR
+	if _, exists := dc.handlers.Load(gvr); exists {
+		panic(fmt.Sprintf("attempted to watch already watched GVR: %v - use UpdateGVRHandler instead", gvr))
 	}
 
-	// Create a new informer
-	gvkInformer := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+	// Create new informer
+	dynamicInformer := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dc.kubeClient,
-		dc.config.ResyncPeriod,
-		// Maybe we can make this configurable in the future. Thinking that
-		// we might want to filter out some resources, by namespace or labels
-		"",
+		resync,
+		"", // all namespaces
 		nil,
 	)
 
-	informer := gvkInformer.ForResource(gvr).Informer()
+	informer := dynamicInformer.ForResource(gvr).Informer()
 
 	// Set up event handlers
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { dc.enqueueObject(obj, "add") },
-		UpdateFunc: dc.updateFunc,
+		UpdateFunc: func(old, new interface{}) { dc.enqueueObject(new, "update") },
 		DeleteFunc: func(obj interface{}) { dc.enqueueObject(obj, "delete") },
 	})
 	if err != nil {
-		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)
 		return fmt.Errorf("failed to add event handler for GVR %s: %w", gvr, err)
 	}
-	informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+	err = informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
 		dc.log.Error(err, "Watch error", "gvr", gvr)
 	})
-	dc.handlers.Store(gvr, handler)
+	if err != nil {
+		return fmt.Errorf("failed to watch error handler for GVR %s: %w", gvr, err)
+	}
 
+	// Store configurations
+	dc.handlers.Store(gvr, &handler)
+	dc.watches.Store(gvr, &WatchConfig{ResyncPeriod: resync})
+	dc.informers.Store(gvr, informer)
+
+	// Create long-lived context for the informer
 	informerContext := context.Background()
-	cancelableContext, cancel := context.WithCancel(informerContext)
+	watchContext, cancelContext := context.WithCancel(informerContext)
+	dc.cancels.Store(gvr, func() {
+		cancelContext()
+		dynamicInformer.Shutdown()
+	})
 	// Start the informer
 	go func() {
 		dc.log.V(1).Info("Starting informer", "gvr", gvr)
-		// time.Sleep(5 * time.Millisecond)
-		informer.Run(cancelableContext.Done())
+		informer.Run(watchContext.Done())
 	}()
 
-	dc.log.V(1).Info("Waiting for cache sync", "gvr", gvr)
 	startTime := time.Now()
-	// Wait for cache sync with a timeout
-	synced := cache.WaitForCacheSync(cancelableContext.Done(), informer.HasSynced)
+	// Wait for cache sync with timeout using the passed context
+	synced := cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
 	syncDuration := time.Since(startTime)
 	informerSyncDuration.WithLabelValues(gvr.String()).Observe(syncDuration.Seconds())
 
 	if !synced {
-		cancel()
-		return fmt.Errorf("failed to sync informer cache for GVR %s", gvr)
+		dc.cleanup(gvr)
+		return fmt.Errorf("failed to sync cache for GVR %v", gvr)
 	}
 
-	dc.informers.Store(gvr, &informerWrapper{
-		informer: gvkInformer,
-		shutdown: cancel,
-	})
 	gvrCount.Inc()
-	dc.log.V(1).Info("Successfully registered GVK", "gvr", gvr)
 	return nil
 }
 
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
-func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
+// cleanup removes all resources associated with a GVR.
+func (dc *DynamicController) cleanup(gvr schema.GroupVersionResource) {
+	if cancel, ok := dc.cancels.LoadAndDelete(gvr); ok {
+		cancel.(context.CancelFunc)()
+	}
+	dc.cancels.Delete(gvr)
+	dc.handlers.Delete(gvr)
+	dc.watches.Delete(gvr)
+	dc.informers.Delete(gvr)
+}
+
+// UnwatchGVR safely removes a GVK from the controller and cleans up associated resources.
+func (dc *DynamicController) UnwatchGVR(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
 	// Retrieve the informer
-	informerObj, ok := dc.informers.Load(gvr)
+	cancelInformer, ok := dc.cancels.Load(gvr)
 	if !ok {
 		dc.log.V(1).Info("GVK not registered, nothing to unregister", "gvr", gvr)
 		return nil
 	}
 
-	wrapper, ok := informerObj.(*informerWrapper)
+	cancel, ok := cancelInformer.(func())
 	if !ok {
-		return fmt.Errorf("invalid informer type for GVR: %s", gvr)
+		panic(fmt.Sprintf("invalid cancel func type for GVR: %s", gvr))
 	}
 
 	// Stop the informer
 	dc.log.V(1).Info("Stopping informer", "gvr", gvr)
 
-	// Cancel the context to stop the informer
-	wrapper.shutdown()
-	// Wait for the informer to shut down
-	wrapper.informer.Shutdown()
+	cancel()
 
-	// Remove the informer from the map
-	dc.informers.Delete(gvr)
-
-	// Unregister the handler if any
-	dc.handlers.Delete(gvr)
+	dc.cleanup(gvr)
 
 	gvrCount.Dec()
-	// Clean up any pending items in the queue for this GVR
-	// NOTE(a-hilaly): This is a bit heavy.. maybe we can find a better way to do this.
-	// Thinking that we might want to have a queue per GVR.
-	// dc.cleanupQueue(gvr)
-	// time.Sleep(1 * time.Second)
-	// isStopped := wrapper.informer.ForResource(gvr).Informer().IsStopped()
 	dc.log.V(1).Info("Successfully unregistered GVK", "gvr", gvr)
 	return nil
+}
+
+// GetGVRWatchStatus returns the current watch configuration for a GVR.
+func (dc *DynamicController) GetGVRWatchStatus(gvr schema.GroupVersionResource) WatchStatus {
+	handler, ok := dc.handlers.Load(gvr)
+	if !ok {
+		return WatchStatus{
+			IsWatching: false,
+		}
+	}
+
+	config, _ := dc.watches.Load(gvr)
+	return WatchStatus{
+		ResourceGroupRevision: handler.(*Handler).ResourceGroupRevision,
+		HandlerHash:           handler.(*Handler).Hash,
+		ResyncPeriod:          config.(*WatchConfig).ResyncPeriod,
+		IsWatching:            true,
+	}
+}
+
+// UpdateGVRHandler updates the handler for an existing watch with a new handler generated
+// from an updated ResourceGroup revision.
+func (dc *DynamicController) UpdateGVRHandler(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
+	dc.log.Info("Updating GVR handler", "gvr", gvr)
+
+	// Check if the GVR is being watched
+	if _, exists := dc.handlers.Load(gvr); !exists {
+		return fmt.Errorf("GVR %v is not being watched", gvr)
+	}
+
+	dc.handlers.Store(gvr, &handler)
+
+	dc.log.Info("Successfully updated GVR handler", "gvr", gvr)
+	return nil
+}
+
+// UpdateGVRResyncPeriod updates the resync period for an existing watch.
+//
+// This functions stops the informer and restarts it with the new resync period.
+func (dc *DynamicController) UpdateGVRResyncPeriod(ctx context.Context, gvr schema.GroupVersionResource, period time.Duration) error {
+	dc.log.Info("Updating GVR resync period", "gvr", gvr, "period", period)
+
+	// Store a reference to the current handler and watch config
+	handler, _ := dc.handlers.Load(gvr)
+
+	err := dc.UnwatchGVR(ctx, gvr)
+	if err != nil {
+		return fmt.Errorf("failed to unwatch GVR: %w", err)
+	}
+
+	// Re-watch the GVR with the new resync period
+	err = dc.WatchGVRWithConfig(ctx, gvr, *handler.(*Handler), period)
+	if err != nil {
+		return fmt.Errorf("failed to re-watch GVR: %w", err)
+	}
+
+	dc.log.Info("Successfully updated GVR resync period", "gvr", gvr, "period", period)
+	return nil
+}
+
+// ResyncGVR triggers an immediate list operation for the specified GVR
+// and enqueues all objects for processing.
+func (dc *DynamicController) ResyncGVR(ctx context.Context, gvr schema.GroupVersionResource) error {
+	dc.log.Info("Resyncing GVR", "gvr", gvr)
+
+	// Check if the GVR is being watched
+	informer, ok := dc.informers.Load(gvr)
+	if !ok {
+		return fmt.Errorf("GVR %v is not being watched", gvr)
+	}
+
+	objects := informer.(cache.SharedIndexInformer).GetStore().List()
+
+	for _, obj := range objects {
+		dc.enqueueObject(obj, "resync")
+	}
+
+	dc.log.Info("Successfully resynced GVR", "gvr", gvr)
+	return nil
+}
+
+// Stop gracefully shuts down the controller with the given timeout duration.
+func (dc *DynamicController) Stop(timeout time.Duration) error {
+	dc.log.Info("Stopping dynamic controller")
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return dc.gracefulShutdown(ctx, timeout)
 }

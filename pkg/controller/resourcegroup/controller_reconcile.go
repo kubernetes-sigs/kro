@@ -60,7 +60,11 @@ func (r *ResourceGroupReconciler) reconcileResourceGroup(ctx context.Context, rg
 	controller := r.setupMicroController(gvr, processedRG, rg.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource group micro controller")
-	if err := r.reconcileResourceGroupMicroController(ctx, &gvr, controller.Reconcile); err != nil {
+	if err := r.reconcileResourceGroupMicroController(ctx, &gvr, dynamiccontroller.Handler{
+		Func:                  controller.Reconcile,
+		ResourceGroupRevision: rg.Generation,
+		Hash:                  "",
+	}); err != nil {
 		return processedRG.TopologicalOrder, resourcesInfo, err
 	}
 
@@ -139,7 +143,13 @@ func (r *ResourceGroupReconciler) reconcileResourceGroupCRD(ctx context.Context,
 
 // reconcileResourceGroupMicroController starts the microcontroller for handling the resources
 func (r *ResourceGroupReconciler) reconcileResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler) error {
-	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler)
+	watchStatus := r.dynamicController.GetGVRWatchStatus(*gvr)
+	if watchStatus.IsWatching {
+		return nil
+	}
+	// TODO(a-hilaly): handle watch reconfigurations.
+
+	err := r.dynamicController.WatchGVRWithConfig(ctx, *gvr, handler, 1*time.Hour)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

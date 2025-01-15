@@ -52,7 +52,7 @@ func (r *ResourceGroupReconciler) cleanupResourceGroup(ctx context.Context, rg *
 // shutdownResourceGroupMicroController stops the dynamic controller associated with the given GVR.
 // This ensures no new reconciliations occur for this resource type.
 func (r *ResourceGroupReconciler) shutdownResourceGroupMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {
-	if err := r.dynamicController.StopServiceGVK(ctx, *gvr); err != nil {
+	if err := r.dynamicController.UnwatchGVR(ctx, *gvr); err != nil {
 		return fmt.Errorf("error stopping service: %w", err)
 	}
 	return nil

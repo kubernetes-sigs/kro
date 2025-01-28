@@ -220,6 +220,14 @@ func (igr *instanceGraphReconciler) handleResourceCreation(
 ) error {
 	igr.log.V(1).Info("Creating new resource", "resourceID", resourceID)
 
+	// Check if label propagation is enabled
+	annotations, found := igr.runtime.GetInstance().Object["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})
+	if found {
+		if val, ok := annotations["kro.run/propagate-labels"]; ok && val == "true" {
+			igr.log.V(1).Info("Found propage labels annotation")
+		}
+	}
+
 	// Apply labels and create resource
 	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
 	if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {

@@ -1,6 +1,6 @@
 # kro WebApp example
 
-This example creates a ResourceGraphDefinition called `WebApp` and then instaciates it with
+This example creates a ResourceGraphDefinition called `WebApp` and then instantiates it with
 the default nginx container image.
 
 ### Create ResourceGraphDefinition called WebApp

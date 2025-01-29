@@ -141,7 +141,7 @@ type Dependency struct {
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:resource:shortName=rg
+// +kubebuilder:resource:shortName=rgd
 
 // ResourceGraphDefinition is the Schema for the resourcegraphdefinitions API
 type ResourceGraphDefinition struct {

@@ -12,7 +12,7 @@ spec:
     listKind: ResourceGraphDefinitionList
     plural: resourcegraphdefinitions
     shortNames:
-    - rg
+    - rgd
     singular: resourcegraphdefinition
   scope: Namespaced
   versions:
@@ -36,7 +36,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions API
+        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
+          API
         properties:
           apiVersion:
             description: |-
@@ -56,7 +57,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
+            description: ResourceGraphDefinitionSpec defines the desired state of
+              ResourceGraphDefinition
             properties:
               defaultServiceAccounts:
                 additionalProperties:
@@ -147,7 +149,8 @@ spec:
             - schema
             type: object
           status:
-            description: ResourceGraphDefinitionStatus defines the observed state of ResourceGraphDefinition
+            description: ResourceGraphDefinitionStatus defines the observed state
+              of ResourceGraphDefinition
             properties:
               conditions:
                 description: Conditions represent the latest available observations

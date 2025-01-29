@@ -17,8 +17,6 @@ import (
 	"fmt"
 	"regexp"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"github.com/kro-run/kro/api/v1alpha1"
 )
 
@@ -138,17 +136,6 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 	_, isString := apiVersion.(string)
 	if !isString {
 		return fmt.Errorf("apiVersion field is not a string")
-	}
-
-	groupVersion, err := schema.ParseGroupVersion(apiVersion.(string))
-	if err != nil {
-		return fmt.Errorf("apiVersion field is not a valid Kubernetes group version: %w", err)
-	}
-	if groupVersion.Version != "" {
-		// Only validate the version if it is not empty. Empty version is allowed.
-		if err := validateKubernetesVersion(groupVersion.Version); err != nil {
-			return fmt.Errorf("apiVersion field does not have a valid version: %w", err)
-		}
 	}
 
 	kind, exists := obj["kind"]

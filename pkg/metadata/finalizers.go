@@ -20,25 +20,25 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 const kroFinalizer = v1alpha1.KroDomainName + "/finalizer"
 
-// SetResourceGroupFinalizer adds the Kro finalizer to the object if it's not already present.
-func SetResourceGroupFinalizer(obj metav1.Object) {
-	if !HasResourceGroupFinalizer(obj) {
+// SetResourceGraphDefinitionFinalizer adds the Kro finalizer to the object if it's not already present.
+func SetResourceGraphDefinitionFinalizer(obj metav1.Object) {
+	if !HasResourceGraphDefinitionFinalizer(obj) {
 		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
 	}
 }
 
-// RemoveResourceGroupFinalizer removes the Kro finalizer from the object.
-func RemoveResourceGroupFinalizer(obj metav1.Object) {
+// RemoveResourceGraphDefinitionFinalizer removes the Kro finalizer from the object.
+func RemoveResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
 }
 
-// HasResourceGroupFinalizer checks if the object has the Kro finalizer.
-func HasResourceGroupFinalizer(obj metav1.Object) bool {
+// HasResourceGraphDefinitionFinalizer checks if the object has the Kro finalizer.
+func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
 	return containsString(obj.GetFinalizers(), kroFinalizer)
 }
 

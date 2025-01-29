@@ -1,0 +1,1174 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: s3crds.kro.run
+  namespace: kro
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: S3CRDGroup
+    spec:
+      name: string | default=KarpentersCRDGroup
+  resources:
+  - id: bucketCRD
+    template: 
+      apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        annotations:
+          controller-gen.kubebuilder.io/version: v0.16.2
+        name: buckets.s3.services.k8s.aws
+      spec:
+        group: s3.services.k8s.aws
+        names:
+          kind: Bucket
+          listKind: BucketList
+          plural: buckets
+          singular: bucket
+        scope: Namespaced
+        versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Bucket is the Schema for the Buckets API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    BucketSpec defines the desired state of Bucket.
+
+                    In terms of implementation, a Bucket is a resource. An Amazon S3 bucket name
+                    is globally unique, and the namespace is shared by all Amazon Web Services
+                    accounts.
+                  properties:
+                    accelerate:
+                      description: Container for setting the transfer acceleration state.
+                      properties:
+                        status:
+                          type: string
+                      type: object
+                    acl:
+                      description: The canned ACL to apply to the bucket.
+                      type: string
+                    analytics:
+                      items:
+                        description: |-
+                          Specifies the configuration and any analyses for the analytics filter of
+                          an Amazon S3 bucket.
+                        properties:
+                          filter:
+                            description: |-
+                              The filter used to describe a set of objects for analyses. A filter must
+                              have exactly one prefix, one tag, or one conjunction (AnalyticsAndOperator).
+                              If no filter is provided, all objects will be considered in any analysis.
+                            properties:
+                              and:
+                                description: |-
+                                  A conjunction (logical AND) of predicates, which is used in evaluating a
+                                  metrics filter. The operator must have at least two predicates in any combination,
+                                  and an object must match all of the predicates for the filter to apply.
+                                properties:
+                                  prefix:
+                                    type: string
+                                  tags:
+                                    items:
+                                      description: A container of a key value name pair.
+                                      properties:
+                                        key:
+                                          type: string
+                                        value:
+                                          type: string
+                                      type: object
+                                    type: array
+                                type: object
+                              prefix:
+                                type: string
+                              tag:
+                                description: A container of a key value name pair.
+                                properties:
+                                  key:
+                                    type: string
+                                  value:
+                                    type: string
+                                type: object
+                            type: object
+                          id:
+                            type: string
+                          storageClassAnalysis:
+                            description: |-
+                              Specifies data related to access patterns to be collected and made available
+                              to analyze the tradeoffs between different storage classes for an Amazon
+                              S3 bucket.
+                            properties:
+                              dataExport:
+                                description: |-
+                                  Container for data related to the storage class analysis for an Amazon S3
+                                  bucket for export.
+                                properties:
+                                  destination:
+                                    description: Where to publish the analytics results.
+                                    properties:
+                                      s3BucketDestination:
+                                        description: Contains information about where to
+                                          publish the analytics results.
+                                        properties:
+                                          bucket:
+                                            type: string
+                                          bucketAccountID:
+                                            type: string
+                                          format:
+                                            type: string
+                                          prefix:
+                                            type: string
+                                        type: object
+                                    type: object
+                                  outputSchemaVersion:
+                                    type: string
+                                type: object
+                            type: object
+                        type: object
+                      type: array
+                    cors:
+                      description: |-
+                        Describes the cross-origin access configuration for objects in an Amazon
+                        S3 bucket. For more information, see Enabling Cross-Origin Resource Sharing
+                        (https://docs.aws.amazon.com/AmazonS3/latest/dev/cors.html) in the Amazon
+                        S3 User Guide.
+                      properties:
+                        corsRules:
+                          items:
+                            description: Specifies a cross-origin access rule for an Amazon
+                              S3 bucket.
+                            properties:
+                              allowedHeaders:
+                                items:
+                                  type: string
+                                type: array
+                              allowedMethods:
+                                items:
+                                  type: string
+                                type: array
+                              allowedOrigins:
+                                items:
+                                  type: string
+                                type: array
+                              exposeHeaders:
+                                items:
+                                  type: string
+                                type: array
+                              id:
+                                type: string
+                              maxAgeSeconds:
+                                format: int64
+                                type: integer
+                            type: object
+                          type: array
+                      type: object
+                    createBucketConfiguration:
+                      description: The configuration information for the bucket.
+                      properties:
+                        locationConstraint:
+                          type: string
+                      type: object
+                    encryption:
+                      description: Specifies the default server-side-encryption configuration.
+                      properties:
+                        rules:
+                          items:
+                            description: Specifies the default server-side encryption configuration.
+                            properties:
+                              applyServerSideEncryptionByDefault:
+                                description: |-
+                                  Describes the default server-side encryption to apply to new objects in the
+                                  bucket. If a PUT Object request doesn't specify any server-side encryption,
+                                  this default encryption will be applied. If you don't specify a customer
+                                  managed key at configuration, Amazon S3 automatically creates an Amazon Web
+                                  Services KMS key in your Amazon Web Services account the first time that
+                                  you add an object encrypted with SSE-KMS to a bucket. By default, Amazon
+                                  S3 uses this KMS key for SSE-KMS. For more information, see PUT Bucket encryption
+                                  (https://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTencryption.html)
+                                  in the Amazon S3 API Reference.
+                                properties:
+                                  kmsMasterKeyID:
+                                    type: string
+                                  sseAlgorithm:
+                                    type: string
+                                type: object
+                              bucketKeyEnabled:
+                                type: boolean
+                            type: object
+                          type: array
+                      type: object
+                    grantFullControl:
+                      description: |-
+                        Allows grantee the read, write, read ACP, and write ACP permissions on the
+                        bucket.
+                      type: string
+                    grantRead:
+                      description: Allows grantee to list the objects in the bucket.
+                      type: string
+                    grantReadACP:
+                      description: Allows grantee to read the bucket ACL.
+                      type: string
+                    grantWrite:
+                      description: |-
+                        Allows grantee to create new objects in the bucket.
+
+                        For the bucket and object owners of existing objects, also allows deletions
+                        and overwrites of those objects.
+                      type: string
+                    grantWriteACP:
+                      description: Allows grantee to write the ACL for the applicable bucket.
+                      type: string
+                    intelligentTiering:
+                      items:
+                        description: |-
+                          Specifies the S3 Intelligent-Tiering configuration for an Amazon S3 bucket.
+
+                          For information about the S3 Intelligent-Tiering storage class, see Storage
+                          class for automatically optimizing frequently and infrequently accessed objects
+                          (https://docs.aws.amazon.com/AmazonS3/latest/dev/storage-class-intro.html#sc-dynamic-data-access).
+                        properties:
+                          filter:
+                            description: |-
+                              The Filter is used to identify objects that the S3 Intelligent-Tiering configuration
+                              applies to.
+                            properties:
+                              and:
+                                description: |-
+                                  A container for specifying S3 Intelligent-Tiering filters. The filters determine
+                                  the subset of objects to which the rule applies.
+                                properties:
+                                  prefix:
+                                    type: string
+                                  tags:
+                                    items:
+                                      description: A container of a key value name pair.
+                                      properties:
+                                        key:
+                                          type: string
+                                        value:
+                                          type: string
+                                      type: object
+                                    type: array
+                                type: object
+                              prefix:
+                                type: string
+                              tag:
+                                description: A container of a key value name pair.
+                                properties:
+                                  key:
+                                    type: string
+                                  value:
+                                    type: string
+                                type: object
+                            type: object
+                          id:
+                            type: string
+                          status:
+                            type: string
+                          tierings:
+                            items:
+                              description: |-
+                                The S3 Intelligent-Tiering storage class is designed to optimize storage
+                                costs by automatically moving data to the most cost-effective storage access
+                                tier, without additional operational overhead.
+                              properties:
+                                accessTier:
+                                  type: string
+                                days:
+                                  format: int64
+                                  type: integer
+                              type: object
+                            type: array
+                        type: object
+                      type: array
+                    inventory:
+                      items:
+                        description: |-
+                          Specifies the inventory configuration for an Amazon S3 bucket. For more information,
+                          see GET Bucket inventory (https://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETInventoryConfig.html)
+                          in the Amazon S3 API Reference.
+                        properties:
+                          destination:
+                            description: Specifies the inventory configuration for an Amazon
+                              S3 bucket.
+                            properties:
+                              s3BucketDestination:
+                                description: |-
+                                  Contains the bucket name, file format, bucket owner (optional), and prefix
+                                  (optional) where inventory results are published.
+                                properties:
+                                  accountID:
+                                    type: string
+                                  bucket:
+                                    type: string
+                                  encryption:
+                                    description: |-
+                                      Contains the type of server-side encryption used to encrypt the inventory
+                                      results.
+                                    properties:
+                                      sseKMS:
+                                        description: Specifies the use of SSE-KMS to encrypt
+                                          delivered inventory reports.
+                                        properties:
+                                          keyID:
+                                            type: string
+                                        type: object
+                                    type: object
+                                  format:
+                                    type: string
+                                  prefix:
+                                    type: string
+                                type: object
+                            type: object
+                          filter:
+                            description: |-
+                              Specifies an inventory filter. The inventory only includes objects that meet
+                              the filter's criteria.
+                            properties:
+                              prefix:
+                                type: string
+                            type: object
+                          id:
+                            type: string
+                          includedObjectVersions:
+                            type: string
+                          isEnabled:
+                            type: boolean
+                          optionalFields:
+                            items:
+                              type: string
+                            type: array
+                          schedule:
+                            description: Specifies the schedule for generating inventory
+                              results.
+                            properties:
+                              frequency:
+                                type: string
+                            type: object
+                        type: object
+                      type: array
+                    lifecycle:
+                      description: Container for lifecycle rules. You can add as many as
+                        1,000 rules.
+                      properties:
+                        rules:
+                          items:
+                            description: A lifecycle rule for individual objects in an Amazon
+                              S3 bucket.
+                            properties:
+                              abortIncompleteMultipartUpload:
+                                description: |-
+                                  Specifies the days since the initiation of an incomplete multipart upload
+                                  that Amazon S3 will wait before permanently removing all parts of the upload.
+                                  For more information, see Aborting Incomplete Multipart Uploads Using a Bucket
+                                  Lifecycle Policy (https://docs.aws.amazon.com/AmazonS3/latest/dev/mpuoverview.html#mpu-abort-incomplete-mpu-lifecycle-config)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  daysAfterInitiation:
+                                    format: int64
+                                    type: integer
+                                type: object
+                              expiration:
+                                description: Container for the expiration for the lifecycle
+                                  of the object.
+                                properties:
+                                  date:
+                                    format: date-time
+                                    type: string
+                                  days:
+                                    format: int64
+                                    type: integer
+                                  expiredObjectDeleteMarker:
+                                    type: boolean
+                                type: object
+                              filter:
+                                description: |-
+                                  The Filter is used to identify objects that a Lifecycle Rule applies to.
+                                  A Filter must have exactly one of Prefix, Tag, or And specified.
+                                properties:
+                                  and:
+                                    description: |-
+                                      This is used in a Lifecycle Rule Filter to apply a logical AND to two or
+                                      more predicates. The Lifecycle Rule will apply to any object matching all
+                                      of the predicates configured inside the And operator.
+                                    properties:
+                                      objectSizeGreaterThan:
+                                        format: int64
+                                        type: integer
+                                      objectSizeLessThan:
+                                        format: int64
+                                        type: integer
+                                      prefix:
+                                        type: string
+                                      tags:
+                                        items:
+                                          description: A container of a key value name pair.
+                                          properties:
+                                            key:
+                                              type: string
+                                            value:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                  objectSizeGreaterThan:
+                                    format: int64
+                                    type: integer
+                                  objectSizeLessThan:
+                                    format: int64
+                                    type: integer
+                                  prefix:
+                                    type: string
+                                  tag:
+                                    description: A container of a key value name pair.
+                                    properties:
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    type: object
+                                type: object
+                              id:
+                                type: string
+                              noncurrentVersionExpiration:
+                                description: |-
+                                  Specifies when noncurrent object versions expire. Upon expiration, Amazon
+                                  S3 permanently deletes the noncurrent object versions. You set this lifecycle
+                                  configuration action on a bucket that has versioning enabled (or suspended)
+                                  to request that Amazon S3 delete noncurrent object versions at a specific
+                                  period in the object's lifetime.
+                                properties:
+                                  newerNoncurrentVersions:
+                                    format: int64
+                                    type: integer
+                                  noncurrentDays:
+                                    format: int64
+                                    type: integer
+                                type: object
+                              noncurrentVersionTransitions:
+                                items:
+                                  description: |-
+                                    Container for the transition rule that describes when noncurrent objects
+                                    transition to the STANDARD_IA, ONEZONE_IA, INTELLIGENT_TIERING, GLACIER_IR,
+                                    GLACIER, or DEEP_ARCHIVE storage class. If your bucket is versioning-enabled
+                                    (or versioning is suspended), you can set this action to request that Amazon
+                                    S3 transition noncurrent object versions to the STANDARD_IA, ONEZONE_IA,
+                                    INTELLIGENT_TIERING, GLACIER_IR, GLACIER, or DEEP_ARCHIVE storage class at
+                                    a specific period in the object's lifetime.
+                                  properties:
+                                    newerNoncurrentVersions:
+                                      format: int64
+                                      type: integer
+                                    noncurrentDays:
+                                      format: int64
+                                      type: integer
+                                    storageClass:
+                                      type: string
+                                  type: object
+                                type: array
+                              prefix:
+                                type: string
+                              status:
+                                type: string
+                              transitions:
+                                items:
+                                  description: |-
+                                    Specifies when an object transitions to a specified storage class. For more
+                                    information about Amazon S3 lifecycle configuration rules, see Transitioning
+                                    Objects Using Amazon S3 Lifecycle (https://docs.aws.amazon.com/AmazonS3/latest/dev/lifecycle-transition-general-considerations.html)
+                                    in the Amazon S3 User Guide.
+                                  properties:
+                                    date:
+                                      format: date-time
+                                      type: string
+                                    days:
+                                      format: int64
+                                      type: integer
+                                    storageClass:
+                                      type: string
+                                  type: object
+                                type: array
+                            type: object
+                          type: array
+                      type: object
+                    logging:
+                      description: Container for logging status information.
+                      properties:
+                        loggingEnabled:
+                          description: |-
+                            Describes where logs are stored and the prefix that Amazon S3 assigns to
+                            all log object keys for a bucket. For more information, see PUT Bucket logging
+                            (https://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTlogging.html)
+                            in the Amazon S3 API Reference.
+                          properties:
+                            targetBucket:
+                              type: string
+                            targetGrants:
+                              items:
+                                description: |-
+                                  Container for granting information.
+
+                                  Buckets that use the bucket owner enforced setting for Object Ownership don't
+                                  support target grants. For more information, see Permissions server access
+                                  log delivery (https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-server-access-logging.html#grant-log-delivery-permissions-general)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  grantee:
+                                    description: Container for the person being granted
+                                      permissions.
+                                    properties:
+                                      displayName:
+                                        type: string
+                                      emailAddress:
+                                        type: string
+                                      id:
+                                        type: string
+                                      type_:
+                                        type: string
+                                      uRI:
+                                        type: string
+                                    type: object
+                                  permission:
+                                    type: string
+                                type: object
+                              type: array
+                            targetPrefix:
+                              type: string
+                          type: object
+                      type: object
+                    metrics:
+                      items:
+                        description: |-
+                          Specifies a metrics configuration for the CloudWatch request metrics (specified
+                          by the metrics configuration ID) from an Amazon S3 bucket. If you're updating
+                          an existing metrics configuration, note that this is a full replacement of
+                          the existing metrics configuration. If you don't include the elements you
+                          want to keep, they are erased. For more information, see PutBucketMetricsConfiguration
+                          (https://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTMetricConfiguration.html).
+                        properties:
+                          filter:
+                            description: |-
+                              Specifies a metrics configuration filter. The metrics configuration only
+                              includes objects that meet the filter's criteria. A filter must be a prefix,
+                              an object tag, an access point ARN, or a conjunction (MetricsAndOperator).
+                              For more information, see PutBucketMetricsConfiguration (https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketMetricsConfiguration.html).
+                            properties:
+                              accessPointARN:
+                                type: string
+                              and:
+                                description: |-
+                                  A conjunction (logical AND) of predicates, which is used in evaluating a
+                                  metrics filter. The operator must have at least two predicates, and an object
+                                  must match all of the predicates in order for the filter to apply.
+                                properties:
+                                  accessPointARN:
+                                    type: string
+                                  prefix:
+                                    type: string
+                                  tags:
+                                    items:
+                                      description: A container of a key value name pair.
+                                      properties:
+                                        key:
+                                          type: string
+                                        value:
+                                          type: string
+                                      type: object
+                                    type: array
+                                type: object
+                              prefix:
+                                type: string
+                              tag:
+                                description: A container of a key value name pair.
+                                properties:
+                                  key:
+                                    type: string
+                                  value:
+                                    type: string
+                                type: object
+                            type: object
+                          id:
+                            type: string
+                        type: object
+                      type: array
+                    name:
+                      description: The name of the bucket to create.
+                      type: string
+                    notification:
+                      description: |-
+                        A container for specifying the notification configuration of the bucket.
+                        If this element is empty, notifications are turned off for the bucket.
+                      properties:
+                        lambdaFunctionConfigurations:
+                          items:
+                            description: A container for specifying the configuration for
+                              Lambda notifications.
+                            properties:
+                              events:
+                                items:
+                                  type: string
+                                type: array
+                              filter:
+                                description: |-
+                                  Specifies object key name filtering rules. For information about key name
+                                  filtering, see Configuring Event Notifications (https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  key:
+                                    description: A container for object key name prefix
+                                      and suffix filtering rules.
+                                    properties:
+                                      filterRules:
+                                        description: |-
+                                          A list of containers for the key-value pair that defines the criteria for
+                                          the filter rule.
+                                        items:
+                                          description: |-
+                                            Specifies the Amazon S3 object key name to filter on and whether to filter
+                                            on the suffix or prefix of the key name.
+                                          properties:
+                                            name:
+                                              type: string
+                                            value:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                type: object
+                              id:
+                                description: |-
+                                  An optional unique identifier for configurations in a notification configuration.
+                                  If you don't provide one, Amazon S3 will assign an ID.
+                                type: string
+                              lambdaFunctionARN:
+                                type: string
+                            type: object
+                          type: array
+                        queueConfigurations:
+                          items:
+                            description: |-
+                              Specifies the configuration for publishing messages to an Amazon Simple Queue
+                              Service (Amazon SQS) queue when Amazon S3 detects specified events.
+                            properties:
+                              events:
+                                items:
+                                  type: string
+                                type: array
+                              filter:
+                                description: |-
+                                  Specifies object key name filtering rules. For information about key name
+                                  filtering, see Configuring Event Notifications (https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  key:
+                                    description: A container for object key name prefix
+                                      and suffix filtering rules.
+                                    properties:
+                                      filterRules:
+                                        description: |-
+                                          A list of containers for the key-value pair that defines the criteria for
+                                          the filter rule.
+                                        items:
+                                          description: |-
+                                            Specifies the Amazon S3 object key name to filter on and whether to filter
+                                            on the suffix or prefix of the key name.
+                                          properties:
+                                            name:
+                                              type: string
+                                            value:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                type: object
+                              id:
+                                description: |-
+                                  An optional unique identifier for configurations in a notification configuration.
+                                  If you don't provide one, Amazon S3 will assign an ID.
+                                type: string
+                              queueARN:
+                                type: string
+                            type: object
+                          type: array
+                        topicConfigurations:
+                          items:
+                            description: |-
+                              A container for specifying the configuration for publication of messages
+                              to an Amazon Simple Notification Service (Amazon SNS) topic when Amazon S3
+                              detects specified events.
+                            properties:
+                              events:
+                                items:
+                                  type: string
+                                type: array
+                              filter:
+                                description: |-
+                                  Specifies object key name filtering rules. For information about key name
+                                  filtering, see Configuring Event Notifications (https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  key:
+                                    description: A container for object key name prefix
+                                      and suffix filtering rules.
+                                    properties:
+                                      filterRules:
+                                        description: |-
+                                          A list of containers for the key-value pair that defines the criteria for
+                                          the filter rule.
+                                        items:
+                                          description: |-
+                                            Specifies the Amazon S3 object key name to filter on and whether to filter
+                                            on the suffix or prefix of the key name.
+                                          properties:
+                                            name:
+                                              type: string
+                                            value:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                type: object
+                              id:
+                                description: |-
+                                  An optional unique identifier for configurations in a notification configuration.
+                                  If you don't provide one, Amazon S3 will assign an ID.
+                                type: string
+                              topicARN:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    objectLockEnabledForBucket:
+                      description: Specifies whether you want S3 Object Lock to be enabled
+                        for the new bucket.
+                      type: boolean
+                    objectOwnership:
+                      type: string
+                    ownershipControls:
+                      description: |-
+                        The OwnershipControls (BucketOwnerEnforced, BucketOwnerPreferred, or ObjectWriter)
+                        that you want to apply to this Amazon S3 bucket.
+                      properties:
+                        rules:
+                          items:
+                            description: The container element for an ownership control
+                              rule.
+                            properties:
+                              objectOwnership:
+                                description: |-
+                                  The container element for object ownership for a bucket's ownership controls.
+
+                                  BucketOwnerPreferred - Objects uploaded to the bucket change ownership to
+                                  the bucket owner if the objects are uploaded with the bucket-owner-full-control
+                                  canned ACL.
+
+                                  ObjectWriter - The uploading account will own the object if the object is
+                                  uploaded with the bucket-owner-full-control canned ACL.
+
+                                  BucketOwnerEnforced - Access control lists (ACLs) are disabled and no longer
+                                  affect permissions. The bucket owner automatically owns and has full control
+                                  over every object in the bucket. The bucket only accepts PUT requests that
+                                  don't specify an ACL or bucket owner full control ACLs, such as the bucket-owner-full-control
+                                  canned ACL or an equivalent form of this ACL expressed in the XML format.
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    policy:
+                      description: The bucket policy as a JSON document.
+                      type: string
+                    publicAccessBlock:
+                      description: |-
+                        The PublicAccessBlock configuration that you want to apply to this Amazon
+                        S3 bucket. You can enable the configuration options in any combination. For
+                        more information about when Amazon S3 considers a bucket or object public,
+                        see The Meaning of "Public" (https://docs.aws.amazon.com/AmazonS3/latest/dev/access-control-block-public-access.html#access-control-block-public-access-policy-status)
+                        in the Amazon S3 User Guide.
+                      properties:
+                        blockPublicACLs:
+                          type: boolean
+                        blockPublicPolicy:
+                          type: boolean
+                        ignorePublicACLs:
+                          type: boolean
+                        restrictPublicBuckets:
+                          type: boolean
+                      type: object
+                    replication:
+                      description: |-
+                        A container for replication rules. You can add up to 1,000 rules. The maximum
+                        size of a replication configuration is 2 MB.
+                      properties:
+                        role:
+                          type: string
+                        rules:
+                          items:
+                            description: Specifies which Amazon S3 objects to replicate
+                              and where to store the replicas.
+                            properties:
+                              deleteMarkerReplication:
+                                description: |-
+                                  Specifies whether Amazon S3 replicates delete markers. If you specify a Filter
+                                  in your replication configuration, you must also include a DeleteMarkerReplication
+                                  element. If your Filter includes a Tag element, the DeleteMarkerReplication
+                                  Status must be set to Disabled, because Amazon S3 does not support replicating
+                                  delete markers for tag-based rules. For an example configuration, see Basic
+                                  Rule Configuration (https://docs.aws.amazon.com/AmazonS3/latest/dev/replication-add-config.html#replication-config-min-rule-config).
+
+                                  For more information about delete marker replication, see Basic Rule Configuration
+                                  (https://docs.aws.amazon.com/AmazonS3/latest/dev/delete-marker-replication.html).
+
+                                  If you are using an earlier version of the replication configuration, Amazon
+                                  S3 handles replication of delete markers differently. For more information,
+                                  see Backward Compatibility (https://docs.aws.amazon.com/AmazonS3/latest/dev/replication-add-config.html#replication-backward-compat-considerations).
+                                properties:
+                                  status:
+                                    type: string
+                                type: object
+                              destination:
+                                description: |-
+                                  Specifies information about where to publish analysis or configuration results
+                                  for an Amazon S3 bucket and S3 Replication Time Control (S3 RTC).
+                                properties:
+                                  accessControlTranslation:
+                                    description: A container for information about access
+                                      control for replicas.
+                                    properties:
+                                      owner:
+                                        type: string
+                                    type: object
+                                  account:
+                                    type: string
+                                  bucket:
+                                    type: string
+                                  encryptionConfiguration:
+                                    description: |-
+                                      Specifies encryption-related information for an Amazon S3 bucket that is
+                                      a destination for replicated objects.
+                                    properties:
+                                      replicaKMSKeyID:
+                                        type: string
+                                    type: object
+                                  metrics:
+                                    description: |-
+                                      A container specifying replication metrics-related settings enabling replication
+                                      metrics and events.
+                                    properties:
+                                      eventThreshold:
+                                        description: |-
+                                          A container specifying the time value for S3 Replication Time Control (S3
+                                          RTC) and replication metrics EventThreshold.
+                                        properties:
+                                          minutes:
+                                            format: int64
+                                            type: integer
+                                        type: object
+                                      status:
+                                        type: string
+                                    type: object
+                                  replicationTime:
+                                    description: |-
+                                      A container specifying S3 Replication Time Control (S3 RTC) related information,
+                                      including whether S3 RTC is enabled and the time when all objects and operations
+                                      on objects must be replicated. Must be specified together with a Metrics
+                                      block.
+                                    properties:
+                                      status:
+                                        type: string
+                                      time:
+                                        description: |-
+                                          A container specifying the time value for S3 Replication Time Control (S3
+                                          RTC) and replication metrics EventThreshold.
+                                        properties:
+                                          minutes:
+                                            format: int64
+                                            type: integer
+                                        type: object
+                                    type: object
+                                  storageClass:
+                                    type: string
+                                type: object
+                              existingObjectReplication:
+                                description: |-
+                                  Optional configuration to replicate existing source bucket objects. For more
+                                  information, see Replicating Existing Objects (https://docs.aws.amazon.com/AmazonS3/latest/dev/replication-what-is-isnot-replicated.html#existing-object-replication)
+                                  in the Amazon S3 User Guide.
+                                properties:
+                                  status:
+                                    type: string
+                                type: object
+                              filter:
+                                description: |-
+                                  A filter that identifies the subset of objects to which the replication rule
+                                  applies. A Filter must specify exactly one Prefix, Tag, or an And child element.
+                                properties:
+                                  and:
+                                    description: |-
+                                      A container for specifying rule filters. The filters determine the subset
+                                      of objects to which the rule applies. This element is required only if you
+                                      specify more than one filter.
+
+                                      For example:
+
+                                        * If you specify both a Prefix and a Tag filter, wrap these filters in
+                                        an And tag.
+
+                                        * If you specify a filter based on multiple tags, wrap the Tag elements
+                                        in an And tag.
+                                    properties:
+                                      prefix:
+                                        type: string
+                                      tags:
+                                        items:
+                                          description: A container of a key value name pair.
+                                          properties:
+                                            key:
+                                              type: string
+                                            value:
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                  prefix:
+                                    type: string
+                                  tag:
+                                    description: A container of a key value name pair.
+                                    properties:
+                                      key:
+                                        type: string
+                                      value:
+                                        type: string
+                                    type: object
+                                type: object
+                              id:
+                                type: string
+                              prefix:
+                                type: string
+                              priority:
+                                format: int64
+                                type: integer
+                              sourceSelectionCriteria:
+                                description: |-
+                                  A container that describes additional filters for identifying the source
+                                  objects that you want to replicate. You can choose to enable or disable the
+                                  replication of these objects. Currently, Amazon S3 supports only the filter
+                                  that you can specify for objects created with server-side encryption using
+                                  a customer managed key stored in Amazon Web Services Key Management Service
+                                  (SSE-KMS).
+                                properties:
+                                  replicaModifications:
+                                    description: |-
+                                      A filter that you can specify for selection for modifications on replicas.
+                                      Amazon S3 doesn't replicate replica modifications by default. In the latest
+                                      version of replication configuration (when Filter is specified), you can
+                                      specify this element and set the status to Enabled to replicate modifications
+                                      on replicas.
+
+                                      If you don't specify the Filter element, Amazon S3 assumes that the replication
+                                      configuration is the earlier version, V1. In the earlier version, this element
+                                      is not allowed.
+                                    properties:
+                                      status:
+                                        type: string
+                                    type: object
+                                  sseKMSEncryptedObjects:
+                                    description: |-
+                                      A container for filter information for the selection of S3 objects encrypted
+                                      with Amazon Web Services KMS.
+                                    properties:
+                                      status:
+                                        type: string
+                                    type: object
+                                type: object
+                              status:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    requestPayment:
+                      description: Container for Payer.
+                      properties:
+                        payer:
+                          type: string
+                      type: object
+                    tagging:
+                      description: Container for the TagSet and Tag elements.
+                      properties:
+                        tagSet:
+                          items:
+                            description: A container of a key value name pair.
+                            properties:
+                              key:
+                                type: string
+                              value:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    versioning:
+                      description: Container for setting the versioning state.
+                      properties:
+                        status:
+                          type: string
+                      type: object
+                    website:
+                      description: Container for the request.
+                      properties:
+                        errorDocument:
+                          description: The error information.
+                          properties:
+                            key:
+                              type: string
+                          type: object
+                        indexDocument:
+                          description: Container for the Suffix element.
+                          properties:
+                            suffix:
+                              type: string
+                          type: object
+                        redirectAllRequestsTo:
+                          description: |-
+                            Specifies the redirect behavior of all requests to a website endpoint of
+                            an Amazon S3 bucket.
+                          properties:
+                            hostName:
+                              type: string
+                            protocol:
+                              type: string
+                          type: object
+                        routingRules:
+                          items:
+                            description: |-
+                              Specifies the redirect behavior and when a redirect is applied. For more
+                              information about routing rules, see Configuring advanced conditional redirects
+                              (https://docs.aws.amazon.com/AmazonS3/latest/dev/how-to-page-redirect.html#advanced-conditional-redirects)
+                              in the Amazon S3 User Guide.
+                            properties:
+                              condition:
+                                description: |-
+                                  A container for describing a condition that must be met for the specified
+                                  redirect to apply. For example, 1. If request is for pages in the /docs folder,
+                                  redirect to the /documents folder. 2. If request results in HTTP error 4xx,
+                                  redirect request to another host where you might process the error.
+                                properties:
+                                  httpErrorCodeReturnedEquals:
+                                    type: string
+                                  keyPrefixEquals:
+                                    type: string
+                                type: object
+                              redirect:
+                                description: |-
+                                  Specifies how requests are redirected. In the event of an error, you can
+                                  specify a different error code to return.
+                                properties:
+                                  hostName:
+                                    type: string
+                                  httpRedirectCode:
+                                    type: string
+                                  protocol:
+                                    type: string
+                                  replaceKeyPrefixWith:
+                                    type: string
+                                  replaceKeyWith:
+                                    type: string
+                                type: object
+                            type: object
+                          type: array
+                      type: object
+                  required:
+                  - name
+                  type: object
+                status:
+                  description: BucketStatus defines the observed state of Bucket
+                  properties:
+                    ackResourceMetadata:
+                      description: |-
+                        All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                        that is used to contain resource sync state, account ownership,
+                        constructed ARN for the resource
+                      properties:
+                        arn:
+                          description: |-
+                            ARN is the Amazon Resource Name for the resource. This is a
+                            globally-unique identifier and is set only by the ACK service controller
+                            once the controller has orchestrated the creation of the resource OR
+                            when it has verified that an "adopted" resource (a resource where the
+                            ARN annotation was set by the Kubernetes user on the CR) exists and
+                            matches the supplied CR's Spec field values.
+                            https://github.com/aws/aws-controllers-k8s/issues/270
+                          type: string
+                        ownerAccountID:
+                          description: |-
+                            OwnerAccountID is the AWS Account ID of the account that owns the
+                            backend AWS service API resource.
+                          type: string
+                        region:
+                          description: Region is the AWS region in which the resource exists
+                            or will exist.
+                          type: string
+                      required:
+                      - ownerAccountID
+                      - region
+                      type: object
+                    conditions:
+                      description: |-
+                        All CRS managed by ACK have a common `Status.Conditions` member that
+                        contains a collection of `ackv1alpha1.Condition` objects that describe
+                        the various terminal states of the CR and its backend AWS service API
+                        resource
+                      items:
+                        description: |-
+                          Condition is the common struct used by all CRDs managed by ACK service
+                          controllers to indicate terminal states  of the CR and its backend AWS
+                          service API resource
+                        properties:
+                          lastTransitionTime:
+                            description: Last time the condition transitioned from one status
+                              to another.
+                            format: date-time
+                            type: string
+                          message:
+                            description: A human readable message indicating details about
+                              the transition.
+                            type: string
+                          reason:
+                            description: The reason for the condition's last transition.
+                            type: string
+                          status:
+                            description: Status of the condition, one of True, False, Unknown.
+                            type: string
+                          type:
+                            description: Type is the type of the Condition
+                            type: string
+                        required:
+                        - status
+                        - type
+                        type: object
+                      type: array
+                    location:
+                      description: A forward slash followed by the name of the bucket.
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}

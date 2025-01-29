@@ -27,10 +27,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/awslabs/kro/api/v1alpha1"
-	kroclient "github.com/awslabs/kro/pkg/client"
-	"github.com/awslabs/kro/pkg/graph"
-	"github.com/awslabs/kro/pkg/metadata"
+	"github.com/kro-run/kro/api/v1alpha1"
+	kroclient "github.com/kro-run/kro/pkg/client"
+	"github.com/kro-run/kro/pkg/graph"
+	"github.com/kro-run/kro/pkg/metadata"
 )
 
 // ReconcileConfig holds configuration parameters for the recnociliation process.
@@ -49,7 +49,7 @@ type ReconcileConfig struct {
 	DeletionPolicy string
 }
 
-// Controller manages the reconciliation of a single instance of a ResourceGroup,
+// Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
 // / it is responsible for reconciling the instance and its sub-resources.
 //
 // The controller is responsible for the following:
@@ -60,12 +60,12 @@ type ReconcileConfig struct {
 // - Handling errors and retries
 // - Performing cleanup operations (garbage collection)
 //
-// For each instance of a ResourceGroup, the controller creates a new instance of
+// For each instance of a ResourceGraphDefinition, the controller creates a new instance of
 // the InstanceGraphReconciler to manage the reconciliation of the instance and its
 // sub-resources.
 //
 // It is important to state that when the controller is reconciling an instance, it
-// creates and uses a new instance of the ResourceGroupRuntime to uniquely manage
+// creates and uses a new instance of the ResourceGraphDefinitionRuntime to uniquely manage
 // the state of the instance and its sub-resources. This ensure that at each
 // reconciliation loop, the controller is working with a fresh state of the instance
 // and its sub-resources.
@@ -76,10 +76,10 @@ type Controller struct {
 	gvr schema.GroupVersionResource
 	// client holds the dynamic client to use for interacting with the Kubernetes API.
 	clientSet *kroclient.Set
-	// rg is a read-only reference to the ResourceGroup that the controller is
+	// rgd is a read-only reference to the Graph that the controller is
 	// managing instances for.
-	// TODO: use a read-only interface for the ResourceGroup
-	rg *graph.Graph
+	// TODO: use a read-only interface for the ResourceGraphDefinition
+	rgd *graph.Graph
 	// instanceLabeler is responsible for applying consistent labels
 	// to resources managed by this controller.
 	instanceLabeler metadata.Labeler
@@ -95,7 +95,7 @@ func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	rg *graph.Graph,
+	rgd *graph.Graph,
 	clientSet *kroclient.Set,
 	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
@@ -104,7 +104,7 @@ func NewController(
 		log:                    log,
 		gvr:                    gvr,
 		clientSet:              clientSet,
-		rg:                     rg,
+		rgd:                    rgd,
 		instanceLabeler:        instanceLabeler,
 		reconcileConfig:        reconcileConfig,
 		defaultServiceAccounts: defaultServiceAccounts,
@@ -132,7 +132,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 	// instance of the resource group. The instance graph reconciler is responsible
 	// for reconciling the instance and its sub-resources, while keeping the same
 	// runtime object in it's fields.
-	rgRuntime, err := c.rg.NewGraphRuntime(instance)
+	rgRuntime, err := c.rgd.NewGraphRuntime(instance)
 	if err != nil {
 		return fmt.Errorf("failed to create runtime resource group: %w", err)
 	}

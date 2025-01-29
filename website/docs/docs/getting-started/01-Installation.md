@@ -30,7 +30,7 @@ Once authenticated, install kro using the Helm chart:
 Fetch the latest release version from GitHub
 ```sh
 export KRO_VERSION=$(curl -sL \
-    https://api.github.com/repos/awslabs/kro/releases/latest | \
+    https://api.github.com/repos/kro-run/kro/releases/latest | \
     jq -r '.tag_name | ltrimstr("v")'
   )
 ```

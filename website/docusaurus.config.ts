@@ -50,7 +50,7 @@ const config: Config = {
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
-            "https://github.com/awslabs/kro/tree/main/website",
+            "https://github.com/kro-run/kro/tree/main/website",
         },
         blog: false,
         theme: {
@@ -112,7 +112,7 @@ const config: Config = {
           ],
         },
         {
-          href: "https://github.com/awslabs/kro",
+          href: "https://github.com/kro-run/kro",
           position: "right",
           className: "header-github-link",
           "aria-label": "GitHub repository",
@@ -145,7 +145,7 @@ const config: Config = {
           items: [
             {
               label: "GitHub",
-              href: "https://github.com/awslabs/kro",
+              href: "https://github.com/kro-run/kro",
             },
           ],
         },

@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - kro.run
   resources:
-  - resourcegroups
+  - resourcegraphdefinitions
   verbs:
   - create
   - delete
@@ -19,13 +19,13 @@ rules:
 - apiGroups:
   - kro.run
   resources:
-  - resourcegroups/finalizers
+  - resourcegraphdefinitions/finalizers
   verbs:
   - update
 - apiGroups:
   - kro.run
   resources:
-  - resourcegroups/status
+  - resourcegraphdefinitions/status
   verbs:
   - get
   - patch

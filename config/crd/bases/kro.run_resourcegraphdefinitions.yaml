@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.2
-  name: resourcegroups.kro.run
+  name: resourcegraphdefinitions.kro.run
 spec:
   group: kro.run
   names:
-    kind: ResourceGroup
-    listKind: ResourceGroupList
-    plural: resourcegroups
+    kind: ResourceGraphDefinition
+    listKind: ResourceGraphDefinitionList
+    plural: resourcegraphdefinitions
     shortNames:
-    - rg
-    singular: resourcegroup
+    - rgd
+    singular: resourcegraphdefinition
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -36,7 +36,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ResourceGroup is the Schema for the resourcegroups API
+        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
+          API
         properties:
           apiVersion:
             description: |-
@@ -56,7 +57,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: ResourceGroupSpec defines the desired state of ResourceGroup
+            description: ResourceGraphDefinitionSpec defines the desired state of
+              ResourceGraphDefinition
             properties:
               defaultServiceAccounts:
                 additionalProperties:
@@ -68,7 +70,7 @@ spec:
                   namespace not explicitly mapped.
                 type: object
               resources:
-                description: The resources that are part of the resourcegroup.
+                description: The resources that are part of the resourcegraphdefinition.
                 items:
                   properties:
                     id:
@@ -91,14 +93,14 @@ spec:
                 type: array
               schema:
                 description: |-
-                  The schema of the resourcegroup, which includes the
+                  The schema of the resourcegraphdefinition, which includes the
                   apiVersion, kind, spec, status, types, and some validation
                   rules.
                 properties:
                   apiVersion:
                     description: |-
-                      The APIVersion of the resourcegroup. This is used to generate
-                      and create the CRD for the resourcegroup.
+                      The APIVersion of the resourcegraphdefinition. This is used to generate
+                      and create the CRD for the resourcegraphdefinition.
                     type: string
                     x-kubernetes-validations:
                     - message: apiVersion is immutable
@@ -106,35 +108,35 @@ spec:
                   group:
                     default: kro.run
                     description: |-
-                      The group of the resourcegroup. This is used to set the API group
+                      The group of the resourcegraphdefinition. This is used to set the API group
                       of the generated CRD. If omitted, it defaults to "kro.run".
                     type: string
                   kind:
                     description: |-
-                      The kind of the resourcegroup. This is used to generate
-                      and create the CRD for the resourcegroup.
+                      The kind of the resourcegraphdefinition. This is used to generate
+                      and create the CRD for the resourcegraphdefinition.
                     type: string
                     x-kubernetes-validations:
                     - message: kind is immutable
                       rule: self == oldSelf
                   spec:
                     description: |-
-                      The spec of the resourcegroup. Typically, this is the spec of
-                      the CRD that the resourcegroup is managing. This is adhering
+                      The spec of the resourcegraphdefinition. Typically, this is the spec of
+                      the CRD that the resourcegraphdefinition is managing. This is adhering
                       to the SimpleSchema spec
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   status:
                     description: |-
-                      The status of the resourcegroup. This is the status of the CRD
-                      that the resourcegroup is managing. This is adhering to the
+                      The status of the resourcegraphdefinition. This is the status of the CRD
+                      that the resourcegraphdefinition is managing. This is adhering to the
                       SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   validation:
                     description: |-
                       Validation is a list of validation rules that are applied to the
-                      resourcegroup.
+                      resourcegraphdefinition.
                       Not implemented yet.
                     items:
                       type: string
@@ -147,7 +149,8 @@ spec:
             - schema
             type: object
           status:
-            description: ResourceGroupStatus defines the observed state of ResourceGroup
+            description: ResourceGraphDefinitionStatus defines the observed state
+              of ResourceGraphDefinition
             properties:
               conditions:
                 description: Conditions represent the latest available observations
@@ -195,7 +198,7 @@ spec:
                 items:
                   description: |-
                     ResourceInformation defines the information about a resource
-                    in the resourcegroup
+                    in the resourcegraphdefinition
                   properties:
                     dependencies:
                       description: Dependencies represents the resource dependencies
@@ -217,10 +220,10 @@ spec:
                   type: object
                 type: array
               state:
-                description: State is the state of the resourcegroup
+                description: State is the state of the resourcegraphdefinition
                 type: string
               topologicalOrder:
-                description: TopologicalOrder is the topological order of the resourcegroup
+                description: TopologicalOrder is the topological order of the resourcegraphdefinition
                   graph
                 items:
                   type: string

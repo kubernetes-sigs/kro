@@ -3,7 +3,7 @@
 This project aims to simplify the creation and management of complex custom resources for Kubernetes.
 
 Kube Resource Orchestrator (**kro**) provides a powerful abstraction layer that allows you to define complex multi-resource constructs as reusable components in your applications and systems.
-You define these using kro's fundamental custom resource, *ResourceGroup*.
+You define these using kro's fundamental custom resource, *ResourceGraphDefinition*.
 This resource serves as a blueprint for creating and managing collections of underlying Kubernetes resources.
 
 With kro, you define custom resources as your fundamental building blocks for Kubernetes.
@@ -19,7 +19,7 @@ kro is Kubernetes native and integrates seamlessly with existing tools to preser
 | -------------------------------------- | ------------------------------- |
 | [Introduction][kro-overview]           | An introduction to kro          |
 | [Installation][kro-installation]       | Install kro in your cluster     |
-| [Getting started][kro-getting-started] | Deploy your first ResourceGroup |
+| [Getting started][kro-getting-started] | Deploy your first ResourceGraphDefinition |
 | [Concepts][kro-concepts]               | Learn more about kro concepts   |
 | [Examples][kro-examples]               | Example resources               |
 | [Contributions](./CONTRIBUTING.md)       | How to get involved             |
@@ -35,28 +35,28 @@ kro is Kubernetes native and integrates seamlessly with existing tools to preser
 1. **What is kro?**
 
     Kube Resource Orchestrator (**kro**) is a new operator for Kubernetes that simplifies the creation of complex Kubernetes resource configurations.
-    kro lets you create and manage custom groups of Kubernetes resources by defining them as a *ResourceGroup*, the project's fundamental custom resource.
-    ResourceGroup specifications define a set of resources and how they relate to each other functionally.
+    kro lets you create and manage custom groups of Kubernetes resources by defining them as a *ResourceGraphDefinition*, the project's fundamental custom resource.
+    ResourceGraphDefinition specifications define a set of resources and how they relate to each other functionally.
     Once defined, resource groups can be applied to a Kubernetes cluster where the kro controller is running.
     Once validated by kro, you can create instances of your resource group.
-    kro translates your ResourceGroup instance and its parameters into specific Kubernetes resources and configurations which it then manages for you.
+    kro translates your ResourceGraphDefinition instance and its parameters into specific Kubernetes resources and configurations which it then manages for you.
 
 2. **How does kro work?**
 
     kro is designed to use core Kubernetes primitives to make resource grouping, customization, and dependency management simpler.
-    When a ResourceGroup is applied to the cluster, the kro controller verifies its specification, then dynamically creates a new CRD and registers it with the API server.
+    When a ResourceGraphDefinition is applied to the cluster, the kro controller verifies its specification, then dynamically creates a new CRD and registers it with the API server.
     kro then deploys a dedicated controller to respond to instance events on the CRD.
-    This microcontroller is responsible for managing the lifecycle of resources defined in the ResourceGroup for each instance that is created.
+    This microcontroller is responsible for managing the lifecycle of resources defined in the ResourceGraphDefinition for each instance that is created.
 
 3. **How do I use kro?**
 
-    First, you define your custom resource groups by creating *ResourceGroup* specifications.
+    First, you define your custom resource groups by creating *ResourceGraphDefinition* specifications.
     These specify one or more Kubernetes resources, and can include specific configuration for each resource.
 
     For example, you can define a *WebApp* resource group that is composed of a *Deployment*, pre-configured to deploy your web server backend, and a *Service* configured to run on a specific port.
     You can just as easily create a more complex *WebAppWithDB* resource group by combining the existing *WebApp* resource group with a *Table* custom resource to provision a cloud managed database instance for your web app to use.
 
-    Once you have defined a ResourceGroup, you can apply it to a Kubernetes cluster where the kro controller is running.
+    Once you have defined a ResourceGraphDefinition, you can apply it to a Kubernetes cluster where the kro controller is running.
     kro will take care of the heavy lifting of creating CRDs and deploying dedicated controllers in order to manage instances of your new custom resource group.
 
     You are now ready to create instances of your new custom resource group, and kro will respond by dynamically creating, configuring, and managing the underlying Kubernetes resources for you.
@@ -67,19 +67,10 @@ kro is Kubernetes native and integrates seamlessly with existing tools to preser
     Building with Kubernetes means dealing with resources that need to operate and work together, and orchestrating this can get complex and difficult at scale.
     With this project, we're taking a first step in reducing the complexity of resource dependency management and customization, paving the way for a simple and scalable way to create complex custom resources for Kubernetes.
 
-5. **Do I need to have an AWS account to use this?**
-
-    No, you can use kro with any Kubernetes cluster.
-
-6. **Can I use this in production?**
+5. **Can I use this in production?**
 
    This project is in active development and not yet intended for production use.
-   The *ResourceGroup* CRD and other APIs used in this project are not solidified and highly subject to change.
-
-7. **Will this be built into Amazon Elastic Kubernetes Service (EKS)?**
-
-    This project is a public experiment, and not currently integrated into Amazon EKS.
-    We welcome your feedback and want to hear about what works and what doesn't for your use cases, please let us know what you think.
+   The *ResourceGraphDefinition* CRD and other APIs used in this project are not solidified and highly subject to change.
 
 ## Community Participation
 

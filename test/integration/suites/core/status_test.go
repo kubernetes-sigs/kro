@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Status", func() {
@@ -46,8 +46,8 @@ var _ = Describe("Status", func() {
 		})).To(Succeed())
 	})
 
-	It("should have correct conditions when ResourceGroup is created", func() {
-		rg := generator.NewResourceGroup("test-status",
+	It("should have correct conditions when ResourceGraphDefinition is created", func() {
+		rg := generator.NewResourceGraphDefinition("test-status",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestStatus", "v1alpha1",
@@ -67,7 +67,7 @@ var _ = Describe("Status", func() {
 
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup status
+		// Verify ResourceGraphDefinition status
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -77,7 +77,7 @@ var _ = Describe("Status", func() {
 
 			// Check conditions
 			g.Expect(rg.Status.Conditions).To(HaveLen(3))
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
 			for _, cond := range rg.Status.Conditions {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
@@ -87,7 +87,7 @@ var _ = Describe("Status", func() {
 	})
 
 	It("should reflect failure conditions when definition is invalid", func() {
-		rg := generator.NewResourceGroup("test-status-fail",
+		rg := generator.NewResourceGraphDefinition("test-status-fail",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestStatusFail", "v1alpha1",
@@ -107,12 +107,12 @@ var _ = Describe("Status", func() {
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 
 			// Check specific failure condition
 			var crdCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 					crdCondition = &cond
 					break
 				}
@@ -120,7 +120,7 @@ var _ = Describe("Status", func() {
 
 			g.Expect(crdCondition).ToNot(BeNil())
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegroup"))
+			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegraphdefinition"))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

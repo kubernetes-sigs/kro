@@ -75,8 +75,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/awslabs/kro/pkg/metadata"
-	"github.com/awslabs/kro/pkg/requeue"
+	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/pkg/requeue"
 )
 
 // Config holds the configuration for DynamicController
@@ -108,7 +108,7 @@ type Config struct {
 // flexible and lightweight operation. DC serves as the core component of kro's
 // dynamic resource management system. Its primary purpose is to create and manage
 // "micro" controllers for custom resources defined by users at runtime (via the
-// ResourceGroup CRs).
+// ResourceGraphDefinition CRs).
 type DynamicController struct {
 	config Config
 
@@ -288,14 +288,14 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 // syncFunc reconciles a single item.
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers) error {
 	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
-	dc.log.V(1).Info("Syncing resourcegroup instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+	dc.log.V(1).Info("Syncing resourcegraphdefinition instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
 
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
-		dc.log.V(1).Info("Finished syncing resourcegroup instance request",
+		dc.log.V(1).Info("Finished syncing resourcegraphdefinition instance request",
 			"gvr", gvrKey,
 			"namespacedKey", oi.NamespacedKey,
 			"duration", duration)

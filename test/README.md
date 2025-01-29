@@ -29,7 +29,7 @@ deployed in production clusters.
 - `integration/`: Contains integration test suites for kro.
 - `e2e/`: Contains e2e test suites for kro.
 - `testdata/`: Directory for test data, such as Kubernetes manifests,
-  resourcegroups ...
+  resourcegraphdefinitions ...
 
 ## Integration tests
 
@@ -42,16 +42,16 @@ controllers, you should:
 3. Test your controller's reconciliation logic
 4. Check status updates on your custom resources
 
-### Example testing ResourceGroups
+### Example testing ResourceGraphDefinitions
 
-1. Create a ResourceGroup
-2. Trigger ResourceGroup reconciliation
-3. Check that the ResourceGroup status was updated correctly
+1. Create a ResourceGraphDefinition
+2. Trigger ResourceGraphDefinition reconciliation
+3. Check that the ResourceGraphDefinition status was updated correctly
 4. Verify that the correct Create (CRD) call was made to the API server
 5. Check that the controller is watching the correct RG instances
-6. Create a ResourceGroup instance
-7. Trigger the ResourceGroup instance reconciliation
-8. Check that the ResourceGroup instance status was updated correctly
+6. Create a ResourceGraphDefinition instance
+7. Trigger the ResourceGraphDefinition instance reconciliation
+8. Check that the ResourceGraphDefinition instance status was updated correctly
 9. Verify that the some resources were created in the cluster
 10. Trigger a second reconciliation and check that the status was updated
     correctly
@@ -68,35 +68,35 @@ should:
 1. Use a real Kubernetes cluster (e.g. kind, minikube, or EKS)
 2. Deploy kro controller and it's CRDs
 3. Deploy other controllers or resources that will interact with kro resources.
-4. Create kro ResourceGroups and ResourceGroupInstances and verify their full
+4. Create kro ResourceGraphDefinitions and ResourceGraphDefinitionInstances and verify their full
    lifecycle.
 
 ### E2e test example
 
 1. Deploy kro controller and CRDs
 2. Deploy a sample application that uses kro
-3. Create a `ResourceGroup` custom resource
+3. Create a `ResourceGraphDefinition` custom resource
 4. Verify that the corresponding CRD is created in the cluster
-5. Create an instance of the `ResourceGroup`
-6. Wait for all resources defined in the `ResourceGroup` to be created
+5. Create an instance of the `ResourceGraphDefinition`
+6. Wait for all resources defined in the `ResourceGraphDefinition` to be created
 7. Verify that all resources are correctly created and configured
-8. Update the `ResourceGroup` instance
+8. Update the `ResourceGraphDefinition` instance
 9. Verify that the changes are correctly propagated to the managed resources
-10. Delete the `ResourceGroup` instance
+10. Delete the `ResourceGraphDefinition` instance
 11. Verify that all managed resources are correctly deleted
-12. Delete the `ResourceGroup` custom resource
+12. Delete the `ResourceGraphDefinition` custom resource
 13. Verify that the corresponding CRD is removed from the cluster
 
 ### Addional scenarios
 
 1. Cross namespace resource management
-2. Scaling testing: Create a large number of ResourceGroups and ResourceGroup
+2. Scaling testing: Create a large number of ResourceGraphDefinitions and ResourceGraphDefinition
    instances to test kro at scale.
 3. Failure recovery: Simulate failures in the controller or the Kubernetes API
    server and verify that kro recovers correctly
 4. Controller upgrade testing: Deploy a new version of kro and verify that it
-   can handle existing `ResourceGroups` and `ResourceGroup` instances
-5. ResourceGroup conflict testing: Create multiple `ResourceGroups` with
+   can handle existing `ResourceGraphDefinitions` and `ResourceGraphDefinition` instances
+5. ResourceGraphDefinition conflict testing: Create multiple `ResourceGraphDefinitions` with
    conflicting resources and verify that kro handles the conflicts correctly
 6. Integration with other controllers: Deploy other controllers that interact
    with kro resources and verify that they work correctly together

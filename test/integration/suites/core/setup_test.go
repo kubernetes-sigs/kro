@@ -22,13 +22,13 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	ctrlinstance "github.com/awslabs/kro/pkg/controller/instance"
-	"github.com/awslabs/kro/test/integration/environment"
+	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
+	"github.com/kro-run/kro/test/integration/environment"
 )
 
 var env *environment.Environment
 
-func TestNetworkingStack(t *testing.T) {
+func TestCore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error
@@ -36,7 +36,7 @@ func TestNetworkingStack(t *testing.T) {
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 15 * time.Second,
+					DefaultRequeueDuration: 5 * time.Second,
 				},
 			},
 		)

@@ -28,8 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Recovery", func() {
@@ -51,8 +51,8 @@ var _ = Describe("Recovery", func() {
 	})
 
 	It("should recover from invalid state and use latest valid configuration", func() {
-		// Create initial valid ResourceGroup
-		rg := generator.NewResourceGroup("test-recovery",
+		// Create initial valid ResourceGraphDefinition
+		rg := generator.NewResourceGraphDefinition("test-recovery",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestRecovery", "v1alpha1",
@@ -75,17 +75,17 @@ var _ = Describe("Recovery", func() {
 			}, nil, nil),
 		)
 
-		// Create ResourceGroup
+		// Create ResourceGraphDefinition
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
-		// Verify initial ResourceGroup becomes active
+		// Verify initial ResourceGraphDefinition becomes active
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 
 		// Update to invalid state with a cyclic dependency
@@ -124,14 +124,14 @@ var _ = Describe("Recovery", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 10*time.Second, time.Second).Should(Succeed())
 
-		// Verify ResourceGroup becomes inactive
+		// Verify ResourceGraphDefinition becomes inactive
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 
 		// Update to new valid state with different configuration
@@ -188,14 +188,14 @@ var _ = Describe("Recovery", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 10*time.Second, time.Second).Should(Succeed())
 
-		// Verify ResourceGroup becomes active again
+		// Verify ResourceGraphDefinition becomes active again
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
 			}, rg)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 
 		// Create instance
@@ -242,15 +242,15 @@ var _ = Describe("Recovery", func() {
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 
-		// Delete ResourceGroup
+		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup is deleted
+		// Verify ResourceGraphDefinition is deleted
 		Eventually(func() bool {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
-			}, &krov1alpha1.ResourceGroup{})
+			}, &krov1alpha1.ResourceGraphDefinition{})
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 	})

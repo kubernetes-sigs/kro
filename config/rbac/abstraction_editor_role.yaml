@@ -1,20 +1,20 @@
-# permissions for end users to edit resourcegroups.
+# permissions for end users to edit resourcegraphdefinitions.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: clusterrole
-    app.kubernetes.io/instance: resourcegroup-editor-role
+    app.kubernetes.io/instance: resourcegraphdefinition-editor-role
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: kro
     app.kubernetes.io/part-of: kro
     app.kubernetes.io/managed-by: kustomize
-  name: resourcegroup-editor-role
+  name: resourcegraphdefinition-editor-role
 rules:
 - apiGroups:
   - kro.run
   resources:
-  - resourcegroups
+  - resourcegraphdefinitions
   verbs:
   - create
   - delete
@@ -26,6 +26,6 @@ rules:
 - apiGroups:
   - kro.run
   resources:
-  - resourcegroups/status
+  - resourcegraphdefinitions/status
   verbs:
   - get

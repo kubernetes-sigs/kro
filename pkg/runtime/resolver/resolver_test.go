@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/awslabs/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
 func TestGetValueFromPath(t *testing.T) {

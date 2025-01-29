@@ -20,10 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 
-	"github.com/awslabs/kro/pkg/graph/emulator"
-	"github.com/awslabs/kro/pkg/graph/variable"
-	"github.com/awslabs/kro/pkg/testutil/generator"
-	"github.com/awslabs/kro/pkg/testutil/k8s"
+	"github.com/kro-run/kro/pkg/graph/emulator"
+	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/testutil/generator"
+	"github.com/kro-run/kro/pkg/testutil/k8s"
 )
 
 func TestGraphBuilder_Validation(t *testing.T) {
@@ -36,13 +36,13 @@ func TestGraphBuilder_Validation(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		resourceGroupOpts []generator.ResourceGroupOption
+		resourceGroupOpts []generator.ResourceGraphDefinitionOption
 		wantErr           bool
 		errMsg            string
 	}{
 		{
 			name: "invalid resource type",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -63,7 +63,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid resource id with operator",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -84,7 +84,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "resource without a valid GVK",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -101,7 +101,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid CEL syntax in readyWhen",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -122,7 +122,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid CEL syntax in includeWhen expression",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -143,7 +143,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "missing required field",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -165,7 +165,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid field reference",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -189,7 +189,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "valid VPC with valid conditional subnets",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -236,7 +236,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid resource type",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -257,7 +257,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid instance spec field type",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -271,7 +271,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid instance status field reference",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -294,7 +294,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "invalid field type in resource spec",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -318,7 +318,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "crds aren't allowed to have variables in their spec fields",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -350,7 +350,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		},
 		{
 			name: "valid instance definition with complex types",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -381,8 +381,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rg := generator.NewResourceGroup("test-group", tt.resourceGroupOpts...)
-			_, err := builder.NewResourceGroup(rg)
+			rg := generator.NewResourceGraphDefinition("test-group", tt.resourceGroupOpts...)
+			_, err := builder.NewResourceGraphDefinition(rg)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -404,14 +404,14 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		resourceGroupOpts []generator.ResourceGroupOption
+		resourceGroupOpts []generator.ResourceGraphDefinitionOption
 		wantErr           bool
 		errMsg            string
 		validateDeps      func(*testing.T, *Graph)
 	}{
 		{
 			name: "complex eks setup dependencies",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -514,7 +514,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		},
 		{
 			name: "missing dependency",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -539,7 +539,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		},
 		{
 			name: "cyclic dependency",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -575,7 +575,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		},
 		{
 			name: "independent pods",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -656,7 +656,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		},
 		{
 			name: "cyclic pod dependencies",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -730,7 +730,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		},
 		{
 			name: "shared infrastructure dependencies",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -937,8 +937,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rg := generator.NewResourceGroup("testgroup", tt.resourceGroupOpts...)
-			g, err := builder.NewResourceGroup(rg)
+			rg := generator.NewResourceGraphDefinition("testgroup", tt.resourceGroupOpts...)
+			g, err := builder.NewResourceGraphDefinition(rg)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -964,12 +964,12 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		resourceGroupOpts []generator.ResourceGroupOption
+		resourceGroupOpts []generator.ResourceGraphDefinitionOption
 		validateVars      func(*testing.T, *Graph)
 	}{
 		{
 			name: "complex resource variable parsing",
-			resourceGroupOpts: []generator.ResourceGroupOption{
+			resourceGroupOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
 					map[string]interface{}{
@@ -1187,8 +1187,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rg := generator.NewResourceGroup("testgroup", tt.resourceGroupOpts...)
-			g, err := builder.NewResourceGroup(rg)
+			rg := generator.NewResourceGraphDefinition("testgroup", tt.resourceGroupOpts...)
+			g, err := builder.NewResourceGraphDefinition(rg)
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)

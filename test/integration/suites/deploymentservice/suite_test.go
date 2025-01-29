@@ -29,9 +29,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	ctrlinstance "github.com/awslabs/kro/pkg/controller/instance"
-	"github.com/awslabs/kro/test/integration/environment"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
+	"github.com/kro-run/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -58,7 +58,7 @@ func TestDeploymentservice(t *testing.T) {
 }
 
 var _ = Describe("DeploymentService", func() {
-	It("should handle complete lifecycle of ResourceGroup and Instance", func() {
+	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func() {
 		ctx := context.Background()
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -70,12 +70,12 @@ var _ = Describe("DeploymentService", func() {
 		}
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 
-		// Create ResourceGroup
+		// Create ResourceGraphDefinition
 		rg, genInstance := deploymentService(namespace, "test-deployment-service")
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup is created and becomes ready
-		createdRG := &krov1alpha1.ResourceGroup{}
+		// Verify ResourceGraphDefinition is created and becomes ready
+		createdRG := &krov1alpha1.ResourceGraphDefinition{}
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -83,23 +83,27 @@ var _ = Describe("DeploymentService", func() {
 			}, createdRG)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			// Verify the ResourceGroup fields
+			// Verify the ResourceGraphDefinition fields
 			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("DeploymentService"))
 			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(2))
 
-			// Verify the ResourceGroup status
+			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
-			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeReconcilerReady))
+			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(
+				krov1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady,
+			))
 			g.Expect(createdRG.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeGraphVerified))
+			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(
+				krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified,
+			))
 			g.Expect(createdRG.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(createdRG.Status.Conditions[2].Type).To(
-				Equal(krov1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
+				Equal(krov1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced),
 			)
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
 
-			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(2))
 			g.Expect(createdRG.Status.TopologicalOrder).To(Equal([]string{"deployment", "service"}))
 		}, 10*time.Second, time.Second).Should(Succeed())
@@ -206,15 +210,15 @@ var _ = Describe("DeploymentService", func() {
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 
-		// Delete ResourceGroup
+		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup is deleted
+		// Verify ResourceGraphDefinition is deleted
 		Eventually(func() bool {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
-			}, &krov1alpha1.ResourceGroup{})
+			}, &krov1alpha1.ResourceGraphDefinition{})
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 

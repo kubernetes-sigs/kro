@@ -1,0 +1,252 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: sqsrds.kro.run
+  namespace: kro
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: SQSCRDGroup
+    spec:
+      name: string | default=sqsCRDGroup
+  resources:
+  - id: queueCRD
+    template:
+      apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        annotations:
+          controller-gen.kubebuilder.io/version: v0.16.2
+        name: queues.sqs.services.k8s.aws
+      spec:
+        group: sqs.services.k8s.aws
+        names:
+          kind: Queue
+          listKind: QueueList
+          plural: queues
+          singular: queue
+        scope: Namespaced
+        versions:
+        - additionalPrinterColumns:
+          - jsonPath: .spec.delaySeconds
+            name: DelaySeconds
+            type: string
+          - jsonPath: .spec.maximumMessageSize
+            name: maximumMessageSize
+            priority: 1
+            type: string
+          - jsonPath: .spec.messageRetentionPeriod
+            name: messageRetentionPeriod
+            priority: 1
+            type: string
+          - jsonPath: .spec.receiveMessageWaitTimeSeconds
+            name: receiveMessageWaitTimeSeconds
+            priority: 1
+            type: string
+          - jsonPath: .spec.visibilityTimeout
+            name: visibilityTimeout
+            type: string
+          - jsonPath: .status.conditions[?(@.type=="ACK.ResourceSynced")].status
+            name: Synced
+            type: string
+          - jsonPath: .metadata.creationTimestamp
+            name: Age
+            type: date
+          name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Queue is the Schema for the Queues API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: QueueSpec defines the desired state of Queue.
+                  properties:
+                    contentBasedDeduplication:
+                      type: string
+                    delaySeconds:
+                      type: string
+                    fifoQueue:
+                      type: string
+                    kmsDataKeyReusePeriodSeconds:
+                      type: string
+                    kmsMasterKeyID:
+                      type: string
+                    kmsMasterKeyRef:
+                      description: "AWSResourceReferenceWrapper provides a wrapper around
+                        *AWSResourceReference\ntype to provide more user friendly syntax
+                        for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                        \ name: my-api"
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    maximumMessageSize:
+                      type: string
+                    messageRetentionPeriod:
+                      type: string
+                    policy:
+                      type: string
+                    policyRef:
+                      description: "AWSResourceReferenceWrapper provides a wrapper around
+                        *AWSResourceReference\ntype to provide more user friendly syntax
+                        for references using 'from' field\nEx:\nAPIIDRef:\n\n\tfrom:\n\t
+                        \ name: my-api"
+                      properties:
+                        from:
+                          description: |-
+                            AWSResourceReference provides all the values necessary to reference another
+                            k8s resource for finding the identifier(Id/ARN/Name)
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                      type: object
+                    queueName:
+                      type: string
+                    receiveMessageWaitTimeSeconds:
+                      type: string
+                    redriveAllowPolicy:
+                      type: string
+                    redrivePolicy:
+                      type: string
+                    sqsManagedSSEEnabled:
+                      type: string
+                    tags:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Add cost allocation tags to the specified Amazon SQS queue. For an overview,
+                        see Tagging Your Amazon SQS Queues (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-queue-tags.html)
+                        in the Amazon SQS Developer Guide.
+
+                        When you use queue tags, keep the following guidelines in mind:
+
+                          * Adding more than 50 tags to a queue isn't recommended.
+
+                          * Tags don't have any semantic meaning. Amazon SQS interprets tags as
+                          character strings.
+
+                          * Tags are case-sensitive.
+
+                          * A new tag with a key identical to that of an existing tag overwrites
+                          the existing tag.
+
+                        For a full list of tag restrictions, see Quotas related to queues (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-limits.html#limits-queues)
+                        in the Amazon SQS Developer Guide.
+
+                        To be able to tag a queue on creation, you must have the sqs:CreateQueue
+                        and sqs:TagQueue permissions.
+
+                        Cross-account permissions don't apply to this action. For more information,
+                        see Grant cross-account permissions to a role and a username (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-customer-managed-policy-examples.html#grant-cross-account-permissions-to-role-and-user-name)
+                        in the Amazon SQS Developer Guide.
+                      type: object
+                    visibilityTimeout:
+                      type: string
+                  required:
+                  - queueName
+                  type: object
+                status:
+                  description: QueueStatus defines the observed state of Queue
+                  properties:
+                    ackResourceMetadata:
+                      description: |-
+                        All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                        that is used to contain resource sync state, account ownership,
+                        constructed ARN for the resource
+                      properties:
+                        arn:
+                          description: |-
+                            ARN is the Amazon Resource Name for the resource. This is a
+                            globally-unique identifier and is set only by the ACK service controller
+                            once the controller has orchestrated the creation of the resource OR
+                            when it has verified that an "adopted" resource (a resource where the
+                            ARN annotation was set by the Kubernetes user on the CR) exists and
+                            matches the supplied CR's Spec field values.
+                            https://github.com/aws/aws-controllers-k8s/issues/270
+                          type: string
+                        ownerAccountID:
+                          description: |-
+                            OwnerAccountID is the AWS Account ID of the account that owns the
+                            backend AWS service API resource.
+                          type: string
+                        region:
+                          description: Region is the AWS region in which the resource exists
+                            or will exist.
+                          type: string
+                      required:
+                      - ownerAccountID
+                      - region
+                      type: object
+                    conditions:
+                      description: |-
+                        All CRS managed by ACK have a common `Status.Conditions` member that
+                        contains a collection of `ackv1alpha1.Condition` objects that describe
+                        the various terminal states of the CR and its backend AWS service API
+                        resource
+                      items:
+                        description: |-
+                          Condition is the common struct used by all CRDs managed by ACK service
+                          controllers to indicate terminal states  of the CR and its backend AWS
+                          service API resource
+                        properties:
+                          lastTransitionTime:
+                            description: Last time the condition transitioned from one status
+                              to another.
+                            format: date-time
+                            type: string
+                          message:
+                            description: A human readable message indicating details about
+                              the transition.
+                            type: string
+                          reason:
+                            description: The reason for the condition's last transition.
+                            type: string
+                          status:
+                            description: Status of the condition, one of True, False, Unknown.
+                            type: string
+                          type:
+                            description: Type is the type of the Condition
+                            type: string
+                        required:
+                        - status
+                        - type
+                        type: object
+                      type: array
+                    queueARN:
+                      type: string
+                    queueURL:
+                      description: The URL of the created Amazon SQS queue.
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}

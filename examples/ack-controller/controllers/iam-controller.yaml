@@ -1,29 +1,25 @@
 apiVersion: kro.run/v1alpha1
-kind: ResourceGroup
+kind: ResourceGraphDefinition
 metadata:
-  name: ec2controller.kro.run
+  name: iamcontroller.kro.run
+  namespace: kro
 spec:
   schema:
     apiVersion: v1alpha1
-    kind: EC2Controller
+    kind: IAMController
     spec:
-      name: string | default=ec2-controller
+      name: string | default=iam-controller
       namespace: string | default=default
       values:
         aws:
-          accountID: string | required=true
           region: string | default=us-west-2
         deployment:
           containerPort: integer | default=8080
           replicas: integer | default=1
-        iamRole:
-          maxSessionDuration: integer | default=3600
-          oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EC2 controller deployement on EKS cluster using kro Resource group
         image:
           deletePolicy: string | default=delete
-          repository: string | default=public.ecr.aws/aws-controllers-k8s/ec2-controller
-          tag: string | default=1.2.27
+          repository: string | default=public.ecr.aws/aws-controllers-k8s/iam-controller
+          tag: string | default=1.3.13
           resources:
             requests:
               memory: string | default=64Mi
@@ -35,41 +31,17 @@ spec:
           enabled: boolean | default=false
           level: string | default=info
         serviceAccount:
-          name: string | default=ec2-controller-sa
+          name: string | default=ack-iam-controller-sa
+          roleArn: string | required=true
   resources:
-  - id: ec2CRDGroup
+  - id: iamCRDGroup
     template:
       apiVersion: kro.run/v1alpha1
-      kind: EC2CRDGroup
+      kind: IAMCRDGroup
       metadata:
         name: ${schema.spec.name}-crd-group
       spec:
         name: ${schema.spec.name}-crd-group
-  - id: ec2ControllerIamRole
-    template:
-      apiVersion: iam.services.k8s.aws/v1alpha1
-      kind: Role
-      metadata:
-        name: ${schema.spec.name}-iam-role
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}-iam-role
-        description: ${schema.spec.values.iamRole.roleDescription}
-        maxSessionDuration: ${schema.spec.values.iamRole.maxSessionDuration}
-        policies:
-        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
-        assumeRolePolicyDocument: >
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": {"Federated": "arn:aws:iam::${schema.spec.values.aws.accountID}:oidc-provider/${schema.spec.values.iamRole.oidcProvider}"},
-              "Action": "sts:AssumeRoleWithWebIdentity",
-              "Condition": {
-                  "StringEquals": {"${schema.spec.values.iamRole.oidcProvider}:sub": "system:serviceaccount:${schema.spec.namespace}:${schema.spec.values.serviceAccount.name}"}
-              }
-            }]
-          }
   - id: serviceAccount
     template:
       apiVersion: v1
@@ -78,7 +50,7 @@ spec:
         name: ${schema.spec.values.serviceAccount.name}
         namespace: ${schema.spec.namespace}
         annotations:
-          eks.amazonaws.com/role-arn: ${ec2ControllerIamRole.status.ackResourceMetadata.arn}
+          eks.amazonaws.com/role-arn: ${schema.spec.values.serviceAccount.roleArn}
   - id: deployment
     template:
       apiVersion: apps/v1
@@ -184,9 +156,9 @@ spec:
         - patch
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - dhcpoptions
+        - groups
         verbs:
         - create
         - delete
@@ -196,37 +168,17 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - dhcpoptions/status
+        - groups/status
         verbs:
         - get
         - patch
         - update
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - elasticipaddresses
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - elasticipaddresses/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - flowlogs
+        - instanceprofiles
         verbs:
         - create
         - delete
@@ -236,37 +188,17 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - flowlogs/status
+        - instanceprofiles/status
         verbs:
         - get
         - patch
         - update
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - instances
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - instances/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - internetgateways
+        - openidconnectproviders
         verbs:
         - create
         - delete
@@ -276,37 +208,17 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - internetgateways/status
+        - openidconnectproviders/status
         verbs:
         - get
         - patch
         - update
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - natgateways
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - natgateways/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - networkacls
+        - policies
         verbs:
         - create
         - delete
@@ -316,37 +228,17 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - networkacls/status
+        - policies/status
         verbs:
         - get
         - patch
         - update
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - routetables
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - routetables/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - securitygroups
+        - roles
         verbs:
         - create
         - delete
@@ -356,37 +248,17 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - securitygroups/status
+        - roles/status
         verbs:
         - get
         - patch
         - update
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - subnets
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - subnets/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - transitgateways
+        - users
         verbs:
         - create
         - delete
@@ -396,89 +268,9 @@ spec:
         - update
         - watch
       - apiGroups:
-        - ec2.services.k8s.aws
+        - iam.services.k8s.aws
         resources:
-        - transitgateways/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcendpoints
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcendpoints/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcendpointserviceconfigurations
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcendpointserviceconfigurations/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcpeeringconnections
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcpeeringconnections/status
-        verbs:
-        - get
-        - patch
-        - update
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcs
-        verbs:
-        - create
-        - delete
-        - get
-        - list
-        - patch
-        - update
-        - watch
-      - apiGroups:
-        - ec2.services.k8s.aws
-        resources:
-        - vpcs/status
+        - users/status
         verbs:
         - get
         - patch

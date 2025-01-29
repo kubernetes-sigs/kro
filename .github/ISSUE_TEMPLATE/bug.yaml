@@ -15,7 +15,7 @@ body:
 
         **Expected Behavior**:
 
-        **Reproduction Steps** (Please include `ResourceGroup` and `Instances` files):
+        **Reproduction Steps** (Please include `ResourceGraphDefinition` and `Instances` files):
 
         **Versions**:
         - kro version:
@@ -38,7 +38,7 @@ body:
       label: Which option describes the most your issue?
       multiple: true
       options:
-        - ResourceGroup (Create, Update, Deletion)
+        - ResourceGraphDefinition (Create, Update, Deletion)
         - Instance (Create, Update, Deletion)
         - Directed Acyclic Graph inference
         - Common Expression Language (CEL)

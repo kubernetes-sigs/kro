@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func TestResourceGroupFinalizer(t *testing.T) {
+func TestResourceGraphDefinitionFinalizer(t *testing.T) {
 	cases := []struct {
 		name          string
 		initialObject metav1.Object
@@ -33,29 +33,29 @@ func TestResourceGroupFinalizer(t *testing.T) {
 		{
 			name:          "Set finaliser on empty object",
 			initialObject: &metav1.ObjectMeta{},
-			operation:     SetResourceGroupFinalizer,
-			check:         HasResourceGroupFinalizer,
+			operation:     SetResourceGraphDefinitionFinalizer,
+			check:         HasResourceGraphDefinitionFinalizer,
 			expected:      true,
 		},
 		{
 			name:          "Add finalizer to object w/ existing finalizers",
 			initialObject: &metav1.ObjectMeta{Finalizers: []string{"some-other-finalizer"}},
-			operation:     SetResourceGroupFinalizer,
-			check:         HasResourceGroupFinalizer,
+			operation:     SetResourceGraphDefinitionFinalizer,
+			check:         HasResourceGraphDefinitionFinalizer,
 			expected:      true,
 		},
 		{
 			name:          "Remove finalizer from object w/ finalizer",
 			initialObject: &metav1.ObjectMeta{Finalizers: []string{kroFinalizer}},
-			operation:     RemoveResourceGroupFinalizer,
-			check:         HasResourceGroupFinalizer,
+			operation:     RemoveResourceGraphDefinitionFinalizer,
+			check:         HasResourceGraphDefinitionFinalizer,
 			expected:      false,
 		},
 		{
 			name:          "Remove finalizer from object without finazlier",
 			initialObject: &metav1.ObjectMeta{Finalizers: []string{"some-other-finalizer"}},
-			operation:     RemoveResourceGroupFinalizer,
-			check:         HasResourceGroupFinalizer,
+			operation:     RemoveResourceGraphDefinitionFinalizer,
+			check:         HasResourceGraphDefinitionFinalizer,
 			expected:      false,
 		},
 	}

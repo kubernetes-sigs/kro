@@ -20,15 +20,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
 )
 
-// ResourceGroupOption is a functional option for ResourceGroup
-type ResourceGroupOption func(*krov1alpha1.ResourceGroup)
+// ResourceGraphDefinitionOption is a functional option for ResourceGraphDefinition
+type ResourceGraphDefinitionOption func(*krov1alpha1.ResourceGraphDefinition)
 
-// NewResourceGroup creates a new ResourceGroup with the given name and options
-func NewResourceGroup(name string, opts ...ResourceGroupOption) *krov1alpha1.ResourceGroup {
-	rg := &krov1alpha1.ResourceGroup{
+// NewResourceGraphDefinition creates a new ResourceGraphDefinition with the given name and options
+func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOption) *krov1alpha1.ResourceGraphDefinition {
+	rg := &krov1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
@@ -40,15 +40,15 @@ func NewResourceGroup(name string, opts ...ResourceGroupOption) *krov1alpha1.Res
 	return rg
 }
 
-// WithNamespace sets the namespace of the ResourceGroup
-func WithNamespace(namespace string) ResourceGroupOption {
-	return func(rg *krov1alpha1.ResourceGroup) {
-		rg.Namespace = namespace
+// WithNamespace sets the namespace of the ResourceGraphDefinition
+func WithNamespace(namespace string) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		rgd.Namespace = namespace
 	}
 }
 
-// WithSchema sets the definition and status of the ResourceGroup
-func WithSchema(kind, version string, spec, status map[string]interface{}) ResourceGroupOption {
+// WithSchema sets the definition and status of the ResourceGraphDefinition
+func WithSchema(kind, version string, spec, status map[string]interface{}) ResourceGraphDefinitionOption {
 	rawSpec, err := json.Marshal(spec)
 	if err != nil {
 		panic(err)
@@ -58,8 +58,8 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 		panic(err)
 	}
 
-	return func(rg *krov1alpha1.ResourceGroup) {
-		rg.Spec.Schema = &krov1alpha1.Schema{
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		rgd.Spec.Schema = &krov1alpha1.Schema{
 			Kind:       kind,
 			APIVersion: version,
 			Spec: runtime.RawExtension{
@@ -74,20 +74,20 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 	}
 }
 
-// WithResource adds a resource to the ResourceGroup with the given name and definition
+// WithResource adds a resource to the ResourceGraphDefinition with the given name and definition
 // readyWhen and includeWhen expressions are optional.
 func WithResource(
 	id string,
 	template map[string]interface{},
 	readyWhen []string,
 	includeWhen []string,
-) ResourceGroupOption {
-	return func(rg *krov1alpha1.ResourceGroup) {
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
 		raw, err := json.Marshal(template)
 		if err != nil {
 			panic(err)
 		}
-		rg.Spec.Resources = append(rg.Spec.Resources, &krov1alpha1.Resource{
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
 			ID:          id,
 			ReadyWhen:   readyWhen,
 			IncludeWhen: includeWhen,

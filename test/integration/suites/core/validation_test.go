@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Validation", func() {
@@ -47,7 +47,7 @@ var _ = Describe("Validation", func() {
 
 	Context("Resource IDs", func() {
 		It("should validate correct resource naming conventions", func() {
-			rg := generator.NewResourceGroup("test-validation",
+			rg := generator.NewResourceGraphDefinition("test-validation",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
@@ -70,7 +70,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
@@ -89,7 +89,7 @@ var _ = Describe("Validation", func() {
 			}
 
 			for _, invalidName := range invalidNames {
-				rg := generator.NewResourceGroup(fmt.Sprintf("test-validation-%s", rand.String(5)),
+				rg := generator.NewResourceGraphDefinition(fmt.Sprintf("test-validation-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
 					generator.WithSchema(
 						"TestValidation", "v1alpha1",
@@ -109,12 +109,12 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 
 					// Verify validation condition
 					var condition *krov1alpha1.Condition
 					for _, cond := range rg.Status.Conditions {
-						if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
+						if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 							condition = &cond
 							break
 						}
@@ -127,7 +127,7 @@ var _ = Describe("Validation", func() {
 		})
 
 		It("should reject duplicate resource IDs", func() {
-			rg := generator.NewResourceGroup("test-validation-dup",
+			rg := generator.NewResourceGraphDefinition("test-validation-dup",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
@@ -148,12 +148,12 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 
 				// Verify validation condition
 				var condition *krov1alpha1.Condition
 				for _, cond := range rg.Status.Conditions {
-					if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
+					if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 						condition = &cond
 						break
 					}
@@ -167,7 +167,7 @@ var _ = Describe("Validation", func() {
 
 	Context("Kubernetes Object Structure", func() {
 		It("should validate correct kubernetes object structure", func() {
-			rg := generator.NewResourceGroup("test-k8s-valid",
+			rg := generator.NewResourceGraphDefinition("test-k8s-valid",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestK8sValidation", "v1alpha1",
@@ -193,7 +193,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
@@ -229,7 +229,7 @@ var _ = Describe("Validation", func() {
 			}
 
 			for i, invalidObj := range invalidObjects {
-				rg := generator.NewResourceGroup(fmt.Sprintf("test-k8s-invalid-%d", i),
+				rg := generator.NewResourceGraphDefinition(fmt.Sprintf("test-k8s-invalid-%d", i),
 					generator.WithNamespace(namespace),
 					generator.WithSchema(
 						"TestK8sValidation", "v1alpha1",
@@ -249,7 +249,7 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -265,7 +265,7 @@ var _ = Describe("Validation", func() {
 			}
 
 			for _, kind := range validKinds {
-				rg := generator.NewResourceGroup(fmt.Sprintf("test-kind-%s", rand.String(5)),
+				rg := generator.NewResourceGraphDefinition(fmt.Sprintf("test-kind-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
 					generator.WithSchema(
 						kind, "v1alpha1",
@@ -284,7 +284,7 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -300,7 +300,7 @@ var _ = Describe("Validation", func() {
 			}
 
 			for _, kind := range invalidKinds {
-				rg := generator.NewResourceGroup(fmt.Sprintf("test-kind-%s", rand.String(5)),
+				rg := generator.NewResourceGraphDefinition(fmt.Sprintf("test-kind-%s", rand.String(5)),
 					generator.WithNamespace(namespace),
 					generator.WithSchema(
 						kind, "v1alpha1",
@@ -319,15 +319,15 @@ var _ = Describe("Validation", func() {
 						Namespace: namespace,
 					}, rg)
 					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+					g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
 	})
 
 	Context("Proper Cleanup", func() {
-		It("should not panic when deleting an inactive ResourceGroup", func() {
-			rg := generator.NewResourceGroup("test-cleanup",
+		It("should not panic when deleting an inactive ResourceGraphDefinition", func() {
+			rg := generator.NewResourceGraphDefinition("test-cleanup",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestCleanup", "v1alpha1",
@@ -353,7 +353,7 @@ var _ = Describe("Validation", func() {
 					Namespace: namespace,
 				}, rg)
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+				g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 				g.Expect(rg.Status.TopologicalOrder).To(BeEmpty())
 			}, 10*time.Second, time.Second).Should(Succeed())
 

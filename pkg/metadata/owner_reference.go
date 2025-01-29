@@ -18,16 +18,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 var (
-	KRORGOwnerReferenceKind       = "ResourceGroup"
+	KRORGOwnerReferenceKind       = "ResourceGraphDefinition"
 	KRORGOwnerReferenceAPIVersion = v1alpha1.GroupVersion.String()
 )
 
 // stamped on the CRD and RGIs
-func NewResourceGroupOwnerReference(name string, uid types.UID) metav1.OwnerReference {
+func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,
 		Kind:       KRORGOwnerReferenceKind,

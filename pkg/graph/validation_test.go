@@ -16,19 +16,19 @@ package graph
 import (
 	"testing"
 
-	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
 	tests := []struct {
 		name        string
-		rg          *v1alpha1.ResourceGroup
+		rg          *v1alpha1.ResourceGraphDefinition
 		expectError bool
 	}{
 		{
 			name: "Valid resource group resource ids",
-			rg: &v1alpha1.ResourceGroup{
-				Spec: v1alpha1.ResourceGroupSpec{
+			rg: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
 					Resources: []*v1alpha1.Resource{
 						{ID: "validID1"},
 						{ID: "validID2"},
@@ -39,8 +39,8 @@ func TestValidateRGResourceNames(t *testing.T) {
 		},
 		{
 			name: "Duplicate resource ids",
-			rg: &v1alpha1.ResourceGroup{
-				Spec: v1alpha1.ResourceGroupSpec{
+			rg: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
 					Resources: []*v1alpha1.Resource{
 						{ID: "duplicateID"},
 						{ID: "duplicateID"},
@@ -51,8 +51,8 @@ func TestValidateRGResourceNames(t *testing.T) {
 		},
 		{
 			name: "Invalid resource ID",
-			rg: &v1alpha1.ResourceGroup{
-				Spec: v1alpha1.ResourceGroupSpec{
+			rg: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
 					Resources: []*v1alpha1.Resource{
 						{ID: "Invalid_ID"},
 					},
@@ -62,8 +62,8 @@ func TestValidateRGResourceNames(t *testing.T) {
 		},
 		{
 			name: "Reserved word as resource id",
-			rg: &v1alpha1.ResourceGroup{
-				Spec: v1alpha1.ResourceGroupSpec{
+			rg: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
 					Resources: []*v1alpha1.Resource{
 						{ID: "spec"},
 					},
@@ -88,7 +88,7 @@ func TestIsKROReservedWord(t *testing.T) {
 		word     string
 		expected bool
 	}{
-		{"resourcegroup", true},
+		{"resourcegraphdefinition", true},
 		{"instance", true},
 		{"notReserved", false},
 		{"RESOURCEGROUP", false}, // Case-sensitive check

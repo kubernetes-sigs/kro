@@ -56,23 +56,23 @@ var (
 	// NAME            STATE    SYNCED   AGE
 	// testcluster29   ACTIVE   True     22d
 	defaultAdditionalPrinterColumns = []extv1.CustomResourceColumnDefinition{
-		// ResourceGroup instance state
+		// ResourceGraphDefinition instance state
 		{
 			Name:        "State",
-			Description: "The state of a ResourceGroup instance",
+			Description: "The state of a ResourceGraphDefinition instance",
 			Priority:    0,
 			Type:        "string",
 			JSONPath:    ".status.state",
 		},
-		// ResourceGroup instance AllResourcesReady condition
+		// ResourceGraphDefinition instance AllResourcesReady condition
 		{
 			Name:        "Synced",
-			Description: "Whether a ResourceGroup instance have all it's subresources ready",
+			Description: "Whether a ResourceGraphDefinition instance have all it's subresources ready",
 			Priority:    0,
 			Type:        "string",
 			JSONPath:    ".status.conditions[?(@.type==\"InstanceSynced\")].status",
 		},
-		// ResourceGroup instance age
+		// ResourceGraphDefinition instance age
 		{
 			Name:        "Age",
 			Description: "Age of the resource",

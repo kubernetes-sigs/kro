@@ -1,0 +1,37 @@
+apiVersion: kro.run/v1alpha1
+kind: AckControllers
+metadata:
+  name: my-kro-ack-controller
+  namespace: kro
+spec:
+  name: ack-controller
+  namespace: kro
+  values:
+    aws:
+      accountID: "......"
+    deployment: {}
+    iam:
+      enabled: false
+      iamRole:
+        oidcProvider: ......
+      serviceAccount:
+        roleArn: ......
+    ec2:
+      serviceAccount: {}
+    eks:
+      serviceAccount: {}
+    s3:
+      serviceAccount: {}
+    ecr:
+      serviceAccount: {}
+    ecrpublic:
+      serviceAccount: {}
+    sqs:
+      serviceAccount: {}
+    imageConfig:
+      resources:
+        requests: {}
+        limits: {}
+    log:
+      enabled: true
+      level: debug

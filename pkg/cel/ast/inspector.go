@@ -20,7 +20,7 @@ import (
 	"github.com/google/cel-go/cel"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 
-	krocel "github.com/awslabs/kro/pkg/cel"
+	krocel "github.com/kro-run/kro/pkg/cel"
 )
 
 // ResourceDependency represents a resource and its accessed path within a CEL expression.

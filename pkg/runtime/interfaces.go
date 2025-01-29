@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
 // Interface defines the main runtime interface for managing and synchronizing
@@ -72,7 +72,7 @@ type Interface interface {
 
 // ResourceDescriptor provides metadata about a resource.
 //
-// Note: the reason why we do not import resourcegroup/graph.Resource here is
+// Note: the reason why we do not import resourcegraphdefinition/graph.Resource here is
 // to avoid a circular dependency between the runtime and the graph packages.
 // Had to scratch my head for a while to figure this out. But here is the
 // quick overview:

@@ -21,19 +21,19 @@ import (
 type ConditionType string
 
 const (
-	// ResourceGroupConditionTypeGraphSynced indicates the state of the directed
+	// ResourceGraphDefinitionConditionTypeGraphSynced indicates the state of the directed
 	// acyclic graph (DAG) that kro uses to manage the resources in a
-	// ResourceGroup.
-	ResourceGroupConditionTypeGraphVerified ConditionType = "GraphVerified"
-	// ResourceGroupConditionTypeCustomResourceDefinitionSynced indicates the state of the
+	// ResourceGraphDefinition.
+	ResourceGraphDefinitionConditionTypeGraphVerified ConditionType = "GraphVerified"
+	// ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced indicates the state of the
 	// CustomResourceDefinition (CRD) that kro uses to manage the resources in a
-	// ResourceGroup.
-	ResourceGroupConditionTypeCustomResourceDefinitionSynced ConditionType = "CustomResourceDefinitionSynced"
-	// ResourceGroupConditionTypeReconcilerReady indicates the state of the reconciler.
-	// Whenever an ResourceGroup resource is created, kro will spin up a
+	// ResourceGraphDefinition.
+	ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced ConditionType = "CustomResourceDefinitionSynced"
+	// ResourceGraphDefinitionConditionTypeReconcilerReady indicates the state of the reconciler.
+	// Whenever an ResourceGraphDefinition resource is created, kro will spin up a
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
-	ResourceGroupConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
+	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
 )
 
 const (

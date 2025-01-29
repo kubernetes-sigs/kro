@@ -17,17 +17,17 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 func eksCluster(
 	namespace, name string,
 ) (
-	*krov1alpha1.ResourceGroup,
+	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name, version string) *unstructured.Unstructured,
 ) {
-	resourcegroup := generator.NewResourceGroup(name,
+	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
 		generator.WithNamespace(namespace),
 		generator.WithSchema(
 			"EKSCluster", "v1alpha1",
@@ -80,7 +80,7 @@ func eksCluster(
 			},
 		}
 	}
-	return resourcegroup, instanceGenerator
+	return resourcegraphdefinition, instanceGenerator
 }
 
 func vpcDef(namespace string) map[string]interface{} {

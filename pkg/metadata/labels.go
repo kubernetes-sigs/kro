@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/kro-run/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -37,10 +37,10 @@ const (
 	InstanceLabel          = LabelKroPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKroPrefix + "instance-namespace"
 
-	ResourceGroupIDLabel        = LabelKroPrefix + "resource-group-id"
-	ResourceGroupNameLabel      = LabelKroPrefix + "resource-group-name"
-	ResourceGroupNamespaceLabel = LabelKroPrefix + "resource-group-namespace"
-	ResourceGroupVersionLabel   = LabelKroPrefix + "resource-group-version"
+	ResourceGraphDefinitionIDLabel        = LabelKroPrefix + "resource-group-id"
+	ResourceGraphDefinitionNameLabel      = LabelKroPrefix + "resource-group-name"
+	ResourceGraphDefinitionNamespaceLabel = LabelKroPrefix + "resource-group-namespace"
+	ResourceGraphDefinitionVersionLabel   = LabelKroPrefix + "resource-group-version"
 )
 
 // IsKroOwned returns true if the resource is owned by Kro.
@@ -111,13 +111,13 @@ func (gl GenericLabeler) Copy() map[string]string {
 	return newGenericLabeler
 }
 
-// NewResourceGroupLabeler returns a new labeler that sets the
-// ResourceGroupLabel and ResourceGroupIDLabel labels on a resource.
-func NewResourceGroupLabeler(rgMeta metav1.Object) GenericLabeler {
+// NewResourceGraphDefinitionLabeler returns a new labeler that sets the
+// ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
+func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
-		ResourceGroupIDLabel:        string(rgMeta.GetUID()),
-		ResourceGroupNameLabel:      rgMeta.GetName(),
-		ResourceGroupNamespaceLabel: rgMeta.GetNamespace(),
+		ResourceGraphDefinitionIDLabel:        string(rgMeta.GetUID()),
+		ResourceGraphDefinitionNameLabel:      rgMeta.GetName(),
+		ResourceGraphDefinitionNamespaceLabel: rgMeta.GetNamespace(),
 	}
 }
 

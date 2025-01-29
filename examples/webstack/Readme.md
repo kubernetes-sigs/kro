@@ -1,12 +1,12 @@
 # kro Nested RG example
 
-This example creates a ResourceGroup called `WebStack` comprised of
+This example creates a ResourceGraphDefinition called `WebStack` comprised of
 three other RGs: `WebApp`, `S3Bucket`, and `PodIdentity`
 
 ![Netsted RG Instance](../../images/architecture-diagrams/kro-WebStack.png)
 _Fugure 1: Nested RG Example_
 
-### Create ResourceGroups
+### Create ResourceGraphDefinitions
 
 Change directory to `examples`:
 ```
@@ -110,8 +110,8 @@ Remove the instance:
 kubectl delete webstacks test-app
 ```
 
-Remove the ResourceGroups:
+Remove the ResourceGraphDefinitions:
 
 ```
-kubectl delete rg webstack.kro.run webapp.kro.run s3bucket.kro.run podidentity.kro.run
+kubectl delete rgd webstack.kro.run webapp.kro.run s3bucket.kro.run podidentity.kro.run
 ```

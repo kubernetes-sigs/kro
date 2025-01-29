@@ -22,16 +22,16 @@ import (
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krocel "github.com/awslabs/kro/pkg/cel"
-	"github.com/awslabs/kro/pkg/graph/variable"
-	"github.com/awslabs/kro/pkg/runtime/resolver"
+	krocel "github.com/kro-run/kro/pkg/cel"
+	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/runtime/resolver"
 )
 
-// Compile time proof to ensure that ResourceGroupRuntime implements the
+// Compile time proof to ensure that ResourceGraphDefinitionRuntime implements the
 // Runtime interface.
-var _ Interface = &ResourceGroupRuntime{}
+var _ Interface = &ResourceGraphDefinitionRuntime{}
 
-// NewResourceGroupRuntime creates and initializes a new ResourceGroupRuntime
+// NewResourceGraphDefinitionRuntime creates and initializes a new ResourceGraphDefinitionRuntime
 // instance.
 //
 // It is also responsible of properly creating the ExpressionEvaluationState
@@ -41,12 +41,12 @@ var _ Interface = &ResourceGroupRuntime{}
 // caller (instance controller in this case).
 //
 // The output of this function is NOT thread safe.
-func NewResourceGroupRuntime(
+func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
 	topologicalOrder []string,
-) (*ResourceGroupRuntime, error) {
-	r := &ResourceGroupRuntime{
+) (*ResourceGraphDefinitionRuntime, error) {
+	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
 		topologicalOrder:             topologicalOrder,
@@ -121,11 +121,11 @@ func NewResourceGroupRuntime(
 	return r, nil
 }
 
-// ResourceGroupRuntime implements the Interface for managing and synchronizing
+// ResourceGraphDefinitionRuntime implements the Interface for managing and synchronizing
 // resources. Is is the responsibility of the consumer to call Synchronize
 // appropriately, and decide whether to follow the TopologicalOrder or a
 // BFS/DFS traversal of the resources.
-type ResourceGroupRuntime struct {
+type ResourceGraphDefinitionRuntime struct {
 	// instance represents the main resource instance being managed.
 	// This is typically the top-level custom resource that owns or manages
 	// other resources in the graph.
@@ -169,7 +169,7 @@ type ResourceGroupRuntime struct {
 }
 
 // TopologicalOrder returns the topological order of resources.
-func (rt *ResourceGroupRuntime) TopologicalOrder() []string {
+func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
 	return rt.topologicalOrder
 }
 
@@ -178,7 +178,7 @@ func (rt *ResourceGroupRuntime) TopologicalOrder() []string {
 // It is the responsibility of the caller to ensure that the resource id
 // exists in the runtime. a.k.a the caller should use the TopologicalOrder
 // to get the resource ids.
-func (rt *ResourceGroupRuntime) ResourceDescriptor(id string) ResourceDescriptor {
+func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) ResourceDescriptor {
 	return rt.resources[id]
 }
 
@@ -186,7 +186,7 @@ func (rt *ResourceGroupRuntime) ResourceDescriptor(id string) ResourceDescriptor
 // the cluster, it also returns the runtime state of the resource. Indicating
 // whether the resource variables are resolved or not, and whether the resource
 // readiness conditions are met or not.
-func (rt *ResourceGroupRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
+func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
 	// Did the user set the resource?
 	r, ok := rt.resolvedResources[id]
 	if ok {
@@ -204,18 +204,18 @@ func (rt *ResourceGroupRuntime) GetResource(id string) (*unstructured.Unstructur
 
 // SetResource updates or sets a resource in the runtime. This is typically
 // called after a resource has been created or updated in the cluster.
-func (rt *ResourceGroupRuntime) SetResource(id string, resource *unstructured.Unstructured) {
+func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstructured.Unstructured) {
 	rt.resolvedResources[id] = resource
 }
 
 // GetInstance returns the main instance object managed by this runtime.
-func (rt *ResourceGroupRuntime) GetInstance() *unstructured.Unstructured {
+func (rt *ResourceGraphDefinitionRuntime) GetInstance() *unstructured.Unstructured {
 	return rt.instance.Unstructured()
 }
 
 // SetInstance updates the main instance object.
 // This is typically called after the instance has been updated in the cluster.
-func (rt *ResourceGroupRuntime) SetInstance(obj *unstructured.Unstructured) {
+func (rt *ResourceGraphDefinitionRuntime) SetInstance(obj *unstructured.Unstructured) {
 	ptr := rt.instance.Unstructured()
 	ptr.Object = obj.Object
 }
@@ -227,7 +227,7 @@ func (rt *ResourceGroupRuntime) SetInstance(obj *unstructured.Unstructured) {
 // Every time Synchronize is called, it walks through the resources and tries
 // to resolve as many as possible. If a resource is resolved, it's added to the
 // resolved resources map.
-func (rt *ResourceGroupRuntime) Synchronize() (bool, error) {
+func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 	// if everything is resolved, we're done.
 	// TODO(a-hilaly): Add readiness check here.
 	if rt.allExpressionsAreResolved() && len(rt.resolvedResources) == len(rt.resources) {
@@ -257,7 +257,7 @@ func (rt *ResourceGroupRuntime) Synchronize() (bool, error) {
 
 // propagateResourceVariables iterates over all resources and evaluates their
 // variables if all dependencies are resolved.
-func (rt *ResourceGroupRuntime) propagateResourceVariables() error {
+func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
 	for id := range rt.resources {
 		if rt.canProcessResource(id) {
 			// evaluate the resource variables
@@ -272,7 +272,7 @@ func (rt *ResourceGroupRuntime) propagateResourceVariables() error {
 
 // canProcessResource checks if a resource can be resolved by examining
 // if all its dependencies are resolved AND if all its variables are resolved.
-func (rt *ResourceGroupRuntime) canProcessResource(resource string) bool {
+func (rt *ResourceGraphDefinitionRuntime) canProcessResource(resource string) bool {
 	// Check if all dependencies are resolved. a.k.a all variables have been
 	// evaluated.
 	for _, dep := range rt.resources[resource].GetDependencies() {
@@ -288,7 +288,7 @@ func (rt *ResourceGroupRuntime) canProcessResource(resource string) bool {
 
 // resourceVariablesResolved determines if all variables for a given resource
 // have been resolved.
-func (rt *ResourceGroupRuntime) resourceVariablesResolved(resource string) bool {
+func (rt *ResourceGraphDefinitionRuntime) resourceVariablesResolved(resource string) bool {
 	for _, variable := range rt.runtimeVariables[resource] {
 		if variable.Kind.IsDynamic() && !variable.Resolved {
 			return false
@@ -301,7 +301,7 @@ func (rt *ResourceGroupRuntime) resourceVariablesResolved(resource string) bool 
 // Static variables are those that can be evaluated immediately, typically
 // depending only on the initial configuration. This function is usually
 // called once during runtime initialization to set up the baseline state
-func (rt *ResourceGroupRuntime) evaluateStaticVariables() error {
+func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 	if err != nil {
 		return err
@@ -341,7 +341,7 @@ func (e *EvalError) Error() string {
 // iteratively as resources are resolved. This function is called during each
 // synchronization cycle to update the runtime state based on newly resolved
 // resources.
-func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
+func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 	// Dynamic variables are those that depend on other resources
 	// and are resolved after all the dependencies are resolved.
 
@@ -404,7 +404,7 @@ func (rt *ResourceGroupRuntime) evaluateDynamicVariables() error {
 // the current state of all resources. This function aggregates information
 // from all managed resources to provide an overall status of the runtime,
 // which is typically reflected in the custom resource's status field.
-func (rt *ResourceGroupRuntime) evaluateInstanceStatuses() error {
+func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
 	rs := resolver.NewResolver(rt.instance.Unstructured().Object, map[string]interface{}{})
 
 	// Two pieces of information are needed here:
@@ -425,7 +425,7 @@ func (rt *ResourceGroupRuntime) evaluateInstanceStatuses() error {
 
 // evaluateResourceExpressions processes all expressions associated with a
 // specific resource.
-func (rt *ResourceGroupRuntime) evaluateResourceExpressions(resource string) error {
+func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
 	exprValues := make(map[string]interface{})
 	for _, v := range rt.expressionsCache {
 		if v.Resolved {
@@ -450,7 +450,7 @@ func (rt *ResourceGroupRuntime) evaluateResourceExpressions(resource string) err
 
 // allExpressionsAreResolved checks if every expression in the runtimes cache
 // has been successfully evaluated
-func (rt *ResourceGroupRuntime) allExpressionsAreResolved() bool {
+func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
 	for _, v := range rt.expressionsCache {
 		if !v.Resolved {
 			return false
@@ -462,7 +462,7 @@ func (rt *ResourceGroupRuntime) allExpressionsAreResolved() bool {
 // IsResourceReady checks if a resource is ready based on the readyWhenExpressions
 // defined in the resource. If no readyWhenExpressions are defined, the resource
 // is considered ready.
-func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string, error) {
+func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bool, string, error) {
 	observed, ok := rt.resolvedResources[resourceID]
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
@@ -500,7 +500,7 @@ func (rt *ResourceGroupRuntime) IsResourceReady(resourceID string) (bool, string
 
 // IgnoreResource ignores resource that has a conditions expressison that evaluated
 // to false or whose dependencies are ignored
-func (rt *ResourceGroupRuntime) IgnoreResource(resourceID string) {
+func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
 	rt.ignoredByConditionsResources[resourceID] = true
 }
 
@@ -510,7 +510,7 @@ func (rt *ResourceGroupRuntime) IgnoreResource(resourceID string) {
 // Naturally, if a resource is judged to be ignored, it will be marked as ignored
 // and all its dependencies will be ignored as well. Causing a chain reaction
 // of ignored resources.
-func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
+func (rt *ResourceGraphDefinitionRuntime) areDependenciesIgnored(resourceID string) bool {
 	for _, p := range rt.resources[resourceID].GetDependencies() {
 		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
 			return true
@@ -521,7 +521,7 @@ func (rt *ResourceGroupRuntime) areDependenciesIgnored(resourceID string) bool {
 
 // WantToCreateResource returns true if all the condition expressions return true
 // if not it will add itself to the ignored resources
-func (rt *ResourceGroupRuntime) WantToCreateResource(resourceID string) (bool, error) {
+func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string) (bool, error) {
 	if rt.areDependenciesIgnored(resourceID) {
 		return false, nil
 	}

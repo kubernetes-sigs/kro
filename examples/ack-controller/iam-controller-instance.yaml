@@ -2,12 +2,13 @@ apiVersion: kro.run/v1alpha1
 kind: IAMController
 metadata:
   name: my-kro-iam-controller
-  namespace: default
+  namespace: kro
 spec:
   name: ack-iam-controller
-  namespace: default
+  namespace: kro
   values: 
-    aws: {}
+    aws:
+      region: us-west-2
     deployment: {}
     image:
       resources:
@@ -18,4 +19,5 @@ spec:
       level: debug
     aws: {}
     serviceAccount:
-      roleArn: arn:aws:iam::399481058530:role/another-iam-controller
+      name: ack-iam-controller-sa
+      roleArn: ....

@@ -97,7 +97,7 @@ const (
 	// ResourceVariableKindDynamic represents a dynamic variable. Dynamic variables
 	// are resolved at runtime and their value can change during the execution. Dynamic
 	// cannot start with 'spec' and they must refer to another resource in the
-	// ResourceGroup.
+	// ResourceGraphDefinition.
 	//
 	// For example:
 	//    spec:

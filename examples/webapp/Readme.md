@@ -1,9 +1,9 @@
 # kro WebApp example
 
-This example creates a ResourceGroup called `WebApp` and then instaciates it with
+This example creates a ResourceGraphDefinition called `WebApp` and then instantiates it with
 the default nginx container image.
 
-### Create ResourceGroup called WebApp
+### Create ResourceGraphDefinition called WebApp
 
 Apply the RG to your cluster:
 
@@ -14,7 +14,7 @@ kubectl apply -f rg.yaml
 Validate the RG status is Active:
 
 ```
-kubectl get rg webapp.kro.run
+kubectl get rgd webapp.kro.run
 ```
 
 Expected result:
@@ -82,8 +82,8 @@ Remove the instance:
 kubectl delete webapps test-app
 ```
 
-Remove the resourcegroup:
+Remove the resourcegraphdefinition:
 
 ```
-kubectl delete rg webapp.kro.run
+kubectl delete rgd webapp.kro.run
 ```

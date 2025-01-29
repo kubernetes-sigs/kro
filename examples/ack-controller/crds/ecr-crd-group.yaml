@@ -1,0 +1,363 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: ecrcrds.kro.run
+  namespace: kro
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ECRCRDGroup
+    spec:
+      name: string | default=ecrCRDGroup
+  resources:
+  - id: repositoryCRD
+    template:
+      apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        annotations:
+          controller-gen.kubebuilder.io/version: v0.16.2
+        name: repositories.ecr.services.k8s.aws
+      spec:
+        group: ecr.services.k8s.aws
+        names:
+          kind: Repository
+          listKind: RepositoryList
+          plural: repositories
+          singular: repository
+        scope: Namespaced
+        versions:
+        - additionalPrinterColumns:
+          - jsonPath: .spec.registryID
+            name: REGISTRY-ID
+            type: string
+          - jsonPath: .spec.imageTagMutability
+            name: IMAGE-TAG-MUTABILITY
+            type: string
+          - jsonPath: .status.conditions[?(@.type=="ACK.ResourceSynced")].status
+            name: Synced
+            type: string
+          name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Repository is the Schema for the Repositories API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    RepositorySpec defines the desired state of Repository.
+
+                    An object representing a repository.
+                  properties:
+                    encryptionConfiguration:
+                      description: |-
+                        The encryption configuration for the repository. This determines how the
+                        contents of your repository are encrypted at rest.
+                      properties:
+                        encryptionType:
+                          type: string
+                        kmsKey:
+                          type: string
+                      type: object
+                    imageScanningConfiguration:
+                      description: |-
+                        The image scanning configuration for the repository. This determines whether
+                        images are scanned for known vulnerabilities after being pushed to the repository.
+                      properties:
+                        scanOnPush:
+                          type: boolean
+                      type: object
+                    imageTagMutability:
+                      description: |-
+                        The tag mutability setting for the repository. If this parameter is omitted,
+                        the default setting of MUTABLE will be used which will allow image tags to
+                        be overwritten. If IMMUTABLE is specified, all image tags within the repository
+                        will be immutable which will prevent them from being overwritten.
+                      type: string
+                    lifecyclePolicy:
+                      description: The JSON repository policy text to apply to the repository.
+                      type: string
+                    name:
+                      description: |-
+                        The name to use for the repository. The repository name may be specified
+                        on its own (such as nginx-web-app) or it can be prepended with a namespace
+                        to group the repository into a category (such as project-a/nginx-web-app).
+                      type: string
+                    policy:
+                      description: |-
+                        The JSON repository policy text to apply to the repository. For more information,
+                        see Amazon ECR repository policies (https://docs.aws.amazon.com/AmazonECR/latest/userguide/repository-policy-examples.html)
+                        in the Amazon Elastic Container Registry User Guide.
+                      type: string
+                    registryID:
+                      description: |-
+                        The Amazon Web Services account ID associated with the registry to create
+                        the repository. If you do not specify a registry, the default registry is
+                        assumed.
+                      type: string
+                    tags:
+                      description: |-
+                        The metadata that you apply to the repository to help you categorize and
+                        organize them. Each tag consists of a key and an optional value, both of
+                        which you define. Tag keys can have a maximum character length of 128 characters,
+                        and tag values can have a maximum length of 256 characters.
+                      items:
+                        description: |-
+                          The metadata to apply to a resource to help you categorize and organize them.
+                          Each tag consists of a key and a value, both of which you define. Tag keys
+                          can have a maximum character length of 128 characters, and tag values can
+                          have a maximum length of 256 characters.
+                        properties:
+                          key:
+                            type: string
+                          value:
+                            type: string
+                        type: object
+                      type: array
+                  required:
+                  - name
+                  type: object
+                status:
+                  description: RepositoryStatus defines the observed state of Repository
+                  properties:
+                    ackResourceMetadata:
+                      description: |-
+                        All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                        that is used to contain resource sync state, account ownership,
+                        constructed ARN for the resource
+                      properties:
+                        arn:
+                          description: |-
+                            ARN is the Amazon Resource Name for the resource. This is a
+                            globally-unique identifier and is set only by the ACK service controller
+                            once the controller has orchestrated the creation of the resource OR
+                            when it has verified that an "adopted" resource (a resource where the
+                            ARN annotation was set by the Kubernetes user on the CR) exists and
+                            matches the supplied CR's Spec field values.
+                            https://github.com/aws/aws-controllers-k8s/issues/270
+                          type: string
+                        ownerAccountID:
+                          description: |-
+                            OwnerAccountID is the AWS Account ID of the account that owns the
+                            backend AWS service API resource.
+                          type: string
+                        region:
+                          description: Region is the AWS region in which the resource exists
+                            or will exist.
+                          type: string
+                      required:
+                      - ownerAccountID
+                      - region
+                      type: object
+                    conditions:
+                      description: |-
+                        All CRS managed by ACK have a common `Status.Conditions` member that
+                        contains a collection of `ackv1alpha1.Condition` objects that describe
+                        the various terminal states of the CR and its backend AWS service API
+                        resource
+                      items:
+                        description: |-
+                          Condition is the common struct used by all CRDs managed by ACK service
+                          controllers to indicate terminal states  of the CR and its backend AWS
+                          service API resource
+                        properties:
+                          lastTransitionTime:
+                            description: Last time the condition transitioned from one status
+                              to another.
+                            format: date-time
+                            type: string
+                          message:
+                            description: A human readable message indicating details about
+                              the transition.
+                            type: string
+                          reason:
+                            description: The reason for the condition's last transition.
+                            type: string
+                          status:
+                            description: Status of the condition, one of True, False, Unknown.
+                            type: string
+                          type:
+                            description: Type is the type of the Condition
+                            type: string
+                        required:
+                        - status
+                        - type
+                        type: object
+                      type: array
+                    createdAt:
+                      description: The date and time, in JavaScript date format, when the
+                        repository was created.
+                      format: date-time
+                      type: string
+                    repositoryURI:
+                      description: |-
+                        The URI for the repository. You can use this URI for container image push
+                        and pull operations.
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  - id: pullThroughCacheRuleCRD
+    template:
+      apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        annotations:
+          controller-gen.kubebuilder.io/version: v0.16.2
+        name: pullthroughcacherules.ecr.services.k8s.aws
+      spec:
+        group: ecr.services.k8s.aws
+        names:
+          kind: PullThroughCacheRule
+          listKind: PullThroughCacheRuleList
+          plural: pullthroughcacherules
+          singular: pullthroughcacherule
+        scope: Namespaced
+        versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: PullThroughCacheRule is the Schema for the PullThroughCacheRules
+                API
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: |-
+                    PullThroughCacheRuleSpec defines the desired state of PullThroughCacheRule.
+
+                    The details of a pull through cache rule.
+                  properties:
+                    ecrRepositoryPrefix:
+                      description: The repository name prefix to use when caching images
+                        from the source registry.
+                      type: string
+                    registryID:
+                      description: |-
+                        The Amazon Web Services account ID associated with the registry to create
+                        the pull through cache rule for. If you do not specify a registry, the default
+                        registry is assumed.
+                      type: string
+                    upstreamRegistryURL:
+                      description: |-
+                        The registry URL of the upstream public registry to use as the source for
+                        the pull through cache rule.
+                      type: string
+                  required:
+                  - ecrRepositoryPrefix
+                  - upstreamRegistryURL
+                  type: object
+                status:
+                  description: PullThroughCacheRuleStatus defines the observed state of
+                    PullThroughCacheRule
+                  properties:
+                    ackResourceMetadata:
+                      description: |-
+                        All CRs managed by ACK have a common `Status.ACKResourceMetadata` member
+                        that is used to contain resource sync state, account ownership,
+                        constructed ARN for the resource
+                      properties:
+                        arn:
+                          description: |-
+                            ARN is the Amazon Resource Name for the resource. This is a
+                            globally-unique identifier and is set only by the ACK service controller
+                            once the controller has orchestrated the creation of the resource OR
+                            when it has verified that an "adopted" resource (a resource where the
+                            ARN annotation was set by the Kubernetes user on the CR) exists and
+                            matches the supplied CR's Spec field values.
+                            https://github.com/aws/aws-controllers-k8s/issues/270
+                          type: string
+                        ownerAccountID:
+                          description: |-
+                            OwnerAccountID is the AWS Account ID of the account that owns the
+                            backend AWS service API resource.
+                          type: string
+                        region:
+                          description: Region is the AWS region in which the resource exists
+                            or will exist.
+                          type: string
+                      required:
+                      - ownerAccountID
+                      - region
+                      type: object
+                    conditions:
+                      description: |-
+                        All CRS managed by ACK have a common `Status.Conditions` member that
+                        contains a collection of `ackv1alpha1.Condition` objects that describe
+                        the various terminal states of the CR and its backend AWS service API
+                        resource
+                      items:
+                        description: |-
+                          Condition is the common struct used by all CRDs managed by ACK service
+                          controllers to indicate terminal states  of the CR and its backend AWS
+                          service API resource
+                        properties:
+                          lastTransitionTime:
+                            description: Last time the condition transitioned from one status
+                              to another.
+                            format: date-time
+                            type: string
+                          message:
+                            description: A human readable message indicating details about
+                              the transition.
+                            type: string
+                          reason:
+                            description: The reason for the condition's last transition.
+                            type: string
+                          status:
+                            description: Status of the condition, one of True, False, Unknown.
+                            type: string
+                          type:
+                            description: Type is the type of the Condition
+                            type: string
+                        required:
+                        - status
+                        - type
+                        type: object
+                      type: array
+                    createdAt:
+                      description: |-
+                        The date and time, in JavaScript date format, when the pull through cache
+                        rule was created.
+                      format: date-time
+                      type: string
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}

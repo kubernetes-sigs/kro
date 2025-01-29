@@ -26,14 +26,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/awslabs/kro/pkg/metadata"
-	"github.com/awslabs/kro/pkg/requeue"
-	"github.com/awslabs/kro/pkg/runtime"
+	"github.com/kro-run/kro/pkg/controller/instance/delta"
+	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/pkg/requeue"
+	"github.com/kro-run/kro/pkg/runtime"
 )
 
 // instanceGraphReconciler is responsible for reconciling a single instance and
 // and its associated sub-resources. It executes the reconciliation logic based
-// on the graph inferred from the ResourceGroup analysis.
+// on the graph inferred from the ResourceGraphDefinition analysis.
 type instanceGraphReconciler struct {
 	log logr.Logger
 	// gvr represents the Group, Version, and Resource of the custom resource
@@ -41,7 +42,7 @@ type instanceGraphReconciler struct {
 	gvr schema.GroupVersionResource
 	// client is a dynamic client for interacting with the Kubernetes API server
 	client dynamic.Interface
-	// runtime is the runtime representation of the ResourceGroup. It holds the
+	// runtime is the runtime representation of the ResourceGraphDefinition. It holds the
 	// information about the instance and its sub-resources, the CEL expressions
 	// their dependencies, and the resolved values... etc
 	runtime runtime.Interface
@@ -269,23 +270,54 @@ func filterUserLabels(labels map[string]interface{}) map[string]string {
 	return userLabels
 }
 
-// updateResource handles updates to an existing resource.
-// Currently performs basic state management, but could be extended to include
-// more sophisticated update logic and diffing.
+// updateResource handles updates to an existing resource, comparing the desired
+// and observed states and applying the necessary changes.
 func (igr *instanceGraphReconciler) updateResource(
-	_ context.Context,
-	_ dynamic.ResourceInterface,
-	_, _ *unstructured.Unstructured,
+	ctx context.Context,
+	rc dynamic.ResourceInterface,
+	desired, observed *unstructured.Unstructured,
 	resourceID string,
 	resourceState *ResourceState,
 ) error {
-	igr.log.V(1).Info("Processing potential resource update", "resourceID", resourceID)
+	igr.log.V(1).Info("Processing resource update", "resourceID", resourceID)
 
-	// TODO: Implement resource diffing logic
-	// TODO: Add update strategy options (e.g., server-side apply)
+	// Compare desired and observed states
+	differences, err := delta.Compare(desired, observed)
+	if err != nil {
+		resourceState.State = "ERROR"
+		resourceState.Err = fmt.Errorf("failed to compare desired and observed states: %w", err)
+		return resourceState.Err
+	}
 
-	resourceState.State = "SYNCED"
-	return nil
+	// If no differences are found, the resource is in sync.
+	if len(differences) == 0 {
+		resourceState.State = "SYNCED"
+		igr.log.V(1).Info("No deltas found for resource", "resourceID", resourceID)
+		return nil
+	}
+
+	// Proceed with the update, note that we don't need to handle each difference
+	// individually. We can apply all changes at once.
+	//
+	// NOTE(a-hilaly): are there any cases where we need to handle each difference individually?
+	igr.log.V(1).Info("Found deltas for resource",
+		"resourceID", resourceID,
+		"delta", differences,
+	)
+	igr.instanceSubResourcesLabeler.ApplyLabels(desired)
+
+	// Apply changes to the resource
+	desired.SetResourceVersion(observed.GetResourceVersion())
+	_, err = rc.Update(ctx, desired, metav1.UpdateOptions{})
+	if err != nil {
+		resourceState.State = "ERROR"
+		resourceState.Err = fmt.Errorf("failed to update resource: %w", err)
+		return resourceState.Err
+	}
+
+	// Set state to UPDATING and requeue to check the update
+	resourceState.State = "UPDATING"
+	return igr.delayedRequeue(fmt.Errorf("resource update in progress"))
 }
 
 // handleInstanceDeletion manages the deletion of an instance and its resources

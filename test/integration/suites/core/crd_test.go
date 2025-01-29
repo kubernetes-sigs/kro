@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("CRD", func() {
@@ -47,9 +47,9 @@ var _ = Describe("CRD", func() {
 	})
 
 	Context("CRD Creation", func() {
-		It("should create CRD when ResourceGroup is created", func() {
-			// Create a simple ResourceGroup
-			rg := generator.NewResourceGroup("test-crd",
+		It("should create CRD when ResourceGraphDefinition is created", func() {
+			// Create a simple ResourceGraphDefinition
+			rg := generator.NewResourceGraphDefinition("test-crd",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestResource", "v1alpha1",
@@ -97,9 +97,9 @@ var _ = Describe("CRD", func() {
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
-		It("should update CRD when ResourceGroup is updated", func() {
-			// Create initial ResourceGroup
-			rg := generator.NewResourceGroup("test-crd-update",
+		It("should update CRD when ResourceGraphDefinition is updated", func() {
+			// Create initial ResourceGraphDefinition
+			rg := generator.NewResourceGraphDefinition("test-crd-update",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestUpdate", "v1alpha1",
@@ -120,7 +120,7 @@ var _ = Describe("CRD", func() {
 				}, crd)
 			}, 10*time.Second, time.Second).Should(Succeed())
 
-			// Update ResourceGroup with new fields
+			// Update ResourceGraphDefinition with new fields
 			Eventually(func(g Gomega) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name:      rg.Name,
@@ -151,9 +151,9 @@ var _ = Describe("CRD", func() {
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 
-		It("should delete CRD when ResourceGroup is deleted", func() {
-			// Create ResourceGroup
-			rg := generator.NewResourceGroup("test-crd-delete",
+		It("should delete CRD when ResourceGraphDefinition is deleted", func() {
+			// Create ResourceGraphDefinition
+			rg := generator.NewResourceGraphDefinition("test-crd-delete",
 				generator.WithNamespace(namespace),
 				generator.WithSchema(
 					"TestDelete", "v1alpha1",
@@ -172,7 +172,7 @@ var _ = Describe("CRD", func() {
 					&apiextensionsv1.CustomResourceDefinition{})
 			}, 10*time.Second, time.Second).Should(Succeed())
 
-			// Delete ResourceGroup
+			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rg)).To(Succeed())
 
 			// Verify CRD is deleted

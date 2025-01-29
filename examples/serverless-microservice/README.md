@@ -70,7 +70,7 @@ implement anything more complicated than simple CRUD operations.
 Check out `./src/install.sh` script for the commands used to install necessary
 ACK controllers .
 
-### Deploy ResourceGroup
+### Deploy ResourceGraphDefinition
 
 Make sure you are in the following directory:
 
@@ -82,10 +82,10 @@ cd examples/serverless-microservice/
 kubectl apply -f microservice.yaml
 ```
 
-Verify the ResourceGroups
+Verify the ResourceGraphDefinitions
 
 ```shell
-kubectl get ResourceGroup
+kubectl get ResourceGraphDefinition
 ```
 
 Expected output
@@ -184,7 +184,7 @@ test-microservice   12m
 Get a list of the resource groups
 
 ```
-kubectl get ResourceGroup
+kubectl get ResourceGraphDefinition
 ```
 
 Expected result
@@ -197,7 +197,7 @@ microservice.kro.run   35m
 Describe your resource group, look for errors and events:
 
 ```
-kubectl describe resourcegroup.kro.run/microservice.kro.run
+kubectl describe resourcegraphdefinition.kro.run/microservice.kro.run
 ```
 
 Expected result (resource definitions removed for brevity)
@@ -208,7 +208,7 @@ Namespace:    default
 Labels:       <none>
 Annotations:  <none>
 API Version:  kro.run/v1alpha1
-Kind:         ResourceGroup
+Kind:         ResourceGraphDefinition
 Metadata:
   Creation Timestamp:  2024-07-11T15:34:53Z
   Finalizers:
@@ -337,7 +337,7 @@ kubectl delete -f claim.yaml
 
 Delete the S3 bucket you've created and the Lambda ZIP packages in it
 
-Delete the ResourceGroups
+Delete the ResourceGraphDefinitions
 
 ```shell
 kubectl delete -f microservice.yaml

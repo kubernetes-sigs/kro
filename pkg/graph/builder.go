@@ -28,17 +28,17 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
-	"github.com/awslabs/kro/api/v1alpha1"
-	krocel "github.com/awslabs/kro/pkg/cel"
-	"github.com/awslabs/kro/pkg/cel/ast"
-	"github.com/awslabs/kro/pkg/graph/crd"
-	"github.com/awslabs/kro/pkg/graph/dag"
-	"github.com/awslabs/kro/pkg/graph/emulator"
-	"github.com/awslabs/kro/pkg/graph/parser"
-	"github.com/awslabs/kro/pkg/graph/schema"
-	"github.com/awslabs/kro/pkg/graph/variable"
-	"github.com/awslabs/kro/pkg/metadata"
-	"github.com/awslabs/kro/pkg/simpleschema"
+	"github.com/kro-run/kro/api/v1alpha1"
+	krocel "github.com/kro-run/kro/pkg/cel"
+	"github.com/kro-run/kro/pkg/cel/ast"
+	"github.com/kro-run/kro/pkg/graph/crd"
+	"github.com/kro-run/kro/pkg/graph/dag"
+	"github.com/kro-run/kro/pkg/graph/emulator"
+	"github.com/kro-run/kro/pkg/graph/parser"
+	"github.com/kro-run/kro/pkg/graph/schema"
+	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/pkg/simpleschema"
 )
 
 // NewBuilder creates a new GraphBuilder instance.
@@ -78,7 +78,7 @@ func NewBuilder(
 //
 // If any of the above steps fail, the Builder will return an error.
 //
-// The resulting ResourceGroup object is a fulyl processed and validated
+// The resulting ResourceGraphDefinition object is a fulyl processed and validated
 // representation of a resource group CR, it's underlying resources, and the
 // relationships between the resources. This object can be used to instantiate
 // a "runtime" data structure that can be used to create the resources in the
@@ -96,11 +96,11 @@ type Builder struct {
 	discoveryClient  discovery.DiscoveryInterface
 }
 
-// NewResourceGroup creates a new ResourceGroup object from the given ResourceGroup
-// CRD. The ResourceGroup object is a fully processed and validated representation
+// NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
+// CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource group CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, error) {
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition) (*Graph, error) {
 	// Before anything else, let's copy the resource group to avoid modifying the
 	// original object.
 	rg := originalCR.DeepCopy()
@@ -112,9 +112,9 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 	//    that the names of the resources are valid to be used in CEL expressions.
 	//    for example name-something-something is not a valid name for a resource,
 	//    because in CEL - is a subtraction operator.
-	err := validateResourceGroupNamingConventions(rg)
+	err := validateResourceGraphDefinitionNamingConventions(rg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate resourcegroup: %w", err)
+		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
 	// Now that we did a basic validation of the resource group, we can start understanding
@@ -199,7 +199,7 @@ func (b *Builder) NewResourceGroup(originalCR *v1alpha1.ResourceGroup) (*Graph, 
 		resources,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build resourcegroup '%v': %w", rg.Name, err)
+		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rg.Name, err)
 	}
 
 	// Before getting into the dependency graph, we need to validate the CEL expressions
@@ -429,7 +429,7 @@ func (b *Builder) buildInstanceResource(
 	// CRD declarations.
 
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
-	gvk := metadata.GetResourceGroupInstanceGVK(group, apiVersion, kind)
+	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
 	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.

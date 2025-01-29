@@ -29,31 +29,31 @@ func NewInstanceSelector(instance metav1.Object) metav1.LabelSelector {
 	}
 }
 
-func NewResourceGroupSelector(resourceGroup metav1.Object) metav1.LabelSelector {
+func NewResourceGraphDefinitionSelector(resourceGroup metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			ResourceGroupIDLabel: string(resourceGroup.GetUID()),
-			// ResourceGroupNameLabel:      resourceGroup.GetName(),
-			// ResourceGroupNamespaceLabel: resourceGroup.GetNamespace(),
+			ResourceGraphDefinitionIDLabel: string(resourceGroup.GetUID()),
+			// ResourceGraphDefinitionNameLabel:      resourceGroup.GetName(),
+			// ResourceGraphDefinitionNamespaceLabel: resourceGroup.GetNamespace(),
 		},
 	}
 }
 
-func NewInstanceAndResourceGroupSelector(instance metav1.Object, resourceGroup metav1.Object) metav1.LabelSelector {
+func NewInstanceAndResourceGraphDefinitionSelector(instance metav1.Object, resourceGroup metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			InstanceIDLabel:      string(instance.GetUID()),
-			ResourceGroupIDLabel: string(resourceGroup.GetUID()),
+			InstanceIDLabel:                string(instance.GetUID()),
+			ResourceGraphDefinitionIDLabel: string(resourceGroup.GetUID()),
 		},
 	}
 }
 
-func NewNodeAndInstanceAndResourceGroupSelector(node metav1.Object, instance metav1.Object, resourceGroup metav1.Object) metav1.LabelSelector {
+func NewNodeAndInstanceAndResourceGraphDefinitionSelector(node metav1.Object, instance metav1.Object, resourceGroup metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			NodeIDLabel:          node.GetName(),
-			InstanceIDLabel:      string(instance.GetUID()),
-			ResourceGroupIDLabel: string(resourceGroup.GetUID()),
+			NodeIDLabel:                    node.GetName(),
+			InstanceIDLabel:                string(instance.GetUID()),
+			ResourceGraphDefinitionIDLabel: string(resourceGroup.GetUID()),
 		},
 	}
 }

@@ -20,7 +20,7 @@ import (
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/awslabs/kro/api/v1alpha1"
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 const (
@@ -58,7 +58,7 @@ func ExtractGVKFromUnstructured(unstructured map[string]interface{}) (schema.Gro
 	}, nil
 }
 
-func GetResourceGroupInstanceGVK(group, apiVersion, kind string) schema.GroupVersionKind {
+func GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind string) schema.GroupVersionKind {
 	//pluralKind := flect.Pluralize(strings.ToLower(kind))
 
 	return schema.GroupVersionKind{
@@ -68,7 +68,7 @@ func GetResourceGroupInstanceGVK(group, apiVersion, kind string) schema.GroupVer
 	}
 }
 
-func GetResourceGroupInstanceGVR(group, apiVersion, kind string) schema.GroupVersionResource {
+func GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind string) schema.GroupVersionResource {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return schema.GroupVersionResource{
 		Group:    fmt.Sprintf("%s.%s", pluralKind, group),

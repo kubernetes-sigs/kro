@@ -23,8 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	krocel "github.com/awslabs/kro/pkg/cel"
-	"github.com/awslabs/kro/pkg/graph/variable"
+	krocel "github.com/kro-run/kro/pkg/cel"
+	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
 func Test_RuntimeWorkflow(t *testing.T) {
@@ -212,9 +212,9 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	}
 
 	// 2. Create runtime
-	rt, err := NewResourceGroupRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"})
 	if err != nil {
-		t.Fatalf("NewResourceGroupRuntime() error = %v", err)
+		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
 
 	// 3. First sync - should resolve static variables
@@ -356,7 +356,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	}
 }
 
-func Test_NewResourceGroupRuntime(t *testing.T) {
+func Test_NewResourceGraphDefinitionRuntime(t *testing.T) {
 	// Setup a test instance with a spec
 	instance := newTestResource(
 		withObject(map[string]interface{}{
@@ -439,9 +439,9 @@ func Test_NewResourceGroupRuntime(t *testing.T) {
 		"service":    service,
 	}
 
-	rt, err := NewResourceGroupRuntime(instance, resources, []string{"deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"})
 	if err != nil {
-		t.Fatalf("NewResourceGroupRuntime() error = %v", err)
+		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
 
 	// Test 1: Check expressionsCache initialization
@@ -610,7 +610,7 @@ func Test_GetResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:         tt.resources,
 				resolvedResources: tt.resolvedResources,
 				runtimeVariables:  tt.runtimeVariables,
@@ -772,7 +772,7 @@ func Test_Synchronize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				instance:          tt.instance,
 				resources:         tt.resources,
 				resolvedResources: tt.resolvedResources,
@@ -1002,7 +1002,7 @@ func Test_propagateResourceVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:        tt.resources,
 				runtimeVariables: tt.runtimeVariables,
 				expressionsCache: tt.expressionsCache,
@@ -1206,7 +1206,7 @@ func Test_canProcessResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:        tt.resources,
 				runtimeVariables: tt.runtimeVariables,
 			}
@@ -1336,7 +1336,7 @@ func Test_resourceVariablesResolved(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				runtimeVariables: tt.runtimeVariables,
 			}
 
@@ -1436,7 +1436,7 @@ func Test_evaluateStaticVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				instance:         tt.instance,
 				expressionsCache: tt.expressionsCache,
 			}
@@ -1689,7 +1689,7 @@ func Test_evaluateDynamicVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				instance: newTestResource(
 					withObject(map[string]interface{}{}),
 				),
@@ -1908,7 +1908,7 @@ func Test_evaluateInstanceStatuses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				instance:         tt.instance,
 				expressionsCache: tt.expCache,
 			}
@@ -2076,7 +2076,7 @@ func Test_evaluateResourceExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:        map[string]Resource{"test": tt.resource},
 				expressionsCache: tt.expressions,
 			}
@@ -2154,7 +2154,7 @@ func Test_allExpressionsAreResolved(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				expressionsCache: tt.expressions,
 			}
 
@@ -2257,7 +2257,7 @@ func Test_IsResourceReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:         map[string]Resource{"test": tt.resource},
 				resolvedResources: map[string]*unstructured.Unstructured{},
 			}
@@ -2356,7 +2356,7 @@ func Test_WantToCreateResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				ignoredByConditionsResources: tt.ignoredDeps,
 				instance: newTestResource(
 					withObject(map[string]interface{}{
@@ -2452,7 +2452,7 @@ func Test_areDependenciesIgnored(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := &ResourceGroupRuntime{
+			rt := &ResourceGraphDefinitionRuntime{
 				resources:                    map[string]Resource{"test": tt.resource},
 				ignoredByConditionsResources: tt.ignoredDeps,
 			}

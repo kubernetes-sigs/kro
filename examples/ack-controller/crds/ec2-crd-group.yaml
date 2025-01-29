@@ -1,7 +1,8 @@
 apiVersion: kro.run/v1alpha1
-kind: ResourceGroup
+kind: ResourceGraphDefinition
 metadata:
   name: ec2crdgroup.kro.run
+  namespace: kro
 spec:
   schema:
     apiVersion: v1alpha1
@@ -754,7 +755,7 @@ spec:
                           properties:
                             capacityReservationID:
                               type: string
-                            capacityReservationResourceGroupARN:
+                            capacityReservationResourceGraphDefinitionARN:
                               type: string
                           type: object
                       type: object
@@ -1147,7 +1148,7 @@ spec:
                           type: string
                         hostID:
                           type: string
-                        hostResourceGroupARN:
+                        hostResourceGraphDefinitionARN:
                           type: string
                         partitionNumber:
                           format: int64

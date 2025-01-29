@@ -24,15 +24,15 @@ const (
 	DefaultServiceAccountKey = "*"
 )
 
-// ResourceGroupSpec defines the desired state of ResourceGroup
-type ResourceGroupSpec struct {
-	// The schema of the resourcegroup, which includes the
+// ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
+type ResourceGraphDefinitionSpec struct {
+	// The schema of the resourcegraphdefinition, which includes the
 	// apiVersion, kind, spec, status, types, and some validation
 	// rules.
 	//
 	// +kubebuilder:validation:Required
 	Schema *Schema `json:"schema,omitempty"`
-	// The resources that are part of the resourcegroup.
+	// The resources that are part of the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
@@ -46,36 +46,36 @@ type ResourceGroupSpec struct {
 }
 
 // Schema represents the attributes that define an instance of
-// a resourcegroup.
+// a resourcegraphdefinition.
 type Schema struct {
-	// The kind of the resourcegroup. This is used to generate
-	// and create the CRD for the resourcegroup.
+	// The kind of the resourcegraphdefinition. This is used to generate
+	// and create the CRD for the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
-	// The APIVersion of the resourcegroup. This is used to generate
-	// and create the CRD for the resourcegroup.
+	// The APIVersion of the resourcegraphdefinition. This is used to generate
+	// and create the CRD for the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
-	// The group of the resourcegroup. This is used to set the API group
+	// The group of the resourcegraphdefinition. This is used to set the API group
 	// of the generated CRD. If omitted, it defaults to "kro.run".
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="kro.run"
 	Group string `json:"group,omitempty"`
-	// The spec of the resourcegroup. Typically, this is the spec of
-	// the CRD that the resourcegroup is managing. This is adhering
+	// The spec of the resourcegraphdefinition. Typically, this is the spec of
+	// the CRD that the resourcegraphdefinition is managing. This is adhering
 	// to the SimpleSchema spec
 	Spec runtime.RawExtension `json:"spec,omitempty"`
-	// The status of the resourcegroup. This is the status of the CRD
-	// that the resourcegroup is managing. This is adhering to the
+	// The status of the resourcegraphdefinition. This is the status of the CRD
+	// that the resourcegraphdefinition is managing. This is adhering to the
 	// SimpleSchema spec.
 	Status runtime.RawExtension `json:"status,omitempty"`
 	// Validation is a list of validation rules that are applied to the
-	// resourcegroup.
+	// resourcegraphdefinition.
 	// Not implemented yet.
 	Validation []string `json:"validation,omitempty"`
 }
@@ -96,11 +96,21 @@ type Resource struct {
 	IncludeWhen []string `json:"includeWhen,omitempty"`
 }
 
-// ResourceGroupStatus defines the observed state of ResourceGroup
-type ResourceGroupStatus struct {
-	// State is the state of the resourcegroup
-	State ResourceGroupState `json:"state,omitempty"`
-	// TopologicalOrder is the topological order of the resourcegroup graph
+// ResourceGraphDefinitionState defines the state of the resource group.
+type ResourceGraphDefinitionState string
+
+const (
+	// ResourceGraphDefinitionStateActive represents the active state of the resource group.
+	ResourceGraphDefinitionStateActive ResourceGraphDefinitionState = "Active"
+	// ResourceGraphDefinitionStateInactive represents the inactive state of the resource group
+	ResourceGraphDefinitionStateInactive ResourceGraphDefinitionState = "Inactive"
+)
+
+// ResourceGraphDefinitionStatus defines the observed state of ResourceGraphDefinition
+type ResourceGraphDefinitionStatus struct {
+	// State is the state of the resourcegraphdefinition
+	State ResourceGraphDefinitionState `json:"state,omitempty"`
+	// TopologicalOrder is the topological order of the resourcegraphdefinition graph
 	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of an object's state
 	Conditions []Condition `json:"conditions,omitempty"`
@@ -109,7 +119,7 @@ type ResourceGroupStatus struct {
 }
 
 // ResourceInformation defines the information about a resource
-// in the resourcegroup
+// in the resourcegraphdefinition
 type ResourceInformation struct {
 	// ID represents the id of the resources we're providing information for
 	ID string `json:"id,omitempty"`
@@ -131,26 +141,26 @@ type Dependency struct {
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:resource:shortName=rg
+// +kubebuilder:resource:shortName=rgd
 
-// ResourceGroup is the Schema for the resourcegroups API
-type ResourceGroup struct {
+// ResourceGraphDefinition is the Schema for the resourcegraphdefinitions API
+type ResourceGraphDefinition struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ResourceGroupSpec   `json:"spec,omitempty"`
-	Status ResourceGroupStatus `json:"status,omitempty"`
+	Spec   ResourceGraphDefinitionSpec   `json:"spec,omitempty"`
+	Status ResourceGraphDefinitionStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 
-// ResourceGroupList contains a list of ResourceGroup
-type ResourceGroupList struct {
+// ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
+type ResourceGraphDefinitionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ResourceGroup `json:"items"`
+	Items           []ResourceGraphDefinition `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&ResourceGroup{}, &ResourceGroupList{})
+	SchemeBuilder.Register(&ResourceGraphDefinition{}, &ResourceGraphDefinitionList{})
 }

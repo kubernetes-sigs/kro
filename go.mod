@@ -1,4 +1,4 @@
-module github.com/awslabs/kro
+module github.com/kro-run/kro
 
 go 1.22.0
 

@@ -28,7 +28,7 @@ Install kro in the cluster created in the previous step following [instructions]
 
 ## Create instance
 
-Create kro ResourceGroup for the data processor:
+Create kro ResourceGraphDefinition for the data processor:
 ```shell
 kubectl apply -f eda-eks-data-processor.yaml
 ```

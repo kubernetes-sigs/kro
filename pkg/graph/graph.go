@@ -16,11 +16,11 @@ package graph
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/awslabs/kro/pkg/graph/dag"
-	"github.com/awslabs/kro/pkg/runtime"
+	"github.com/kro-run/kro/pkg/graph/dag"
+	"github.com/kro-run/kro/pkg/runtime"
 )
 
-// Graph represents a processed resourcegroup. It contains the DAG representation
+// Graph represents a processed resourcegraphdefinition. It contains the DAG representation
 // and everything needed to "manage" the resources defined in the resource group.
 type Graph struct {
 	// DAG is the directed acyclic graph representation of the resource group.
@@ -34,17 +34,17 @@ type Graph struct {
 }
 
 // NewGraphRuntime creates a new runtime resource group from the resource group instance.
-func (rg *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runtime.ResourceGroupRuntime, error) {
+func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runtime.ResourceGraphDefinitionRuntime, error) {
 	// we need to copy the resources to the runtime resources, mainly focusing
 	// on the variables and dependencies.
 	resources := make(map[string]runtime.Resource)
-	for name, resource := range rg.Resources {
+	for name, resource := range rgd.Resources {
 		resources[name] = resource.DeepCopy()
 	}
 
-	instance := rg.Instance.DeepCopy()
+	instance := rgd.Instance.DeepCopy()
 	instance.originalObject = newInstance
-	rt, err := runtime.NewResourceGroupRuntime(instance, resources, rg.TopologicalOrder)
+	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder)
 	if err != nil {
 		return nil, err
 	}

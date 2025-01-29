@@ -21,8 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	rgschema "github.com/awslabs/kro/pkg/graph/schema"
-	"github.com/awslabs/kro/pkg/graph/variable"
+	rgschema "github.com/kro-run/kro/pkg/graph/schema"
+	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
 // Resource represents a resource in a resource group, it hholds

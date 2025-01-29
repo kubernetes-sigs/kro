@@ -13,7 +13,7 @@
 
 package runtime
 
-import "github.com/awslabs/kro/pkg/graph/variable"
+import "github.com/kro-run/kro/pkg/graph/variable"
 
 // ResourceState represents the current state of a resource in the runtime.
 // It indicates the resource's readiness for processing or what it's waiting on.

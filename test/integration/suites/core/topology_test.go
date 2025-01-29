@@ -25,8 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Topology", func() {
@@ -47,7 +47,7 @@ var _ = Describe("Topology", func() {
 	})
 
 	It("should correctly order AWS resources in dependency graph", func() {
-		rg := generator.NewResourceGroup("test-topology",
+		rg := generator.NewResourceGraphDefinition("test-topology",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestTopology", "v1alpha1",
@@ -139,7 +139,7 @@ var _ = Describe("Topology", func() {
 
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup topology
+		// Verify ResourceGraphDefinition topology
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -150,7 +150,7 @@ var _ = Describe("Topology", func() {
 			// Verify graph is verified
 			var graphCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 					graphCondition = &cond
 					break
 				}
@@ -171,7 +171,7 @@ var _ = Describe("Topology", func() {
 	})
 
 	It("should detect cyclic dependencies in AWS resource definitions", func() {
-		rg := generator.NewResourceGroup("test-topology-cyclic",
+		rg := generator.NewResourceGraphDefinition("test-topology-cyclic",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestTopologyCyclic", "v1alpha1",
@@ -216,7 +216,7 @@ var _ = Describe("Topology", func() {
 
 			var graphCondition *krov1alpha1.Condition
 			for _, cond := range rg.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGroupConditionTypeGraphVerified {
+				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 					graphCondition = &cond
 					break
 				}
@@ -224,7 +224,7 @@ var _ = Describe("Topology", func() {
 			g.Expect(graphCondition).ToNot(BeNil())
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*graphCondition.Reason).To(ContainSubstring("This would create a cycle"))
-			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGroupStateInactive))
+			g.Expect(rg.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

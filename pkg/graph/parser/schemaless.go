@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/awslabs/kro/pkg/graph/variable"
+	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful

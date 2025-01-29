@@ -29,8 +29,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krov1alpha1 "github.com/awslabs/kro/api/v1alpha1"
-	"github.com/awslabs/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Readiness", func() {
@@ -53,7 +53,7 @@ var _ = Describe("Readiness", func() {
 
 	It(`should wait for deployment to have deployment.spec.replicas 
 		== deployment.status.availableReplicas before creating service`, func() {
-		rg := generator.NewResourceGroup("test-readiness",
+		rg := generator.NewResourceGraphDefinition("test-readiness",
 			generator.WithNamespace(namespace),
 			generator.WithSchema(
 				"TestReadiness", "v1alpha1",
@@ -136,11 +136,11 @@ var _ = Describe("Readiness", func() {
 			}, nil, nil),
 		)
 
-		// Create ResourceGroup
+		// Create ResourceGraphDefinition
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup is created and becomes ready
-		createdRG := &krov1alpha1.ResourceGroup{}
+		// Verify ResourceGraphDefinition is created and becomes ready
+		createdRG := &krov1alpha1.ResourceGraphDefinition{}
 		Eventually(func(g Gomega) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
@@ -148,7 +148,7 @@ var _ = Describe("Readiness", func() {
 			}, createdRG)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			// Verify the ResourceGroup fields
+			// Verify the ResourceGraphDefinition fields
 			g.Expect(createdRG.Spec.Schema.Kind).To(Equal("TestReadiness"))
 			g.Expect(createdRG.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRG.Spec.Resources).To(HaveLen(2))
@@ -158,19 +158,23 @@ var _ = Describe("Readiness", func() {
 				"service",
 			}))
 
-			// Verify the ResourceGroup status
+			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRG.Status.TopologicalOrder).To(HaveLen(2))
 			// Verify conditions
 			g.Expect(createdRG.Status.Conditions).To(HaveLen(3))
-			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeReconcilerReady))
+			g.Expect(createdRG.Status.Conditions[0].Type).To(Equal(
+				krov1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady,
+			))
 			g.Expect(createdRG.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(krov1alpha1.ResourceGroupConditionTypeGraphVerified))
+			g.Expect(createdRG.Status.Conditions[1].Type).To(Equal(
+				krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified,
+			))
 			g.Expect(createdRG.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(createdRG.Status.Conditions[2].Type).To(
-				Equal(krov1alpha1.ResourceGroupConditionTypeCustomResourceDefinitionSynced),
+				Equal(krov1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced),
 			)
 			g.Expect(createdRG.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGroupStateActive))
+			g.Expect(createdRG.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
 		}, 10*time.Second, time.Second).Should(Succeed())
 
@@ -276,15 +280,15 @@ var _ = Describe("Readiness", func() {
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 
-		// Delete ResourceGroup
+		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rg)).To(Succeed())
 
-		// Verify ResourceGroup is deleted
+		// Verify ResourceGraphDefinition is deleted
 		Eventually(func() bool {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rg.Name,
 				Namespace: namespace,
-			}, &krov1alpha1.ResourceGroup{})
+			}, &krov1alpha1.ResourceGraphDefinition{})
 			return errors.IsNotFound(err)
 		}, 20*time.Second, time.Second).Should(BeTrue())
 	})

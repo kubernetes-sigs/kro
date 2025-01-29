@@ -49,7 +49,7 @@ controllers installation) will be automated via the GitOps flow.
    first (surrounded with`<>`):
 
 ```sh
-export KRO_REPO_URL="https://github.com/awslabs/kro.git"
+export KRO_REPO_URL="https://github.com/kro-run/kro.git"
 export WORKSPACE_PATH=<workspace-path> #the directory where repos will be cloned e.g. ~/environment
 export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
 export AWS_REGION=<region> #e.g. us-west-2

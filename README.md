@@ -2,7 +2,7 @@
 
 This project aims to simplify the creation and management of complex custom resources for Kubernetes.
 
-Kube Resource Orchestrator (**kro**) helps you to define complex multi-resource constructs as reusable components in your applications and systems. It does this by providing a Kubernetes-native, cloud agnostic way to define groupings of Kubernetes resources. 
+Kube Resource Orchestrator (**kro**) helps you to define complex multi-resource constructs as reusable components in your applications and systems. It does this by providing a Kubernetes-native, vendor agnostic way to define groupings of Kubernetes resources. 
 
 kro's fundamental custom resource is the *ResourceGraphDefinition*. A ResourceGraphDefinition defines collections of underlying Kubernetes resources. It can define any Kubernetes resources, either native or custom, and can specify the dependencies between them. This lets you define complex custom resources, and include default configurations for their use.
 

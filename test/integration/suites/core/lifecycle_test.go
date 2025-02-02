@@ -136,6 +136,22 @@ var _ = Describe("Update", func() {
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(80)))
 		}, 20*time.Second, time.Second).Should(Succeed())
 
+		fakeFinalizers := []string{"non-kro-finalizer/finalizer"}
+		fakeOwnerReferences := []metav1.OwnerReference{
+			{
+				APIVersion: "something.com/v1alpha1",
+				Kind:       "Something",
+				Name:       "that-owns-me",
+				UID:        "1234",
+			},
+		}
+
+		// While deployments usually don't have finalizers, we add them here to test that they
+		// are not removed when the instance is updated.
+		deployment.Finalizers = fakeFinalizers
+		deployment.OwnerReferences = fakeOwnerReferences
+		Expect(env.Client.Update(ctx, deployment)).To(Succeed())
+
 		// Mark deployment as ready
 		deployment.Status.Replicas = 1
 		deployment.Status.ReadyReplicas = 1
@@ -170,6 +186,22 @@ var _ = Describe("Update", func() {
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx:1.20"))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(443)))
 		}, 20*time.Second, time.Second).Should(Succeed())
+
+		// Verify deployment still has the fake metadata
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "deployment-test-instance-for-updates",
+				Namespace: namespace,
+			}, deployment)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(deployment.Finalizers).To(Equal(fakeFinalizers))
+			g.Expect(deployment.OwnerReferences).To(Equal(fakeOwnerReferences))
+		}, 20*time.Second, time.Second).Should(Succeed())
+
+		// We need to remove the finalizers and owner references to be able to delete the deployment
+		deployment.Finalizers = nil
+		deployment.OwnerReferences = nil
+		Expect(env.Client.Update(ctx, deployment)).To(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())

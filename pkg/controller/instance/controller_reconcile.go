@@ -273,6 +273,8 @@ func (igr *instanceGraphReconciler) updateResource(
 	// TODO: Handle annotations
 	desired.SetResourceVersion(observed.GetResourceVersion())
 	desired.SetFinalizers(observed.GetFinalizers())
+	desired.SetOwnerReferences(observed.GetOwnerReferences())
+
 	_, err = rc.Update(ctx, desired, metav1.UpdateOptions{})
 	if err != nil {
 		resourceState.State = "ERROR"

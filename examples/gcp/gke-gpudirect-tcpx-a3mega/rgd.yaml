@@ -1,0 +1,447 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: gkecluster.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: GkeGpuDirectTCPXCluster
+    spec:
+      name: string
+      location: string | default=us-central1
+      version: string | default=1.29.5-gke.1121000
+    status:
+      masterVersion: ${cluster.status.masterVersion}
+  resources:
+  # ----------- NETWORKS --------------------
+  - id: network1
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeNetwork
+      metadata:
+        name: ${schema.spec.name}-net-1
+      spec:
+        autoCreateSubnetworks: false # for custom subnet mode
+        mtu: 8244
+        #routingMode: GLOBAL|REGIONAL
+        #deleteDefaultRoutesOnCreate: false
+  - id: network2
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeNetwork
+      metadata:
+        name: ${schema.spec.name}-net-2
+      spec:
+        autoCreateSubnetworks: false # for custom subnet mode
+        mtu: 8244
+        #routingMode: GLOBAL|REGIONAL
+        #deleteDefaultRoutesOnCreate: false
+  - id: network3
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeNetwork
+      metadata:
+        name: ${schema.spec.name}-net-3
+      spec:
+        autoCreateSubnetworks: false # for custom subnet mode
+        mtu: 8244
+        #routingMode: GLOBAL|REGIONAL
+        #deleteDefaultRoutesOnCreate: false
+  - id: network4
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeNetwork
+      metadata:
+        name: ${schema.spec.name}-net-4
+      spec:
+        autoCreateSubnetworks: false # for custom subnet mode
+        mtu: 8244
+        #routingMode: GLOBAL|REGIONAL
+        #deleteDefaultRoutesOnCreate: false
+  # ----------- SUB-NETS --------------------
+  - id: subnet1
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeSubnetwork
+      metadata:
+        name: ${schema.spec.name}-sub-1
+      spec:
+        ipCidrRange: 192.168.1.0/24
+        networkRef:
+          name: ${network1.metadata.name}
+        region: ${schema.spec.location}
+        #privateIpGoogleAccess: true
+  - id: subnet2
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeSubnetwork
+      metadata:
+        name: ${schema.spec.name}-sub-2
+      spec:
+        ipCidrRange: 192.168.2.0/24
+        networkRef:
+          name: ${network2.metadata.name}
+        region: ${schema.spec.location}
+        #privateIpGoogleAccess: true
+  - id: subnet3
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeSubnetwork
+      metadata:
+        name: ${schema.spec.name}-sub-3
+      spec:
+        ipCidrRange: 192.168.3.0/24
+        networkRef:
+          name: ${network3.metadata.name}
+        region: ${schema.spec.location}
+        #privateIpGoogleAccess: true
+  - id: subnet4
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeSubnetwork
+      metadata:
+        name: ${schema.spec.name}-sub-4
+      spec:
+        ipCidrRange: 192.168.4.0/24
+        networkRef:
+          name: ${network4.metadata.name}
+        region: ${schema.spec.location}
+        #privateIpGoogleAccess: true
+  # ----------- FIREWALLS --------------------
+  - id: firewall1
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeFirewall
+      metadata:
+        name: ${schema.spec.name}-internal-1
+      spec:
+        networkRef:
+          name: ${network1.metadata.name}
+        allow:
+          tcp:
+            - 0-65535
+          udp:
+            - 0-65535
+          icmp: {} # indicates all ICMP types
+        sourceRanges:
+          - 192.168.0.0/16
+  - id: firewall2
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeFirewall
+      metadata:
+        name: ${schema.spec.name}-internal-2
+      spec:
+        networkRef:
+          name: ${network2.metadata.name}
+        allow:
+          tcp:
+            - 0-65535
+          udp:
+            - 0-65535
+          icmp: {} # indicates all ICMP types
+        sourceRanges:
+          - 192.168.0.0/16
+  - id: firewall3
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeFirewall
+      metadata:
+        name: ${schema.spec.name}-internal-3
+      spec:
+        networkRef:
+          name: ${network3.metadata.name}
+        allow:
+          tcp:
+            - 0-65535
+          udp:
+            - 0-65535
+          icmp: {} # indicates all ICMP types
+        sourceRanges:
+          - 192.168.0.0/16
+  - id: firewall4
+    template:
+      apiVersion: compute.cnrm.cloud.google.com/v1beta1
+      kind: ComputeFirewall
+      metadata:
+        name: ${schema.spec.name}-internal-4
+      spec:
+        networkRef:
+          name: ${network4.metadata.name}
+        allow:
+          tcp:
+            - 0-65535
+          udp:
+            - 0-65535
+          icmp: {} # indicates all ICMP types
+        sourceRanges:
+          - 192.168.0.0/16
+  #------------ GKE CLUSTER --------------------------
+  ##  ╰─❯ gcloud beta container clusters create CLUSTER_NAME   --enable-dataplane-v2 --enable-ip-alias --zone=ZONE   --enable-multi-networking --cluster-version=VERSION   --no-enable-autoupgrade    --log-http
+  ## {"cluster": {
+  # ✓   "initialClusterVersion": "VERSION", 
+  # ✓  "ipAllocationPolicy": {"createSubnetwork": false, "useIpAliases": true}, 
+  # ✓  "name": "CLUSTER_NAME", 
+  # ✓  "networkConfig": {"datapathProvider": "ADVANCED_DATAPATH", "enableMultiNetworking": true}, 
+  # ✓  "nodePools": [
+  # ✓      {
+  # ✓      "config": {
+  # ✓        "oauthScopes": ["https://www.googleapis.com/auth/devstorage.read_only",
+  # ✓                        "https://www.googleapis.com/auth/logging.write",
+  # ✓                        "https://www.googleapis.com/auth/monitoring",
+  # ✓                        "https://www.googleapis.com/auth/service.management.readonly",
+  # ✓                        "https://www.googleapis.com/auth/servicecontrol",
+  # ✓                        "https://www.googleapis.com/auth/trace.append"]
+  # ✓       },
+  # ✓       "initialNodeCount": 3, 
+  # ✓       "management": {"autoRepair": true, "autoUpgrade": false}, 
+  # ✓       "name": "default-pool", 
+  # ✓       "upgradeSettings": {"maxSurge": 1}}
+  # ✓  ]},
+  # ✓   "parent": "projects/kro-barni/locations/ZONE"}
+  #
+  # Since KCC does not allow changing the autoUpgrade settings of default nodepool, 
+  # we annotate the cluster to remove the default nodepool
+  # and add an explicit nodepool with autoupgrade false 
+  - id: cluster
+    template:
+      apiVersion: container.cnrm.cloud.google.com/v1beta1
+      kind: ContainerCluster
+      metadata:
+        annotations:
+          cnrm.cloud.google.com/remove-default-node-pool: "true"
+        name: ${schema.spec.name}
+      spec:
+        location: ${schema.spec.location}
+        initialNodeCount: 1 # we are deleting this anyways
+        minMasterVersion: ${schema.spec.version}
+        enableMultiNetworking: true # Enables Multi-networking
+        datapathProvider: ADVANCED_DATAPATH
+        enableAutoupgrade: false # Disables auto-upgrades
+        ipAllocationPolicy:
+          stackType: IPV4 # to force ipAllocationPolicy.useIpAliases: true
+          #clusterIpv4CidrBlock: /20
+          #servicesIpv4CidrBlock: /20
+  - id: clusterConnection
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${cluster.metadata.name}-connection
+      data:
+        caData: ${cluster.status.observedState.masterAuth.clusterCaCertificate}
+        server: https://${cluster.status.endpoint}
+        name: ${cluster.metadata.name}
+  - id: defaultNodepool
+    template:
+      apiVersion: container.cnrm.cloud.google.com/v1beta1
+      kind: ContainerNodePool
+      metadata:
+        name: ${cluster.metadata.name}-default
+      spec:
+        clusterRef:
+          name: ${cluster.metadata.name}
+        initialNodeCount: 3
+        location: ${schema.spec.location}
+        management:
+          autoRepair: true
+          autoUpgrade: false
+        nodeConfig:
+          oauthScopes: 
+            - https://www.googleapis.com/auth/devstorage.read_only
+            - https://www.googleapis.com/auth/logging.write
+            - https://www.googleapis.com/auth/monitoring
+            - https://www.googleapis.com/auth/service.management.readonly
+            - https://www.googleapis.com/auth/servicecontrol
+            - https://www.googleapis.com/auth/trace.append
+          upgradeSettings:
+            maxSurge: 1
+  - id: gkeNetwork1
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: Network
+      metadata:
+        name: vpc1
+      spec:
+        parametersRef:
+          group: networking.gke.io
+          kind: GKENetworkParamSet
+          name: vpc1
+        type: Device
+  - id: gkeNetwork2
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: Network
+      metadata:
+        name: vpc2
+      spec:
+        parametersRef:
+          group: networking.gke.io
+          kind: GKENetworkParamSet
+          name: vpc2
+        type: Device
+  - id: gkeNetwork3
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: Network
+      metadata:
+        name: vpc3
+      spec:
+        parametersRef:
+          group: networking.gke.io
+          kind: GKENetworkParamSet
+          name: vpc3
+        type: Device
+  - id: gkeNetwork4
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: Network
+      metadata:
+        name: vpc4
+      spec:
+        parametersRef:
+          group: networking.gke.io
+          kind: GKENetworkParamSet
+          name: vpc4
+        type: Device
+  - id: gkeNetworkParams1
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: GKENetworkParamSet
+      metadata:
+        name: vpc1
+      spec:
+        vpc: ${network1.metadata.name}
+        vpcSubnet: ${subnet1.metadata.name}
+        deviceMode: NetDevice
+  - id: gkeNetworkParams2
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: GKENetworkParamSet
+      metadata:
+        name: vpc2
+      spec:
+        vpc: ${network2.metadata.name}
+        vpcSubnet: ${subnet2.metadata.name}
+        deviceMode: NetDevice
+  - id: gkeNetworkParams3
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: GKENetworkParamSet
+      metadata:
+        name: vpc3
+      spec:
+        vpc: ${network3.metadata.name}
+        vpcSubnet: ${subnet3.metadata.name}
+        deviceMode: NetDevice
+  - id: gkeNetworkParams4
+    in: clusterConnection
+    template:
+      apiVersion: networking.gke.io/v1
+      kind: GKENetworkParamSet
+      metadata:
+        name: vpc4
+      spec:
+        vpc: ${network4.metadata.name}
+        vpcSubnet: ${subnet4.metadata.name}
+        deviceMode: NetDevice
+      
+  - id: gpuNodepool
+    template:
+      # gcloud container node-pools create NODE_POOL_NAME 
+      #  --cluster=CLUSTER_NAME \ --location=LOCATION \ 
+      #  --machine-type=a3-highgpu-8g \ 
+      #  --accelerator=type=nvidia-h100-80gb,count=8,gpu-driver-version=LATEST \ 
+      #  --additional-node-network=network=${schema.spec.name}-net-1,subnetwork=${schema.spec.name}-sub-1 \ 
+      #  --additional-node-network=network=${schema.spec.name}-net-2,subnetwork=${schema.spec.name}-sub-2 \ 
+      #  --additional-node-network=network=${schema.spec.name}-net-3,subnetwork=${schema.spec.name}-sub-3 \ 
+      #  --additional-node-network=network=${schema.spec.name}-net-4,subnetwork=${schema.spec.name}-sub-4 \ 
+      #  --enable-gvnic \ --no-enable-autoupgrade
+      #
+      # {"nodePool": {
+      # ✓  "config": {
+      # ✓   "accelerators": [
+      # ✓     {"acceleratorCount": "8", 
+      # ✓      "acceleratorType": "nvidia-h100-80gb", 
+      # ✓      "gpuDriverInstallationConfig": {
+      # ✓         "gpuDriverVersion": "LATEST"
+      # ✓       }}
+      # ✓     ], 
+      # ✓    "gvnic": {"enabled": true},
+      # ✓    "machineType": "a3-highgpu-8g",
+      # ✓    "oauthScopes": [
+      # ✓       "https://www.googleapis.com/auth/devstorage.read_only", 
+      # ✓       "https://www.googleapis.com/auth/logging.write", 
+      # ✓       "https://www.googleapis.com/auth/monitoring", 
+      # ✓       "https://www.googleapis.com/auth/service.management.readonly", 
+      # ✓       "https://www.googleapis.com/auth/servicecontrol", 
+      # ✓       "https://www.googleapis.com/auth/trace.append"
+      # ✓       ]}, 
+      # ✓    "initialNodeCount": 3, 
+      # ✓   "management": {"autoRepair": true, "autoUpgrade": false}, 
+      # ✓   "name": "NODE_POOL_NAME", 
+      # ✓   "networkConfig": {
+      # ✓    "additionalNodeNetworkConfigs": [
+      # ✓      {"network": "n1-net-1", "subnetwork": "n1-sub-1"}, 
+      # ✓      {"network": "n1-net-2", "subnetwork": "n1-sub-2"}, 
+      # ✓      {"network": "n1-net-3", "subnetwork": "n1-sub-3"}, 
+      # ✓      {"network": "n1-net-4", "subnetwork": "n1-sub-4"}
+      # ✓    ]},
+      # ✓   "upgradeSettings": {"maxSurge": 1}},
+      # ✓   "parent": "projects/kro-barni/locations/LOCATION/clusters/CLUSTER_NAME"}
+      apiVersion: container.cnrm.cloud.google.com/v1beta1
+      kind: ContainerNodePool
+      metadata:
+        name: ${cluster.metadata.name}-gpu
+      spec:
+        clusterRef:
+          name: ${schema.spec.name}
+        initialNodeCount: 3
+        location: ${schema.spec.location}
+        management:
+          autoRepair: true # Recommended for production
+          autoUpgrade: false # Disables auto-upgrades
+        nodeConfig:
+          guestAccelerator:
+          - type: nvidia-h100-80gb
+            count: 8
+            gpuDriverInstallationConfig:
+              gpuDriverVersion: LATEST
+          gvnic:
+            enabled: true
+          machineType: a3-highgpu-8g
+          oauthScopes: 
+            - https://www.googleapis.com/auth/devstorage.read_only
+            - https://www.googleapis.com/auth/logging.write
+            - https://www.googleapis.com/auth/monitoring
+            - https://www.googleapis.com/auth/service.management.readonly
+            - https://www.googleapis.com/auth/servicecontrol
+            - https://www.googleapis.com/auth/trace.append
+          upgradeSettings:
+            maxSurge: 1
+        networkConfig:
+          additionalNodeNetworkConfigs:
+          - networkRef:
+              name: ${network1.metadata.name}
+            subnetworkRef:
+              name: ${subnet1.metadata.name}
+          - networkRef:
+              name: ${network2.metadata.name}
+            subnetworkRef:
+              name: ${subnet2.metadata.name}
+          - networkRef:
+              name: ${network3.metadata.name}
+            subnetworkRef:
+              name: ${subnet3.metadata.name}
+          - networkRef:
+              name: ${network4.metadata.name}
+            subnetworkRef:
+              name: ${subnet4.metadata.name}
+        # version: ${schema.spec.initialVersion} # Not needed. will be set to cluster version

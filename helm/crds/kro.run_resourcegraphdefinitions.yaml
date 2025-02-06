@@ -75,6 +75,14 @@ spec:
                   properties:
                     id:
                       type: string
+                    in:
+                      description: |-
+                        `in` is the unique identifier of the ConfigMap resource that describes a remote cluster connection
+                         The configmap is expected to have the following fields set:
+                           .spec.data.caData
+                           .spec.data.server
+                           .spec.data.name
+                      type: string
                     includeWhen:
                       items:
                         type: string

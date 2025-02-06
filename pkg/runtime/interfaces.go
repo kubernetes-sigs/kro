@@ -94,6 +94,8 @@ type ResourceDescriptor interface {
 	// the GVR to interact with the API server. Yep, it's a bit unfortunate.
 	GetGroupVersionResource() schema.GroupVersionResource
 
+	GetClusterConnectionID() string
+
 	// GetVariables returns the list of variables associated with this resource.
 	GetVariables() []*variable.ResourceField
 

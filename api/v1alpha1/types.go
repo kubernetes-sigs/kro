@@ -88,6 +88,13 @@ type Validation struct {
 type Resource struct {
 	// +kubebuilder:validation:Required
 	ID string `json:"id,omitempty"`
+	// `in` is the unique identifier of the ConfigMap resource that describes a remote cluster connection
+	//  The configmap is expected to have the following fields set:
+	//    .spec.data.caData
+	//    .spec.data.server
+	//    .spec.data.name
+	// +kubebuilder:validation:Optional
+	In string `json:"in,omitempty"`
 	// +kubebuilder:validation:Required
 	Template runtime.RawExtension `json:"template,omitempty"`
 	// +kubebuilder:validation:Optional

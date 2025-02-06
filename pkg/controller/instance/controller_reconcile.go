@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	"github.com/kro-run/kro/pkg/controller/instance/delta"
 	"github.com/kro-run/kro/pkg/metadata"
@@ -171,7 +172,12 @@ func (igr *instanceGraphReconciler) handleResourceReconciliation(
 	log := igr.log.WithValues("resourceID", resourceID)
 
 	// Get resource client and namespace
-	rc := igr.getResourceClient(resourceID)
+	rc, err := igr.getResourceClient(resourceID)
+	if err != nil {
+		resourceState.State = "CONNECTION_ERROR"
+		resourceState.Err = fmt.Errorf("failed to get resource client: %w", err)
+		return resourceState.Err
+	}
 
 	// Check if resource exists
 	observed, err := rc.Get(ctx, resource.GetName(), metav1.GetOptions{})
@@ -199,16 +205,67 @@ func (igr *instanceGraphReconciler) handleResourceReconciliation(
 	return igr.updateResource(ctx, rc, resource, observed, resourceID, resourceState)
 }
 
+// getRemoteClusterClient returns the dynamic client for a given cluster connection
+func (igr *instanceGraphReconciler) getRemoteClusterClient(remoteClusterConnID string) (dynamic.Interface, error) {
+	log := igr.log.WithValues("resourceID", remoteClusterConnID)
+	if ready, reason, err := igr.runtime.IsResourceReady(remoteClusterConnID); err != nil || !ready {
+		log.V(1).Info("Cluster Connection resource not ready", "reason", reason, "error", err)
+		return nil, fmt.Errorf("Cluster Connection resource: %s is not ready: %s, %w", remoteClusterConnID, reason, err)
+	}
+	configmap, state := igr.runtime.GetResource(remoteClusterConnID)
+	if state != runtime.ResourceStateResolved {
+		return nil, fmt.Errorf("Cluster Connection resource: %s is not resolved. state: %s", remoteClusterConnID, state)
+	}
+
+	caData, found, err := unstructured.NestedString(configmap.Object, "data", "caData")
+	if err != nil || !found {
+		return nil, fmt.Errorf("failed to get .data.caData from remote cluster connection configmap: %s, %w",
+			configmap.GetName(), err)
+	}
+
+	server, found, err := unstructured.NestedString(configmap.Object, "data", "server")
+	if err != nil || !found {
+		return nil, fmt.Errorf("failed to get .data.server from remote cluster connection configmap: %s, %w",
+			configmap.GetName(), err)
+	}
+
+	// Create REST config for remote cluster
+	config := &rest.Config{
+		Host: server,
+		TLSClientConfig: rest.TLSClientConfig{
+			CAData: []byte(caData),
+		},
+	}
+
+	// Create dynamic client from config
+	client, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic client from cluster connection configmap %s: %w",
+			configmap.GetName(), err)
+	}
+
+	return client, nil
+}
+
 // getResourceClient returns the appropriate dynamic client and namespace for a resource
-func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic.ResourceInterface {
+func (igr *instanceGraphReconciler) getResourceClient(resourceID string) (dynamic.ResourceInterface, error) {
+	var err error
 	descriptor := igr.runtime.ResourceDescriptor(resourceID)
+	clientInterface := igr.client
+	clusterConnectionId := descriptor.GetClusterConnectionID()
+	if clusterConnectionId != "" {
+		clientInterface, err = igr.getRemoteClusterClient(clusterConnectionId)
+		if err != nil {
+			return nil, err
+		}
+	}
 	gvr := descriptor.GetGroupVersionResource()
 	namespace := igr.getResourceNamespace(resourceID)
 
 	if descriptor.IsNamespaced() {
-		return igr.client.Resource(gvr).Namespace(namespace)
+		return clientInterface.Resource(gvr).Namespace(namespace), nil
 	}
-	return igr.client.Resource(gvr)
+	return clientInterface.Resource(gvr), nil
 }
 
 // handleResourceCreation manages the creation of a new resource
@@ -321,7 +378,11 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 		}
 
 		// Check if resource exists
-		rc := igr.getResourceClient(resourceID)
+		rc, err := igr.getResourceClient(resourceID)
+		if err != nil {
+			return fmt.Errorf("failed to get resource client for %s: %w", resourceID, err)
+		}
+
 		observed, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -366,10 +427,13 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 	igr.log.V(1).Info("Deleting resource", "resourceID", resourceID)
 
 	resource, _ := igr.runtime.GetResource(resourceID)
-	rc := igr.getResourceClient(resourceID)
+	rc, err := igr.getResourceClient(resourceID)
+	if err != nil {
+		return fmt.Errorf("failed to get resource client: %w", err)
+	}
 
 	// Attempt to delete the resource
-	err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
+	err = rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			igr.state.ResourceStates[resourceID].State = "DELETED"

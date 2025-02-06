@@ -2656,6 +2656,10 @@ func (m *mockResource) Unstructured() *unstructured.Unstructured {
 	return m.obj
 }
 
+func (m *mockResource) GetClusterConnectionID() string {
+	return ""
+}
+
 type mockResourceOption func(*mockResource)
 
 /* func withGVR(group, version, resource string) mockResourceOption {

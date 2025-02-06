@@ -37,6 +37,12 @@ type Resource struct {
 	// An id is unique within a resource graph definition, and adheres to the naming
 	// conventions.
 	id string
+	// `in` is the unique identifier of the ConfigMap resource that describes a remote cluster connection
+	//  The configmap is expected to have the following fields set:
+	//    .spec.data.caData
+	//    .spec.data.server
+	//    .spec.data.name
+	in string
 	// GroupVersionKind is the GVK of the resource.
 	gvr schema.GroupVersionResource
 	// Schema is the JSON schema of the resource. See [JSON Schema Specification Draft 4](http://json-schema.org/)
@@ -109,6 +115,11 @@ func (r *Resource) GetID() string {
 	return r.id
 }
 
+// GetClusterConnectionID returns the field `in` of the resource.
+func (r *Resource) GetClusterConnectionID() string {
+	return r.in
+}
+
 // GetOrder returns the original Order of the resource.
 func (r *Resource) GetOrder() int {
 	return r.order
@@ -168,6 +179,7 @@ func (r *Resource) IsNamespaced() bool {
 func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
 		id:                     r.id,
+		in:                     r.in,
 		order:                  r.order,
 		gvr:                    r.gvr,
 		schema:                 r.schema,

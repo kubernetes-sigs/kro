@@ -298,7 +298,7 @@ var _ = Describe("Validation", func() {
 					),
 				)
 
-				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+				Expect(env.Client.Create(ctx, rgd)).ToNot(Succeed())
 
 				Eventually(func(g Gomega) {
 					err := env.Client.Get(ctx, types.NamespacedName{

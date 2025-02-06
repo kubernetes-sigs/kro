@@ -116,7 +116,7 @@ spec:
                     description: |-
                       The kind of the resourcegraphdefinition. This is used to generate
                       and create the CRD for the resourcegraphdefinition.
-                    pattern: ^[A-Z][a-zA-Z]*$
+                    pattern: ^[A-Z][a-zA-Z0-9]*$
                     type: string
                     x-kubernetes-validations:
                     - message: kind is immutable

@@ -52,7 +52,7 @@ type Schema struct {
 	// and create the CRD for the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^[A-Z][a-zA-Z]*$`
+	// +kubebuilder:validation:Pattern=`^[A-Z][a-zA-Z0-9]*$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
 	// The APIVersion of the resourcegraphdefinition. This is used to generate

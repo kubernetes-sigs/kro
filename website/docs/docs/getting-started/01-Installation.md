@@ -13,6 +13,11 @@ Before you begin, ensure you have the following:
 
 1. `Helm` 3.x installed
 2. `kubectl` installed and configured to interact with your Kubernetes cluster
+3. Make sure you have a valid GitHub Personal Access Token stored in the GITHUB_TOKEN environment variable.
+ and authenticated with GitHub Container Registry (GHCR):
+```sh 
+echo $GITHUB_TOKEN | helm registry login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```
 
 ## Installation Steps
 

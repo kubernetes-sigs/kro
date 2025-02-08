@@ -214,9 +214,6 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 		}}, nil
 	}
 
-	fmt.Printf("expectedTypes: %v\n", expectedTypes)
-	fmt.Printf("schemaTypeAny: %v\n", schemaTypeAny)
-
 	if !slices.Contains(expectedTypes, "string") && !slices.Contains(expectedTypes, schemaTypeAny) {
 		return nil, fmt.Errorf("expected string type or AdditionalProperties for path %s, got %v", path, field)
 	}

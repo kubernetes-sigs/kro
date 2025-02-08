@@ -53,16 +53,24 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 		return nil, err
 	}
 
+	fmt.Printf("resource: %v\n", resource)
+	fmt.Printf("expectedTypes: %v\n", expectedTypes)
+
 	switch field := resource.(type) {
 	case map[string]interface{}:
+		fmt.Printf("map field: %v\n", field)
 		return parseObject(field, schema, path, expectedTypes)
 	case []interface{}:
+		fmt.Printf("array field: %v\n", field)
 		return parseArray(field, schema, path, expectedTypes)
 	case string:
+		fmt.Printf("string field: %v\n", field)
 		return parseString(field, schema, path, expectedTypes)
 	case nil:
+		fmt.Printf("nill field: %v\n", field)
 		return nil, nil
 	default:
+		fmt.Printf("default field: %v\n", field)
 		return parseScalarTypes(field, schema, path, expectedTypes)
 	}
 }
@@ -214,6 +222,9 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 		}}, nil
 	}
 
+	fmt.Printf("expectedTypes: %v\n", expectedTypes)
+	fmt.Printf("schemaTypeAny: %v\n", schemaTypeAny)
+
 	if !slices.Contains(expectedTypes, "string") && !slices.Contains(expectedTypes, schemaTypeAny) {
 		return nil, fmt.Errorf("expected string type or AdditionalProperties for path %s, got %v", path, field)
 	}
@@ -236,7 +247,7 @@ func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTy
 	// perform type checks for scalar types
 	switch {
 	case slices.Contains(expectedTypes, "number"):
-		if _, ok := field.(float64); !ok {
+		if !isNumber(field) {
 			return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
 		}
 	case slices.Contains(expectedTypes, "int"), slices.Contains(expectedTypes, "integer"):
@@ -286,9 +297,22 @@ func getArrayItemSchema(schema *spec.Schema, path string) (*spec.Schema, error) 
 	return nil, fmt.Errorf("invalid array schema for path %s: neither Items.Schema nor Properties are defined", path)
 }
 
+func isNumber(v interface{}) bool {
+	return isInteger(v) || ifFloat(v)
+}
+
+func ifFloat(v interface{}) bool {
+	switch v.(type) {
+	case float32, float64:
+		return true
+	default:
+		return false
+	}
+}
+
 func isInteger(v interface{}) bool {
 	switch v.(type) {
-	case int, int64, int32:
+	case int, int8, int32, int64:
 		return true
 	default:
 		return false

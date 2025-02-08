@@ -53,24 +53,16 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 		return nil, err
 	}
 
-	fmt.Printf("resource: %v\n", resource)
-	fmt.Printf("expectedTypes: %v\n", expectedTypes)
-
 	switch field := resource.(type) {
 	case map[string]interface{}:
-		fmt.Printf("map field: %v\n", field)
 		return parseObject(field, schema, path, expectedTypes)
 	case []interface{}:
-		fmt.Printf("array field: %v\n", field)
 		return parseArray(field, schema, path, expectedTypes)
 	case string:
-		fmt.Printf("string field: %v\n", field)
 		return parseString(field, schema, path, expectedTypes)
 	case nil:
-		fmt.Printf("nill field: %v\n", field)
 		return nil, nil
 	default:
-		fmt.Printf("default field: %v\n", field)
 		return parseScalarTypes(field, schema, path, expectedTypes)
 	}
 }

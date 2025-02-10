@@ -287,10 +287,10 @@ func getArrayItemSchema(schema *spec.Schema, path string) (*spec.Schema, error) 
 }
 
 func isNumber(v interface{}) bool {
-	return isInteger(v) || ifFloat(v)
+	return isInteger(v) || isFloat(v)
 }
 
-func ifFloat(v interface{}) bool {
+func isFloat(v interface{}) bool {
 	switch v.(type) {
 	case float32, float64:
 		return true

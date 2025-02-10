@@ -3,8 +3,7 @@ sidebar_position: 301
 ---
 
 :::info[**ACK controllers Dependency**]
-Most examples below will need ACK controllers to be running in the cluster either through kro or other means
-
+Most examples below will need ACK controllers to be running in the cluster either through kro or other means.
 :::
 
 # AWS Examples

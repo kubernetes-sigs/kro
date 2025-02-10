@@ -2,6 +2,11 @@
 sidebar_position: 301
 ---
 
+:::info[**ACK controllers Dependency**]
+Most examples below will need ACK controllers to be running in the cluster either through kro or other means
+
+:::
+
 # AWS Examples
 - [Deploying a Controller](./deploying-controller.md) Discover how to deploy a
   Kubernetes controller using kro ResourceGraphDefinitions, including the necessary
@@ -9,7 +14,7 @@ sidebar_position: 301
 
 - [AWS Networking Stack](./ack-networking-stack.md) Learn how to define and
   manage an AWS networking stack using kro ResourceGraphDefinitions, including VPCs,
-  subnets, and security groups. (Please note: this example will need ACK EC2 controller to be running in the cluster either through kro or other means)
+  subnets, and security groups.
 
 - [EKS Cluster with ACK CRDs](./ack-eks-cluster.md) Explore how to define and
   manage an EKS cluster using AWS Controllers for Kubernetes (ACK) CRDs within a

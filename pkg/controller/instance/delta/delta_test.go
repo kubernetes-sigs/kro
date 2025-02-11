@@ -351,6 +351,42 @@ func TestCompare_EmptyMaps(t *testing.T) {
 			wantDiff: false,
 		},
 		{
+			name: "nil map in desired, empty map in observed should not diff",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"tags": nil,
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"tags": map[string]interface{}{},
+					},
+				},
+			},
+			wantDiff: false,
+		},
+		{
+			name: "empty map in desired, nil map in observed should not diff",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"tags": map[string]interface{}{},
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"tags": nil,
+					},
+				},
+			},
+			wantDiff: false,
+		},
+		{
 			name: "empty map in desired, no field in observed should diff",
 			desired: &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -455,6 +491,124 @@ func TestCompare_EmptyMaps(t *testing.T) {
 			} else {
 				assert.Empty(t, differences,
 					"expected no differences but got: %+v", differences)
+			}
+		})
+	}
+}
+
+func TestCompare_EmptyArraysAndNil(t *testing.T) {
+	tests := []struct {
+		name     string
+		desired  *unstructured.Unstructured
+		observed *unstructured.Unstructured
+		wantDiff bool
+	}{
+		{
+			name: "empty array equals nil in nested structure",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": []interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": nil,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDiff: false,
+		},
+		{
+			name: "nil equals empty array in nested structure",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": nil,
+								},
+							},
+						},
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": []interface{}{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDiff: false,
+		},
+		{
+			name: "non-empty array differs from nil",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": []interface{}{
+										map[string]interface{}{
+											"name":  "TEST",
+											"value": "value",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"template": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"env": nil,
+								},
+							},
+						},
+					},
+				},
+			},
+			wantDiff: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			differences, err := Compare(tt.desired, tt.observed)
+			if err != nil {
+				t.Errorf("Compare() error = %v", err)
+				return
+			}
+			if (len(differences) > 0) != tt.wantDiff {
+				t.Errorf("Compare() got differences = %v, want diff = %v", differences, tt.wantDiff)
 			}
 		})
 	}

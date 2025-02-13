@@ -72,6 +72,16 @@ Development and discussion is coordinated in the [Kubernetes Slack (invite link)
 [k8s-slack]: https://communityinviter.com/apps/kubernetes/community
 [kro-channel]: https://kubernetes.slack.com/archives/C081TMY9D6Y
 
+Please join our community meeting.
+* Every other Wednesday at 9AM PT (Pacific Time). [Convert to local timezone][tz-help] 
+* Agenda: [Public doc][agenda]
+* Join us: [Zoom meeting][zoom]
+
+
+[tz-help]: http://www.thetimezoneconverter.com/?t=9%3A00&tz=PT%20%28Pacific%20Time%29
+[agenda]: https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit?tab=t.0
+[zoom]: https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.

@@ -3,6 +3,7 @@ kind: ResourceGraphDefinition
 metadata:
   name: webapp.kro.run
 spec:
+  weight: 150
   schema:
     apiVersion: v1alpha1
     kind: WebApp
@@ -68,7 +69,7 @@ spec:
 
   - id: service
     includeWhen:
-    - ${schema.spec.service.enabled}  
+    - ${schema.spec.service.enabled}
     template:
       apiVersion: v1
       kind: Service
@@ -86,7 +87,7 @@ spec:
 
   - id: ingress
     includeWhen:
-    - ${schema.spec.ingress.enabled}  
+    - ${schema.spec.ingress.enabled}
     template:
       apiVersion: networking.k8s.io/v1
       kind: Ingress

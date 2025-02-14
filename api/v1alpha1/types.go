@@ -43,6 +43,13 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
+	// The weight used to determine priority when queuing reconciliation.
+	//
+	// +kubebuilder:default=100
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Optional
+	Weight int `json:"weight,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of

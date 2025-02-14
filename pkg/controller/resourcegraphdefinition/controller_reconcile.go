@@ -63,7 +63,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
-	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile); err != nil {
+	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile, rgd.Spec.Weight); err != nil {
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
 
@@ -141,8 +141,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 }
 
 // reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler) error {
-	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler)
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler, weight int) error {
+	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler, weight)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

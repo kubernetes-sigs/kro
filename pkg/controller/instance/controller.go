@@ -47,6 +47,9 @@ type ReconcileConfig struct {
 	// TODO(a-hilaly): need to define think the different deletion policies we need to
 	// support.
 	DeletionPolicy string
+
+	// Instance controller events are queued in a weighted queue.
+	Weight int
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,

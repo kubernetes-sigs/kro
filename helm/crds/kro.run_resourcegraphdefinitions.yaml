@@ -145,6 +145,12 @@ spec:
                 - apiVersion
                 - kind
                 type: object
+              weight:
+                default: 100
+                description: The weight used to determine priority when queuing reconciliation.
+                maximum: 1000
+                minimum: 1
+                type: integer
             required:
             - schema
             type: object

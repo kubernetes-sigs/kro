@@ -71,7 +71,7 @@ func GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind string) schem
 func GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind string) schema.GroupVersionResource {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return schema.GroupVersionResource{
-		Group:    fmt.Sprintf("%s.%s", pluralKind, group),
+		Group:    group,
 		Version:  apiVersion,
 		Resource: pluralKind,
 	}

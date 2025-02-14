@@ -161,8 +161,8 @@ func NewDynamicController(
 		kubeClient: kubeClient,
 
 		weightedQueues: make(map[int]*WeightedQueue),
-		gvrWeights: make(map[schema.GroupVersionResource]int),
-		log: logger,
+		gvrWeights:     make(map[schema.GroupVersionResource]int),
+		log:            logger,
 		// pass version and pod id from env
 	}
 
@@ -648,7 +648,6 @@ func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.Grou
 
 	// Unregister the handler if any
 	dc.handlers.Delete(gvr)
-
 
 	gvrCount.Dec()
 	// Clean up any pending items in the queue for this GVR

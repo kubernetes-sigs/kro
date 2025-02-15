@@ -175,7 +175,6 @@ func NewDynamicController(
 		// pass version and pod id from env
 	}
 
-	dc.ensureWeightedQueue(defaultQueueWeight)
 	dc.setGVRWeight(schema.GroupVersionResource{}, defaultQueueWeight)
 
 	return dc
@@ -198,6 +197,8 @@ func (dc *DynamicController) getGVRWeight(gvr schema.GroupVersionResource) int {
 // setGVRWeight sets the weight for a given GroupVersionResource (GVR) and updates the
 // corresponding weighted queue.
 func (dc *DynamicController) setGVRWeight(gvr schema.GroupVersionResource, weight int) {
+	dc.ensureWeightedQueue(weight)
+
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 
@@ -214,6 +215,11 @@ func (dc *DynamicController) deleteGVRWeight(gvr schema.GroupVersionResource) {
 
 	weight := dc.gvrWeights[gvr]
 	wq := dc.weightedQueues[weight]
+
+	if weight == defaultQueueWeight {
+		dc.log.Error(nil, "cannot delete default queue", "weight", weight)
+		return
+	}
 
 	delete(dc.gvrWeights, gvr)
 	delete(wq.gvrSet, gvr)
@@ -295,9 +301,9 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 // shutdownQueues shuts down all the weighted queues managed by the DynamicController.
 func (dc *DynamicController) shutdownQueues() {
 	dc.log.Info("Shutting down dynamic controller queues")
-	for key := range dc.weightedQueues {
+	for key, wq := range dc.weightedQueues {
 		dc.log.Info("Shutting down weighted queue", "key", key)
-		dc.weightedQueues[key].queue.ShutDown()
+		wq.queue.ShutDown()
 	}
 }
 
@@ -335,12 +341,17 @@ func (dc *DynamicController) worker(ctx context.Context) {
 // A queue with a weight of 200 will be selected twice as often assuming an even
 // number of events are distributed between the queues
 func (dc *DynamicController) selectQueueByWeight() *WeightedQueue {
+	startTime := time.Now()
+
 	var (
 		totalWeight   int = 0
 		maxWeight     int = 0
 		selectedQueue *WeightedQueue
 		activeQueues  = make([]*WeightedQueue, 0, len(dc.weightedQueues))
 	)
+
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
 
 	for _, wq := range dc.weightedQueues {
 		if wq.queue.Len() > 0 {
@@ -365,6 +376,9 @@ func (dc *DynamicController) selectQueueByWeight() *WeightedQueue {
 		}
 	}
 
+	duration := time.Since(startTime)
+	dc.log.V(1).Info("Time to select queue", "duration", duration.String(), "weight", selectedQueue.weight)
+
 	return selectedQueue
 }
 
@@ -374,7 +388,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 
 	obj, shutdown := weightedQueue.queue.Get()
 	if shutdown {
-		return false
+		return true
 	}
 	defer weightedQueue.queue.Done(obj)
 
@@ -570,9 +584,6 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
 	// Set the weight for the GVR and ensure the queue exists for that weight class
-	if ok := dc.ensureWeightedQueue(queueWeight); !ok {
-		return fmt.Errorf("failed to create or get weighted queue with weight: %d", queueWeight)
-	}
 	dc.setGVRWeight(gvr, queueWeight)
 
 	_, exists := dc.informers.Load(gvr)

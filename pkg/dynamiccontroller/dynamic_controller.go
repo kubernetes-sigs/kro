@@ -296,7 +296,7 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 func (dc *DynamicController) shutdownQueues() {
 	dc.log.Info("Shutting down dynamic controller queues")
 	for key := range dc.weightedQueues {
-		dc.log.Info("Shutting down weighted queue: %d", key)
+		dc.log.Info("Shutting down weighted queue", "key", key)
 		dc.weightedQueues[key].queue.ShutDown()
 	}
 }

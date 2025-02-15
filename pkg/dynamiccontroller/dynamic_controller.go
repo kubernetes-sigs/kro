@@ -102,8 +102,11 @@ type Config struct {
 // of each GVR. Weighted queues provide a flexible way for the DynamicController (DC) to prioritize
 // GVRs based on their weights.
 type WeightedQueue struct {
+	// queue items will be prioritized based on GVR weight, between 1 and 1000
 	weight int
-	queue  workqueue.RateLimitingInterface
+	// queues are the workqueue used to process items
+	queue workqueue.RateLimitingInterface
+	// a set of each gvr associated with the queue
 	gvrSet map[schema.GroupVersionResource]struct{}
 }
 
@@ -137,8 +140,10 @@ type DynamicController struct {
 	// weight of gvr when queued, between 1 and 1000
 	gvrWeights map[schema.GroupVersionResource]int
 
+	// mutex for weightedQueues and gvrWeights
+	mu sync.RWMutex
+
 	log logr.Logger
-	mu  sync.RWMutex
 }
 
 type Handler func(ctx context.Context, req ctrl.Request) error
@@ -147,6 +152,10 @@ type informerWrapper struct {
 	informer dynamicinformer.DynamicSharedInformerFactory
 	shutdown func()
 }
+
+var (
+	defaultQueueWeight = 100
+)
 
 // NewDynamicController creates a new DynamicController instance.
 func NewDynamicController(
@@ -166,7 +175,7 @@ func NewDynamicController(
 		// pass version and pod id from env
 	}
 
-	dc.ensureWeightedQueue(100, schema.GroupVersionResource{})
+	dc.ensureWeightedQueue(defaultQueueWeight, schema.GroupVersionResource{})
 
 	return dc
 }
@@ -174,7 +183,11 @@ func NewDynamicController(
 func (dc *DynamicController) getWeightByGVR(gvr schema.GroupVersionResource) int {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
-	return int(dc.gvrWeights[gvr])
+	if weight, ok := dc.gvrWeights[gvr]; ok {
+		return weight
+	}
+
+	return defaultQueueWeight
 }
 
 func (dc *DynamicController) setWeightByGVR(gvr schema.GroupVersionResource, weight int) {
@@ -274,7 +287,7 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 
 func (dc *DynamicController) shutdownQueues() {
 	dc.log.Info("Shutting down dynamic controller queues")
-	for key, _ := range dc.weightedQueues {
+	for key := range dc.weightedQueues {
 		dc.log.Info("Shutting down weighted queue: %d", key)
 		dc.weightedQueues[key].queue.ShutDown()
 	}
@@ -618,7 +631,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
-	// Remove gvr from weight map
+	// Remove gvr from weight map and cleanup queue if no GVRs are assigned
 	weight := dc.getWeightByGVR(gvr)
 	dc.deleteWeightByGVR(gvr)
 	dc.deleteGVRFromQueue(weight, gvr)

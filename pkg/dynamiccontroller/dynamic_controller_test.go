@@ -104,14 +104,14 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	})
 
 	// Register GVK
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, 100)
+	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, defaultQueueWeight)
 	require.NoError(t, err)
 
 	_, exists := dc.informers.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, 100)
+	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, defaultQueueWeight)
 	assert.NoError(t, err)
 
 	// Unregister GVK
@@ -125,7 +125,6 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 }
 
 func TestEnqueueObject(t *testing.T) {
-	queueWeight := 100
 	logger := noopLogger()
 	client := setupFakeClient()
 	dc := NewDynamicController(logger, Config{}, client)
@@ -133,10 +132,10 @@ func TestEnqueueObject(t *testing.T) {
 	obj := &unstructured.Unstructured{}
 	obj.SetName("test-object")
 	obj.SetNamespace("default")
-	err := unstructured.SetNestedField(obj.Object, int64(queueWeight), "spec", "weight")
+	err := unstructured.SetNestedField(obj.Object, int64(defaultQueueWeight), "spec", "weight")
 	require.NoError(t, err)
 
 	dc.enqueueObject(obj, "add")
 
-	assert.Equal(t, 1, dc.weightedQueues[queueWeight].queue.Len())
+	assert.Equal(t, 1, dc.weightedQueues[defaultQueueWeight].queue.Len())
 }

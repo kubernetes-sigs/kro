@@ -115,8 +115,8 @@ func (gl GenericLabeler) Copy() map[string]string {
 // ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
 func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
-		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
-		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
+		ResourceGraphDefinitionIDLabel:        string(rgMeta.GetUID()),
+		ResourceGraphDefinitionNameLabel:      rgMeta.GetName(),
 	}
 }
 

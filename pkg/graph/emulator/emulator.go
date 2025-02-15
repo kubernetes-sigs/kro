@@ -44,7 +44,8 @@ func NewEmulator() *Emulator {
 }
 
 // GenerateDummyCR generates a dummy CR based on the provided schema.
-func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind, schema *spec.Schema) (*unstructured.Unstructured, error) {
+func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind,
+	schema *spec.Schema) (*unstructured.Unstructured, error) {
 	if schema == nil {
 		return nil, fmt.Errorf("schema is nil for %v", gvk)
 	}
@@ -70,6 +71,7 @@ func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind, schema *spec.Sch
 	cr.SetKind(gvk.Kind)
 	cr.SetName(fmt.Sprintf("%s-sample", strings.ToLower(gvk.Kind)))
 	cr.SetNamespace("default")
+	cr.SetResourceVersion(fmt.Sprintf("%d", e.rand.Intn(1000)))
 	return cr, nil
 }
 

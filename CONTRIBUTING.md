@@ -6,7 +6,6 @@ documentation, we greatly value feedback and contributions from our community.
 Please read through this document before submitting any issues or pull requests to ensure we have all the necessary
 information to effectively respond to your bug report or contribution.
 
-
 ## Reporting Bugs/Feature Requests
 
 We welcome you to use the GitHub issue tracker to report bugs or suggest features.
@@ -39,125 +38,9 @@ To send us a pull request, please:
 GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
 [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 
-## Setting Up a Local Development Environment
+## Development setup
 
-By following the steps for [externally running a controller](#running-the-controller-external-to-the-cluster) or 
-[running the controller inside a `KinD` cluster](#running-the-controller-inside-a-kind-cluster-with-ko), you can set up 
-a local environment to test your contributions before submitting a pull request.
-
-### Running the controller external to the cluster
-
-To test and run the project with your local changes, follow these steps to set up a development environment:
-
-1. Install Dependencies: Ensure you have the necessary dependencies installed, including:
-    - [Go](https://golang.org/doc/install) (version specified in `go.mod`).
-    - [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) for interacting with Kubernetes clusters.
-    - A local Kubernetes cluster such as [kind](https://kind.sigs.k8s.io/).
-
-2. Create a Local Kubernetes Cluster: If you don't already have a cluster, create one with your preferred tool. For example, with `kind`:
-    ```bash
-    kind create cluster
-    ```
-
-3. Install the Custom Resource Definitions (CRDs): Apply the latest CRDs to your cluster:
-    ```bash
-    make generate
-    kubectl apply -k ./config/crd
-    ```
-
-4. Run the kro Controller Locally: Execute the controller with your changes:
-    ```bash
-    go run ./cmd/controller --log-level 2
-    ```
-    This will connect to the default Kubernetes context in your local kubeconfig (`~/.kube/config`). Ensure the context is pointing to your local cluster.
-
-### Running the controller inside a [`KinD`][kind] cluster with [`ko`][ko]
-
-[ko]: https://ko.build
-[kind]: https://kind.sigs.k8s.io/
-
-1. Create a `KinD` cluster.
-
-   ```sh
-   kind create cluster
-   ```
-
-2. Create the `kro-system` namespace.
-
-   ```sh
-   kubectl create namespace kro-system
-   ```
-
-3. Set the `KO_DOCKER_REPO` env var.
-
-   ```sh
-   export KO_DOCKER_REPO=kind.local
-   ```
-
-   > _Note_, if not using the default kind cluster name, set KIND_CLUSTER_NAME
-
-   ```sh
-   export KIND_CLUSTER_NAME=my-other-cluster
-   ```
-4. Apply the Kro CRDs.
-
-   ```sh
-   make manifests
-   kubectl apply -f ./helm/crds
-   ```
-
-5. Render and apply the local helm chart.
-
-   ```sh
-    helm template kro ./helm \
-      --namespace kro-system \
-      --set image.pullPolicy=Never \
-      --set image.ko=true | ko apply -f -
-    ```
-
-### Dev Environment Hello World
-
-1. Create a `NoOp` ResourceGraph using the `ResourceGraphDefinition`.
-
-   ```sh
-   kubectl apply -f - <<EOF
-   apiVersion: kro.run/v1alpha1
-   kind: ResourceGraphDefinition
-   metadata:
-     name: noop
-   spec:
-     schema:
-       apiVersion: v1alpha1
-       kind: NoOp
-       spec: {}
-       status: {}
-     resources: []
-   EOF
-   ```
-
-   Inspect that the `ResourceGraphDefinition` was created, and also the newly created CRD `NoOp`.
-
-   ```sh
-   kubectl get ResourceGraphDefinition noop
-   kubectl get crds | grep noops
-   ```
-
-3. Create an instance of the new `NoOp` kind.
-
-   ```sh
-   kubectl apply -f - <<EOF
-   apiVersion: kro.run/v1alpha1
-   kind: NoOp
-   metadata:
-     name: demo
-   EOF
-   ```
-
-   And inspect the new instance,
-
-   ```shell
-   kubectl get noops -oyaml
-   ```
+Setup the [local enviroment](docs/developer-getting-started.md) to build and test the code locally.
 
 ## Finding contributions to work on
 Looking at the existing issues is a great way to find something to contribute on. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.

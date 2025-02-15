@@ -1,15 +1,13 @@
 
-AWS_ACCOUNT_ID ?= $(shell aws sts get-caller-identity --query Account --output text)
-AWS_REGION ?= us-west-2
 RELEASE_VERSION ?= dev-$(shell git rev-parse --short HEAD)
 OCI_REPO ?= ghcr.io/kro-run/kro
 
-CONTROLLER_IMAGE ?= ${OCI_REPO}/controller:${RELEASE_VERSION}
 HELM_IMAGE ?= ${OCI_REPO}
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
+export KIND_CLUSTER_NAME ?= kro
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
@@ -151,13 +149,25 @@ $(LOCALBIN):
 
 ## Tool Binaries
 KUBECTL ?= kubectl
+KIND ?= kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+KO ?= $(LOCALBIN)/ko
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
+KO_VERSION ?= v0.17.1
 KUSTOMIZE_VERSION ?= v5.2.1
 CONTROLLER_TOOLS_VERSION ?= v0.16.2
+
+.PHONY: ko
+ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
+$(KO): $(LOCALBIN)
+	@if test -x $(LOCALBIN)/ko && ! $(LOCALBIN)/ko version | grep -q $(KO_VERSION); then \
+		echo "$(LOCALBIN)/ko version is not expected $(KO_VERSION). Removing it before installing."; \
+		rm -rf $(LOCALBIN)/ko; \
+	fi
+	test -s $(LOCALBIN)/ko || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/google/ko@$(KO_VERSION)
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -175,15 +185,17 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 
 .PHONY: image
-build-image: ## Build the kro controller images using ko build
-	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) \
-		ko build --bare github.com/kro-run/kro/cmd/controller \
+build-image: ko ## Build the kro controller images using ko build
+	echo "Building kro image $(RELEASE_VERSION).."
+	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
+		$(KO) build --bare github.com/kro-run/kro/cmd/controller \
+		--local\
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
-publish-image: ## Publish the kro controller images to ghcr.io
+publish-image: ko ## Publish the kro controller images to ghcr.io
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) \
-		ko publish --bare github.com/kro-run/kro/cmd/controller \
+		$(KO) publish --bare github.com/kro-run/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: package-helm
@@ -200,3 +212,30 @@ publish-helm: ## Helm publish
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm
+
+##@ Deployment
+
+ifndef ignore-not-found
+  ignore-not-found = true
+endif
+
+.PHONY: install
+install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	$(KUBECTL) apply -f ./helm/crds
+
+.PHONY: uninstall
+uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config
+	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f ./helm/crds
+
+.PHONY: deploy-kind
+deploy-kind: export KO_DOCKER_REPO=kind.local
+deploy-kind:
+	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
+	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
+	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system
+	make install
+	# This generates deployment with ko://... used in image. 
+	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
+	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
+	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A

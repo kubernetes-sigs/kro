@@ -70,6 +70,7 @@ func TestNewDynamicController(t *testing.T) {
 	assert.NotNil(t, dc)
 	assert.Equal(t, config, dc.config)
 	assert.NotNil(t, dc.weightedQueues)
+	assert.NotNil(t, dc.weightedQueues[defaultQueueWeight].queue)
 	assert.NotNil(t, dc.kubeClient)
 }
 

@@ -105,7 +105,7 @@ type WeightedQueue struct {
 	// queue items will be prioritized based on GVR weight, between 1 and 1000
 	weight int
 	// queues are the workqueue used to process items
-	queue workqueue.RateLimitingInterface
+	queue workqueue.TypedRateLimitingInterface[any]
 	// a set of each gvr associated with the queue
 	gvrSet map[schema.GroupVersionResource]struct{}
 }
@@ -236,10 +236,13 @@ func (dc *DynamicController) ensureWeightedQueue(weight int) bool {
 		// TODO(a-hilaly): Make the queue size configurable.
 		dc.weightedQueues[weight] = &WeightedQueue{
 			weight: weight,
-			queue: workqueue.NewNamedRateLimitingQueue(workqueue.NewMaxOfRateLimiter(
-				workqueue.NewItemExponentialFailureRateLimiter(200*time.Millisecond, 1000*time.Second),
-				&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-			), fmt.Sprintf("weight-%d-queue", weight)),
+			queue: workqueue.NewNamedRateLimitingQueue(
+				workqueue.NewTypedMaxOfRateLimiter(
+					workqueue.NewTypedItemExponentialFailureRateLimiter[any](200*time.Millisecond, 1000*time.Second),
+					&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+				),
+				fmt.Sprintf("weight-%d-queue", weight),
+			),
 			gvrSet: map[schema.GroupVersionResource]struct{}{},
 		}
 	}
@@ -333,10 +336,10 @@ func (dc *DynamicController) worker(ctx context.Context) {
 // number of events are distributed between the queues
 func (dc *DynamicController) selectQueueByWeight() *WeightedQueue {
 	var (
-		totalWeight int = 0
-		maxWeight int = 0
+		totalWeight   int = 0
+		maxWeight     int = 0
 		selectedQueue *WeightedQueue
-		activeQueues = make([]*WeightedQueue, 0, len(dc.weightedQueues))
+		activeQueues  = make([]*WeightedQueue, 0, len(dc.weightedQueues))
 	)
 
 	for _, wq := range dc.weightedQueues {
@@ -360,7 +363,7 @@ func (dc *DynamicController) selectQueueByWeight() *WeightedQueue {
 		if effectiveWeight == maxWeight && q.weight > selectedQueue.weight {
 			selectedQueue = q
 		}
- 	}
+	}
 
 	return selectedQueue
 }

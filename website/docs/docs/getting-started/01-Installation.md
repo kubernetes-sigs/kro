@@ -13,7 +13,6 @@ Before you begin, ensure you have the following:
 
 1. `Helm` 3.x installed
 2. `kubectl` installed and configured to interact with your Kubernetes cluster
-3. Login to ghcr.io
 
 ## Installation Steps
 
@@ -45,6 +44,12 @@ helm install kro oci://ghcr.io/kro-run/kro/kro \
   --namespace kro \
   --create-namespace \
   --version=${KRO_VERSION}
+```
+Note: In case you are facing Helm install download failure, follow these steps:
+1. Generate a valid GitHub Personal Access Token (with read:packages scope) and store it in the GITHUB_TOKEN environment variable.
+2. Authenticate with GitHub Container Registry (GHCR)
+```sh 
+echo $GITHUB_TOKEN | helm registry login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 ```
 
 ## Verifying the Installation

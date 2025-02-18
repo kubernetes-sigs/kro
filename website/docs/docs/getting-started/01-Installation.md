@@ -45,12 +45,11 @@ helm install kro oci://ghcr.io/kro-run/kro/kro \
   --create-namespace \
   --version=${KRO_VERSION}
 ```
-Note: In case you are facing Helm install download failure, follow these steps:
-1. Generate a valid GitHub Personal Access Token (with read:packages scope) and store it in the GITHUB_TOKEN environment variable.
-2. Authenticate with GitHub Container Registry (GHCR)
-```sh 
-echo $GITHUB_TOKEN | helm registry login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-```
+
+:::info[**Troubleshooting Helm Install**]
+If you encounter Helm install download failures, the issue may be caused by expired local credentials. Try clearing your local credentials cache and retry the installation. Authentication is not required for pulling charts from public GHCR repositories.
+
+:::
 
 ## Verifying the Installation
 

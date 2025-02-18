@@ -1,0 +1,303 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: ollama-deployment.kro.run
+  namespace: default
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: OllamaDeployment
+    spec:
+      name: string | default=ollama
+      namespace: string | default=default
+      values:
+        # Storage configuration for model files
+        storage: string | default=50Gi # Minimum storage needed for model files
+        
+        # Model configuration
+        model:
+          name: string | default=llama3.2 # phi | deepseek - Name of the LLM model to deploy
+          size: string | default=1b         # Size variant of the model
+        
+        # Resource allocation for the Ollama containers
+        resources:
+          requests:
+            cpu: string | default="2"
+            memory: string | default="8Gi"
+          limits:
+            cpu: string | default="4"
+            memory: string | default="16Gi"
+        
+        # GPU configuration for hardware acceleration
+        gpu:
+          enabled: boolean | default=false  # Set to true to use GPU acceleration
+          count: integer | default=1        # Number of GPUs to allocate
+        
+        # Ingress configuration for external access
+        ingress:
+          enabled: boolean | default=true   # Enable/disable external access
+          port: integer | default=80        # Port for ingress traffic
+
+  resources:
+  - id: ollamaStorageClass
+    template:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: ${schema.spec.name}-storage-class
+        namespace: ${schema.spec.namespace}
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+      parameters:
+        type: gp3
+      provisioner: ebs.csi.aws.com
+      reclaimPolicy: Delete
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true
+
+  - id: ollamaPersistentVolumeClaim
+    template:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        annotations:
+          volume.kubernetes.io/storage-provisioner: ebs.csi.aws.com
+        name: ${schema.spec.name}-pvc
+        namespace: ${schema.spec.namespace}
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: ${schema.spec.values.storage}
+        storageClassName: ${schema.spec.name}-storage-class
+        volumeMode: Filesystem
+
+  - id: ollamaModelPullDeployment
+    includeWhen:
+    - ${schema.spec.values.gpu.enabled == false}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}-pull
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}-pull
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}-pull
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}-pull
+          spec:
+            volumes:
+            - name: ${schema.spec.name}-volume
+              persistentVolumeClaim:
+                claimName: ${schema.spec.name}-pvc  # <-- same PVC that the 'serve' deployment will use
+            containers:
+            - name: pull-model
+              image: ollama/ollama:latest
+              imagePullPolicy: IfNotPresent
+              env:
+              - name: OLLAMA_KEEP_ALIVE
+                value: "-1"
+              # Pull the model, then keep the container alive
+              lifecycle:
+                postStart:
+                  exec:
+                    command: 
+                    - "/bin/sh"
+                    - "-c"
+                    - "ollama run ${schema.spec.values.model.name}:${schema.spec.values.model.size}"
+              ports:
+              - containerPort: 11434
+              volumeMounts:
+              - name: ${schema.spec.name}-volume
+                mountPath: /root/.ollama
+
+  - id: ollamaServeDeployment
+    includeWhen:
+    - ${schema.spec.values.gpu.enabled == false}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+          spec:
+            volumes:
+            - name: ${schema.spec.name}-volume
+              persistentVolumeClaim:
+                claimName: ${schema.spec.name}-pvc  # <-- must match the first deployment
+            containers:
+            - name: serve
+              image: ollama/ollama:latest
+              imagePullPolicy: IfNotPresent
+              env:
+              - name: OLLAMA_KEEP_ALIVE
+                value: "-1"
+              command: ["ollama", "serve"] # Serve model
+              ports:
+              - containerPort: 11434
+              resources:
+                limits:
+                  cpu: ${schema.spec.values.resources.limits.cpu}
+                  memory: ${schema.spec.values.resources.limits.memory}
+                requests:
+                  cpu: ${schema.spec.values.resources.requests.cpu}
+                  memory: ${schema.spec.values.resources.requests.memory}
+              volumeMounts:
+              - name: ${schema.spec.name}-volume
+                mountPath: /root/.ollama
+
+  - id: ollamaModelPullDeploymentGPU
+    includeWhen:
+    - ${schema.spec.values.gpu.enabled}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}-pull
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}-pull
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}-pull
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}-pull
+          spec:
+            volumes:
+            - name: ${schema.spec.name}-volume
+              persistentVolumeClaim:
+                claimName: ${schema.spec.name}-pvc  # <-- same PVC that the 'serve' deployment will use
+            containers:
+            - name: pull-model
+              image: ollama/ollama:latest
+              imagePullPolicy: IfNotPresent
+              env:
+              - name: OLLAMA_KEEP_ALIVE
+                value: "-1"
+              # Pull the model, then keep the container alive
+              lifecycle:
+                postStart:
+                  exec:
+                    command: 
+                    - "/bin/sh"
+                    - "-c"
+                    - "ollama run ${schema.spec.values.model.name}:${schema.spec.values.model.size}"
+              ports:
+              - containerPort: 11434
+              volumeMounts:
+              - name: ${schema.spec.name}-volume
+                mountPath: /root/.ollama
+
+  - id: ollamaServeDeploymentGPU
+    includeWhen:
+    - ${schema.spec.values.gpu.enabled}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+          spec:
+            nodeSelector:        
+              nvidia.com/gpu: ${schema.spec.values.gpu.enabled} # <-- label for gpu
+            volumes:
+            - name: ${schema.spec.name}-volume
+              persistentVolumeClaim:
+                claimName: ${schema.spec.name}-pvc  # <-- must match the first deployment
+            containers:
+            - name: serve
+              image: ollama/ollama:latest
+              imagePullPolicy: IfNotPresent
+              env:
+              - name: OLLAMA_KEEP_ALIVE
+                value: "-1"
+              command: ["ollama", "serve"] # Serve model
+              ports:
+              - containerPort: 11434
+              resources:
+                limits:
+                  nvidia.com/gpu: ${schema.spec.values.gpu.count}
+                  cpu: ${schema.spec.values.resources.limits.cpu}
+                  memory: ${schema.spec.values.resources.limits.memory}
+                requests:
+                  cpu: ${schema.spec.values.resources.requests.cpu}
+                  memory: ${schema.spec.values.resources.requests.memory}
+              volumeMounts:
+              - name: ${schema.spec.name}-volume
+                mountPath: /root/.ollama
+
+  - id: ollamaService
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+      spec:
+        selector:
+          app.kubernetes.io/name: ${schema.spec.name}
+        ports:
+          - protocol: TCP
+            port: 80
+            targetPort: 11434
+  
+  - id: ollamaIngress
+    includeWhen:
+    - ${schema.spec.values.ingress.enabled} 
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ${schema.spec.name}-ingress
+        namespace: ${schema.spec.namespace}
+        annotations:
+          alb.ingress.kubernetes.io/scheme: internet-facing
+          alb.ingress.kubernetes.io/target-type: ip
+          alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+          alb.ingress.kubernetes.io/backend-protocol: HTTP
+      spec:
+        rules:
+          - http:
+              paths:
+                - path: /${schema.spec.name}
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${schema.spec.name}
+                      port:
+                        number: ${schema.spec.values.ingress.port}
+

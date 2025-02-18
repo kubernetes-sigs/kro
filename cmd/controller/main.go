@@ -60,20 +60,22 @@ func (c customLevelEnabler) Enabled(lvl zapcore.Level) bool {
 }
 
 func main() {
-	var metricsAddr string
-	var enableLeaderElection bool
-	var probeAddr string
-	var allowCRDDeletion bool
-	var resourceGraphDefinitionConcurrentReconciles int
-	var dynamicControllerConcurrentReconciles int
-	// reconciler parameters
-	var resyncPeriod int
-	var queueMaxRetries int
-	var shutdownTimeout int
-	// var dynamicControllerDefaultResyncPeriod int
-	var logLevel int
-	var qps float64
-	var burst int
+	var (
+		metricsAddr                                 string
+		enableLeaderElection                        bool
+		probeAddr                                   string
+		allowCRDDeletion                            bool
+		resourceGraphDefinitionConcurrentReconciles int
+		dynamicControllerConcurrentReconciles       int
+		// reconciler parameters
+		resyncPeriod    int
+		queueMaxRetries int
+		shutdownTimeout int
+		// var dynamicControllerDefaultResyncPeriod int
+		logLevel int
+		qps      float64
+		burst    int
+	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8079", "The address the probe endpoint binds to.")
@@ -189,20 +191,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	go dc.Run(context.Background())
+	go func() {
+		err := dc.Run(context.Background())
+		if err != nil {
+			setupLog.Error(err, "dynamic controller failed to run")
+		}
+	}()
 
 	//+kubebuilder:scaffold:builder
 
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+
+	if err = mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
 
 	ctx := ctrl.SetupSignalHandler()
+
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
 			setupLog.Error(err, "problem running manager")

@@ -57,6 +57,18 @@ spec:
               value: {{ .Values.config.dynamicControllerConcurrentReconciles | quote }}
             - name: KRO_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_DEFAULT_RESYNC_PERIOD
+              value: {{ .Values.config.dynamicControllerDefaultResyncPeriod | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_DEFAULT_QUEUE_MAX_RETRIES
+              value: {{ .Values.config.dynamicControllerDefaultQueueMaxRetries | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_DEFAULT_SHUTDOWN_TIMEOUT
+              value: {{ .Values.config.dynamicControllerDefaultShutdownTimeout | quote }}
+            - name: KRO_CLIENT_QPS
+              value: {{ .Values.config.clientQps | quote }}
+            - name: KRO_CLIENT_BURST
+              value: {{ .Values.config.clientBurst | quote }}
+            - name: KRO_LEADER_ELECTION
+              value: {{ .Values.config.enableLeaderElection | quote }}
           args:
             - --allow-crd-deletion
             - "$(KRO_ALLOW_CRD_DELETION)"
@@ -70,6 +82,18 @@ spec:
             - "$(KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES)"
             - --log-level
             - "$(KRO_LOG_LEVEL)"
+            - --dynamic-controller-default-resync-period
+            - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_RESYNC_PERIOD)"
+            - --dynamic-controller-default-queue-max-retries
+            - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_QUEUE_MAX_RETRIES)"
+            - --dynamic-controller-default-shutdown-timeout
+            - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_SHUTDOWN_TIMEOUT)"
+            - --client-qps
+            - "$(KRO_CLIENT_QPS)"
+            - --client-burst
+            - "$(KRO_CLIENT_BURST)"
+            - --leader-elect
+            - "$(KRO_LEADER_ELECTION)"
           livenessProbe:
             httpGet:
               path: /healthz

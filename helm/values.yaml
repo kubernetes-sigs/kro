@@ -11,7 +11,7 @@ image:
   # The location of the container image repository
   repository: ghcr.io/kro-run/kro/controller
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.2.0"
+  tag: "0.2.1"
   # Ignores the repository and tag settings and uses the controllers ko entrypoint.
   ko: false
   # Image pull policy (IfNotPresent: pull the image only if it is not present locally)
@@ -35,7 +35,7 @@ deployment:
   # Number of replicas for the Pods to run
   replicaCount: 1
   # Port that the container will expose
-  containerPort: 8080
+  containerPort: 8078
   # Annotations to add to the Pod
   podAnnotations: {}
   # Labels to add to the Pod
@@ -84,6 +84,12 @@ deployment:
 config:
   # Allow kro to delete CRDs
   allowCRDDeletion: false
+  # The maximum number of queries per second to allow
+  clientQps: 100
+  # The number of requests that can be stored for processing before the server starts enforcing the QPS limit
+  clientBurst: 150
+  # Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.
+  enableLeaderElection: false
   # The address the metric endpoint binds to
   metricsBindAddress: :8078
   # The address the probe endpoint binds to
@@ -92,6 +98,12 @@ config:
   resourceGraphDefinitionConcurrentReconciles: 1
   # The number of dynamic controller reconciles to run in parallel
   dynamicControllerConcurrentReconciles: 1
+  # The interval at which the controller will re list resources even with no changes, in hours
+  dynamicControllerDefaultResyncPeriod: 10
+  # The maximum number of retries for an item in the queue will be retried before being dropped
+  dynamicControllerDefaultQueueMaxRetries: 20
+  # The maximum duration to wait for the controller to gracefully shutdown, in seconds
+  dynamicControllerDefaultShutdownTimeout: 60
   # The log level verbosity. 0 is the least verbose, 5 is the most verbose
   logLevel: 3
 

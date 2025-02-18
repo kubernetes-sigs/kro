@@ -117,7 +117,6 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
 		ResourceGraphDefinitionIDLabel:        string(rgMeta.GetUID()),
 		ResourceGraphDefinitionNameLabel:      rgMeta.GetName(),
-		ResourceGraphDefinitionNamespaceLabel: rgMeta.GetNamespace(),
 	}
 }
 

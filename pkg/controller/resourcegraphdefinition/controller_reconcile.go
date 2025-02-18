@@ -43,16 +43,19 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 		return nil, nil, err
 	}
 
-	// Ensure CRD exists and is up to date
-	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, processedRGD.Instance.GetCRD()); err != nil {
-		return processedRGD.TopologicalOrder, resourcesInfo, err
-	}
-
 	// Setup metadata labeling
 	graphExecLabeler, err := r.setupLabeler(rgd)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
+	}
+
+	crd := processedRGD.Instance.GetCRD()
+	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
+
+	// Ensure CRD exists and is up to date
+	log.V(1).Info("reconciling resource graph definition CRD")
+	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
 
 	// Setup and start microcontroller

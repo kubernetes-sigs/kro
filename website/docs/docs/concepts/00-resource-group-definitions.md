@@ -153,11 +153,11 @@ its behavior accordingly.
 
 After the **ResourceGraphDefinition** is validated and registered in the cluster, users
 can can create instances of it. Here's an example of how an instance for the
-`SimpleWebApp` might look:
+`WebApplication` might look:
 
 ```yaml title="my-web-app-instance.yaml"
 apiVersion: kro.run/v1alpha1
-kind: SimpleWebApp
+kind: WebApplication
 metadata:
   name: my-web-app
 spec:

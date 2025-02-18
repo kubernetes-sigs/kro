@@ -1,8 +1,6 @@
 module github.com/kro-run/kro
 
-go 1.22.0
-
-toolchain go1.22.4
+go 1.24.0
 
 require (
 	github.com/go-logr/logr v1.4.2

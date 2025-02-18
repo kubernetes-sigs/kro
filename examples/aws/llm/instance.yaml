@@ -1,0 +1,25 @@
+apiVersion: kro.run/v1alpha1
+kind: OllamaDeployment
+metadata:
+  name: llm
+spec:
+  name: llm
+  namespace: default
+  values:
+    storage: 50Gi 
+    model:
+      name: llama3.2 # phi | deepseek
+      size: 1b
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"
+    gpu:
+      enabled: false
+      count: 1
+    ingress:
+      enabled: false
+      port: 80

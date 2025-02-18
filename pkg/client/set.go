@@ -62,7 +62,7 @@ func NewSet(cfg Config) (*Set, error) {
 	if config.Burst == 0 {
 		config.Burst = cfg.Burst
 	}
-	config.UserAgent = "kro/0.2.0"
+	config.UserAgent = "kro/0.2.1"
 
 	c := &Set{config: config}
 	if err := c.init(); err != nil {

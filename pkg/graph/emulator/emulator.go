@@ -81,6 +81,11 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		return nil, fmt.Errorf("schema is nil")
 	}
 
+	if enabled, ok := schema.VendorExtensible.Extensions["x-kubernetes-preserve-unknown-fields"]; ok && enabled.(bool) {
+		// Handle x-kubernetes-preserve-unknown-fields
+		return e.generateObject(schema)
+	}
+
 	if enabled, ok := schema.VendorExtensible.Extensions["x-kubernetes-int-or-string"]; ok && enabled.(bool) {
 		// Default to integer for dummy CRs
 		return e.generateInteger(schema), nil
@@ -101,7 +106,8 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 			return e.generateValue(&schema.AnyOf[e.rand.Intn(len(schema.AnyOf))])
 		}
 
-		return nil, fmt.Errorf("schema type is empty and has no properties")
+    // return nil, fmt.Errorf("schema type is empty and has no properties: %+v", schema)
+    return nil, fmt.Errorf("schema type is empty and has no properties")
 	}
 
 	if len(schema.Type) != 1 {

@@ -14,6 +14,7 @@
 package emulator
 
 import (
+  "fmt" // HACK: remove me, used for debugging, i need to learn to debug better...
 	"strings"
 	"testing"
 
@@ -501,6 +502,24 @@ func TestGenerateValueWithIntOrString(t *testing.T) {
 
 }
 
+func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
+	e := NewEmulator()
+
+	t.Run("x-kubernetes-preserve-unknown-fields present, does not produce error", func(t *testing.T) {
+		schema := &spec.Schema{
+			VendorExtensible: spec.VendorExtensible{
+				Extensions: map[string]interface{}{
+					"x-kubernetes-preserve-unknown-fields": true,
+				},
+			},
+		}
+
+		value, err := e.generateValue(schema)
+		require.NoError(t, err)
+	})
+
+}
+
 func ptr[T comparable](v T) *T {
 	return &v
 }
@@ -511,6 +530,6 @@ func isInt64OrString(v interface{}) bool {
 	case int64, string:
 		return true
 	default:
-		return false
+	return false
 	}
 }

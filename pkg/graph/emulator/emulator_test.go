@@ -14,7 +14,6 @@
 package emulator
 
 import (
-  "fmt" // HACK: remove me, used for debugging, i need to learn to debug better...
 	"strings"
 	"testing"
 

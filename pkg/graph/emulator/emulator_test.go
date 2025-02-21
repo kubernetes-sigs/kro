@@ -514,7 +514,7 @@ func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
 			},
 		}
 
-		value, err := e.generateValue(schema)
+		_, err := e.generateValue(schema)
 		require.NoError(t, err)
 	})
 

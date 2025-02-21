@@ -140,16 +140,19 @@ func NewDynamicController(
 	log logr.Logger,
 	config Config,
 	kubeClient dynamic.Interface,
+	minRetryDelay time.Duration,
+	maxRetryDelay time.Duration,
+	rateLimit int,
+	burstLimit int,
 ) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
 	dc := &DynamicController{
 		config:     config,
 		kubeClient: kubeClient,
-		// TODO(a-hilaly): Make the queue size configurable.
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](200*time.Millisecond, 1000*time.Second),
-			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](minRetryDelay, maxRetryDelay),
+			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(rateLimit), burstLimit)},
 		), workqueue.TypedRateLimitingQueueConfig[ObjectIdentifiers]{Name: "dynamic-controller-queue"}),
 		log: logger,
 		// pass version and pod id from env

@@ -14,7 +14,7 @@ package dynamiccontroller
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"testing"
 	"time"
 
@@ -34,10 +34,17 @@ import (
 // parts that need to be tested. I'll probably need to rewrite some parts of graphexec
 // and dynamiccontroller to make this work.
 
+const (
+	minRetryDelay = 200 * time.Millisecond
+	maxRetryDelay = 1000 * time.Second
+	rateLimit     = 10
+	burstLimit    = 100
+)
+
 func noopLogger() logr.Logger {
 	opts := zap.Options{
 		// Write to dev/null
-		DestWriter: ioutil.Discard,
+		DestWriter: io.Discard,
 	}
 	logger := zap.New(zap.UseFlagOptions(&opts))
 	return logger
@@ -65,7 +72,7 @@ func TestNewDynamicController(t *testing.T) {
 		ShutdownTimeout: 60 * time.Second,
 	}
 
-	dc := NewDynamicController(logger, config, client)
+	dc := NewDynamicController(logger, config, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
 
 	assert.NotNil(t, dc)
 	assert.Equal(t, config, dc.config)
@@ -76,13 +83,15 @@ func TestNewDynamicController(t *testing.T) {
 func TestRegisterAndUnregisterGVK(t *testing.T) {
 	logger := noopLogger()
 	client := setupFakeClient()
+
 	config := Config{
 		Workers:         1,
 		ResyncPeriod:    1 * time.Second,
 		QueueMaxRetries: 5,
 		ShutdownTimeout: 5 * time.Second,
 	}
-	dc := NewDynamicController(logger, config, client)
+
+	dc := NewDynamicController(logger, config, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
@@ -127,7 +136,8 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
 	client := setupFakeClient()
-	dc := NewDynamicController(logger, Config{}, client)
+
+	dc := NewDynamicController(logger, Config{}, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
 
 	obj := &unstructured.Unstructured{}
 	obj.SetName("test-object")

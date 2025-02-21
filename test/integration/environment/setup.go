@@ -142,7 +142,12 @@ func (e *Environment) setupController() error {
 			ShutdownTimeout: 60 * time.Second,
 		},
 		e.ClientSet.Dynamic(),
+		200*time.Millisecond,
+		1000*time.Second,
+		10,
+		100,
 	)
+
 	go func() {
 		err := dc.Run(e.context)
 		if err != nil {

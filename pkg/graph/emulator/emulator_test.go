@@ -529,6 +529,6 @@ func isInt64OrString(v interface{}) bool {
 	case int64, string:
 		return true
 	default:
-	return false
+		return false
 	}
 }

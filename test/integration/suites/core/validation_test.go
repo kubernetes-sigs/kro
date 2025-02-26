@@ -285,7 +285,7 @@ var _ = Describe("Validation", func() {
 				"123Test",       // Starts with number
 				"Test.Resource", // Contains dot
 				"Test!",         // Special character
-				"TestThisIsAValidButReallyLongNameSoLongThatItIsGreaterThan63Characters" // Greater than 63 characters
+				"TestThisIsAValidButReallyLongNameSoLongThatItIsGreaterThan63Characters", // Greater than 63 characters
 			}
 
 			for _, kind := range invalidKinds {

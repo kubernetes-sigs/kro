@@ -46,11 +46,13 @@ const (
 	MarkerTypeDefault MarkerType = "default"
 	// MarkerTypeDescription represents the `description` marker.
 	MarkerTypeDescription MarkerType = "description"
+	// MarkerTypeEnumeration represents the `enum` marker.
+	MarkerTypeEnumeration MarkerType = "enum"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
 	switch MarkerType(s) {
-	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription:
+	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription, MarkerTypeEnumeration:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("unknown marker type: %s", s)

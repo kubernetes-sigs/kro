@@ -15,6 +15,7 @@ package simpleschema
 
 import (
 	"fmt"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
@@ -203,6 +204,23 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			schema.Default = &extv1.JSON{Raw: defaultValue}
 		case MarkerTypeDescription:
 			schema.Description = marker.Value
+		case MarkerTypeEnumeration:
+			enumValues := strings.Split(marker.Value, ",")
+			enumJSON := make([]extv1.JSON, 0, len(enumValues))
+			for _, v := range enumValues {
+				v = strings.TrimSpace(v)
+				var enumVal []byte
+				switch schema.Type {
+				case "string":
+					enumVal = []byte(fmt.Sprintf("\"%s\"", v))
+				case "integer", "number":
+					enumVal = []byte(v)
+				default:
+					enumVal = []byte(v)
+				}
+				enumJSON = append(enumJSON, extv1.JSON{Raw: enumVal})
+			}
+			schema.Enum = enumJSON
 		}
 	}
 }

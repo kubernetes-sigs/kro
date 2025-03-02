@@ -42,6 +42,7 @@ func NewCelMetrics() *CelMetrics {
 		),
 	}
 
+	prometheus.MustRegister(m.compilationTime , m.evaluationTime)
 
 	return m
 }

@@ -16,6 +16,7 @@ package graph
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	cel "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
@@ -31,6 +32,7 @@ import (
 	"github.com/kro-run/kro/api/v1alpha1"
 	krocel "github.com/kro-run/kro/pkg/cel"
 	"github.com/kro-run/kro/pkg/cel/ast"
+	"github.com/kro-run/kro/pkg/cel/metrics"
 	"github.com/kro-run/kro/pkg/graph/crd"
 	"github.com/kro-run/kro/pkg/graph/dag"
 	"github.com/kro-run/kro/pkg/graph/emulator"
@@ -40,6 +42,8 @@ import (
 	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/pkg/simpleschema"
 )
+
+var celMetrics = metrics.NewCelMetrics()
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(
@@ -597,11 +601,14 @@ func buildStatusSchema(
 // validateCELExpressionContext validates the given CEL expression in the context
 // of the resources defined in the resource graph definition.
 func validateCELExpressionContext(env *cel.Env, expression string, resources []string) error {
+	start := time.Now()
 	inspector := ast.NewInspectorWithEnv(env, resources, nil)
 
 	// The CEL expression is valid if it refers to the resources defined in the
 	// resource graph definition.
 	inspectionResult, err := inspector.Inspect(expression)
+	celMetrics.ObserveCompilationTime(time.Since(start))
+
 	if err != nil {
 		return fmt.Errorf("failed to inspect expression: %w", err)
 	}
@@ -635,7 +642,10 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 		context[resourceName] = resource.emulatedObject.Object
 	}
 
+	start := time.Now()
 	output, _, err := program.Eval(context)
+	celMetrics.ObserveEvaluationTime(time.Since(start))
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate expression: %w", err)
 	}

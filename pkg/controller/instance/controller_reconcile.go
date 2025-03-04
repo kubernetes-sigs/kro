@@ -55,6 +55,8 @@ type instanceGraphReconciler struct {
 	reconcileConfig ReconcileConfig
 	// state holds the current state of the instance and its sub-resources.
 	state *InstanceState
+	// owner reference to the owning ResourceGraph Instance
+	OwnerReference metav1.OwnerReference
 }
 
 // reconcile performs the reconciliation of the instance and its sub-resources.
@@ -211,6 +213,11 @@ func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic
 	return igr.client.Resource(gvr)
 }
 
+func applyValues(resource *unstructured.Unstructured, labeler metadata.Labeler, owner metav1.OwnerReference) {
+	labeler.ApplyLabels(resource)
+	resource.SetOwnerReferences([]metav1.OwnerReference{owner})
+}
+
 // handleResourceCreation manages the creation of a new resource
 func (igr *instanceGraphReconciler) handleResourceCreation(
 	ctx context.Context,
@@ -222,7 +229,8 @@ func (igr *instanceGraphReconciler) handleResourceCreation(
 	igr.log.V(1).Info("Creating new resource", "resourceID", resourceID)
 
 	// Apply labels and create resource
-	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
+	applyValues(resource, igr.instanceSubResourcesLabeler, igr.OwnerReference)
+
 	if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {
 		resourceState.State = "ERROR"
 		resourceState.Err = fmt.Errorf("failed to create resource: %w", err)
@@ -267,7 +275,7 @@ func (igr *instanceGraphReconciler) updateResource(
 		"resourceID", resourceID,
 		"delta", differences,
 	)
-	igr.instanceSubResourcesLabeler.ApplyLabels(desired)
+	applyValues(desired, igr.instanceSubResourcesLabeler, igr.OwnerReference)
 
 	// Apply changes to the resource
 	// TODO: Handle annotations
@@ -418,7 +426,7 @@ func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstruc
 		return nil, fmt.Errorf("failed to set finalizer: %w", err)
 	}
 
-	igr.instanceLabeler.ApplyLabels(copy)
+	applyValues(copy, igr.instanceSubResourcesLabeler, igr.OwnerReference)
 
 	updated, err := igr.client.Resource(igr.gvr).
 		Namespace(obj.GetNamespace()).

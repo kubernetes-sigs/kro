@@ -88,7 +88,6 @@ func TestSetKROOwned(t *testing.T) {
 		})
 	}
 }
-
 func TestSetKROUnowned(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -177,6 +176,35 @@ func TestGenericLabeler(t *testing.T) {
 					assert.NoError(t, err)
 					assert.Equal(t, tc.expectedMerged, merged)
 				}
+			})
+		}
+	})
+
+	t.Run("FactoryFunction", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			given    metav1.ObjectMeta
+			expected map[string]string
+		}{
+			{
+				name:     "Create without K8s App Instance Label",
+				given:    metav1.ObjectMeta{UID: "123", Name: "Name", Namespace: "Namespace"},
+				expected: map[string]string{InstanceIDLabel: "123", InstanceLabel: "Name", InstanceNamespaceLabel: "Namespace"},
+			},
+			{
+				name:     "Create include K8s App Instance Label",
+				given:    metav1.ObjectMeta{UID: "123", Name: "Name", Namespace: "Namespace", Labels: map[string]string{K8sAppInstanceLabel: "someApp"}},
+				expected: map[string]string{InstanceIDLabel: "123", InstanceLabel: "Name", InstanceNamespaceLabel: "Namespace", K8sAppInstanceLabel: "someApp"},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+
+				obj := &mockObject{ObjectMeta: tc.given}
+				labeler := NewInstanceLabeler(obj)
+				labeler.ApplyLabels(obj)
+				assert.Equal(t, tc.expected, obj.Labels)
 			})
 		}
 	})

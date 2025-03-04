@@ -159,6 +159,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		reconcileConfig:             c.reconcileConfig,
 		// Fresh instance state at each reconciliation loop.
 		state: newInstanceState(),
+		OwnerReference: metav1.OwnerReference{
+			APIVersion: instance.GetAPIVersion(),
+			Kind:       instance.GetKind(),
+			Name:       instance.GetName(),
+			UID:        instance.GetUID(),
+		},
 	}
 	return instanceGraphReconciler.reconcile(ctx)
 }

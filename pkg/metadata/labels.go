@@ -24,6 +24,7 @@ import (
 const (
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+	K8sAppPrefix   = "app.kubernetes.io/"
 )
 
 const (
@@ -40,6 +41,8 @@ const (
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+
+	K8sAppInstanceLabel = K8sAppPrefix + "instance"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -119,16 +122,25 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	}
 }
 
-// NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
+// NewInstanceLabeler returns a new labeler that sets the K8sComponentId, InstanceLabel and
 // InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
 // and name of the instance that was reconciled to create the resource.
+// The K8s Component Id gets propagated from the given given and only set when
+// available on it.
 func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
-	return map[string]string{
+	retVal := map[string]string{
 		InstanceIDLabel:        string(instanceMeta.GetUID()),
 		InstanceLabel:          instanceMeta.GetName(),
 		InstanceNamespaceLabel: instanceMeta.GetNamespace(),
 	}
+
+	appInstance, exists := instanceMeta.GetLabels()[K8sAppInstanceLabel]
+	if exists {
+		retVal[K8sAppInstanceLabel] = appInstance
+	}
+	return retVal
 }
+
 
 // NewKROMetaLabeler returns a new labeler that sets the OwnedLabel and
 // KROVersion labels on a resource.

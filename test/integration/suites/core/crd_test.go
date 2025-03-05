@@ -244,6 +244,165 @@ var _ = Describe("CRD", func() {
 		})
 	})
 
+	Context("CRD Breaking Changes", func() {
+		It("should block RGD update when schema has breaking changes", func(ctx SpecContext) {
+			// Create initial ResourceGraphDefinition with two fields
+			rgd := generator.NewResourceGraphDefinition("test-breaking-change",
+				generator.WithSchema(
+					"BreakingTest", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+						"field2": "integer | default=42",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			// Wait for CRD and RGD to become active
+			crdName := "breakingtests.kro.run"
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
+					&apiextensionsv1.CustomResourceDefinition{})
+				g.Expect(err).ToNot(HaveOccurred())
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Update RGD with breaking change: remove field2
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Remove field2 - this is a breaking change
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"field1": "string",
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify RGD becomes inactive with breaking change error
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+				// Check that the condition mentions breaking changes
+				var foundCondition bool
+				for _, cond := range rgd.Status.Conditions {
+					if cond.Type == "KindReady" &&
+						cond.Status == metav1.ConditionFalse {
+						g.Expect(cond.Message).ToNot(BeNil())
+						g.Expect(*cond.Message).To(ContainSubstring("breaking"))
+						foundCondition = true
+						break
+					}
+				}
+				g.Expect(foundCondition).To(BeTrue(), "Expected to find KindReady=False condition")
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Now add the allow-breaking-changes annotation and touch spec to trigger reconcile
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				if rgd.Annotations == nil {
+					rgd.Annotations = make(map[string]string)
+				}
+				rgd.Annotations[krov1alpha1.AllowBreakingChangesAnnotation] = "true"
+
+				// Touch spec to trigger reconcile (annotation changes don't increment generation)
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"field1": "string",
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify RGD becomes active and CRD is updated with breaking change
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Verify field2 was removed from CRD (breaking change applied)
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties).ToNot(HaveKey("field2"))
+				g.Expect(props["spec"].Properties).To(HaveKey("field1"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should allow RGD update when schema changes are non-breaking", func(ctx SpecContext) {
+			// Create initial ResourceGraphDefinition
+			rgd := generator.NewResourceGraphDefinition("test-nonbreaking-change",
+				generator.WithSchema(
+					"NonBreakingTest", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			// Wait for RGD to become active
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Update RGD with non-breaking change: add optional field2
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Add field2 - this is a non-breaking change
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"field1": "string",
+					"field2": "integer | default=42",
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify RGD stays active and CRD is updated
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name: "nonbreakingtests.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Verify new field exists in CRD
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties).To(HaveKey("field2"))
+				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+	})
+
 	Context("CRD Watch Reconciliation", func() {
 		It("should reconcile the ResourceGraphDefinition back when CRD is manually modified", func(ctx SpecContext) {
 			rgdName := "test-crd-watch"

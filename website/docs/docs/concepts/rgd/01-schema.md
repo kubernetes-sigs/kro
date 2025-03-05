@@ -287,6 +287,10 @@ When users create instances, Kubernetes validates them against the generated CRD
 
 kro continuously evaluates status expressions and updates instance status as resources change. If a deployment's replica count changes, the corresponding status field updates automatically.
 
+### 4. Schema Updates
+
+When you update an RGD's schema, kro checks whether the changes are compatible with existing instances. Changes like removing fields, changing types, or adding required fields without defaults are considered breaking and will be blocked by default. See [Breaking Changes](./00-overview.md#breaking-changes) for how to allow breaking changes when needed.
+
 ## Custom Types
 
 For complex schemas, you can define reusable custom types:

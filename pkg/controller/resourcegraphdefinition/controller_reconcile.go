@@ -63,7 +63,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
@@ -157,8 +158,8 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 }
 
 // reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, allowBreakingChanges bool) error {
+	if err := r.crdManager.Ensure(ctx, *crd, allowBreakingChanges); err != nil {
 		return newCRDError(err)
 	}
 	return nil

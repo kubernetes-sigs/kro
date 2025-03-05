@@ -124,6 +124,15 @@ func TestParseMarkers(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:  "validation marker with one value",
+			input: "validation=\"oldself=self\" required=true",
+			want: []*Marker{
+				{MarkerType: MarkerTypeValidation, Key: "validation", Value: "oldself=self"},
+				{MarkerType: MarkerTypeRequired, Key: "required", Value: "true"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

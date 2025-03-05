@@ -212,6 +212,13 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
 				schema.Maximum = &val
 			}
+		case MarkerTypeValidation:
+			newRule := extv1.ValidationRule{
+				Rule: marker.Value,
+			}
+			if parentSchema != nil {
+				parentSchema.XValidations = append(parentSchema.XValidations, newRule)
+			}
 		}
 	}
 }

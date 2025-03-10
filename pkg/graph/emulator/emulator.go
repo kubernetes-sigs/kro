@@ -82,6 +82,10 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 	}
 
 	if enabled, ok := schema.VendorExtensible.Extensions["x-kubernetes-preserve-unknown-fields"]; ok && enabled.(bool) {
+		// Handle x-kubernetes-preserve-unknown-fields with no properties or type
+		if len(schema.Properties) == 0 && schema.Type == nil {
+			return e.generateString(schema), nil
+		}
 		// Handle x-kubernetes-preserve-unknown-fields
 		return e.generateObject(schema)
 	}
@@ -137,7 +141,7 @@ func (e *Emulator) generateObject(schema *spec.Schema) (map[string]interface{}, 
 	if schema == nil {
 		return nil, fmt.Errorf("schema is nil")
 	}
-
+ 
 	result := make(map[string]interface{})
 	for propertyName, propertySchema := range schema.Properties {
 		value, err := e.generateValue(&propertySchema)

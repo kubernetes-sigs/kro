@@ -292,12 +292,22 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.ID)
 		}
 	} else {
-
 		// 4. Emulate the resource, this is later used to verify the validity of the
 		//    CEL expressions.
 		emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.ID, err)
+		}
+
+		// Add metadata fields to emulated resource
+		if emulatedResource.Object["metadata"] == nil {
+			emulatedResource.Object["metadata"] = map[string]interface{}{
+				"name": "dummy-name",
+				"creationTimestamp": "2024-01-01T00:00:00Z",
+				"namespace": "default",
+				"labels": map[string]interface{}{},
+				"annotations": map[string]interface{}{},
+			}
 		}
 
 		// 5. Extract CEL fieldDescriptors from the schema.

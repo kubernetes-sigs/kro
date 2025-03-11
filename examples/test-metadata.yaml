@@ -1,0 +1,24 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: using-metadata
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UsingMetadata
+    spec:
+      data:
+        foo: string
+        bar: integer
+    status:
+      created: ${configmap.metadata.creationTimestamp}
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${instance.metadata.name + "-cm"}
+        data:
+          foo: ${schema.spec.data.foo}
+          bar: ${string(schema.spec.data.bar)} 

@@ -46,6 +46,16 @@ func WithCustomDeclarations(declarations []cel.EnvOption) EnvOption {
 	}
 }
 
+// WithMetadataSupport adds support for metadata field access in CEL expressions
+func WithMetadataSupport() EnvOption {
+	return func(opts *envOptions) {
+		// Add metadata type declarations
+		opts.customDeclarations = append(opts.customDeclarations,
+			cel.Variable("metadata", cel.AnyType),
+		)
+	}
+}
+
 // DefaultEnvironment returns the default CEL environment.
 func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	opts := &envOptions{}
@@ -57,10 +67,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		// default stdlibs
 		ext.Lists(),
 		ext.Strings(),
+		// Always enable metadata support by default
+		cel.Variable("metadata", cel.AnyType),
 	}
 
 	for _, name := range opts.resourceIDs {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
+
+	declarations = append(declarations, opts.customDeclarations...)
 	return cel.NewEnv(declarations...)
 }

@@ -59,8 +59,12 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		ext.Strings(),
 	}
 
+	// Add resource IDs
 	for _, name := range opts.resourceIDs {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
+
+	declarations = append(declarations, opts.customDeclarations...)
+
 	return cel.NewEnv(declarations...)
 }

@@ -36,6 +36,10 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
+
+	// Functions defines custom CEL functions that can be used in expressions
+	// +kubebuilder:validation:Optional
+	Functions []Function `json:"functions,omitempty"`
 	// ServiceAccount configuration for controller impersonation.
 	// Key is the namespace, value is the service account name to use.
 	// Special key "*" defines the default service account for any
@@ -43,6 +47,18 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
+}
+
+type Function struct {
+	// The unique identifier for the function
+	ID string `json:"id"`
+
+	// Inputs defines the expected input types
+	// +kubebuilder:validation:MinItems=1
+	Inputs []string `json:"inputs"`
+
+	// The CEL expression template that defines the function logic
+	Template string `json:"template"`
 }
 
 // Schema represents the attributes that define an instance of

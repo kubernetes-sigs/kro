@@ -3,13 +3,12 @@ package main
 import (
 	"os"
 
-	"github.com/kro-run/kro/cmd/kubectl-cro/render"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "kubectl-cro",
-	Short: "kubectl-cro is a kubectl plugin for kro",
+	Use:   "kro",
+	Short: "kro is a CLI for https://kro.run",
 }
 
 func main() {
@@ -19,5 +18,5 @@ func main() {
 }
 
 func init() {
-	rootCmd.AddCommand(render.Cmd)
+	// Add subcommands and configure global flags here
 }

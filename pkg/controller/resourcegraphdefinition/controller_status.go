@@ -130,6 +130,15 @@ func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
 
+		// Ensure metadata fields are included in the status update
+		metadata := resourcegraphdefinition.Object["metadata"].(map[string]interface{})
+		if metadata != nil {
+			dc.Status.Resources = append(dc.Status.Resources, v1alpha1.ResourceInformation{
+				ID: "metadata",
+				Dependencies: []v1alpha1.Dependency{},
+			})
+		}
+
 		log.V(1).Info("updating resource graph definition status",
 			"state", dc.Status.State,
 			"conditions", len(dc.Status.Conditions),

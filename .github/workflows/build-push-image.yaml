@@ -2,14 +2,14 @@ name: Build and Publish
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [main]
+    tags: ["v*"]
     paths:
       - "**.go"
       - go.mod
       - go.sum
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
       - "**.go"
       - go.mod
@@ -32,12 +32,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.24'
+          go-version: "1.24"
 
       - name: Install Dependencies
         run: |
           go mod download
-          go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.2
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.2.1
           go install github.com/google/ko@latest
 

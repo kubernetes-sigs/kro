@@ -1,0 +1,22 @@
+nwa:
+  holder: The Kube Resource Orchestrator Authors
+  path:
+    - api/**
+    - cmd/**
+    - examples/**
+    - pkg/**
+    - test/**
+  skip:
+    - examples/**/*.md
+    - examples/**/*.py
+    - examples/**/*.sh
+    - examples/**/*.yaml
+    - test/**/*.md
+    - test/**/*.yaml
+    # these file types are not supported
+    - "**/*.png"
+    - "**/*.tpl"
+    - "**/requirements.txt"
+    - "**/*.graffle"
+    - "**/.*ignore"
+    - "**/*.drawio"

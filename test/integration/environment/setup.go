@@ -77,6 +77,7 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 			filepath.Join("../..", "crds", "ack-eks-controller"),
 		},
 		ErrorIfCRDPathMissing:   true,
+		DownloadBinaryAssets:    true,
 		ControlPlaneStopTimeout: 2 * time.Minute,
 	}
 

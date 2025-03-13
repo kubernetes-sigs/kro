@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-K8S_VERSION="${K8S_VERSION:="1.29.x"}"
-KUBEBUILDER_ASSETS="/usr/local/kubebuilder/bin"
-
 main() {
     tools
     kubebuilder
@@ -17,7 +14,6 @@ tools() {
     go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
     go install github.com/google/ko@latest
     go install github.com/mikefarah/yq/v4@latest
-    go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
     go install github.com/sigstore/cosign/v2/cmd/cosign@latest
     go install golang.org/x/vuln/cmd/govulncheck@latest
 }

@@ -149,7 +149,6 @@ KUBECTL ?= kubectl
 KIND ?= kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 KO ?= $(LOCALBIN)/ko
-ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
 KO_VERSION ?= v0.17.1

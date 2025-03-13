@@ -96,6 +96,14 @@ type Config struct {
 	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving
 	// the controller enough time to finish processing any pending items.
 	ShutdownTimeout time.Duration
+	// MinRetryDelay is the minimum delay before retrying an item in the queue
+	MinRetryDelay time.Duration
+	// MaxRetryDelay is the maximum delay before retrying an item in the queue
+	MaxRetryDelay time.Duration
+	// RateLimit is the maximum number of events processed per second
+	RateLimit int
+	// BurstLimit is the maximum number of events in a burst
+	BurstLimit int
 }
 
 // DynamicController (DC) is a single controller capable of managing multiple different
@@ -139,20 +147,15 @@ type informerWrapper struct {
 func NewDynamicController(
 	log logr.Logger,
 	config Config,
-	kubeClient dynamic.Interface,
-	minRetryDelay time.Duration,
-	maxRetryDelay time.Duration,
-	rateLimit int,
-	burstLimit int,
-) *DynamicController {
+	kubeClient dynamic.Interface) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
 	dc := &DynamicController{
 		config:     config,
 		kubeClient: kubeClient,
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](minRetryDelay, maxRetryDelay),
-			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(rateLimit), burstLimit)},
+			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](config.MinRetryDelay, config.MaxRetryDelay),
+			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(config.RateLimit), config.BurstLimit)},
 		), workqueue.TypedRateLimitingQueueConfig[ObjectIdentifiers]{Name: "dynamic-controller-queue"}),
 		log: logger,
 		// pass version and pod id from env

@@ -173,11 +173,11 @@ func main() {
 		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Hour,
 		QueueMaxRetries: queueMaxRetries,
-	}, set.Dynamic(),
-		minRetryDelay,
-		maxRetryDelay,
-		rateLimit,
-		burstLimit)
+		MinRetryDelay:   minRetryDelay,
+		MaxRetryDelay:   maxRetryDelay,
+		RateLimit:       rateLimit,
+		BurstLimit:      burstLimit,
+	}, set.Dynamic())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig,

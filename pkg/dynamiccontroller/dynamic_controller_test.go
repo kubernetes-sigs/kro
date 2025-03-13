@@ -34,13 +34,6 @@ import (
 // parts that need to be tested. I'll probably need to rewrite some parts of graphexec
 // and dynamiccontroller to make this work.
 
-const (
-	minRetryDelay = 200 * time.Millisecond
-	maxRetryDelay = 1000 * time.Second
-	rateLimit     = 10
-	burstLimit    = 100
-)
-
 func noopLogger() logr.Logger {
 	opts := zap.Options{
 		// Write to dev/null
@@ -70,9 +63,13 @@ func TestNewDynamicController(t *testing.T) {
 		ResyncPeriod:    10 * time.Hour,
 		QueueMaxRetries: 20,
 		ShutdownTimeout: 60 * time.Second,
+		MinRetryDelay:   200 * time.Millisecond,
+		MaxRetryDelay:   1000 * time.Second,
+		RateLimit:       10,
+		BurstLimit:      100,
 	}
 
-	dc := NewDynamicController(logger, config, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
+	dc := NewDynamicController(logger, config, client)
 
 	assert.NotNil(t, dc)
 	assert.Equal(t, config, dc.config)
@@ -89,9 +86,13 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 		ResyncPeriod:    1 * time.Second,
 		QueueMaxRetries: 5,
 		ShutdownTimeout: 5 * time.Second,
+		MinRetryDelay:   200 * time.Millisecond,
+		MaxRetryDelay:   1000 * time.Second,
+		RateLimit:       10,
+		BurstLimit:      100,
 	}
 
-	dc := NewDynamicController(logger, config, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
+	dc := NewDynamicController(logger, config, client)
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
@@ -137,7 +138,10 @@ func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
 	client := setupFakeClient()
 
-	dc := NewDynamicController(logger, Config{}, client, minRetryDelay, maxRetryDelay, rateLimit, burstLimit)
+	dc := NewDynamicController(logger, Config{MinRetryDelay: 200 * time.Millisecond,
+		MaxRetryDelay: 1000 * time.Second,
+		RateLimit:     10,
+		BurstLimit:    100}, client)
 
 	obj := &unstructured.Unstructured{}
 	obj.SetName("test-object")

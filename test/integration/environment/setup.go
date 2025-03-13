@@ -140,13 +140,12 @@ func (e *Environment) setupController() error {
 			ResyncPeriod:    60 * time.Second,
 			QueueMaxRetries: 20,
 			ShutdownTimeout: 60 * time.Second,
+			MinRetryDelay:   200 * time.Millisecond,
+			MaxRetryDelay:   1000 * time.Second,
+			RateLimit:       10,
+			BurstLimit:      100,
 		},
-		e.ClientSet.Dynamic(),
-		200*time.Millisecond,
-		1000*time.Second,
-		10,
-		100,
-	)
+		e.ClientSet.Dynamic())
 
 	go func() {
 		err := dc.Run(e.context)

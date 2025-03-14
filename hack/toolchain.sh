@@ -12,7 +12,6 @@ tools() {
     fi
 
     go install github.com/google/ko@latest
-    go install github.com/mikefarah/yq/v4@latest
     go install github.com/sigstore/cosign/v2/cmd/cosign@latest
     go install golang.org/x/vuln/cmd/govulncheck@latest
 }

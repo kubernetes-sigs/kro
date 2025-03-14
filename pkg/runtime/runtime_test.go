@@ -2690,11 +2690,11 @@ func withConditions(conditions []string) mockResourceOption {
 	}
 }
 
-func withTopLevelFields(fields []string) mockResourceOption {
+/* func withTopLevelFields(fields []string) mockResourceOption {
 	return func(m *mockResource) {
 		m.topLevelFields = fields
 	}
-}
+} */
 
 /* func withNamespaced(namespaced bool) mockResourceOption {
 	return func(m *mockResource) {

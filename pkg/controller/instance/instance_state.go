@@ -30,6 +30,15 @@ func newInstanceState() *InstanceState {
 	}
 }
 
+const (
+	ResourceStateCreated             = "CREATED"
+	ResourceStateError               = "ERROR"
+	ResourceStateSynced              = "SYNCED"
+	ResourceStateUpdating            = "UPDATING"
+	ResourceStateSkipped             = "SKIPPED"
+	ResourceStateWaitingForReadiness = "WAITING_FOR_READINESS"
+)
+
 // ResourceState represents the state and any associated error of a resource
 // being managed by the controller.
 type ResourceState struct {

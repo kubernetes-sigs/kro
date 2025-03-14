@@ -449,7 +449,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)
 		return fmt.Errorf("failed to add event handler for GVR %s: %w", gvr, err)
 	}
-	informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+	_ = informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
 		dc.log.Error(err, "Watch error", "gvr", gvr)
 	})
 	dc.handlers.Store(gvr, handler)

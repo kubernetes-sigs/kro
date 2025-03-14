@@ -97,7 +97,7 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{}
 
 	if isAtomicType(fieldType) {
-		fieldJSONSchemaProps.Type = string(fieldType)
+		fieldJSONSchemaProps.Type = fieldType
 	} else if isCollectionType(fieldType) {
 		if isMapType(fieldType) {
 			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)

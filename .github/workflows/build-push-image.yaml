@@ -64,22 +64,22 @@ jobs:
       # Build and push image on push to main
       - name: Build and Push Image
         if: github.event_name != 'pull_request'
-        run: >-
-          go tool ko build
-            --bare
-            github.com/kro-run/kro/cmd/controller
-            --tags $RELEASE_VERSION
+        run: |
+          go tool ko build \
+            --bare \
+            github.com/kro-run/kro/cmd/controller \
+            --tags $RELEASE_VERSION \
             --sbom=none
 
       # Build image only on PR
       - name: Build Image (PR)
         if: github.event_name == 'pull_request'
-        run: >-
-          go tool ko build
-            --bare
-            github.com/kro-run/kro/cmd/controller
-            --tags $RELEASE_VERSION
-            --sbom=none
+        run: |
+          go tool ko build \
+            --bare \
+            github.com/kro-run/kro/cmd/controller \
+            --tags $RELEASE_VERSION \
+            --sbom=none \
             --push=false
 
       # Push helm chart only on tag

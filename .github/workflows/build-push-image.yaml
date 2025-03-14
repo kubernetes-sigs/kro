@@ -89,10 +89,6 @@ jobs:
         if: github.ref_type == 'tag'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-          # Use sed compatible with Linux (GitHub Actions runners)
-          cp ./config/crd/bases/* helm/crds/
-          sed -i "s/tag: .*/tag: \"${RELEASE_VERSION}\"/" helm/values.yaml
-          sed -i "s/version: .*/version: ${RELEASE_VERSION}/" helm/Chart.yaml
-          sed -i "s/appVersion: .*/appVersion: \"${RELEASE_VERSION}\"/" helm/Chart.yaml
-          helm package helm
-          HELM_IMAGE=ghcr.io/${{ github.repository }} make publish-helm
+          sed -i "s/tag: \".*\"/tag: \"$RELEASE_VERSION\"/ helm/values.yaml
+          helm package helm --version $RELEASE_VERSION --app-version $RELEASE_VERSION
+          helm push ./kro-$RELEASE_VERSION.tgz oci://ghcr.io/${{ github.repository }}

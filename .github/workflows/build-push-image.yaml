@@ -17,6 +17,7 @@ on:
 
 env:
   KO_DOCKER_REPO: ghcr.io/${{ github.repository }}/controller
+  KO_CONFIG_PATH: .ko-ci.yaml
 
 jobs:
   build-and-push:
@@ -37,11 +38,9 @@ jobs:
       - name: Install Dependencies
         run: |
           go mod download
-          go install sigs.k8s.io/kustomize/kustomize/v5@v5.2.1
-          go install github.com/google/ko@latest
 
       - name: Run tests
-        run: make test WHAT=unit
+        run: go test -v ./pkg/...
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -59,18 +58,31 @@ jobs:
           else
             echo "RELEASE_VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           fi
+          echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
 
       # Build and push image on push to main
       - name: Build and Push Image
         if: github.event_name != 'pull_request'
         run: |
-          make publish-image
+          go tool ko build
+            --platforms linux/amd64,linux/arm64
+            --bare
+            github.com/kro-run/kro/cmd/controller
+            --tags $RELEASE_VERSION
+            --sbom=none
 
       # Build image only on PR
       - name: Build Image (PR)
         if: github.event_name == 'pull_request'
-        run: |
-          make build-image
+        run: >
+          go tool ko build
+            --platforms linux/amd64,linux/arm64
+            --bare
+            github.com/kro-run/kro/cmd/controller
+            --tags $RELEASE_VERSION
+            --sbom=none
+            --push=false
 
       # Push helm chart only on tag
       - name: Package and Push Helm Chart

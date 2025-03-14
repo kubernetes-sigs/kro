@@ -11,7 +11,6 @@ tools() {
         echo "Go workspace's \"bin\" directory is not in PATH. Run 'export PATH=\"\$PATH:\${GOPATH:-\$HOME/go}/bin\"'."
     fi
 
-    go install github.com/google/ko@latest
     go install github.com/sigstore/cosign/v2/cmd/cosign@latest
     go install golang.org/x/vuln/cmd/govulncheck@latest
 }

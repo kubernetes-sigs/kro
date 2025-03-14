@@ -68,13 +68,13 @@ func New(controllerConfig ControllerConfig) (*Environment, error) {
 	env.TestEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			// resourcegraphdefinition CRD
-			filepath.Join("../../../..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "..", "..", "helm", "templates", "crds"),
 			// ACK ec2 CRDs
-			filepath.Join("../..", "crds", "ack-ec2-controller"),
+			filepath.Join("..", "..", "crds", "ack-ec2-controller"),
 			// ACK iam CRDs
-			filepath.Join("../..", "crds", "ack-iam-controller"),
+			filepath.Join("..", "..", "crds", "ack-iam-controller"),
 			// ACK eks CRDs
-			filepath.Join("../..", "crds", "ack-eks-controller"),
+			filepath.Join("..", "..", "crds", "ack-eks-controller"),
 		},
 		ErrorIfCRDPathMissing:   true,
 		DownloadBinaryAssets:    true,

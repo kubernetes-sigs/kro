@@ -5,4 +5,4 @@
 // To run just the CRD related codegen, from the repo root do go generate ./api/...
 package api
 
-//go:generate go tool controller-gen object paths="./..." output:object:artifacts:config=../helm/templates/crds
+//go:generate go tool controller-gen object crd paths="./..." output:crd:artifacts:config=../helm/templates/crds

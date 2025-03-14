@@ -48,25 +48,18 @@ To test and run the project with your local changes, follow these steps to set u
 [ko]: https://ko.build
 [kind]: https://kind.sigs.k8s.io/
 
-A helper Makefile target is used to (re)create a kind cluster, install the CRDs, build the container image and helm install the controller manifests in the kind cluster. 
-
-> _Note_: This target re-creates the kind cluster from scratch and should be used as a starting point or when you want to start over fresh.
-
-```sh
-KIND_CLUSTER_NAME=kro make deploy-kind
-```
-
 For iterating on an existing cluster, follow the instructions below.
 
 1. Prepare the cluster
 ```sh
-export KIND_CLUSTER_NAME=my-other-cluster
+export KIND_CLUSTER_NAME=kro-local-dev
 # Create a kind cluster if needed
+# If you skip this, remember to set your kubecontext to point to your existing cluster,
+# as kind will do this automatically when creating a new one!
 kind create cluster
 
 ## Create the kro-system namespace
 kubectl create namespace kro-system || true
-
 ```
 
 2. Build and install KRO components
@@ -81,7 +74,7 @@ export KO_DOCKER_REPO=kind.local
 helm template kro ./helm \
   --namespace kro-system \
   --set image.pullPolicy=Never \
-  --set image.ko=true | ko apply -f -
+  --set image.ko=true | go tool ko apply -f -
 ```
 
 ### Dev Environment Hello World

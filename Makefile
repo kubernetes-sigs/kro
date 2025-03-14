@@ -186,22 +186,3 @@ publish-helm: ## Helm publish
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm
-
-##@ Deployment
-
-ifndef ignore-not-found
-  ignore-not-found = true
-endif
-
-.PHONY: deploy-kind
-deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind: ko
-	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
-	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
-	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system
-	make install
-	# This generates deployment with ko://... used in image.
-	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
-	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
-	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A

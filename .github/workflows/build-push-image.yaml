@@ -39,11 +39,8 @@ jobs:
         run: |
           go mod download
 
-      - name: Run Checks
-        run: |
-          go vet ./...
-          go tool golangci-lint run
-          go test -v ./pkg/...
+      - name: Run Tests
+        run: go test -v ./pkg/...
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'

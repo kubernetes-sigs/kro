@@ -29,4 +29,4 @@ jobs:
           cache: true
 
       - name: Run integration tests
-        run: make test WHAT=integration
+        run: go test -v ./test/integration/...

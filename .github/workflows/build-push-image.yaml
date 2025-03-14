@@ -39,8 +39,11 @@ jobs:
         run: |
           go mod download
 
-      - name: Run tests
-        run: go test -v ./pkg/...
+      - name: Run Checks
+        run: |
+          go vet ./...
+          go tool golangci-lint run
+          go test -v ./pkg/...
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -64,9 +67,8 @@ jobs:
       # Build and push image on push to main
       - name: Build and Push Image
         if: github.event_name != 'pull_request'
-        run: |
+        run: >-
           go tool ko build
-            --platforms linux/amd64,linux/arm64
             --bare
             github.com/kro-run/kro/cmd/controller
             --tags $RELEASE_VERSION
@@ -75,9 +77,8 @@ jobs:
       # Build image only on PR
       - name: Build Image (PR)
         if: github.event_name == 'pull_request'
-        run: >
+        run: >-
           go tool ko build
-            --platforms linux/amd64,linux/arm64
             --bare
             github.com/kro-run/kro/cmd/controller
             --tags $RELEASE_VERSION

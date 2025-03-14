@@ -193,14 +193,6 @@ ifndef ignore-not-found
   ignore-not-found = true
 endif
 
-.PHONY: install
-install: generate ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUBECTL) apply -f ./helm/crds
-
-.PHONY: uninstall
-uninstall: kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config
-	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f ./helm/crds
-
 .PHONY: deploy-kind
 deploy-kind: export KO_DOCKER_REPO=kind.local
 deploy-kind: ko

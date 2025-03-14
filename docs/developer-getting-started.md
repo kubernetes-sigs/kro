@@ -1,6 +1,16 @@
 
 # Developer Getting Started
 
+## Getting and running local tools
+
+Tools in this project are generally managed as [tool dependencies](https://tip.golang.org/doc/modules/managing-dependencies#tools),
+and where possible hooked into the standard `go` commands. Here's how you accomplish some common tasks in this repository:
+
+* **Build the project**: `go vet ./...` to ensure that the project can be built, and `go build -o kro-controller cmd/controller/main.go` to produce a binary.
+* **Run tests**: `go test ./...` runs all tests in the project. To skip the integration tests (they can be a bit on the slow side), run `go test ./pkg/...`.
+* **Lint**: We have also set up `golangci-lint`, so you can run `go tool golangci-lint run` to see any linter warnings.
+* **Generate code and manifests**: Everything should be hooked up through `go generate ./...`
+
 ## Setting Up a Local Development Environment
 
 By following the steps for [externally running a controller](#running-the-controller-external-to-the-cluster) or 
@@ -23,8 +33,8 @@ To test and run the project with your local changes, follow these steps to set u
 
 3. Install the Custom Resource Definitions (CRDs): Apply the latest CRDs to your cluster:
     ```bash
-    make manifests
-    kubectl apply -k ./config/crd
+    go generate ./api/...
+    kubectl apply -f ./helm/templates/crds
     ```
 
 4. Run the kro Controller Locally: Execute the controller with your changes:
@@ -63,7 +73,8 @@ kubectl create namespace kro-system || true
 
 ```sh
 ## install the KRO CRDs
-make install
+go generate ./api/...
+kubectl apply -f ./helm/template/crds
 
 # render the helm chart and apply using ko
 export KO_DOCKER_REPO=kind.local

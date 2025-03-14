@@ -10,7 +10,9 @@ here=$(realpath "$(dirname "$0")")
 # this mv is a hack; it will no longer be necessary once controller-gen supports
 # specifying the filename; see https://github.com/kubernetes-sigs/controller-tools/pull/1169
 mv "$here"/templates/role.yaml "$here"/templates/controller.static.rbac.yaml
-printf "%s\n%s\n%s\n" \
+printf "%s\n%s\n%s\n---\n%s\n" \
     '{{- if eq .Values.rbac.mode "aggregation" }}' \
-    "$(sed -E "s/name: kro:(.*)/name: '{{ include \"kro.fullname\" . }}:\1'/" "$here"/templates/controller.static.rbac.yaml)" \
-    '{{- end }}' > temp && mv temp "$here"/templates/controller.static.rbac.yaml
+    "$(go tool yq 'select(.kind == "ClusterRole") | .metadata.name |= "{{ include \"kro.fullname\" . }}:controller:static"' "$here"/templates/controller.static.rbac.yaml)" \
+    '{{- end }}' \
+    "$(go tool yq 'select(.kind == "Role")' "$here"/templates/controller.static.rbac.yaml)" \
+    > temp && mv temp "$here"/templates/controller.static.rbac.yaml

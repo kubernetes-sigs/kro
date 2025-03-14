@@ -5,30 +5,32 @@ kind: ClusterRole
 metadata:
   name: '{{ include "kro.fullname" . }}:controller:static'
 rules:
-- apiGroups:
-  - kro.run
-  resources:
-  - resourcegraphdefinitions
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kro.run
-  resources:
-  - resourcegraphdefinitions/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - kro.run
-  resources:
-  - resourcegraphdefinitions/status
-  verbs:
-  - get
-  - patch
-  - update
+  - apiGroups:
+      - kro.run
+    resources:
+      - resourcegraphdefinitions
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - kro.run
+    resources:
+      - resourcegraphdefinitions/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - kro.run
+    resources:
+      - resourcegraphdefinitions/status
+    verbs:
+      - get
+      - patch
+      - update
 {{- end }}
+---
+

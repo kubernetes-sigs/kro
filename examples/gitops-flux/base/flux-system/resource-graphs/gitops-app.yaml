@@ -1,0 +1,82 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: gitops-app
+spec:
+  description: "A GitOps-enabled application template using Flux CD"
+  schema:
+    openAPIV3Schema:
+      type: object
+      required: ["image", "replicas", "env"]
+      properties:
+        image:
+          type: string
+          description: "Container image to deploy"
+        replicas:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: "Number of replicas to run"
+        env:
+          type: string
+          enum: ["dev", "prod"]
+          description: "Target environment"
+  resources:
+    - name: deployment
+      kind: Deployment
+      apiVersion: apps/v1
+      template:
+        metadata:
+          labels:
+            app: "{{ .Name }}"
+        spec:
+          replicas: "{{ .Parameters.replicas }}"
+          selector:
+            matchLabels:
+              app: "{{ .Name }}"
+          template:
+            metadata:
+              labels:
+                app: "{{ .Name }}"
+            spec:
+              containers:
+                - name: app
+                  image: "{{ .Parameters.image }}"
+                  ports:
+                    - containerPort: 8080
+                  resources:
+                    limits:
+                      cpu: "1"
+                      memory: "512Mi"
+                    requests:
+                      cpu: "200m"
+                      memory: "256Mi"
+    
+    - name: service
+      kind: Service
+      apiVersion: v1
+      template:
+        metadata:
+          labels:
+            app: "{{ .Name }}"
+        spec:
+          selector:
+            app: "{{ .Name }}"
+          ports:
+            - port: 80
+              targetPort: 8080
+          type: ClusterIP
+    
+    - name: kustomization
+      kind: Kustomization
+      apiVersion: kustomize.toolkit.fluxcd.io/v1
+      template:
+        metadata:
+          name: "{{ .Name }}"
+        spec:
+          interval: 1m
+          path: "./overlays/{{ .Parameters.env }}"
+          prune: true
+          sourceRef:
+            kind: GitRepository
+            name: "{{ .Name }}-source" 

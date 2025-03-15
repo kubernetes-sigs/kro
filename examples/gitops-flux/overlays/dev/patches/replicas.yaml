@@ -1,0 +1,6 @@
+apiVersion: kro.run/v1alpha1
+kind: GitOpsApp
+metadata:
+  name: demo-app
+spec:
+  replicas: 1  # Reduce replicas in dev environment 

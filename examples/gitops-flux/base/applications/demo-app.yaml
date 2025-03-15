@@ -1,0 +1,8 @@
+apiVersion: kro.run/v1alpha1
+kind: GitOpsApp
+metadata:
+  name: demo-app
+spec:
+  image: nginx:1.21
+  replicas: 3
+  env: dev 

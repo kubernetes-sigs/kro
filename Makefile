@@ -1,4 +1,3 @@
-
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_DATE ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 RELEASE_VERSION ?= dev-$(GIT_COMMIT)
@@ -237,7 +236,10 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy-kind
 deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind:
+deploy-kind: export GIT_COMMIT=$(shell git rev-parse --short HEAD)
+deploy-kind: export BUILD_DATE=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
+deploy-kind: export RELEASE_VERSION=dev-$(GIT_COMMIT)
+deploy-kind: ko
 	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system

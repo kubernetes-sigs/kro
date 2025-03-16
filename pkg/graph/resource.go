@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	rgschema "github.com/kro-run/kro/pkg/graph/schema"
 	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
@@ -152,11 +151,6 @@ func (r *Resource) GetReadyWhenExpressions() []string {
 // GetIncludeWhenExpressions returns the condition expressions of the resource.
 func (r *Resource) GetIncludeWhenExpressions() []string {
 	return r.includeWhenExpressions
-}
-
-// GetTopLevelFields returns the top-level fields of the resource.
-func (r *Resource) GetTopLevelFields() []string {
-	return rgschema.GetResourceTopLevelFieldNames(r.schema)
 }
 
 // IsNamespaced returns true if the resource is namespaced.

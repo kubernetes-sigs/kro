@@ -109,9 +109,6 @@ type ResourceDescriptor interface {
 	// be evaluated before deciding whether to create a resource
 	GetIncludeWhenExpressions() []string
 
-	// GetTopLevelFields returns the list of top-level fields in the resource.
-	// e.g spec, status, metadata, etc.
-	GetTopLevelFields() []string
 
 	// IsNamespaced returns true if the resource is namespaced, and false if it's
 	// cluster-scoped.

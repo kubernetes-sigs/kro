@@ -34,12 +34,15 @@ func TestNewCombinedResolver(t *testing.T) {
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				// Mock successful discovery endpoints
 				if r.URL.Path == "/api" {
-					w.Write([]byte(`{"versions":["v1"]}`))
+					_, err := w.Write([]byte(`{"versions":["v1"]}`))
+					require.NoError(t, err, "Failed to write API response")
 				} else if r.URL.Path == "/apis" {
-					w.Write([]byte(`{"groups":[{"name":"apps","versions":[{"groupVersion":"apps/v1"}]}]}`))
+					_, err := w.Write([]byte(`{"groups":[{"name":"apps","versions":[{"groupVersion":"apps/v1"}]}]}`))
+					require.NoError(t, err, "Failed to write APIs response")
 				} else {
 					w.WriteHeader(http.StatusOK)
-					w.Write([]byte(`{}`))
+					_, err := w.Write([]byte(`{}`))
+					require.NoError(t, err, "Failed to write empty response")
 				}
 			},
 			expectError: false,
@@ -48,7 +51,8 @@ func TestNewCombinedResolver(t *testing.T) {
 			name: "discovery client error",
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(`{"error":"internal server error"}`))
+				_, err := w.Write([]byte(`{"error":"internal server error"}`))
+				require.NoError(t, err, "Failed to write error response")
 			},
 			expectError: true,
 		},

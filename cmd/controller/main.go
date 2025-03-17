@@ -36,6 +36,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
+	crdwatcher "github.com/kro-run/kro/pkg/controller/crdwatcher"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -158,6 +159,11 @@ func main() {
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Hour,
 		QueueMaxRetries: queueMaxRetries,
 	}, set.Dynamic())
+		// Initialize and start the CRD Watcher
+	crdQueue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	crdWatcher := crdwatcher.NewCRDWatcher(set.Clientset(), crdQueue, ctx)
+	go crdWatcher.Start()
+
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig,

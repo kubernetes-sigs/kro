@@ -1,47 +1,47 @@
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
-  name: gitops-app
+  name: gitops-app.kro.run
 spec:
-  description: "A GitOps-enabled application template using Flux CD"
   schema:
-    openAPIV3Schema:
-      type: object
-      required: ["image", "replicas", "env"]
-      properties:
-        image:
-          type: string
-          description: "Container image to deploy"
-        replicas:
-          type: integer
-          minimum: 1
-          maximum: 10
-          description: "Number of replicas to run"
-        env:
-          type: string
-          enum: ["dev", "prod"]
-          description: "Target environment"
+    apiVersion: v1alpha1
+    group: kro.run
+    kind: GitOpsApp
+    spec:
+      name: string
+      namespace: string
+      image: string
+      replicas: integer
+      env: string
+    status:
+      availableReplicas: integer
+      deploymentConditions: array
+
   resources:
-    - name: deployment
-      kind: Deployment
-      apiVersion: apps/v1
+    - id: deployment
+      readyWhen:
+        - ${deployment.spec.replicas == deployment.status.availableReplicas}
       template:
+        apiVersion: apps/v1
+        kind: Deployment
         metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
           labels:
-            app: "{{ .Name }}"
+            app: ${schema.spec.name}
         spec:
-          replicas: "{{ .Parameters.replicas }}"
+          replicas: ${schema.spec.replicas}
           selector:
             matchLabels:
-              app: "{{ .Name }}"
+              app: ${schema.spec.name}
           template:
             metadata:
               labels:
-                app: "{{ .Name }}"
+                app: ${schema.spec.name}
             spec:
               containers:
                 - name: app
-                  image: "{{ .Parameters.image }}"
+                  image: ${schema.spec.image}
                   ports:
                     - containerPort: 8080
                   resources:
@@ -52,31 +52,34 @@ spec:
                       cpu: "200m"
                       memory: "256Mi"
     
-    - name: service
-      kind: Service
-      apiVersion: v1
+    - id: service
       template:
+        apiVersion: v1
+        kind: Service
         metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
           labels:
-            app: "{{ .Name }}"
+            app: ${schema.spec.name}
         spec:
           selector:
-            app: "{{ .Name }}"
+            app: ${schema.spec.name}
           ports:
             - port: 80
               targetPort: 8080
           type: ClusterIP
     
-    - name: kustomization
-      kind: Kustomization
-      apiVersion: kustomize.toolkit.fluxcd.io/v1
+    - id: kustomization
       template:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
         metadata:
-          name: "{{ .Name }}"
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
         spec:
           interval: 1m
-          path: "./overlays/{{ .Parameters.env }}"
+          path: "./overlays/${schema.spec.env}"
           prune: true
           sourceRef:
             kind: GitRepository
-            name: "{{ .Name }}-source" 
+            name: "${schema.spec.name}-source" 

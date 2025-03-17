@@ -13,18 +13,17 @@ type testObject struct {
 	metav1.ObjectMeta
 }
 
-func newTestObject(name, namespace string, uid types.UID) *testObject {
+func newTestObject(name string, uid types.UID) *testObject {
 	return &testObject{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			UID:       uid,
+			Name: name,
+			UID:  uid,
 		},
 	}
 }
 
 func TestNewInstanceSelector(t *testing.T) {
-	instance := newTestObject("test-instance", "test-ns", "instance-123")
+	instance := newTestObject("test-instance", "instance-123")
 	selector := NewInstanceSelector(instance)
 
 	assert.Equal(t, map[string]string{
@@ -33,7 +32,7 @@ func TestNewInstanceSelector(t *testing.T) {
 }
 
 func TestNewResourceGraphDefinitionSelector(t *testing.T) {
-	rgd := newTestObject("test-rgd", "test-ns", "rgd-123")
+	rgd := newTestObject("test-rgd", "rgd-123")
 	selector := NewResourceGraphDefinitionSelector(rgd)
 
 	assert.Equal(t, map[string]string{
@@ -42,8 +41,8 @@ func TestNewResourceGraphDefinitionSelector(t *testing.T) {
 }
 
 func TestNewInstanceAndResourceGraphDefinitionSelector(t *testing.T) {
-	instance := newTestObject("test-instance", "test-ns", "instance-123")
-	rgd := newTestObject("test-rgd", "test-ns", "rgd-123")
+	instance := newTestObject("test-instance", "instance-123")
+	rgd := newTestObject("test-rgd", "rgd-123")
 
 	selector := NewInstanceAndResourceGraphDefinitionSelector(instance, rgd)
 
@@ -54,9 +53,9 @@ func TestNewInstanceAndResourceGraphDefinitionSelector(t *testing.T) {
 }
 
 func TestNewNodeAndInstanceAndResourceGraphDefinitionSelector(t *testing.T) {
-	node := newTestObject("test-node", "test-ns", "node-123")
-	instance := newTestObject("test-instance", "test-ns", "instance-123")
-	rgd := newTestObject("test-rgd", "test-ns", "rgd-123")
+	node := newTestObject("test-node", "node-123")
+	instance := newTestObject("test-instance", "instance-123")
+	rgd := newTestObject("test-rgd", "rgd-123")
 
 	selector := NewNodeAndInstanceAndResourceGraphDefinitionSelector(node, instance, rgd)
 

@@ -6,6 +6,7 @@ resources:
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:
+[]
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
 # patches here are for enabling the conversion webhook for each CRD
 #- path: patches/webhook_in_resourcegraphdefinitions.yaml

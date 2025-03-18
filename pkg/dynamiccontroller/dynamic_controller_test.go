@@ -14,7 +14,8 @@ package dynamiccontroller
 
 import (
 	"context"
-	"io/ioutil"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -24,8 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/dynamic/fake"
 	controllerruntime "sigs.k8s.io/controller-runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -37,7 +40,7 @@ import (
 func noopLogger() logr.Logger {
 	opts := zap.Options{
 		// Write to dev/null
-		DestWriter: ioutil.Discard,
+		DestWriter: io.Discard,
 	}
 	logger := zap.New(zap.UseFlagOptions(&opts))
 	return logger
@@ -124,17 +127,263 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	assert.False(t, exists)
 }
 
-func TestEnqueueObject(t *testing.T) {
-	logger := noopLogger()
-	client := setupFakeClient()
-	dc := NewDynamicController(logger, Config{}, client)
+func TestEnqueueObjectErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		obj        interface{}
+		queueItems int
+	}{
+		{
+			name: "valid unstructured object",
+			obj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetName("test-object")
+				obj.SetNamespace("default")
+				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+				return obj
+			}(),
+			queueItems: 1,
+		},
+		{
+			name:       "nil object",
+			obj:        nil,
+			queueItems: 0,
+		},
+	}
 
-	obj := &unstructured.Unstructured{}
-	obj.SetName("test-object")
-	obj.SetNamespace("default")
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := NewDynamicController(noopLogger(), Config{}, setupFakeClient())
 
-	dc.enqueueObject(obj, "add")
+			dc.enqueueObject(tt.obj, "add")
 
-	assert.Equal(t, 1, dc.queue.Len())
+			assert.Equal(t, tt.queueItems, dc.queue.Len())
+		})
+	}
+}
+
+func TestAllInformerHaveSynced(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupInformers func(*DynamicController)
+		expected       bool
+	}{
+		{
+			name:           "no informes",
+			setupInformers: func(dc *DynamicController) {},
+			expected:       true,
+		},
+		{
+			name: "one unsynced informer",
+			setupInformers: func(dc *DynamicController) {
+				mockInformer := &mockSharedIndexInformer{hasSynced: false}
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.informers.Store(gvr, mockInformer)
+			},
+			expected: false,
+		},
+		{
+			name: "invalid informer type",
+			setupInformers: func(dc *DynamicController) {
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.informers.Store(gvr, "not an informer")
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := NewDynamicController(noopLogger(), Config{}, setupFakeClient())
+			tt.setupInformers(dc)
+			result := dc.AllInformerHaveSynced()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+type mockSharedIndexInformer struct {
+	hasSynced bool
+}
+
+func (m *mockSharedIndexInformer) HasSynced() bool {
+	return m.hasSynced
+}
+
+func TestUpdateFunc(t *testing.T) {
+	tests := []struct {
+		name        string
+		oldObj      *unstructured.Unstructured
+		newObj      *unstructured.Unstructured
+		queueLength int
+	}{
+		{
+			name: "generation changed",
+			oldObj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetName("test")
+				obj.SetNamespace("default")
+				obj.SetGeneration(1)
+				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+				return obj
+			}(),
+			newObj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetName("test")
+				obj.SetNamespace("default")
+				obj.SetGeneration(2)
+				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+				return obj
+			}(),
+			queueLength: 1,
+		},
+		{
+			name: "generation unchanged",
+			oldObj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetName("test")
+				obj.SetNamespace("default")
+				obj.SetGeneration(1)
+				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+				return obj
+			}(),
+			newObj: func() *unstructured.Unstructured {
+				obj := &unstructured.Unstructured{}
+				obj.SetName("test")
+				obj.SetNamespace("default")
+				obj.SetGeneration(1)
+				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+				return obj
+			}(),
+			queueLength: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := NewDynamicController(noopLogger(), Config{}, setupFakeClient())
+
+			dc.updateFunc(tt.oldObj, tt.newObj)
+
+			assert.Equal(t, tt.queueLength, dc.queue.Len())
+		})
+	}
+}
+
+func TestSyncFunc(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupHandlers func(*DynamicController)
+		object        ObjectIdentifiers
+		expectError   bool
+	}{
+		{
+			name: "handler exists and succeeds",
+			setupHandlers: func(dc *DynamicController) {
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req ctrl.Request) error {
+					return nil
+				}))
+			},
+			object: ObjectIdentifiers{
+				NamespacedKey: "default/test",
+				GVR:           schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"},
+			},
+			expectError: false,
+		},
+		{
+			name: "handler exists but returns error",
+			setupHandlers: func(dc *DynamicController) {
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req ctrl.Request) error {
+					return fmt.Errorf("handler error")
+				}))
+			},
+			object: ObjectIdentifiers{
+				NamespacedKey: "default/test",
+				GVR:           schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"},
+			},
+			expectError: true,
+		},
+		{
+			name:          "handler doesn't exist",
+			setupHandlers: func(dc *DynamicController) {},
+			object: ObjectIdentifiers{
+				NamespacedKey: "default/test",
+				GVR:           schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"},
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid handler type",
+			setupHandlers: func(dc *DynamicController) {
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.handlers.Store(gvr, "not a handler") // Wrong type
+			},
+			object: ObjectIdentifiers{
+				NamespacedKey: "default/test",
+				GVR:           schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := NewDynamicController(noopLogger(), Config{}, setupFakeClient())
+			tt.setupHandlers(dc)
+
+			err := dc.syncFunc(context.Background(), tt.object)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupInformers func(*DynamicController)
+		timeout        time.Duration
+		expectError    bool
+	}{
+		{
+			name:           "successful shutdown with no informers",
+			setupInformers: func(dc *DynamicController) {},
+			timeout:        1 * time.Second,
+			expectError:    false,
+		},
+		{
+			name: "successful shutdown with informers",
+			setupInformers: func(dc *DynamicController) {
+				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+				dc.informers.Store(gvr, &informerWrapper{
+					informer: dynamicinformer.NewDynamicSharedInformerFactory(
+						setupFakeClient(), 5*time.Minute),
+					shutdown: func() {},
+				})
+			},
+			timeout:     1 * time.Second,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := NewDynamicController(noopLogger(), Config{}, setupFakeClient())
+			tt.setupInformers(dc)
+
+			err := dc.gracefulShutdown(tt.timeout)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

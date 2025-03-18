@@ -40,46 +40,39 @@ func NewStatusProcessor() *StatusProcessor {
 		state:      v1alpha1.ResourceGraphDefinitionStateActive,
 	}
 }
-
-// setDefaultConditions sets the default conditions for an active resource graph definition
 func (sp *StatusProcessor) setDefaultConditions() {
 	sp.conditions = []v1alpha1.Condition{
-		newReconcilerReadyCondition(metav1.ConditionTrue, ""),
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
+		newReconcilerReadyCondition(metav1.ConditionTrue, "ReconcilerAvailable"),
+		newGraphVerifiedCondition(metav1.ConditionTrue, "GraphValidated"),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "CRDSynced"),
 	}
 }
-
-// processGraphError handles graph-related errors
 func (sp *StatusProcessor) processGraphError(err error) {
 	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionFalse, err.Error()),
-		newReconcilerReadyCondition(metav1.ConditionUnknown, "Faulty Graph"),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, "Faulty Graph"),
+		newGraphVerifiedCondition(metav1.ConditionFalse, "GraphValidationFailed"),
+		newReconcilerReadyCondition(metav1.ConditionUnknown, "GraphIssue"),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, "GraphIssue"),
 	}
 	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
 }
 
-// processCRDError handles CRD-related errors
 func (sp *StatusProcessor) processCRDError(err error) {
 	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, err.Error()),
-		newReconcilerReadyCondition(metav1.ConditionUnknown, "CRD not-synced"),
+		newGraphVerifiedCondition(metav1.ConditionTrue, "GraphValidated"),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, "CRDNotSynced"),
+		newReconcilerReadyCondition(metav1.ConditionUnknown, "CRDNotReady"),
 	}
 	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
 }
 
-// processMicroControllerError handles microcontroller-related errors
 func (sp *StatusProcessor) processMicroControllerError(err error) {
 	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
-		newReconcilerReadyCondition(metav1.ConditionFalse, err.Error()),
+		newGraphVerifiedCondition(metav1.ConditionTrue, "GraphValidated"),
+		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, "CRDSynced"),
+		newReconcilerReadyCondition(metav1.ConditionFalse, "ReconcilerFailure"),
 	}
 	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
 }
-
 // setResourceGraphDefinitionStatus calculates the ResourceGraphDefinition status and updates it
 // in the API server.
 func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
@@ -172,13 +165,13 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 }
 
 func newReconcilerReadyCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady, status, reason, "micro controller is ready")
+	return v1alpha1.NewCondition("ReconcilerReady", status, reason, "Reconciler is available and processing updates")
 }
 
 func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified, status, reason, "Directed Acyclic Graph is synced")
+	return v1alpha1.NewCondition("GraphVerified", status, reason, "Graph validation is complete and no issues were found")
 }
 
 func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, status, reason, "Custom Resource Definition is synced")
+	return v1alpha1.NewCondition("CustomResourceDefinitionSynced", status, reason, "Custom Resource Definitions have been successfully applied and reconciled")
 }

@@ -1196,6 +1196,18 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		if !reflect.DeepEqual(expressions[0].Path, expected.Path) {
 			t.Errorf("Expected path %s, got %s", expected.Path, expressions[0].Path)
 		}
+
+		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
+			t.Errorf("Expressions mismatch: got %v, want %v", expressions[0].Expressions, expected.Expressions)
+		}
+
+		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
+			t.Errorf("ExpectedTypes mismatch: got %v, want %v", expressions[0].ExpectedTypes, expected.ExpectedTypes)
+		}
+
+		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
+			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
+		}
 	})
 
 	t.Run("networkRef with external reference", func(t *testing.T) {
@@ -1283,6 +1295,10 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
 			t.Errorf("Expected types %v, got %v", expected.ExpectedTypes, expressions[0].ExpectedTypes)
+		}
+
+		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
+			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
 		}
 	})
 }

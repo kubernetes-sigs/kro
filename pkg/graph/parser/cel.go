@@ -24,7 +24,8 @@ const (
 	exprEnd   = "}"
 )
 
-var ErrNestedExpression = errors.New("nested expressions are not allowed")
+// Allow nested expressions, but only if they are escaped with quotes ${outer("${inner}")} is allowed, but ${outer(${inner})} is not
+var ErrNestedExpression = errors.New("nested expressions are not allowed unless inside string literals")
 
 // extractExpressions extracts all non-nested CEL expressions from a string.
 // It returns an error if it encounters a nested expression.
@@ -42,26 +43,48 @@ func extractExpressions(str string) ([]string, error) {
 		// Adjust the start index to the actual position in the string
 		startIdx += start
 
-		// We need to find the matching end bracket. we have to be careful about
-		// nested expressions and dictionary building expressions. For example:
-		// a user can have an expression like "${{"key": 123}}". For this reason,
-		// we need to keep track of the bracket count and make sure that we only
-		// consider the outermost expression
+		// We need to find the matching end bracket, being careful about
+		// nested expressions, dictionary building expressions, and string literals
 		bracketCount := 1
 		endIdx := startIdx + len(exprStart)
+		inStringLiteral := false
+		escapeNext := false
+
 		for endIdx < len(str) {
-			if str[endIdx] == '{' {
-				bracketCount++
-			} else if str[endIdx] == '}' {
-				bracketCount--
-				// If we have reached the end of the expression, break
-				if bracketCount == 0 {
-					break
+			c := str[endIdx]
+
+			// Handle escape sequences inside string literals
+			if escapeNext {
+				escapeNext = false
+				endIdx++
+				continue
+			}
+
+			// Check for escape character inside string literals
+			if inStringLiteral && c == '\\' {
+				escapeNext = true
+				endIdx++
+				continue
+			}
+
+			// Handle string literal boundaries
+			if c == '"' {
+				inStringLiteral = !inStringLiteral
+			} else if !inStringLiteral {
+				// Only count braces when not inside a string literal
+				if c == '{' {
+					bracketCount++
+				} else if c == '}' {
+					bracketCount--
+					if bracketCount == 0 {
+						break
+					}
+				} else if endIdx+1 < len(str) && str[endIdx:endIdx+2] == "${" {
+					// Allow nested expressions, but only if they are escaped with quotes
+					if str[endIdx-1] != '"' {
+						return nil, ErrNestedExpression
+					}
 				}
-			} else if endIdx+1 < len(str) && str[endIdx:endIdx+2] == "${" {
-				// We do not allow nested expressions. I'm not sure if this is a
-				// good idea, but its sounds like a reasonable restriction.
-				return nil, ErrNestedExpression
 			}
 			endIdx++
 		}

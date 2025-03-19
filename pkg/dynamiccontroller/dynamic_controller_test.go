@@ -28,7 +28,6 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/dynamic/fake"
 	controllerruntime "sigs.k8s.io/controller-runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -134,14 +133,8 @@ func TestEnqueueObjectErrors(t *testing.T) {
 		queueItems int
 	}{
 		{
-			name: "valid unstructured object",
-			obj: func() *unstructured.Unstructured {
-				obj := &unstructured.Unstructured{}
-				obj.SetName("test-object")
-				obj.SetNamespace("default")
-				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
-				return obj
-			}(),
+			name:       "valid unstructured object",
+			obj:        newTestObject(),
 			queueItems: 1,
 		},
 		{
@@ -161,6 +154,27 @@ func TestEnqueueObjectErrors(t *testing.T) {
 		})
 	}
 }
+
+func newTestObject(opts ...TestObjectOption) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+
+	obj.SetName("test")
+	obj.SetNamespace("default")
+	obj.SetGeneration(1)
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "test",
+		Version: "v1",
+		Kind:    "Test",
+	})
+
+	for _, opt := range opts {
+		opt(obj)
+	}
+
+	return obj
+}
+
+type TestObjectOption func(*unstructured.Unstructured)
 
 func TestAllInformerHaveSynced(t *testing.T) {
 	tests := []struct {
@@ -218,43 +232,17 @@ func TestUpdateFunc(t *testing.T) {
 		queueLength int
 	}{
 		{
-			name: "generation changed",
-			oldObj: func() *unstructured.Unstructured {
-				obj := &unstructured.Unstructured{}
-				obj.SetName("test")
-				obj.SetNamespace("default")
-				obj.SetGeneration(1)
-				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
-				return obj
-			}(),
-			newObj: func() *unstructured.Unstructured {
-				obj := &unstructured.Unstructured{}
-				obj.SetName("test")
-				obj.SetNamespace("default")
+			name:   "generation changed",
+			oldObj: newTestObject(),
+			newObj: newTestObject(func(obj *unstructured.Unstructured) {
 				obj.SetGeneration(2)
-				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
-				return obj
-			}(),
+			}),
 			queueLength: 1,
 		},
 		{
-			name: "generation unchanged",
-			oldObj: func() *unstructured.Unstructured {
-				obj := &unstructured.Unstructured{}
-				obj.SetName("test")
-				obj.SetNamespace("default")
-				obj.SetGeneration(1)
-				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
-				return obj
-			}(),
-			newObj: func() *unstructured.Unstructured {
-				obj := &unstructured.Unstructured{}
-				obj.SetName("test")
-				obj.SetNamespace("default")
-				obj.SetGeneration(1)
-				obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
-				return obj
-			}(),
+			name:        "generation unchanged",
+			oldObj:      newTestObject(),
+			newObj:      newTestObject(),
 			queueLength: 0,
 		},
 	}
@@ -281,7 +269,7 @@ func TestSyncFunc(t *testing.T) {
 			name: "handler exists and succeeds",
 			setupHandlers: func(dc *DynamicController) {
 				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req ctrl.Request) error {
+				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 					return nil
 				}))
 			},
@@ -295,7 +283,7 @@ func TestSyncFunc(t *testing.T) {
 			name: "handler exists but returns error",
 			setupHandlers: func(dc *DynamicController) {
 				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req ctrl.Request) error {
+				dc.handlers.Store(gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
 					return fmt.Errorf("handler error")
 				}))
 			},

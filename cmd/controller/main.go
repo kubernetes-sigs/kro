@@ -91,7 +91,7 @@ func main() {
 		"dynamic-controller-concurrent-reconciles", 1,
 		"The number of dynamic controller reconciles to run in parallel",
 	)
-	// reconciler parametes
+	// reconciler parameters
 	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 10,
 		"interval at which the controller will re list resources even with no changes, in hours")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,

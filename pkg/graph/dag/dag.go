@@ -26,7 +26,7 @@ import (
 type Vertex struct {
 	// ID is a unique identifier for the node
 	ID string
-	// Order records the original order, and is used to preserve the original user-provided ordering as far as posible.
+	// Order records the original order, and is used to preserve the original user-provided ordering as far as possible.
 	Order int
 	// DependsOn stores the IDs of the nodes that this node depends on.
 	// If we depend on another vertex, we must appear after that vertex in the topological sort.

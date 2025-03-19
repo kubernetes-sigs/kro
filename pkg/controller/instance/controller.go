@@ -33,7 +33,7 @@ import (
 	"github.com/kro-run/kro/pkg/metadata"
 )
 
-// ReconcileConfig holds configuration parameters for the recnociliation process.
+// ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
 	// DefaultRequeueDuration is the default duration to wait before requeueing a
@@ -128,7 +128,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 	}
 
 	// This is one of the main reasons why we're splitting the controller into
-	// two parts. The instanciator is responsible for creating a new runtime
+	// two parts. The instantiator is responsible for creating a new runtime
 	// instance of the resource graph definition. The instance graph reconciler is responsible
 	// for reconciling the instance and its sub-resources, while keeping the same
 	// runtime object in it's fields.

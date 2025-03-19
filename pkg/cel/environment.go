@@ -57,6 +57,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		// default stdlibs
 		ext.Lists(),
 		ext.Strings(),
+		cel.StdLib(),
 	}
 
 	for _, name := range opts.resourceIDs {

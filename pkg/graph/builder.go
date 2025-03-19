@@ -776,26 +776,30 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				if err != nil {
 					return fmt.Errorf("failed to validate expression context: '%s' %w", includeWhenExpression, err)
 				}
-				// create context
-				context := map[string]*Resource{}
-				// for now we will only support the instance context for condition expressions.
-				// With this decision we will decide in creation time, and update time
-				// If we'll be creating resources or not
-				context["schema"] = &Resource{
-					emulatedObject: &unstructured.Unstructured{
-						Object: instanceEmulatedCopy.Object,
-					},
-				}
 
-				output, err := dryRunExpression(instanceEnv, includeWhenExpression, context)
+				err = validateIncludeWhenExpression(instanceEnv, includeWhenExpression)
 				if err != nil {
-					return fmt.Errorf("failed to dry-run expression %s: %w", includeWhenExpression, err)
-				}
-				if !krocel.IsBoolType(output) {
-					return fmt.Errorf("output of condition expression %s can only be of type bool", includeWhenExpression)
+					return fmt.Errorf("failed to validate includeWhen expression: %w", err)
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// validateIncludeWhenExpression checks if an includeWhen expression can be compiled and
+// returns a boolean without evaluating it. This prevents errors from referencing
+// non-existent array indices during validation. At runtime, the WantToCreateResource
+// method checks these conditions to avoid 'index out of bounds' errors.
+func validateIncludeWhenExpression(env *cel.Env, expression string) error {
+	ast, issues := env.Compile(expression)
+	if issues != nil && issues.Err() != nil {
+		return fmt.Errorf("failed to compile expression: %w", issues.Err())
+	}
+
+	if ast.OutputType() != cel.BoolType {
+		return fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression)
 	}
 
 	return nil

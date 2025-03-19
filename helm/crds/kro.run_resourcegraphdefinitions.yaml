@@ -1,0 +1,238 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: resourcegraphdefinitions.kro.run
+spec:
+  group: kro.run
+  names:
+    kind: ResourceGraphDefinition
+    listKind: ResourceGraphDefinitionList
+    plural: resourcegraphdefinitions
+    shortNames:
+    - rgd
+    singular: resourcegraphdefinition
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.schema.apiVersion
+      name: APIVERSION
+      type: string
+    - jsonPath: .spec.schema.kind
+      name: KIND
+      type: string
+    - jsonPath: .status.state
+      name: STATE
+      type: string
+    - jsonPath: .status.topologicalOrder
+      name: TOPOLOGICALORDER
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ResourceGraphDefinitionSpec defines the desired state of
+              ResourceGraphDefinition
+            properties:
+              defaultServiceAccounts:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ServiceAccount configuration for controller impersonation.
+                  Key is the namespace, value is the service account name to use.
+                  Special key "*" defines the default service account for any
+                  namespace not explicitly mapped.
+                type: object
+              resources:
+                description: The resources that are part of the resourcegraphdefinition.
+                items:
+                  properties:
+                    id:
+                      type: string
+                    includeWhen:
+                      items:
+                        type: string
+                      type: array
+                    readyWhen:
+                      items:
+                        type: string
+                      type: array
+                    template:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - id
+                  - template
+                  type: object
+                type: array
+              schema:
+                description: |-
+                  The schema of the resourcegraphdefinition, which includes the
+                  apiVersion, kind, spec, status, types, and some validation
+                  rules.
+                properties:
+                  apiVersion:
+                    description: |-
+                      The APIVersion of the resourcegraphdefinition. This is used to generate
+                      and create the CRD for the resourcegraphdefinition.
+                    pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: apiVersion is immutable
+                      rule: self == oldSelf
+                  group:
+                    default: kro.run
+                    description: |-
+                      The group of the resourcegraphdefinition. This is used to set the API group
+                      of the generated CRD. If omitted, it defaults to "kro.run".
+                    type: string
+                  kind:
+                    description: |-
+                      The kind of the resourcegraphdefinition. This is used to generate
+                      and create the CRD for the resourcegraphdefinition.
+                    pattern: ^[A-Z][a-zA-Z0-9]{0,62}$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: kind is immutable
+                      rule: self == oldSelf
+                  spec:
+                    description: |-
+                      The spec of the resourcegraphdefinition. Typically, this is the spec of
+                      the CRD that the resourcegraphdefinition is managing. This is adhering
+                      to the SimpleSchema spec
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  status:
+                    description: |-
+                      The status of the resourcegraphdefinition. This is the status of the CRD
+                      that the resourcegraphdefinition is managing. This is adhering to the
+                      SimpleSchema spec.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  validation:
+                    description: |-
+                      Validation is a list of validation rules that are applied to the
+                      resourcegraphdefinition.
+                      Not implemented yet.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - apiVersion
+                - kind
+                type: object
+            required:
+            - schema
+            type: object
+          status:
+            description: ResourceGraphDefinitionStatus defines the observed state
+              of ResourceGraphDefinition
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state
+                items:
+                  description: |-
+                    Condition is the common struct used by all CRDs managed by ACK service
+                    controllers to indicate terminal states  of the CR and its backend AWS
+                    service API resource
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: A human-readable message indicating details about
+                        the transition.
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: The reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type is the type of the Condition
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              resources:
+                description: Resources represents the resources, and their information
+                  (dependencies for now)
+                items:
+                  description: |-
+                    ResourceInformation defines the information about a resource
+                    in the resourcegraphdefinition
+                  properties:
+                    dependencies:
+                      description: Dependencies represents the resource dependencies
+                        of a resource graph definition
+                      items:
+                        description: |-
+                          Dependency defines the dependency a resource has observed
+                          from the resources it points to based on expressions
+                        properties:
+                          id:
+                            description: ID represents the id of the dependency resource
+                            type: string
+                        type: object
+                      type: array
+                    id:
+                      description: ID represents the id of the resources we're providing
+                        information for
+                      type: string
+                  type: object
+                type: array
+              state:
+                description: State is the state of the resourcegraphdefinition
+                type: string
+              topologicalOrder:
+                description: TopologicalOrder is the topological order of the resourcegraphdefinition
+                  graph
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

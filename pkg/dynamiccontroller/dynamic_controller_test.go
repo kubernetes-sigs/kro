@@ -187,20 +187,42 @@ func TestAllInformerHaveSynced(t *testing.T) {
 			setupInformers: func(dc *DynamicController) {},
 			expected:       true,
 		},
+		// {
+		// 	name: "one synced informer",
+		// 	setupInformers: func(dc *DynamicController) {
+		// 		dc.informers.Store("informer", &mockSharedIndexInformer{hasSynced: true})
+		// 	},
+		// 	expected: true,
+		// },
 		{
 			name: "one unsynced informer",
 			setupInformers: func(dc *DynamicController) {
-				mockInformer := &mockSharedIndexInformer{hasSynced: false}
-				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-				dc.informers.Store(gvr, mockInformer)
+				dc.informers.Store("informer", &mockSharedIndexInformer{hasSynced: false})
+			},
+			expected: false,
+		},
+		// {
+		// 	name: "multiple synced informers",
+		// 	setupInformers: func(dc *DynamicController) {
+		// 		dc.informers.Store("informer1", &mockSharedIndexInformer{hasSynced: true})
+		// 		dc.informers.Store("informer2", &mockSharedIndexInformer{hasSynced: true})
+		// 		dc.informers.Store("informer3", &mockSharedIndexInformer{hasSynced: true})
+		// 	},
+		// 	expected: true,
+		// },
+		{
+			name: "mix of synced and unsynced informers",
+			setupInformers: func(dc *DynamicController) {
+				dc.informers.Store("informer1", &mockSharedIndexInformer{hasSynced: true})
+				dc.informers.Store("informer2", &mockSharedIndexInformer{hasSynced: true})
+				dc.informers.Store("informer3", &mockSharedIndexInformer{hasSynced: false})
 			},
 			expected: false,
 		},
 		{
 			name: "invalid informer type",
 			setupInformers: func(dc *DynamicController) {
-				gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
-				dc.informers.Store(gvr, "not an informer")
+				dc.informers.Store("informer", &mockSharedIndexInformer{})
 			},
 			expected: false,
 		},

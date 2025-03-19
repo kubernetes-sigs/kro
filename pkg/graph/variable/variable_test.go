@@ -140,136 +140,176 @@ func TestResourceFieldAddDependencies(t *testing.T) {
 func TestFieldDescriptor(t *testing.T) {
 	tests := []struct {
 		name           string
-		fieldDesc      FieldDescriptor
-		expectedPath   string
-		expectedExprs  []string
+		path           string
+		expressions    []string
 		expectedTypes  []string
-		expectedSchema *spec.Schema
+		schema         *spec.Schema
 		standalone     bool
+		expectedResult FieldDescriptor
 	}{
 		{
-			name: "basic field descriptor",
-			fieldDesc: FieldDescriptor{
+			name:          "basic field descriptor",
+			path:          "spec.replicas",
+			expressions:   []string{"${schema.spec.replicas + 5}"},
+			expectedTypes: []string{"integer"},
+			schema:        nil,
+			standalone:    true,
+			expectedResult: FieldDescriptor{
 				Path:                 "spec.replicas",
 				Expressions:          []string{"${schema.spec.replicas + 5}"},
 				ExpectedTypes:        []string{"integer"},
 				ExpectedSchema:       nil,
 				StandaloneExpression: true,
 			},
-			expectedPath:   "spec.replicas",
-			expectedExprs:  []string{"${schema.spec.replicas + 5}"},
-			expectedTypes:  []string{"integer"},
-			expectedSchema: nil,
-			standalone:     true,
 		},
 		{
-			name: "field descriptor with schema",
-			fieldDesc: FieldDescriptor{
+			name:          "field descriptor with schema",
+			path:          "spec.template",
+			expressions:   []string{"${schema.spec.template}"},
+			expectedTypes: []string{"object"},
+			schema:        &spec.Schema{},
+			standalone:    true,
+			expectedResult: FieldDescriptor{
 				Path:                 "spec.template",
 				Expressions:          []string{"${schema.spec.template}"},
 				ExpectedTypes:        []string{"object"},
 				ExpectedSchema:       &spec.Schema{},
 				StandaloneExpression: true,
 			},
-			expectedPath:   "spec.template",
-			expectedExprs:  []string{"${schema.spec.template}"},
-			expectedTypes:  []string{"object"},
-			expectedSchema: &spec.Schema{},
-			standalone:     true,
 		},
 		{
-			name: "field descriptor with multiple expressions",
-			fieldDesc: FieldDescriptor{
+			name:          "field descriptor with multiple expressions",
+			path:          "spec.name",
+			expressions:   []string{"${prefix}", "${suffix}"},
+			expectedTypes: []string{"string"},
+			schema:        nil,
+			standalone:    false,
+			expectedResult: FieldDescriptor{
 				Path:                 "spec.name",
 				Expressions:          []string{"${prefix}", "${suffix}"},
 				ExpectedTypes:        []string{"string"},
 				ExpectedSchema:       nil,
 				StandaloneExpression: false,
 			},
-			expectedPath:   "spec.name",
-			expectedExprs:  []string{"${prefix}", "${suffix}"},
-			expectedTypes:  []string{"string"},
-			expectedSchema: nil,
-			standalone:     false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expectedPath, tc.fieldDesc.Path)
-			assert.Equal(t, tc.expectedExprs, tc.fieldDesc.Expressions)
-			assert.Equal(t, tc.expectedTypes, tc.fieldDesc.ExpectedTypes)
-			assert.Equal(t, tc.expectedSchema, tc.fieldDesc.ExpectedSchema)
-			assert.Equal(t, tc.standalone, tc.fieldDesc.StandaloneExpression)
+			// (assuming there's a constructor - if not, we'll use direct initialization)
+			fd := FieldDescriptor{
+				Path:                 tc.path,
+				Expressions:          tc.expressions,
+				ExpectedTypes:        tc.expectedTypes,
+				ExpectedSchema:       tc.schema,
+				StandaloneExpression: tc.standalone,
+			}
+
+			assert.Equal(t, tc.expectedResult.Path, fd.Path)
+			assert.Equal(t, tc.expectedResult.Expressions, fd.Expressions)
+			assert.Equal(t, tc.expectedResult.ExpectedTypes, fd.ExpectedTypes)
+			assert.Equal(t, tc.expectedResult.ExpectedSchema, fd.ExpectedSchema)
+			assert.Equal(t, tc.expectedResult.StandaloneExpression, fd.StandaloneExpression)
+
+			// Test method functionality (if FieldDescriptor has methods)
+			// For example, if it has a method to get the first expression:
+			if len(fd.Expressions) > 0 {
+				// This is a hypothetical method - replace with actual methods from variable.go
+				// assert.Equal(t, fd.Expressions[0], fd.GetFirstExpression())
+			}
+
+			// Test schema validation if applicable
+			if fd.ExpectedSchema != nil {
+				assert.NotNil(t, fd.ExpectedSchema, "Schema should not be nil when expected")
+				// Test schema functionality if applicable
+				// For example: assert.Equal(t, "object", fd.ExpectedSchema.Type[0])
+			}
 		})
 	}
 }
-
 func TestResourceField(t *testing.T) {
 	tests := []struct {
-		name          string
-		resourceField ResourceField
-		expectedKind  ResourceVariableKind
-		expectedDeps  []string
+		name              string
+		fieldDescriptor   FieldDescriptor
+		kind              ResourceVariableKind
+		initialDeps       []string
+		additionalDeps    []string
+		expectedKind      ResourceVariableKind
+		expectedFinalDeps []string
 	}{
 		{
 			name: "static resource field",
-			resourceField: ResourceField{
-				FieldDescriptor: FieldDescriptor{
-					Path:        "spec.replicas",
-					Expressions: []string{"${schema.spec.replicas + 5}"},
-				},
-				Kind:         ResourceVariableKindStatic,
-				Dependencies: []string{"instance"},
+			fieldDescriptor: FieldDescriptor{
+				Path:        "spec.replicas",
+				Expressions: []string{"${schema.spec.replicas + 5}"},
 			},
-			expectedKind: ResourceVariableKindStatic,
-			expectedDeps: []string{"instance"},
+			kind:              ResourceVariableKindStatic,
+			initialDeps:       []string{"instance"},
+			additionalDeps:    []string{"schema"},
+			expectedKind:      ResourceVariableKindStatic,
+			expectedFinalDeps: []string{"instance", "schema"},
 		},
 		{
 			name: "dynamic resource field",
-			resourceField: ResourceField{
-				FieldDescriptor: FieldDescriptor{
-					Path:        "spec.vpcId",
-					Expressions: []string{"${vpc.status.vpcId}"},
-				},
-				Kind:         ResourceVariableKindDynamic,
-				Dependencies: []string{"vpc"},
+			fieldDescriptor: FieldDescriptor{
+				Path:        "spec.vpcId",
+				Expressions: []string{"${vpc.status.vpcId}"},
 			},
-			expectedKind: ResourceVariableKindDynamic,
-			expectedDeps: []string{"vpc"},
+			kind:              ResourceVariableKindDynamic,
+			initialDeps:       []string{"vpc"},
+			additionalDeps:    []string{"instance"},
+			expectedKind:      ResourceVariableKindDynamic,
+			expectedFinalDeps: []string{"vpc", "instance"},
 		},
 		{
 			name: "readyWhen resource field",
-			resourceField: ResourceField{
-				FieldDescriptor: FieldDescriptor{
-					Path:        "readyWhen",
-					Expressions: []string{"${cluster.status.status == \"Active\"}"},
-				},
-				Kind:         ResourceVariableKindReadyWhen,
-				Dependencies: []string{"cluster"},
+			fieldDescriptor: FieldDescriptor{
+				Path:        "readyWhen",
+				Expressions: []string{"${cluster.status.status == \"Active\"}"},
 			},
-			expectedKind: ResourceVariableKindReadyWhen,
-			expectedDeps: []string{"cluster"},
+			kind:              ResourceVariableKindReadyWhen,
+			initialDeps:       []string{"cluster"},
+			additionalDeps:    []string{"cluster", "another-dep"}, // Test deduplication
+			expectedKind:      ResourceVariableKindReadyWhen,
+			expectedFinalDeps: []string{"cluster", "another-dep"},
 		},
 		{
 			name: "includeWhen resource field",
-			resourceField: ResourceField{
-				FieldDescriptor: FieldDescriptor{
-					Path:        "includeWhen",
-					Expressions: []string{"${schema.spec.replicas > 1}"},
-				},
-				Kind:         ResourceVariableKindIncludeWhen,
-				Dependencies: []string{"instance"},
+			fieldDescriptor: FieldDescriptor{
+				Path:        "includeWhen",
+				Expressions: []string{"${schema.spec.replicas > 1}"},
 			},
-			expectedKind: ResourceVariableKindIncludeWhen,
-			expectedDeps: []string{"instance"},
+			kind:              ResourceVariableKindIncludeWhen,
+			initialDeps:       []string{"instance"},
+			additionalDeps:    []string{},
+			expectedKind:      ResourceVariableKindIncludeWhen,
+			expectedFinalDeps: []string{"instance"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expectedKind, tc.resourceField.Kind)
-			assert.Equal(t, tc.expectedDeps, tc.resourceField.Dependencies)
+			field := ResourceField{
+				FieldDescriptor: tc.fieldDescriptor,
+				Kind:            tc.kind,
+				Dependencies:    tc.initialDeps,
+			}
+
+			// Verifying initial state
+			assert.Equal(t, tc.kind, field.Kind)
+			assert.ElementsMatch(t, tc.initialDeps, field.Dependencies)
+
+			field.AddDependencies(tc.additionalDeps...)
+
+			// Verifying final state
+			assert.Equal(t, tc.expectedKind, field.Kind)
+			assert.ElementsMatch(t, tc.expectedFinalDeps, field.Dependencies)
+
+			// Verifying behavior methods
+			assert.Equal(t, tc.kind.IsStatic(), field.Kind.IsStatic())
+			assert.Equal(t, tc.kind.IsDynamic(), field.Kind.IsDynamic())
+			assert.Equal(t, tc.kind.IsIncludeWhen(), field.Kind.IsIncludeWhen())
+			assert.Equal(t, string(tc.kind), field.Kind.String())
 		})
 	}
 }

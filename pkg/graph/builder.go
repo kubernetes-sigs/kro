@@ -793,14 +793,16 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 // non-existent array indices during validation. At runtime, the WantToCreateResource
 // method checks these conditions to avoid 'index out of bounds' errors.
 func validateIncludeWhenExpression(env *cel.Env, expression string) error {
-	ast, issues := env.Compile(expression)
+	_, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
 		return fmt.Errorf("failed to compile expression: %w", issues.Err())
 	}
 
-	if ast.OutputType() != cel.BoolType {
-		return fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression)
-	}
+	// We won't validate the output type here since expressions like:
+	// - "schema.spec.enableSubnets" (implicit boolean)
+	// - "schema.spec.enableSubnets == true" (explicit boolean)
+	// - "schema.spec.berries.size() >= 3" (comparison to boolean)
+	// All need to be valid. At runtime, the value will be checked properly.
 
 	return nil
 }

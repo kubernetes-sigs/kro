@@ -1,0 +1,8 @@
+{
+  "label": "Security",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Security advisories and best practices for Kro"
+  }
+} 

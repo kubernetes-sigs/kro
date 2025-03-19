@@ -115,21 +115,16 @@ func TestResourceFieldAddDependencies(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create a ResourceField with initial dependencies
 			rf := ResourceField{
 				Dependencies: tc.initialDeps,
 			}
 
-			// Add dependencies
 			rf.AddDependencies(tc.depsToAdd...)
 
-			// Check that the dependencies are as expected
 			assert.ElementsMatch(t, tc.expectedFinalDeps, rf.Dependencies)
 
-			// Also verify no duplicates
 			seen := make(map[string]bool)
 			for _, dep := range rf.Dependencies {
-				// Should not have seen this dependency before
 				assert.False(t, seen[dep], "Duplicate dependency found: %s", dep)
 				seen[dep] = true
 			}
@@ -196,7 +191,6 @@ func TestFieldDescriptor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// (assuming there's a constructor - if not, we'll use direct initialization)
 			fd := FieldDescriptor{
 				Path:                 tc.path,
 				Expressions:          tc.expressions,
@@ -211,18 +205,8 @@ func TestFieldDescriptor(t *testing.T) {
 			assert.Equal(t, tc.expectedResult.ExpectedSchema, fd.ExpectedSchema)
 			assert.Equal(t, tc.expectedResult.StandaloneExpression, fd.StandaloneExpression)
 
-			// Test method functionality (if FieldDescriptor has methods)
-			// For example, if it has a method to get the first expression:
-			if len(fd.Expressions) > 0 {
-				// This is a hypothetical method - replace with actual methods from variable.go
-				// assert.Equal(t, fd.Expressions[0], fd.GetFirstExpression())
-			}
-
-			// Test schema validation if applicable
 			if fd.ExpectedSchema != nil {
 				assert.NotNil(t, fd.ExpectedSchema, "Schema should not be nil when expected")
-				// Test schema functionality if applicable
-				// For example: assert.Equal(t, "object", fd.ExpectedSchema.Type[0])
 			}
 		})
 	}

@@ -279,6 +279,64 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "Schema with multiple enum types",
+			obj: map[string]interface{}{
+				"logLevel": "string | enum=\"debug,info,warn,error\" default=\"info\"",
+				"features": map[string]interface{}{
+					"debugMode": "boolean | enum=\"true,false\" default=false",
+					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
+					"errorCode": "integer | enum=\"400,404,500\" default=500",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"logLevel": {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte("\"info\"")},
+						Enum: []extv1.JSON{
+							{Raw: []byte("\"debug\"")},
+							{Raw: []byte("\"info\"")},
+							{Raw: []byte("\"warn\"")},
+							{Raw: []byte("\"error\"")},
+						},
+					},
+					"features": {
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"debugMode": {
+								Type:    "boolean",
+								Default: &extv1.JSON{Raw: []byte("false")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("true")},
+									{Raw: []byte("false")},
+								},
+							},
+							"logFormat": {
+								Type:    "string",
+								Default: &extv1.JSON{Raw: []byte("\"json\"")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("\"json\"")},
+									{Raw: []byte("\"text\"")},
+									{Raw: []byte("\"csv\"")},
+								},
+							},
+							"errorCode": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("500")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("400")},
+									{Raw: []byte("404")},
+									{Raw: []byte("500")},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

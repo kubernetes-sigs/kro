@@ -16,6 +16,7 @@ package simpleschema
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
@@ -211,6 +212,45 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeMaximum:
 			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
 				schema.Maximum = &val
+			}
+		case MarkerTypeEnum:
+			enumValues := strings.Split(marker.Value, ",")
+
+			var enumJsonValues []extv1.JSON
+
+			for _, val := range enumValues {
+				val = strings.TrimSpace(val)
+				var rawValue []byte
+
+				switch schema.Type {
+				case "string":
+					rawValue = []byte(fmt.Sprintf("\"%s\"", val))
+				case "integer":
+					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
+						rawValue = []byte(val)
+						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						continue
+					}
+				case "number":
+					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
+						rawValue = []byte(val)
+						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						continue
+					}
+				case "boolean":
+					if val == "true" || val == "false" {
+						rawValue = []byte(val)
+						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						continue
+					}
+				default:
+					rawValue = []byte(val)
+					enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+				}
+				enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+			}
+			if len(enumJsonValues) > 0 {
+				schema.Enum = enumJsonValues
 			}
 		}
 	}

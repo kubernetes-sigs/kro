@@ -14,80 +14,113 @@
 package schema
 
 import (
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
 
-func TestNewCombinedResolver(t *testing.T) {
-	tests := []struct {
-		name          string
-		serverHandler http.HandlerFunc
-		expectError   bool
-	}{
-		{
-			name: "successful resolver creation",
-			serverHandler: func(w http.ResponseWriter, r *http.Request) {
-				// Mock successful discovery endpoints
-				if r.URL.Path == "/api" {
-					_, err := w.Write([]byte(`{"versions":["v1"]}`))
-					require.NoError(t, err, "Failed to write API response")
-				} else if r.URL.Path == "/apis" {
-					_, err := w.Write([]byte(`{"groups":[{"name":"apps","versions":[{"groupVersion":"apps/v1"}]}]}`))
-					require.NoError(t, err, "Failed to write APIs response")
-				} else {
-					w.WriteHeader(http.StatusOK)
-					_, err := w.Write([]byte(`{}`))
-					require.NoError(t, err, "Failed to write empty response")
-				}
-			},
-			expectError: false,
+func TestCombinedResolver(t *testing.T) {
+	fakeClient := fakeclientset.NewSimpleClientset()
+
+	// Creating REST client using fake client
+	clientConfig := &rest.Config{
+		Host: "https://fake.example.com",
+		ContentConfig: rest.ContentConfig{
+			ContentType: "application/json",
 		},
-		{
-			name: "discovery client error",
-			serverHandler: func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusInternalServerError)
-				_, err := w.Write([]byte(`{"error":"internal server error"}`))
-				require.NoError(t, err, "Failed to write error response")
-			},
-			expectError: true,
+		WrapTransport: func(rt http.RoundTripper) http.RoundTripper {
+			return &fakeTransport{
+				fakeClient: fakeClient,
+			}
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			testServer := httptest.NewServer(tc.serverHandler)
-			defer testServer.Close()
+	// Testing resolver with valid config
+	t.Run("with valid config", func(t *testing.T) {
+		resolver, discoveryClient, err := NewCombinedResolver(clientConfig)
+		require.NoError(t, err)
+		require.NotNil(t, resolver)
+		require.NotNil(t, discoveryClient)
 
-			config := &rest.Config{
-				Host: testServer.URL,
-			}
+		// Checking that we can get some basic info from discoveryClient
+		version, err := discoveryClient.ServerVersion()
+		require.NoError(t, err)
+		assert.NotNil(t, version)
+		assert.Equal(t, "1", version.Major)
+		assert.Equal(t, "25", version.Minor)
+	})
 
-			// Calling the function being tested
-			resolver, discoveryClient, err := NewCombinedResolver(config)
+	// Testing with invalid config
+	t.Run("with invalid config", func(t *testing.T) {
+		// Malformed config that will fail during client creation
+		badConfig := &rest.Config{
+			Host: "://invalid-host",
+		}
+		resolver, discoveryClient, err := NewCombinedResolver(badConfig)
+		require.Error(t, err)
+		assert.Nil(t, resolver)
+		assert.Nil(t, discoveryClient)
+	})
+}
 
-			if tc.name == "discovery client error" {
-				// Creating a new test - verifying that using the client fails
-				serverVersion, err := discoveryClient.ServerVersion()
-				require.Error(t, err)
-				assert.Nil(t, serverVersion)
-			} else if tc.expectError {
-				require.Error(t, err)
-				assert.Nil(t, resolver)
-				assert.Nil(t, discoveryClient)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, resolver)
-				assert.NotNil(t, discoveryClient)
+// fakeTransport simulates HTTP transport using fake Kubernetes client
+type fakeTransport struct {
+	fakeClient *fakeclientset.Clientset
+}
 
-				// Verify resolver can resolve some basic types
-				// This is a more complex test that would require deeper mocking
-				// of the OpenAPI schemas returned by the server
-			}
-		})
+func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Simplified responses based on request path
+	switch {
+	case req.URL.Path == "/version":
+		return &http.Response{
+			StatusCode: 200,
+			Body: io.NopCloser(strings.NewReader(`{
+                "major": "1", 
+                "minor": "25",
+                "gitVersion": "v1.25.0"
+            }`)),
+			Header: make(http.Header),
+		}, nil
+
+	case req.URL.Path == "/api":
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`{"versions":["v1"]}`)),
+			Header:     make(http.Header),
+		}, nil
+
+	case req.URL.Path == "/apis":
+		return &http.Response{
+			StatusCode: 200,
+			Body: io.NopCloser(strings.NewReader(`{
+                "groups": [
+                    {
+                        "name": "apps",
+                        "versions": [{"groupVersion": "apps/v1"}]
+                    }
+                ]
+            }`)),
+			Header: make(http.Header),
+		}, nil
+
+	case strings.Contains(req.URL.Path, "/openapi/v3"):
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Header:     make(http.Header),
+		}, nil
+
+	default:
+		return &http.Response{
+			StatusCode: 404,
+			Body:       io.NopCloser(strings.NewReader(`{"message": "not found"}`)),
+			Header:     make(http.Header),
+		}, nil
 	}
 }

@@ -788,21 +788,11 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	return nil
 }
 
-// validateIncludeWhenExpression checks if an includeWhen expression can be compiled and
-// returns a boolean without evaluating it. This prevents errors from referencing
-// non-existent array indices during validation. At runtime, the WantToCreateResource
-// method checks these conditions to avoid 'index out of bounds' errors.
 func validateIncludeWhenExpression(env *cel.Env, expression string) error {
 	_, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
 		return fmt.Errorf("failed to compile expression: %w", issues.Err())
 	}
-
-	// We won't validate the output type here since expressions like:
-	// - "schema.spec.enableSubnets" (implicit boolean)
-	// - "schema.spec.enableSubnets == true" (explicit boolean)
-	// - "schema.spec.berries.size() >= 3" (comparison to boolean)
-	// All need to be valid. At runtime, the value will be checked properly.
 
 	return nil
 }

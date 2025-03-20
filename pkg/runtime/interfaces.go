@@ -109,7 +109,6 @@ type ResourceDescriptor interface {
 	// be evaluated before deciding whether to create a resource
 	GetIncludeWhenExpressions() []string
 
-
 	// IsNamespaced returns true if the resource is namespaced, and false if it's
 	// cluster-scoped.
 	IsNamespaced() bool

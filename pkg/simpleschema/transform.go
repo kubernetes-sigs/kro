@@ -117,7 +117,9 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 		fieldJSONSchemaProps = &preDefinedType
 	}
 
-	tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema)
+	if err := tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema); err != nil {
+		return nil, fmt.Errorf("failed to apply markers: %w", err)
+	}
 
 	return fieldJSONSchemaProps, nil
 }
@@ -185,7 +187,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) {
+func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
@@ -206,11 +208,15 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeDescription:
 			schema.Description = marker.Value
 		case MarkerTypeMinimum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
+			if val, err := strconv.ParseFloat(marker.Value, 64); err != nil {
+				return fmt.Errorf("failed to parse minimum enum value: %w", err)
+			} else {
 				schema.Minimum = &val
 			}
 		case MarkerTypeMaximum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
+			if val, err := strconv.ParseFloat(marker.Value, 64); err != nil {
+				return fmt.Errorf("failed to parse maximum enum value: %w", err)
+			} else {
 				schema.Maximum = &val
 			}
 		case MarkerTypeEnum:
@@ -226,20 +232,20 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				case "string":
 					rawValue = []byte(fmt.Sprintf("\"%s\"", val))
 				case "integer":
-					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
+					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+						return fmt.Errorf("failed to parse integer enum value: %w", err)
+					} else {
 						rawValue = []byte(val)
-						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
-						continue
 					}
+
 				case "number":
-					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
+					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+						return fmt.Errorf("failed to parse number enum value: %w", err)
+					} else {
 						rawValue = []byte(val)
-						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
-						continue
 					}
 				default:
 					rawValue = []byte(val)
-					enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 				}
 				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 			}
@@ -248,6 +254,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			}
 		}
 	}
+	return nil
 }
 
 // Other functions (LoadPreDefinedTypes, transformMap) remain unchanged

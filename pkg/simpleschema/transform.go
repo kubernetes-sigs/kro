@@ -237,9 +237,8 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 					} else {
 						rawValue = []byte(val)
 					}
-
 				case "number":
-					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+					if _, err := strconv.ParseFloat(val, 64); err != nil {
 						return fmt.Errorf("failed to parse number enum value: %w", err)
 					} else {
 						rawValue = []byte(val)

@@ -286,6 +286,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				"features": map[string]interface{}{
 					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
 					"errorCode": "integer | enum=\"400,404,500\" default=500",
+					"threshold": "number | enum=\"1.2,2.0,0.1\" default=0.1",
 				},
 			},
 			want: &extv1.JSONSchemaProps{
@@ -320,6 +321,15 @@ func TestBuildOpenAPISchema(t *testing.T) {
 									{Raw: []byte("400")},
 									{Raw: []byte("404")},
 									{Raw: []byte("500")},
+								},
+							},
+							"threshold": {
+								Type:    "number",
+								Default: &extv1.JSON{Raw: []byte("0.1")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("1.2")},
+									{Raw: []byte("2.0")},
+									{Raw: []byte("0.1")},
 								},
 							},
 						},

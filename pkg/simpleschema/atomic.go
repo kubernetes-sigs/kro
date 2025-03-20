@@ -34,11 +34,13 @@ const (
 	AtomicTypeFloat AtomicType = "float"
 	// AtomicTypeString represents a string value.
 	AtomicTypeString AtomicType = "string"
+	// AtomicTypeNumber represents a number value.
+	AtomicTypeNumber AtomicType = "number"
 )
 
 func isAtomicType(s string) bool {
 	switch AtomicType(s) {
-	case AtomicTypeBool, AtomicTypeInteger, AtomicTypeFloat, AtomicTypeString:
+	case AtomicTypeBool, AtomicTypeInteger, AtomicTypeFloat, AtomicTypeString, AtomicTypeNumber:
 		return true
 	default:
 		return false

@@ -1,4 +1,0 @@
-region: AWS_REGION
-clusterName: CLUSTER_NAME
-accountId: ACCOUNT_ID
-oidcProvider: OIDC_PROVIDER

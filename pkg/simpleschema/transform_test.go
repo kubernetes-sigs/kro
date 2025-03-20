@@ -284,7 +284,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			obj: map[string]interface{}{
 				"logLevel": "string | enum=\"debug,info,warn,error\" default=\"info\"",
 				"features": map[string]interface{}{
-					"debugMode": "boolean | enum=\"true,false\" default=false",
 					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
 					"errorCode": "integer | enum=\"400,404,500\" default=500",
 				},
@@ -305,14 +304,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 					"features": {
 						Type: "object",
 						Properties: map[string]extv1.JSONSchemaProps{
-							"debugMode": {
-								Type:    "boolean",
-								Default: &extv1.JSON{Raw: []byte("false")},
-								Enum: []extv1.JSON{
-									{Raw: []byte("true")},
-									{Raw: []byte("false")},
-								},
-							},
 							"logFormat": {
 								Type:    "string",
 								Default: &extv1.JSON{Raw: []byte("\"json\"")},

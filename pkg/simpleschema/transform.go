@@ -237,12 +237,6 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 						continue
 					}
-				case "boolean":
-					if val == "true" || val == "false" {
-						rawValue = []byte(val)
-						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
-						continue
-					}
 				default:
 					rawValue = []byte(val)
 					enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})

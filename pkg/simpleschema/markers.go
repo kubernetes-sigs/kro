@@ -50,7 +50,6 @@ const (
 	MarkerTypeMinimum MarkerType = "minimum"
 	// MarkerTypeMaximum represents the `maximum` marker.
 	MarkerTypeMaximum MarkerType = "maximum"
-
 	// MarkerTypeEnum represents the `enum` marker.
 	MarkerTypeEnum MarkerType = "enum"
 )

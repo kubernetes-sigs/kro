@@ -216,7 +216,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeEnum:
 			enumValues := strings.Split(marker.Value, ",")
 
-			var enumJsonValues []extv1.JSON
+			var enumJSONValues []extv1.JSON
 
 			for _, val := range enumValues {
 				val = strings.TrimSpace(val)

@@ -228,29 +228,29 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				case "integer":
 					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
 						rawValue = []byte(val)
-						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 						continue
 					}
 				case "number":
 					if _, err := strconv.ParseInt(val, 10, 64); err == nil {
 						rawValue = []byte(val)
-						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 						continue
 					}
 				case "boolean":
 					if val == "true" || val == "false" {
 						rawValue = []byte(val)
-						enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+						enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 						continue
 					}
 				default:
 					rawValue = []byte(val)
-					enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+					enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 				}
-				enumJsonValues = append(enumJsonValues, extv1.JSON{Raw: rawValue})
+				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 			}
-			if len(enumJsonValues) > 0 {
-				schema.Enum = enumJsonValues
+			if len(enumJSONValues) > 0 {
+				schema.Enum = enumJSONValues
 			}
 		}
 	}

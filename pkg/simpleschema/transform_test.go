@@ -341,6 +341,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		{
 			name: "invalid enum type",
 			obj: map[string]interface{}{
+				"errorCode": "int | enum=\"1,,3\"",
 				"threshold": "number | enum=\"1.0,1.5,three\"",
 			},
 			want:    nil,

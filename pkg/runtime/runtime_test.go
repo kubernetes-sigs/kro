@@ -2644,6 +2644,7 @@ func (m *mockResource) GetIncludeWhenExpressions() []string {
 	return m.conditions
 }
 
+
 func (m *mockResource) IsNamespaced() bool {
 	return m.namespaced
 }

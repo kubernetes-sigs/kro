@@ -1,0 +1,456 @@
+syncPolicy:
+  automated:
+    selfHeal: false
+    allowEmpty: true
+    prune: false
+  retry:
+    limit: -1 # number of failed sync attempt retries; unlimited number of attempts if less than 0
+    backoff:
+      duration: 5s # the amount to back off. Default unit is seconds, but could also be a duration (e.g. "2m", "1h")
+      factor: 2 # a factor to multiply the base duration after each failed retry
+      maxDuration: 10m # the maximum amount of time allowed for the backoff strategy
+  syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true  # Big CRDs.
+syncPolicyAppSet:
+  preserveResourcesOnDeletion: false # to be able to cleanup
+useSelectors: true
+repoURLGit: '{{.metadata.annotations.addons_repo_url}}'
+repoURLGitRevision: '{{.metadata.annotations.addons_repo_revision}}'
+repoURLGitBasePath: '{{.metadata.annotations.addons_repo_basepath}}'
+valueFiles:
+  - default/addons
+  - environments/{{.metadata.labels.environment}}/addons
+  - clusters/{{.nameNormalized}}/addons
+useValuesFilePrefix: true
+valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
+
+########################################
+# define Addons
+########################################
+
+argocd:
+  enabled: false
+  chartName: argo-cd
+  namespace: argocd
+  releaseName: argocd
+  defaultVersion: "7.7.8"
+  chartRepository: "https://argoproj.github.io/argo-helm"
+  selector:
+    matchExpressions:
+      - key: enable_argocd
+        operator: In
+        values: ['true']
+
+ack-iam:
+  enabled: false
+  enableACK: false
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "1" # Needs to be after KRO RGD
+  namespace: ack-system
+  defaultVersion: "1.3.16"
+  chartNamespace: aws-controllers-k8s
+  chartName: iam-chart
+  chartRepository: public.ecr.aws
+  selector:
+    matchExpressions:
+      - key: enable_ack_iam
+        operator: In
+        values: ['true']
+  valuesObject:
+    aws:
+      region: '{{.metadata.annotations.aws_region}}'
+    serviceAccount:
+      name: '{{default "ack-iam-controller" (index .metadata.annotations "ack_iam_service_account")}}'
+
+ack-eks:
+  enabled: false
+  enableACK: false
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "1" # Needs to be after KRO RGD  
+  namespace: ack-system
+  chartName: eks-chart
+  defaultVersion: "1.6.0"
+  chartNamespace: aws-controllers-k8s
+  chartRepository: public.ecr.aws
+  selector:
+    matchExpressions:
+      - key: enable_ack_eks
+        operator: In
+        values: ['true']
+  valuesObject:
+    aws:
+      region: '{{.metadata.annotations.aws_region}}'
+    serviceAccount:
+      name: '{{default "ack-eks-controller" (index .metadata.annotations "ack_eks_service_account")}}'
+
+ack-ec2:
+  enabled: false
+  enableACK: false
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "1" # Needs to be after KRO RGD  
+  namespace: ack-system
+  chartName: ec2-chart
+  defaultVersion: "1.3.4"
+  chartNamespace: aws-controllers-k8s
+  chartRepository: public.ecr.aws
+  selector:
+    matchExpressions:
+      - key: enable_ack_ec2
+        operator: In
+        values: ['true']
+  valuesObject:
+    aws:
+      region: '{{.metadata.annotations.aws_region}}'
+    serviceAccount:
+      name: '{{default "ack-ec2-controller" (index .metadata.annotations "ack_ec2_service_account")}}'
+
+external-secrets:
+  enabled: false
+  enableACK: false
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  namespace: external-secrets
+  chartName: external-secrets
+  defaultVersion: "0.10.3"
+  chartRepository: "https://charts.external-secrets.io"
+  selector:
+    matchExpressions:
+      - key: enable_external_secrets
+        operator: In
+        values: ['true']
+  valuesObject:
+    serviceAccount:
+      name: "external-secrets-sa"
+
+metrics-server:
+  enabled: false
+  namespace: kube-system
+  chartName: metrics-server
+  defaultVersion: "3.12.1"
+  chartRepository: "https://kubernetes-sigs.github.io/metrics-server"
+  selector:
+    matchExpressions:
+      - key: enable_metrics_server
+        operator: In
+        values: ['true']
+
+kro:
+  enabled: false
+  namespace: kro-system
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "-3" # Needs to be before resources that needs PodIdentity 
+  defaultVersion: "0.2.1"
+  chartName: kro
+  chartNamespace: kro-run/kro
+  chartRepository: ghcr.io
+  selector:
+    matchExpressions:
+      - key: enable_kro
+        operator: In
+        values: ['true']     
+
+ack-efs:
+  enable: false
+  enableACK: true
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  namespace: ack-system
+  chartName: efs-chart
+  defaultVersion: "1.0.6"
+  chartNamespace: aws-controllers-k8s
+  chartRepository: public.ecr.aws
+  selector:
+    matchExpressions:
+      - key: enable_ack_efs
+        operator: In
+        values: ['true']
+  valuesObject:
+    aws:
+      region: '{{.metadata.annotations.aws_region}}'
+    serviceAccount:
+      name:  'ack-efs-controller'
+
+aws_efs_csi_driver:
+  enabled: false
+  enableACK: false
+  releaseName: aws-efs-csi-driver
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "4" # Needs to be after eck-efs 
+  namespace: "kube-sytem"
+  chartName: aws-efs-csi-driver
+  chartRepository: https://kubernetes-sigs.github.io/aws-efs-csi-driver
+  defaultVersion: "3.0.7"
+  selector:
+    matchExpressions:
+      - key: enable_aws_efs_csi_driver
+        operator: In
+        values: ['true']
+  valuesObject:
+    controller:
+      serviceAccount:
+        name: '{{default "efs-csi-controller-sa" (index  .metadata.annotations "aws_efs_csi_driver_controller_service_account")}}'
+        annotations:
+          eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations "aws_efs_csi_driver_iam_role_arn")}}'
+    node:
+      serviceAccount:
+        name: '{{default "efs-csi-node-sa" (index .metadata.annotations "aws_efs_csi_driver_node_service_account")}}'
+        annotations:
+          eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations "aws_efs_csi_driver_iam_role_arn")}}'
+
+aws_for_fluentbit:
+  enabled: false
+  releaseName: aws-for-fluentbit
+  namespace: '{{ default "kube-system" (index .metadata.annotations "aws_for_fluentbit_namespace") }}'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  chartName: aws-for-fluent-bit
+  chartRepository: https://aws.github.io/eks-charts
+  defaultVersion: "0.1.34"
+  selector:
+    matchExpressions:
+      - key: enable_aws_for_fluentbit
+        operator: In
+        values: ['true']
+  values:
+    cloudWatchLogs:
+      enabled: true
+      region: '{{.metadata.annotations.aws_region}}'
+      logGroupName: '{{.metadata.annotations.aws_for_fluentbit_log_group_name}}'
+      logGroupTemplate: "{{.metadata.annotations.aws_for_fluentbit_log_group_name}}/workload/$kubernetes['namespace_name']"
+      logStreamTemplate: "$kubernetes['pod_name'].$kubernetes['container_name']"
+      logRetentionDays: 90
+    serviceAccount:
+      name: '{{ default "aws-for-fluentbit" (index .metadata.annotations "aws_for_fluentbit_service_account") }}'
+
+cert_manager:
+  enabled: false
+  releaseName: cert-manager
+  namespace: '{{ default "cert-manager" (index .metadata.annotations "cert-manager_namespace") }}'
+  chartName: cert-manager
+  chartRepository: https://charts.jetstack.io
+  defaultVersion: "v1.15.2"
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '-2'
+  selector:
+    matchExpressions:
+      - key: enable_cert_manager
+        operator: In
+        values: ['true']
+  values:
+    installCRDs: true
+    serviceAccount:
+      name: '{{ default "cert-manager" (index .metadata.annotations "cert_manager_service_account") }}'
+
+external_dns:
+  enabled: false
+  releaseName: external-dns
+  namespace: '{{ default "kube-system" (index .metadata.annotations "external_dns_namespace") }}'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  chartName: external-dns
+  chartRepository: https://kubernetes-sigs.github.io/external-dns
+  defaultVersion: "1.14.5"
+  selector:
+    matchExpressions:
+      - key: enable_external_dns
+        operator: In
+        values: ['true']
+  values:
+    provider: aws
+    serviceAccount:
+      name: '{{default "external-dns" (index .metadata.annotations "external_dns_service_account")}}'
+    domainFilters: ['{{.metadata.annotations.external_dns_domain_filters}}']
+    txtOwnerId: '{{.metadata.annotations.aws_cluster_name}}'
+    policy: '{{ default "upsert-only" (index .metadata.annotations "external_dns_policy")}}'
+
+opentelemetry_operator:
+  enabled: false
+  releaseName: opentelemetry-operator
+  namespace: "opentelemetry-operator-system"
+  chartName: opentelemetry-operator
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  chartRepository: https://open-telemetry.github.io/opentelemetry-helm-charts
+  defaultVersion: "0.71.1"
+  values:
+    manager:
+      collectorImage:
+        repository: "otel/opentelemetry-collector-k8s"
+  selector:
+    matchExpressions:
+      - key: enable_opentelemetry_operator
+        operator: In
+        values: ['true']
+
+kyverno:
+  enabled: false
+  releaseName: kyverno
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  namespace: '{{ default "kyverno" (index .metadata.annotations "kyverno_namespace")}}'
+  chartName: kyverno
+  chartRepository: https://kyverno.github.io/kyverno
+  defaultVersion: "3.3.4"
+  selector:
+    matchExpressions:
+      - key: enable_kyverno
+        operator: In
+        values: ['true']
+  resources:
+    path: '{{.metadata.annotations.addons_repo_basepath}}charts/resources/kyverno'
+    helm:
+      valuesObject:
+        environment: '{{.metadata.labels.environment}}'
+
+kyverno_policy_reporter:
+  enabled: false
+  releaseName: kyverno-policy-reporter
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "4" # Needs to be after KRO RGD  
+  namespace: '{{ default "kyverno" (index .metadata.annotations "kyverno_namespace")}}'
+  chartName: policy-reporter
+  chartRepository: https://kyverno.github.io/policy-reporter
+  defaultVersion: '3.0.0'
+  selector:
+    matchExpressions:
+      - key: enable_kyverno_policy_reporter
+        operator: In
+        values: ['true']
+  values:
+    serviceAccount:
+      name: policy-reporter
+
+    logging:
+      logLevel: 0
+
+    plugin:
+      kyverno:
+        enabled: true
+    ui:
+      banner: '{{.metadata.annotations.aws_cluster_name}}'
+      enabled: true
+
+    target:
+      securityHub:
+        accountId: '{{.metadata.annotations.aws_account_id}}'
+        region: '{{.metadata.annotations.aws_region}}'
+        productName: '{{.metadata.annotations.aws_cluster_name}}'
+        skipExistingOnStartup: false
+        delayInSeconds: 10
+        customFields:
+          cluster: '{{.metadata.annotations.aws_cluster_name}}'
+          region: '{{.metadata.annotations.aws_region}}'
+          account: '{{.metadata.annotations.aws_account_id}}'
+          eks_console_url: 'https://{{.metadata.annotations.aws_region}}.console.aws.amazon.com/eks/home?region={{.metadata.annotations.aws_region}}#/clusters/{{.metadata.annotations.aws_cluster_name}}?selectedTab=cluster-resources-tab&selectedResourceId=namespaces'
+        minimumPriority: 'warning'
+        synchronize: true
+
+kyverno_policies:
+  enabled: false
+  releaseName: kyverno-policies
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "4" # Needs to be after KRO RGD  
+  namespace: '{{ default "kyverno" (index .metadata.annotations "kyverno_namespace")}}'
+  chartName: kyverno-policies
+  chartRepository: https://kyverno.github.io/kyverno
+  defaultVersion: "3.2.5"
+  selector:
+    matchExpressions:
+      - key: enable_kyverno_policies
+        operator: In
+        values: ['true']
+  values:
+    podSecurityStandard: restricted
+    validationFailureAction: Audit
+    skipBackgroundRequests: false
+
+cni_metrics_helper:
+  enabled: false
+  releaseName: cni-metrics-helper
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  namespace: '{{ default "kube-system" (index .metadata.annotations "cni_metrics_helper_namespace")}}'
+  chartName: cni-metrics-helper
+  chartRepository: https://aws.github.io/eks-charts
+  defaultVersion: "1.19.2"
+  values:
+    env:
+      AWS_CLUSTER_ID: '{{.metadata.annotations.aws_cluster_name}}'
+  selector:
+    matchExpressions:
+      - key: enable_cni_metrics_helper
+        operator: In
+        values: ['true']
+
+kube_state_metrics:
+  enabled: false
+  releaseName: kube-state-metrics
+  namespace: '{{ default "kube-prometheus-stack" (index .metadata.annotations "kube_state_metrics_namespace")}}'
+  chartName: kube-state-metrics
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  chartRepository: https://prometheus-community.github.io/helm-charts
+  defaultVersion: "5.25.1"
+  selector:
+    matchExpressions:
+      - key: enable_kube_state_metrics
+        operator: In
+        values: ['true']
+
+prometheus_node_exporter:
+  enabled: false
+  releaseName: prometheus-node-exporter
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  namespace: '{{ default "kube-prometheus-stack" (index .metadata.annotations "prometheus_node_exporter_namespace")}}'
+  chartName: prometheus-node-exporter
+  chartRepository: https://prometheus-community.github.io/helm-charts
+  defaultVersion: "4.39.0"
+  selector:
+    matchExpressions:
+      - key: enable_prometheus_node_exporter
+        operator: In
+        values: ['true']
+
+cw_prometheus:
+  enabled: false
+  namespace: '{{ default "amazon-cloudwatch" (index .metadata.annotations "cw_prometheus_namespace")}}'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "3" # Needs to be after KRO RGD  
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/cw-prometheus'
+  chartRepository: '{{.metadata.annotations.addons_repo_url}}'
+  targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+  selector:
+    matchExpressions:
+      - key: enable_cw_prometheus
+        operator: In
+        values: ['true']
+
+kro-eks-rgs:
+  enabled: false
+  type: manifest
+  namespace: kro
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "-2" # Needs to be before resources that needs PodIdentity 
+  path: 'charts/kro/resource-groups/eks'
+  chartRepository: '{{.metadata.annotations.addons_repo_url}}'
+  targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+  selector:
+    matchExpressions:
+      - key: enable_kro_eks_rgs
+        operator: In
+        values: ['true']
+
+multi-acct:
+  enabled: false
+  namespace: kro
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: "-5" # Needs to be before KRO RGD  
+  defaultVersion: "0.1.0"
+  path: charts/multi-acct
+  selector:
+    matchExpressions:
+      - key: enable_mutli_acct
+        operator: In
+        values: ['true']

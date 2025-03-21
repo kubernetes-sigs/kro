@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-redis
+  labels:
+    app.kubernetes.io/created-by: eks-workshop
+    app.kubernetes.io/team: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: checkout
+      app.kubernetes.io/instance: checkout
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: checkout
+        app.kubernetes.io/instance: checkout
+        app.kubernetes.io/component: redis
+        app.kubernetes.io/created-by: eks-workshop
+        app.kubernetes.io/team: database
+    spec:
+      containers:
+        - name: redis
+          image: "public.ecr.aws/docker/library/redis:6.0-alpine"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+             drop:
+             - ALL
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 999 # redis
+            allowPrivilegeEscalation: false
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 1Gi

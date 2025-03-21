@@ -1,0 +1,52 @@
+# resources for the addon
+global:
+  tolerations:
+  - key: "CriticalAddonsOnly"
+    operator: "Exists"
+  nodeSelector:
+    eks.amazonaws.com/compute-type: auto
+    kubernetes.io/os: linux
+    karpenter.sh/nodepool: system
+
+server:
+  autoscaling:
+    enabled: true
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  resources: # Adjust based on your specific use case (required for HPA)
+    requests:
+      cpu: '500m'
+      memory: '512Mi'
+    limits:
+      memory: '1Gi'
+  metrics:
+    enabled: true
+    service:
+      annotations:
+        prometheus.io/scrape: true
+  service:
+   type: LoadBalancer
+   annotations:
+     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+configs:
+  cm:
+    controller.self.heal.timeout.seconds: "600"
+    # Specifies if resource health should be persisted in app CRD (default true)
+    # Changing this to `false` significantly reduce number of Application CRD updates and improves controller performance.
+    controller.resource.health.persist: "false"
+    ui.bannerpermanent: "false"
+    controller.auto-sync: "false" # Seb test to see If I can disable it
+  repositories:
+    # Required when using helm repository with oci formal like karpenter and aws-gateway-api-controller
+    aws-public-ecr:
+      name: aws-public-ecr
+      type: helm
+      url: public.ecr.aws
+      enableOCI: 'true'
+    ghcr.io:
+      name: ghcr.io
+      type: helm
+      url: ghcr.io
+      enableOCI: 'true'

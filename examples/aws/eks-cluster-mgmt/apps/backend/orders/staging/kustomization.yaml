@@ -1,0 +1,5 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../base
+#- try-namespace.yaml # namespaces are not allowed to be created by apps team in project workloads

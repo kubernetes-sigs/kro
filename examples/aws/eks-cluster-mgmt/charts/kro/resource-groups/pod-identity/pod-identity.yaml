@@ -1,0 +1,80 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: podidentity.kro.run
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: PodIdentity  
+    spec:
+      name: string | default="pod-identity"
+      values:
+        aws:
+          clusterName: string
+        policy:
+          description: 'string | default="Test Description"'
+          path: 'string | default="/"'
+          policyDocument: string | default=""
+        piAssociation:
+          serviceAccount: string
+          piNamespace: string
+    status:
+      policyStatus: ${podpolicy.status.conditions}
+      roleStatus: ${podrole.status.conditions}
+  resources:
+  - id: podpolicy
+    readyWhen:
+      - ${podpolicy.status.conditions[0].status == "True"}
+    template:
+      apiVersion: iam.services.k8s.aws/v1alpha1
+      kind: Policy
+      metadata:
+        name: ${schema.spec.name}-pod-policy
+      spec:
+        name: ${schema.spec.name}-pod-policy
+        description: ${schema.spec.values.policy.description}
+        path: ${schema.spec.values.policy.path}
+        policyDocument: ${schema.spec.values.policy.policyDocument}
+  - id: podrole
+    readyWhen:
+      - ${podrole.status.conditions[0].status == "True"}
+    template:
+      apiVersion: iam.services.k8s.aws/v1alpha1
+      kind: Role
+      metadata:
+        name: ${schema.spec.name}-role
+      spec:
+        name: ${schema.spec.name}-role               
+        policies:
+          - ${podpolicy.status.ackResourceMetadata.arn}
+        assumeRolePolicyDocument: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "Service": "pods.eks.amazonaws.com"
+                },
+                "Action": [
+                  "sts:TagSession",
+                  "sts:AssumeRole"
+                ]
+              }
+            ]
+          }
+  - id: piAssociation
+    readyWhen:
+      - ${piAssociation.status.conditions[0].status == "True"}
+    template:
+      apiVersion: eks.services.k8s.aws/v1alpha1
+      kind: PodIdentityAssociation
+      metadata:
+        name: ${schema.spec.name}-pod-association-${schema.spec.values.piAssociation.serviceAccount}
+      spec:
+        clusterName: ${schema.spec.values.aws.clusterName}
+        roleARN: ${podrole.status.ackResourceMetadata.arn}
+        serviceAccount: ${schema.spec.values.piAssociation.serviceAccount}
+        namespace: ${schema.spec.values.piAssociation.piNamespace}

@@ -1,0 +1,16 @@
+argocd:
+  enabled: false
+kro:
+  enabled: false
+ack-iam:
+  enabled: false
+ack-eks:
+  enabled: false
+ack-ec2:
+  enabled: false
+kro-eks-rgs:
+  enabled: false
+multi-acct:
+  enabled: false
+metrics-server:
+  enabled: false

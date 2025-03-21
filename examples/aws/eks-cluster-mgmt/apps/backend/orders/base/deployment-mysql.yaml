@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-mysql
+  labels:
+    app.kubernetes.io/created-by: eks-workshop
+    app.kubernetes.io/team: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orders
+      app.kubernetes.io/instance: orders
+      app.kubernetes.io/component: mysql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orders
+        app.kubernetes.io/instance: orders
+        app.kubernetes.io/component: mysql
+        app.kubernetes.io/created-by: eks-workshop
+        app.kubernetes.io/team: database
+    spec:
+      containers:
+      - name: mysql
+        image: "public.ecr.aws/docker/library/mysql:5.7"
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: my-secret-pw
+        - name: MYSQL_DATABASE
+          value: orders
+        - name: MYSQL_USER
+          value: orders_user
+        - name: MYSQL_PASSWORD
+          value: default_password
+        ports:
+        - name: mysql
+          containerPort: 3306
+          protocol: TCP
+        securityContext:
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+        resources:
+          limits:
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 1Gi

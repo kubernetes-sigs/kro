@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ui
+data:
+  ENDPOINTS_CATALOG: http://catalog.catalog.svc:80
+  ENDPOINTS_CARTS: http://carts.carts.svc:80
+  ENDPOINTS_ORDERS: http://orders.orders.svc:80
+  ENDPOINTS_ASSETS: http://assets.assets.svc:80
+  ENDPOINTS_CHECKOUT: http://checkout.checkout.svc:80

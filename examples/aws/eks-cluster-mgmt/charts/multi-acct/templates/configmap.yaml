@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ack-role-team-map
+  namespace: ack-system
+data:
+  {{- range $key, $value := .Values.clusters }}
+  ec2.{{ $key }}: "arn:aws:iam::{{ $value }}:role/eks-cluster-mgmt-ec2"
+  eks.{{ $key }}: "arn:aws:iam::{{ $value }}:role/eks-cluster-mgmt-eks"
+  iam.{{ $key }}: "arn:aws:iam::{{ $value }}:role/eks-cluster-mgmt-iam"
+  {{- end }}

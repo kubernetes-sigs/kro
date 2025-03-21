@@ -1,0 +1,66 @@
+{{- if .Values.create | default false }}
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Role
+metadata:
+  name: {{ include "pod-identity.fullname" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  name: {{ include "pod-identity.fullname" . }}
+  assumeRolePolicyDocument: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Service": "pods.eks.amazonaws.com"
+          },
+          "Action": [
+            "sts:TagSession",
+            "sts:AssumeRole"
+          ]
+        }
+      ]
+    }
+  description: {{ .Values.podIdentityRole.description }}
+
+  {{- if .Values.podIdentityRole.managedPolicies }}
+  policies:
+    {{- if and (.Values.podIdentityPolicyCreate | default false) .Values.podIdentityRole.managedPolicies }}
+    - "arn:aws:iam::{{ $.Values.accountId }}:policy/{{ include "pod-identity.fullname" . }}"
+    {{- end }}
+    {{- range .Values.podIdentityRole.managedPolicies }}
+    - "{{ . }}"
+    {{- end }}
+  
+  {{- else if .Values.podIdentityRole.policyRefs }}
+  policyRefs:
+    {{- if .Values.podIdentityPolicyCreate | default true }}
+    - from:
+        name: "{{ include "pod-identity.fullname" . }}"
+    {{- end }}
+    {{- range .Values.podIdentityRole.policyRefs }}
+    - from:
+        name: "{{ .name }}"
+        {{- if .namespace }}
+        namespace: "{{ .namespace }}"
+        {{- end }}
+    {{- end }}
+
+  {{- else }}
+  policyRefs:
+    - from:
+        name: "{{ include "pod-identity.fullname" . }}"
+  {{- end }}
+
+  {{- if .Values.podIdentityRole.inlinePolicies }}
+  inlinePolicies:
+    {{ .Values.podIdentityRole.inlinePolicies | toYaml | nindent 4 }}
+  {{- end }}
+
+  {{- if .Values.podIdentityRole.tags }}
+  tags:
+    {{ .Values.podIdentityRole.tags | toYaml | nindent 4 }}
+  {{- end }}
+{{- end }}

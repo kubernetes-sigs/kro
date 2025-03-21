@@ -1,0 +1,9 @@
+{{- range $key, $value := .Values.clusters }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $key }}
+  annotations:
+    services.k8s.aws/team-id: "{{ $key }}"
+{{- end }}

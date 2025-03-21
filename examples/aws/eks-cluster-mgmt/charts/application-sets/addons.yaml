@@ -1,0 +1,235 @@
+#Define in Addons repo
+#...
+# syncPolicy:
+#   automated:
+#     selfHeal: false
+#     allowEmpty: true
+#     prune: false
+#   retry:
+#     limit: -1 # number of failed sync attempt retries; unlimited number of attempts if less than 0
+#     backoff:
+#       duration: 5s # the amount to back off. Default unit is seconds, but could also be a duration (e.g. "2m", "1h")
+#       factor: 2 # a factor to multiply the base duration after each failed retry
+#       maxDuration: 10m # the maximum amount of time allowed for the backoff strategy
+#   syncOptions:
+#     - CreateNamespace=true
+#     - ServerSideApply=true  # Big CRDs.
+# syncPolicyAppSet:
+#   preserveResourcesOnDeletion: false
+# useSelectors: false
+# repoURLGit: '{{.metadata.annotations.addons_repo_url}}'
+# repoURLGitRevision: '{{.metadata.annotations.addons_repo_revision}}'
+# repoURLGitBasePath: '{{.metadata.annotations.addons_repo_basepath}}'
+# valueFiles:
+#   - default/addons
+#   - clusters/{{.nameNormalized}}/addons
+# useValuesFilePrefix: true
+# valuesFilePrefix: '{{.metadata.labels.tenant}}/'
+# argocd:
+#   enabled: false
+#   chartName: argo-cd
+#   namespace: argocd
+#   releaseName: argocd
+#   defaultVersion: "7.7.8"
+#   chartRepository: "https://argoproj.github.io/argo-helm"
+#   selector:
+#     matchExpressions:
+#       - key: enable_argocd
+#         operator: In
+#         values: ['true']
+# ack-iam:
+#   enabled: false
+#   namespace: ack-system
+#   defaultVersion: "1.3.13"
+#   chartNamespace: aws-controllers-k8s
+#   chartRepository: public.ecr.aws
+#   selector:
+#     matchExpressions:
+#       - key: enable_ack_iam
+#         operator: In
+#         values: ['true']
+#   environments:
+#   - selector:
+#       environment: staging
+#       tenant: tenant1
+#     chartVersion: "7.6.12"
+#   valuesObject:
+#     aws:
+#       region: '{{.metadata.annotations.aws_region}}'
+#     serviceAccount:
+#       name: '{{.metadata.annotations.ack_iam_service_account}}'
+# ack-eks:
+#   enabled: false
+#   namespace: ack-system
+#   chartName: eks-chart
+#   defaultVersion: "1.5.1"
+#   chartNamespace: aws-controllers-k8s
+#   chartRepository: public.ecr.aws
+#   selector:
+#     matchExpressions:
+#       - key: enable_ack_eks
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     aws:
+#       region: '{{.metadata.annotations.aws_region}}'
+#     serviceAccount:
+#       name: '{{.metadata.annotations.ack_eks_service_account}}'
+# ack-acm:
+#   enabled: true
+#   enableACK: true
+#   namespace: ack
+#   chartName: acm-chart
+#   defaultVersion: "1.0.0"
+#   chartNamespace: aws-controllers-k8s
+#   chartRepository: public.ecr.aws
+#   selector:
+#     matchExpressions:
+#       - key: enable_ack_acm
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     aws:
+#       region: '{{.metadata.annotations.aws_region}}'
+#     serviceAccount:
+#       name:  'ack-acm-controller'
+#       annotations:
+#         eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations "ack_acm_role_arn")}}'
+# external-secrets:
+#   enabled: true
+#   enableACK: false
+#   namespace: external-secrets
+#   chartName: external-secrets
+#   defaultVersion: "0.10.3"
+#   chartRepository: "https://charts.external-secrets.io"
+#   additionalResources:
+#     path: "charts/fleet-secret"
+#     type: "manifest"
+#     helm:
+#      releaseName: ecr-token
+#   selector:
+#     matchExpressions:
+#       - key: enable_external_secrets
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     serviceAccount:
+#       name: "external-secrets-sa"
+#       annotations:
+#         eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations "external_secrets_iam_role_arn")}}'
+# aws-load-balancer-controller:
+#   enabled: false
+#   enableACK: false
+#   namespace: kube-system
+#   defaultVersion: "1.8.4"
+#   chartRepository: "https://aws.github.io/eks-charts"
+#   selector:
+#     matchExpressions:
+#       - key: enable_aws_load_balancer_controller
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     serviceAccount:
+#       name:  "aws-load-balancer-controller-sa"
+#     vpcId: '{{.metadata.annotations.aws_vpc_id}}'
+#     clusterName: '{{.name}}'
+#   ignoreDifferences:
+#     - kind: Secret
+#       name: aws-load-balancer-tls
+#       jsonPointers: [/data]
+#     - group: admissionregistration.k8s.io
+#       kind: MutatingWebhookConfiguration
+#       jqPathExpressions: ['.webhooks[].clientConfig.caBundle']
+#     - group: admissionregistration.k8s.io
+#       kind: ValidatingWebhookConfiguration
+#       jqPathExpressions: ['.webhooks[].clientConfig.caBundle']
+# metrics-server:
+#   enabled: true
+#   namespace: kube-system
+#   defaultVersion: "3.11.0"
+#   chartRepository: "https://kubernetes-sigs.github.io/metrics-server"
+#   selector:
+#     matchExpressions:
+#       - key: enable_aws_load_balancer_controller
+#         operator: In
+#         values: ['true']
+# karpenter:
+#   enabled: false
+#   releaseName: karpenter
+#   namespace: 'karpenter'
+#   chartName: karpenter/karpenter
+#   chartRepository: public.ecr.aws
+#   defaultVersion: "1.0.4"
+#   selector:
+#     matchExpressions:
+#       - key: enable_karpenter
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     settings:
+#       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
+#       interruptionQueue: '{{.metadata.annotations.karpenter_sqs_queue_name}}'
+#     serviceAccount:
+#       name: '{{.metadata.annotations.karpenter_service_account}}'
+#       annotations:
+#         eks.amazonaws.com/role-arn: '{{.metadata.annotations.karpenter_iam_role_arn}}'
+# aws_efs_csi_driver:
+#   enabled: false
+#   releaseName: aws-efs-csi-driver
+#   namespace: "kube-sytem"
+#   chartName: aws-efs-csi-driver
+#   chartRepository: https://kubernetes-sigs.github.io/aws-efs-csi-driver
+#   defaultVersion: "3.0.7"
+#   selector:
+#     matchExpressions:
+#       - key: enable_aws_efs_csi_driver
+#         operator: In
+#         values: ['true']
+#   valuesObject:
+#     controller:
+#       serviceAccount:
+#         name: '{{default "" (index  .metadata.annotations aws_efs_csi_driver_controller_service_account)}}'
+#         annotations:
+#           eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations aws_efs_csi_driver_iam_role_arn)}}'
+#     node:
+#       serviceAccount:
+#         name: '{{.metadata.annotations.aws_efs_csi_driver_node_service_account}}'
+#         annotations:
+#           eks.amazonaws.com/role-arn: '{{.metadata.annotations.aws_efs_csi_driver_iam_role_arn}}'
+# kro:
+#   enabled: false
+#   enableACK: false
+#   namespace: kro-system
+#   # defaultVersion: "0.2.1"
+#   # chartName: kro
+#   # chartNamespace: kro
+#   # chartRepository: public.ecr.aws
+
+#   defaultVersion: "0.2.1"
+#   chartName: kro
+#   chartNamespace: kro-run/kro/kro
+#   chartRepository: ghcr.io
+
+#   # chart: kro-run/kro/kro
+#   # repoUrl: ghcr.io
+#   # targetRevision: "0.2.1"  
+#   selector:
+#     matchExpressions:
+#       - key: enable_kro
+#         operator: In
+#         values: ['true']
+#     # values:
+#     #   image:
+#     #     repository: public.ecr.aws/seb-demo/kro/controller-9ef43f9a25dce381a8ff6218d45fdc24
+#     #     tag: latest        
+# kro-resource-groups:
+#   enabled: false
+#   type: manifest
+#   namespace: kro-resource-groups
+#   defaultVersion: "0.1.0"
+#   path: kro/resource-groups
+#   selector:
+#     matchExpressions:
+#       - key: enable_kro_resource_groups
+#         operator: In
+#         values: ['true']

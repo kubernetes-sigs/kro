@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: namespaces
+  namespace: argocd
+spec:
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=error    
+  generators:
+  - matrix:
+      generators:
+      - clusters:
+          selector:
+            matchLabels:
+              workloads: 'true'
+          values:
+            chart: teams
+      - git:
+          repoURL: '{{.metadata.annotations.platform_repo_url}}'
+          revision: '{{.metadata.annotations.platform_repo_revision}}'
+          directories:
+            - path: '{{.metadata.annotations.platform_repo_basepath}}teams/*'
+
+  template:
+    metadata:
+      name: 'namespaces-{{.name}}-{{.path.basename}}'
+      labels:
+        environment: '{{.metadata.labels.environment}}'
+        team: '{{.path.basename}}'
+        workloads: 'true'
+        namespaces: 'true'
+      finalizers:
+      # This is here only for workshop purposes. In a real-world scenario, you should not use this
+      - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: '{{.metadata.annotations.platform_repo_url}}'
+        path: '{{.metadata.annotations.platform_repo_basepath}}charts/{{.values.chart}}'
+        targetRevision: '{{.metadata.annotations.platform_repo_revision}}'
+        helm:
+          releaseName: '{{.path.basename}}'
+          ignoreMissingValueFiles: true
+          valueFiles:
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/defaults/namespaces/values.yaml'
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/environments/{{.metadata.labels.environment}}/namespaces/values.yaml'            
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/clusters/{{.metadata.labels.aws_cluster_name}}/namespaces/values.yaml'
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/tenants/{{.metadata.labels.tenant}}/defaults/namespaces/values.yaml'
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/tenants/{{.metadata.labels.tenant}}/environments/{{.metadata.labels.environment}}/namespaces/values.yaml'            
+            - '$values/{{.metadata.annotations.platform_repo_basepath}}teams/{{.path.basename}}/tenants/{{.metadata.labels.tenant}}/clusters/{{.metadata.labels.aws_cluster_name}}/namespaces/values.yaml'
+      destination:
+        name: '{{.name}}'
+      syncPolicy:
+        automated:
+          allowEmpty: true
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100
+        syncOptions:
+          - CreateNamespace=true

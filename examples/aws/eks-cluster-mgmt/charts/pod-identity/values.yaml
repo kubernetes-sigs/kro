@@ -1,0 +1,61 @@
+# region: us-west-2
+# accountId: "471112582304"
+# create: true
+# podIdentityPolicyCreate: false
+# podIdentityRole:
+#   description: "Test"
+#   # Only one of the two can be true Managed Policy or Policy Refs
+#   # If Policy is created it will automaticaly add it on managed Policies or PolicyRefs
+#   managedPolicies:
+#     - "arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess" 
+#     - "arn:aws:iam::aws:policy/Admin"
+#   policyRefs:
+#     - name: "custom-policy-1"
+#       namespace: kube-system
+#     - name: "AmazonSSMReadOnlyAccess"
+#       namespace: kube-system
+# podIdentityAssociation:
+#   clusterName: control-plane
+#   namespace: default
+#   serviceAccounts:
+#       - serviceAccount1
+#       - serviceAccount2
+# podIdentityPolicy:
+#   description: "Test"
+#   policies:
+#     - resourceType: ssm
+#       resourceName: "*"
+#       actions:
+#         - "ssm:DescribeParameters"
+#     - resourceType: ssm
+#       resourceName: parameter/*
+#       actions:
+#         - "ssm:GetParameter"
+#         - "ssm:GetParameters"
+#     - resourceType: secretsmanager
+#       resourceName: secret:*
+#       actions:
+#         - "secretsmanager:GetResourcePolicy"
+#         - "secretsmanager:GetSecretValue"
+#         - "secretsmanager:DescribeSecret"
+#         - "secretsmanager:ListSecretVersionIds"
+#         - "secretsmanager:CreateSecret"
+#         - "secretsmanager:PutSecretValue"
+#         - "secretsmanager:TagResource"
+#     - resourceType: secretsmanager
+#       resourceName: secret:*
+#       actions:
+#         - "secretsmanager:DeleteSecret"
+#       conditions:
+#         - test: "StringEquals"
+#           variable: "secretsmanager:ResourceTag/managed-by"
+#           values:
+#             - "external-secrets"
+#     - resourceType: kms
+#       resourceName: "key/*"
+#       actions:
+#         - "kms:Decrypt"
+#     - resourceType: ecr
+#       resourceName: "*"
+#       actions:
+#         - "ecr:GetAuthorizationToken"

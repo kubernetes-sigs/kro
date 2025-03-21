@@ -1,30 +1,31 @@
 vpc_name                        = "hub-cluster"
 kubernetes_version              = "1.32"
 cluster_name                    = "hub-cluster"
-tenant                          = "kubecon1"
+tenant                          = "tenant1"
 region                          = "eu-west-2"
-#Fork gitops-fleet-management from xxx in your own git repo and give that creds here
+
+#Create the GitHub repo `gitops-fleet-management` in your organization; Use your organization as the git_org_name below
 git_org_name                    = "xxxxxxxxx"
 
 gitops_addons_repo_name         = "gitops-fleet-management"
 gitops_addons_repo_base_path    = "addons/"
 gitops_addons_repo_path         = "bootstrap"
-gitops_addons_repo_revision     = "kubecon"
+gitops_addons_repo_revision     = "main"
 
 gitops_fleet_repo_name           = "gitops-fleet-management"
 gitops_fleet_repo_base_path      = "fleet/"
 gitops_fleet_repo_path           = "bootstrap"
-gitops_fleet_repo_revision       = "kubecon"
+gitops_fleet_repo_revision       = "main"
 
 gitops_platform_repo_name       = "gitops-fleet-management"
 gitops_platform_repo_base_path  = "platform/"
 gitops_platform_repo_path       = "bootstrap"
-gitops_platform_repo_revision   = "kubecon"
+gitops_platform_repo_revision   = "main"
 
-gitops_workload_repo_name      = "gitops-fleet-management"
-gitops_workload_repo_base_path = "workload/"
-gitops_workload_repo_path      = "bootstrap"
-gitops_workload_repo_revision  = "kubecon"
+gitops_workload_repo_name       = "gitops-fleet-management"
+gitops_workload_repo_base_path  = "apps/"
+gitops_workload_repo_path       = ""
+gitops_workload_repo_revision   = "main"
 
 use_ack                         = true
 enable_automode                 = true
@@ -49,4 +50,4 @@ addons = {
 }
 
 # Insert your own AWS Accounts here (cluster1, cluster2)
-account_ids = "xxxxxxxxxxxx xxxxxxxxxxxx"
+account_ids = "586794472760 825765380480"

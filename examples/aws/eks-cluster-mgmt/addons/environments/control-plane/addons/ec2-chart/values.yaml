@@ -1,0 +1,4 @@
+# Activating cross-account feature for control-plane
+featureGates:
+  ServiceLevelCARM: true
+  TeamLevelCARM: true

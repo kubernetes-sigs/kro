@@ -40,6 +40,9 @@ controllers installation) will be automated via the GitOps flow.
      ]
    }
    ```
+3. The above IAM roles can be created using this script present in "https://github.com/kro-run/kro/tree/main/examples/aws/eks-cluster-mgmt/scripts/create_ack_workload_roles.sh
+
+4. In your workload accounts, use cloud-shell and export the MGMT_ACCOUNT_ID whcih is the account you will use as the main account where your management cluster will be provisioned. Execute the above shell and it will auto provision the IAM roles with the right polices need for this solution.
 
 ## Instructions
 
@@ -101,17 +104,29 @@ Apply terraform as follows
 cd $WORKSPACE_PATH/kro/examples/eks-cluster-mgmt/terraform/hub
 terraform apply --auto-approve
 ```
+7. Get ArgoCD credentials
+
+Execute the following command to get the ArgoCD credentials
+
+```sh
+echo "ArgoCD Password: $(kubectl -n argocd  get  secrets argocd-initial-admin-secret --template="{{index .data.password | base64decode}}")"
+kubectl port-forward --namespace argocd service/argocd-server 8080:443
+```
+
+8. Set Git Creds in ArgoCD UI
+Login to Argocd using the creds acquired above and you will get an error like " Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = authentication required"
+The reason is ArgoCD needs your git creds and for that go to settings and under "Repositories" enable a connection to your GubHub repo with the approriate creds. 
 
 ### Adding workload clusters
 
-7. Update gitops-fleet-management\fleet\kro-values\tenants
+9. Update gitops-fleet-management\fleet\kro-values\tenants
     `xxx/kro-clusters/values.yaml`.
-8. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI.
+10. Commit/push the changes to Git, then wait for the sync operation to complete by checking ArgoCD UI.
 
 
 ## Clean-up
 
-1. Apply terraform as follows
+11. Apply terraform as follows
 
 ```sh
 cd $WORKSPACE_PATH/kro/examples/eks-cluster-mgmt/terraform/hub

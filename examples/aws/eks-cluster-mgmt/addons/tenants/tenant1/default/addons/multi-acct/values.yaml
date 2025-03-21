@@ -1,0 +1,3 @@
+clusters:
+  workload-cluster1: "586794472760" # kro-c1
+  workload-cluster2: "825765380480" # kro-c2

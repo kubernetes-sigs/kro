@@ -1,0 +1,56 @@
+{{- if and (.Values.create | default false) (.Values.podIdentityPolicyCreate | default false) }}
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Policy
+metadata:
+  name: {{ include "pod-identity.fullname" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  name: {{ include "pod-identity.fullname" . }}
+  description: {{ .Values.podIdentityPolicy.description }}
+  {{- if .Values.podIdentityPolicy.path }}
+  path: {{ .Values.podIdentityPolicy.path }}
+  {{- end }}
+  policyDocument: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {{- range $index, $policy := .Values.podIdentityPolicy.policies }}
+        {
+          "Effect": "Allow",
+          "Action": [
+            {{- range $i, $action := $policy.actions }}
+            "{{ $action }}"{{ if not (eq (add $i 1) (len $policy.actions)) }},{{ end }}
+            {{- end }}
+          ],
+          "Resource": [
+            {{- if $policy.customArn }}
+            "{{ $policy.customArn }}"
+            {{- else if eq $policy.resourceName "*" }}
+            "*"
+            {{- else }}
+            "arn:aws:{{ $policy.resourceType }}:{{ $.Values.region }}:{{ $.Values.accountId }}:{{ $policy.resourceName }}"
+            {{- end }}
+          ]
+          {{- if $policy.conditions }}
+          ,"Condition": {
+            {{- range $j, $condition := $policy.conditions }}
+            "{{ $condition.test }}": {
+              "{{ $condition.variable }}": [
+                {{- range $k, $value := $condition.values }}
+                "{{ $value }}"{{ if not (eq (add $k 1) (len $condition.values)) }},{{ end }}
+                {{- end }}
+              ]
+            }
+            {{- end }}
+          }
+          {{- end }}
+        }{{ if not (eq (add $index 1) (len $.Values.podIdentityPolicy.policies)) }},{{ end }}
+        {{- end }}
+      ]
+    }
+  {{- if .Values.podIdentityPolicy.tags }}
+  tags:
+    {{- .Values.podIdentityPolicy.tags | toYaml | nindent 10 }}
+  {{- end }}
+{{- end }}

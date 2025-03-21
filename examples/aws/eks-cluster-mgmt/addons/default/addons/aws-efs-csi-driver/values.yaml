@@ -1,0 +1,6 @@
+# EFS CSI Values
+controller:
+  nodeSelector:
+    eks.amazonaws.com/compute-type: auto
+    kubernetes.io/os: linux
+    karpenter.sh/nodepool: system

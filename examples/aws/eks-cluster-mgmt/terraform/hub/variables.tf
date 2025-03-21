@@ -90,7 +90,7 @@ variable "gitops_fleet_repo_revision" {
   default     = ""
 }
 
-# Resources
+# workload
 variable "gitops_workload_repo_name" {
   description = "The name of Github organisation"
   default     = ""

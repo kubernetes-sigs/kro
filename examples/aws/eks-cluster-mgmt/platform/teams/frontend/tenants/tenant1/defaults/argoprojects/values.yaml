@@ -1,0 +1,79 @@
+# using upstream argo chart https://github.com/argoproj/argo-helm/tree/main/charts/argocd-apps
+projects:
+- name: frontend
+  sourceRepos:
+  - 'tobereplace'
+  namespace: argocd
+  additionalLabels: {}
+  additionalAnnotations: {}
+  description: Team Project
+  destinations:
+  - namespace: ui
+    name: workload-cluster1
+  - namespace: assets
+    name: workload-cluster1
+
+  - namespace: ui
+    name: workload-cluster2
+  - namespace: assets
+    name: workload-cluster2
+
+  - namespace: ui
+    name: workload-cluster3
+  - namespace: assets
+    name: workload-cluster3
+
+  - namespace: ui
+    name: workload-cluster4
+  - namespace: assets
+    name: workload-cluster4
+
+  - namespace: ui
+    name: workload-cluster5
+  - namespace: assets
+    name: workload-cluster5
+
+  - namespace: ui
+    name: workload-cluster6
+  - namespace: assets
+    name: workload-cluster6
+
+  - namespace: "*"
+    server: 'https://kubernetes.default.svc'    
+  
+  # Allow all namespaced-scoped resources to be created, except for ResourceQuota, LimitRange, NetworkPolicy
+  namespaceResourceBlacklist:
+  - group: ''
+    kind: ResourceQuota
+  - group: ''
+    kind: LimitRange
+  - group: ''
+    kind: NetworkPolicy
+  # Deny all namespaced-scoped resources from being created, except for these
+  namespaceResourceWhitelist:
+  - group: ''
+    kind: Pod
+  - group: 'apps'
+    kind: Deployment
+  - group: 'apps'
+    kind: StatefulSet
+  - group: 'apps'
+    kind: ReplicaSet
+  - group: ''
+    kind: Service
+  - group: ''
+    kind: ServiceAccount
+  - group: ''
+    kind: ConfigMap
+  - group: ''
+    kind: Secret
+  - group: 'rbac.authorization.k8s.io'
+    kind: RoleBinding
+  - group: 'rbac.authorization.k8s.io'
+    kind: Role
+  - group: 'dynamodb.services.k8s.aws'
+    kind: Table
+  - group: 'autoscaling'
+    kind: HorizontalPodAutoscaler
+  - group: 'networking.k8s.io'
+    kind: Ingress

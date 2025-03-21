@@ -1,0 +1,17 @@
+storageClasses:
+  # efs:
+    # fileSystemId: fs-12345678 
+    # efs-sc:
+    #   reclaimPolicy: Delete  
+    #   directoryPerms: "700"  
+    #   basePath: /data  
+    #   mountOptions:
+    #     - nfsvers=4.1
+
+  ebs:
+    ebs-sc-gp3:
+      reclaimPolicy: Retain
+      volumeType: gp3 
+      size: 20Gi
+      iops: 3000
+      throughput: 125

@@ -337,7 +337,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "empty enum integer type",
+			name: "Invalid integer enum marker",
 			obj: map[string]interface{}{
 				"errorCode": "integer | enum=\"1,,3\"",
 			},

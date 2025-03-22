@@ -216,19 +216,16 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				schema.Maximum = &val
 			}
 		case MarkerTypeEnum:
-			enumValues := strings.Split(marker.Value, ",")
-
 			var enumJSONValues []extv1.JSON
 
+			enumValues := strings.Split(marker.Value, ",")
 			for _, val := range enumValues {
 				val = strings.TrimSpace(val)
-
 				if val == "" {
 					return fmt.Errorf("empty enum values are not allowed")
 				}
-
+				
 				var rawValue []byte
-
 				switch schema.Type {
 				case "string":
 					rawValue = []byte(fmt.Sprintf("%q", val))

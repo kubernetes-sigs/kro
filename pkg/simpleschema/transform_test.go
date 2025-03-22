@@ -337,9 +337,17 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "empty enum type",
+			name: "empty enum integer type",
 			obj: map[string]interface{}{
 				"errorCode": "integer | enum=\"1,,3\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "string enum with empty values",
+			obj: map[string]interface{}{
+				"status": "string | enum=\"a,b,,c\"",
 			},
 			want:    nil,
 			wantErr: true,

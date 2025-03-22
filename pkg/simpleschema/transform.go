@@ -226,6 +226,11 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 
 			for _, val := range enumValues {
 				val = strings.TrimSpace(val)
+
+				if val == "" {
+					return fmt.Errorf("empty enum values are not allowed")
+				}
+
 				var rawValue []byte
 
 				switch schema.Type {

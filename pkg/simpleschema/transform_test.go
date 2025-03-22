@@ -286,7 +286,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				"features": map[string]interface{}{
 					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
 					"errorCode": "integer | enum=\"400,404,500\" default=500",
-					"threshold": "number | enum=\"1.2,2.0,0.1\" default=0.1",
 				},
 			},
 			want: &extv1.JSONSchemaProps{
@@ -323,15 +322,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 									{Raw: []byte("500")},
 								},
 							},
-							"threshold": {
-								Type:    "number",
-								Default: &extv1.JSON{Raw: []byte("0.1")},
-								Enum: []extv1.JSON{
-									{Raw: []byte("1.2")},
-									{Raw: []byte("2.0")},
-									{Raw: []byte("0.1")},
-								},
-							},
 						},
 					},
 				},
@@ -341,7 +331,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		{
 			name: "invalid enum type",
 			obj: map[string]interface{}{
-				"threshold": "number | enum=\"1.0,1.5,three\"",
+				"threshold": "integer | enum=\"1,2,three\"",
 			},
 			want:    nil,
 			wantErr: true,
@@ -349,7 +339,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		{
 			name: "empty enum type",
 			obj: map[string]interface{}{
-				"errorCode": "int | enum=\"1,,3\"",
+				"errorCode": "integer | enum=\"1,,3\"",
 			},
 			want:    nil,
 			wantErr: true,

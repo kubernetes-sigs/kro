@@ -237,14 +237,8 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 					} else {
 						rawValue = []byte(val)
 					}
-				case "number":
-					if _, err := strconv.ParseFloat(val, 64); err != nil {
-						return fmt.Errorf("failed to parse number enum value: %w", err)
-					} else {
-						rawValue = []byte(val)
-					}
 				default:
-					rawValue = []byte(val)
+					return fmt.Errorf("enum values only supported for string and integer types, got type: %s", schema.Type)
 				}
 				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
 			}

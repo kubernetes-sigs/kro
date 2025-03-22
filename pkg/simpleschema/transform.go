@@ -208,15 +208,11 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeDescription:
 			schema.Description = marker.Value
 		case MarkerTypeMinimum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err != nil {
-				return fmt.Errorf("failed to parse minimum enum value: %w", err)
-			} else {
+			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
 				schema.Minimum = &val
 			}
 		case MarkerTypeMaximum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err != nil {
-				return fmt.Errorf("failed to parse maximum enum value: %w", err)
-			} else {
+			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
 				schema.Maximum = &val
 			}
 		case MarkerTypeEnum:

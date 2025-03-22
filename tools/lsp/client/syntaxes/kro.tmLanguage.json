@@ -1,0 +1,235 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kro YAML",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#storage-type"
+    },
+    {
+      "include": "#cel-expressions"
+    },
+    {
+      "include": "#property-names"
+    },
+    {
+      "include": "#schema-types"
+    },
+    {
+      "include": "#values"
+    },
+    {
+      "include": "#dependencies"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.yaml",
+          "match": "(?<![\\S])#.*$"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.kro",
+          "match": "\\b(apiVersion|kind|metadata|spec|resources|dependencies|schema|status|template|id|source|target|ingress|ports|env|replicas|enabled|host|path|availableReplicas|serviceEndpoint|selector|matchLabels|app|labels|containers)\\b"
+        },
+        {
+          "name": "entity.name.type.kro",
+          "match": "\\b(ResourceGraphDefinition|WebApplication|ApplicationStack|CustomResource)\\b"
+        },
+        {
+          "name": "storage.type.kro",
+          "match": "\\b(kro\\.run\\/v1alpha1|v1alpha1|apps\\/v1)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.yaml",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.yaml",
+              "match": "\\\\."
+            },
+            {
+              "include": "#cel-expressions"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.yaml",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.yaml",
+              "match": "''"
+            },
+            {
+              "include": "#cel-expressions"
+            }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.kro",
+          "match": "\\b(name|namespace|id|template|template\\.metadata|template\\.spec)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.yaml",
+          "match": "\\b(true|false|null|~)\\b"
+        },
+        {
+          "name": "constant.numeric.yaml",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "storage-type": {
+      "patterns": [
+        {
+          "name": "storage.type.kro.resource",
+          "match": "\\b(Deployment|Service|ConfigMap|Secret|StatefulSet|DaemonSet|Job|CronJob|Ingress|NetworkPolicy|PersistentVolumeClaim|ServiceAccount|Role|RoleBinding|ClusterRole|ClusterRoleBinding)\\b"
+        }
+      ]
+    },
+    "cel-expressions": {
+      "name": "variable.other.readwrite.cel",
+      "begin": "\\$\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.template-expression.begin.cel" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.template-expression.end.cel" }
+      },
+      "patterns": [
+        {
+          "match": "\\b(deployment|service|status|loadBalancer|ingress|hostname|availableReplicas)\\b",
+          "name": "support.variable.cel"
+        },
+        {
+          "match": "\\b(spec)\\b",
+          "name": "support.class.cel"
+        },
+        {
+          "match": "\\b(if|else|has|in|&&|\\|\\||!|==|!=|>=|<=|>|<)\\b",
+          "name": "keyword.control.cel"
+        },
+        {
+          "match": "\\b(string|int|bool|size|map|list|filter|all|exists|contains)\\b",
+          "name": "support.function.cel"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.cel"
+        },
+        {
+          "match": "\\[\\d+\\]",
+          "name": "constant.numeric.array-index.cel"
+        }
+      ]
+    },
+    "property-names": {
+      "patterns": [
+        {
+          "match": "^\\s*(\\w+)(?=\\s*:)",
+          "captures": {
+            "1": { "name": "support.type.property-name.yaml" }
+          }
+        }
+      ]
+    },
+    "schema-types": {
+      "patterns": [
+        {
+          "match": "\\b(string|integer|boolean|object|array)\\b",
+          "name": "support.type.primitive.schema"
+        },
+        {
+          "match": "\\b(required|default|description|minimum|maximum|enum|type|format)=",
+          "name": "entity.other.attribute-name.schema"
+        },
+        {
+          "match": "\\[\\]integer|map\\[string\\]string",
+          "name": "support.type.complex.schema"
+        }
+      ]
+    },
+    "values": {
+      "patterns": [
+        {
+          "match": ":\\s+(web-application|deployment|service|v1|LoadBalancer|[a-zA-Z0-9_-]+)$",
+          "captures": {
+            "1": { "name": "entity.name.function.yaml" }
+          }
+        },
+        {
+          "match": "\\|\\s+",
+          "name": "keyword.operator.pipe.yaml"
+        }
+      ]
+    },
+    "dependencies": {
+      "patterns": [
+        {
+          "begin": "(dependencies)\\s*:",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.kro" }
+          },
+          "end": "^(?!\\s)",
+          "patterns": [
+            {
+              "match": "\\s*-\\s*(source|target)\\s*:\\s*([a-zA-Z0-9_-]+)",
+              "captures": {
+                "1": { "name": "keyword.control.kro" },
+                "2": { "name": "entity.name.tag.dependency.kro" }
+              }
+            }
+          ]
+        },
+        {
+          "begin": "(status)\\s*:",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.kro" }
+          },
+          "end": "^(?!\\s)",
+          "patterns": [
+            {
+              "include": "#cel-expressions"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "scopeName": "source.yaml.kro"
+}

@@ -1,0 +1,49 @@
+# Compiled binary
+server/kro-language-server
+
+# Debug files
+/tmp/kro-server-debug.log
+/tmp/kro-protocol-debug.log
+server-pid.txt
+.vscode-test/
+*.vsix
+*debug*.log
+debug-*.json
+*debug*.sh
+
+# Client build artifacts
+client/out/
+client/node_modules/
+client/dist/
+client/package-lock.json
+client/.vscode-test/
+client/test-resources/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.swp
+*.swo
+*~
+.*.un~
+
+# Go build files
+*.o
+*.a
+*.so
+*.exe
+*.dll
+*.dylib
+*.test 

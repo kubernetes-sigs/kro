@@ -1,0 +1,69 @@
+{
+  "name": "kro-language-extension",
+  "displayName": "Kro Language Extension",
+  "description": "Language support for Kro YAML files",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "yaml",
+        "extensions": [
+          ".yaml",
+          ".yml"
+        ],
+        "aliases": [
+          "YAML",
+          "Kro YAML"
+        ],
+        "filenames": [
+          "Krofile"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "yaml",
+        "scopeName": "source.yaml.kro",
+        "path": "./syntaxes/kro.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.kubernetes": "yaml"
+        }
+      }
+    ],
+    "themes": [
+      {
+        "label": "Kro Theme",
+        "uiTheme": "vs-dark",
+        "path": "./themes/kro-color-theme.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "kro.restartServer",
+        "title": "Restart Kro Language Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "precompile": "mkdir -p src out"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.7",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}

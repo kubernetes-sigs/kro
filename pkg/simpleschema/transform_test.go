@@ -345,7 +345,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "string enum with empty values",
+			name: "invalid string enum marker",
 			obj: map[string]interface{}{
 				"status": "string | enum=\"a,b,,c\"",
 			},

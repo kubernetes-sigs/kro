@@ -231,7 +231,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 
 				switch schema.Type {
 				case "string":
-					rawValue = []byte(fmt.Sprintf("\"%s\"", val))
+					rawValue = []byte(fmt.Sprintf("%q", val))
 				case "integer":
 					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
 						return fmt.Errorf("failed to parse integer enum value: %w", err)

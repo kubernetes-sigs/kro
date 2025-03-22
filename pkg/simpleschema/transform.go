@@ -224,7 +224,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				if val == "" {
 					return fmt.Errorf("empty enum values are not allowed")
 				}
-				
+
 				var rawValue []byte
 				switch schema.Type {
 				case "string":

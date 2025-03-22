@@ -15,7 +15,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,20 +27,12 @@ import (
 	"github.com/kro-run/kro/pkg/graph/variable"
 )
 
-// Use testing-only budget for cost-sensitive tests
+// Using testing-only budget for cost-sensitive tests
 const testBudget = 10000000
 
 // setupTestRuntime updates a runtime with a high cost budget for testing
 func setupTestRuntime(rt *ResourceGraphDefinitionRuntime) {
 	rt.celCostBudget = testBudget
-}
-
-func TestMain(m *testing.M) {
-	// Run tests
-	exitCode := m.Run()
-
-	// Exit with appropriate code
-	os.Exit(exitCode)
 }
 
 func Test_RuntimeWorkflow(t *testing.T) {

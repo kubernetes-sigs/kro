@@ -16,10 +16,11 @@ package metadata
 import (
 	"testing"
 
-	"github.com/kro-run/kro/pkg"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/kro-run/kro/pkg"
 )
 
 // mockObject is a simple implementation of metav1.Object for testing

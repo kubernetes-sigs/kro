@@ -14,12 +14,16 @@
 package graph
 
 import (
+	"fmt"
 	"testing"
 
+	celref "github.com/google/cel-go/common/types/ref"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
 
+	krocel "github.com/kro-run/kro/pkg/cel"
 	"github.com/kro-run/kro/pkg/graph/emulator"
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/testutil/generator"
@@ -1225,4 +1229,158 @@ func TestNewBuilder(t *testing.T) {
 	builder, err := NewBuilder(&rest.Config{})
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
+}
+
+func TestDryRunExpression_WithCostTracking(t *testing.T) {
+	resources := make(map[string]*Resource)
+
+	testResource := &Resource{
+		id: "test",
+		emulatedObject: &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Test",
+				"metadata": map[string]interface{}{
+					"name": "test-resource",
+				},
+				"spec": map[string]interface{}{
+					"value": 10,
+				},
+			},
+		},
+	}
+	resources["test"] = testResource
+
+	//  CEL environment with our test resource
+	resourceNames := []string{"test"}
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	require.NoError(t, err, "Failed to create CEL environment")
+
+	// Helper function to convert a CEL value to a Go native value
+	var convertCelValue func(celref.Val) interface{}
+	convertCelValue = func(val celref.Val) interface{} {
+		if val == nil {
+			return nil
+		}
+
+		nativeVal := val.Value()
+
+		// If it's a list, we need to convert each element
+		if list, ok := nativeVal.([]interface{}); ok {
+			result := make([]interface{}, len(list))
+			for i, item := range list {
+				if celItem, ok := item.(celref.Val); ok {
+					result[i] = convertCelValue(celItem)
+				} else {
+					result[i] = item
+				}
+			}
+			return result
+		}
+
+		return nativeVal
+	}
+
+	// Helper function to run dryRunExpression with custom budget
+	runDryRunWithBudget := func(expr string, budget int64) (interface{}, error) {
+		ast, issues := env.Compile(expr)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("failed to compile expression: %w", issues.Err())
+		}
+
+		programOpts := krocel.WithCostTracking(budget)
+		program, err := env.Program(ast, programOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create program: %w", err)
+		}
+
+		context := map[string]interface{}{}
+		for resourceName, resource := range resources {
+			context[resourceName] = resource.emulatedObject.Object
+		}
+
+		output, _, err := program.Eval(context)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert CEL value to native types that can be compared in tests
+		if output == nil {
+			return nil, nil
+		}
+
+		// For lists, we need to convert the ref.Val elements to native types
+		if celList, ok := output.(celref.Val); ok {
+			return convertCelValue(celList), nil
+		}
+
+		return output.Value(), nil
+	}
+
+	// Test 1: Simple expression with low cost
+	t.Run("Simple expression with low cost", func(t *testing.T) {
+		expr := "test.spec.value * 2"
+		result, err := runDryRunWithBudget(expr, 100)
+		require.NoError(t, err, "Failed to evaluate simple expression")
+		require.Equal(t, int64(20), result)
+	})
+
+	// Test 2: Complex expression with higher cost (but still within budget)
+	t.Run("Complex expression with higher cost", func(t *testing.T) {
+		expr := "[1,2,3,4,5].map(x, x * test.spec.value)"
+		result, err := runDryRunWithBudget(expr, 1000) // Increased budget
+		require.NoError(t, err, "Failed to evaluate complex expression")
+
+		// Compare string representations instead of trying to match types
+		resultStr := fmt.Sprintf("%v", result)
+		expectedStr := fmt.Sprintf("%v", []interface{}{int64(10), int64(20), int64(30), int64(40), int64(50)})
+		require.Equal(t, expectedStr, resultStr)
+	})
+
+	// Test 3: Extremely high cost expression that should fail
+	t.Run("Expression that exceeds budget", func(t *testing.T) {
+		// Create a nested loop operation that should exceed a very small budget
+		expr := "[1,2,3,4,5,6,7,8,9,10].map(x, [1,2,3,4,5,6,7,8,9,10].map(y, x * y * test.spec.value))"
+		_, err := runDryRunWithBudget(expr, 10) // Very low budget to ensure failure
+
+		// Expect an error related to cost budget
+		require.Error(t, err, "Expected cost budget error")
+		require.Contains(t, err.Error(), "cost limit", "Expected cost limit error message")
+	})
+}
+
+func TestExpression_CostBudget(t *testing.T) {
+	resources := map[string]*Resource{
+		"test": {
+			emulatedObject: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"value": 10,
+					},
+				},
+			},
+		},
+	}
+
+	resourceNames := []string{"test"}
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	require.NoError(t, err)
+
+	// Test that a complex expression with high cost fails due to budget limit
+	ast, issues := env.Compile("[1,2,3,4,5,6,7,8,9,10].map(x, [1,2,3,4,5,6,7,8,9,10].map(y, x * y * test.spec.value))")
+	require.NoError(t, issues.Err())
+
+	// cost tracking options
+	programOpts := krocel.WithCostTracking(10) // Setting a very low budget to ensure it will fail
+	program, err := env.Program(ast, programOpts...)
+	require.NoError(t, err)
+
+	// Evaluating and expect it to fail due to cost budget
+	context := map[string]interface{}{
+		"test": resources["test"].emulatedObject.Object,
+	}
+
+	_, _, err = program.Eval(context)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cost limit", "Expected a cost limit error")
 }

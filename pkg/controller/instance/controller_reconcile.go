@@ -15,6 +15,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
+	krocel "github.com/kro-run/kro/pkg/cel"
 	"github.com/kro-run/kro/pkg/controller/instance/delta"
 	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/pkg/requeue"
@@ -116,6 +118,14 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 		// Synchronize runtime state after each resource
 		if _, err := igr.runtime.Synchronize(); err != nil {
+			if errors.Is(err, krocel.ErrCELBudgetExceeded) {
+				resourceState := igr.state.ResourceStates[resourceID]
+				resourceState.State = "ERROR"
+				resourceState.Err = err
+				igr.state.State = "CELBudgetExceeded"
+				igr.state.ReconcileErr = err
+				return err
+			}
 			return fmt.Errorf("failed to synchronize reconciling resource %s: %w", resourceID, err)
 		}
 	}

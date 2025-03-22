@@ -625,7 +625,10 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 	}
 
 	// TODO(a-hilaly): thinking about a creating a library to hide this...
-	program, err := env.Program(ast)
+
+	//adding cost tracking options
+	programOpts := krocel.WithCostTracking(krocel.PerCallLimit)
+	program, err := env.Program(ast, programOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create program: %w", err)
 	}

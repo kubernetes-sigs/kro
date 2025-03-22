@@ -54,6 +54,8 @@ func NewResourceGraphDefinitionRuntime(
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
 		ignoredByConditionsResources: make(map[string]bool),
+		celCostBudget:                krocel.RuntimeCELCostBudget,
+		celCostUsed:                  0,
 	}
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
@@ -166,6 +168,10 @@ type ResourceGraphDefinitionRuntime struct {
 	// ignoredByConditionsResources holds the resources whos defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
+
+	//CEL cost tracking
+	celCostBudget int64
+	celCostUsed   int64
 }
 
 // TopologicalOrder returns the topological order of resources.
@@ -312,7 +318,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				return err
 			}
@@ -377,7 +383,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			evalContext["schema"] = rt.instance.Unstructured().Object
 
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				if strings.Contains(err.Error(), "no such key") {
 					// TODO(a-hilaly): I'm not sure if this is the best way to handle
@@ -486,7 +492,7 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 	}
 
 	for _, expression := range expressions {
-		out, err := evaluateExpression(env, context, expression)
+		out, err := rt.evaluateExpression(env, context, expression)
 		if err != nil {
 			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
 		}
@@ -544,7 +550,7 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 
 	for _, condition := range conditions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := evaluateExpression(env, context, condition)
+		value, err := rt.evaluateExpression(env, context, condition)
 		if err != nil {
 			return false, err
 		}
@@ -557,21 +563,50 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 }
 
 // evaluateExpression evaluates an CEL expression and returns a value if successful, or error
-func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
+func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
+	// if we've already exceeded the total budget
+	if rt.celCostUsed >= rt.celCostBudget {
+		return nil, krocel.WrapCostLimitExceeded(
+			fmt.Errorf("total cost limit exceeded"),
+			rt.celCostUsed,
+		)
+	}
+
 	ast, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 	}
-	// Here as well
-	program, err := env.Program(ast)
+
+	// Add cost options to track and limit costs
+	programOpts := krocel.WithCostTracking(krocel.PerCallLimit)
+	program, err := env.Program(ast, programOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
 	}
-	// We get an error here when the value field we're looking for is not yet defined
-	// For now leaving it as error, in the future when we see different scenarios
-	// of this error we can make some a reason, and others an error
-	val, _, err := program.Eval(context)
+
+	// Evaluate the expression
+	val, details, err := program.Eval(context)
+
+	// Update cost usage if available
+	if details != nil && details.ActualCost() != nil {
+		rt.celCostUsed += int64(*details.ActualCost())
+
+		// Check if we've exceeded the total budget
+		if rt.celCostUsed >= rt.celCostBudget {
+			return nil, krocel.WrapCostLimitExceeded(
+				fmt.Errorf("total cost limit exceeded"),
+				rt.celCostUsed,
+			)
+		}
+	}
+
+	// Check for evaluation errors
 	if err != nil {
+		// Check for cost limit exceeded and handle it
+		if krocel.IsCostLimitExceeded(err) {
+			rt.celCostUsed += krocel.PerCallLimit // Consider the full budget consumed for the failed evaluation
+			return nil, krocel.WrapCostLimitExceeded(err, rt.celCostUsed)
+		}
 		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
 	}
 

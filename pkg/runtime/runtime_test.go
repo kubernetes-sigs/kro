@@ -15,6 +15,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,6 +27,22 @@ import (
 	krocel "github.com/kro-run/kro/pkg/cel"
 	"github.com/kro-run/kro/pkg/graph/variable"
 )
+
+// Use testing-only budget for cost-sensitive tests
+const testBudget = 10000000
+
+// setupTestRuntime updates a runtime with a high cost budget for testing
+func setupTestRuntime(rt *ResourceGraphDefinitionRuntime) {
+	rt.celCostBudget = testBudget
+}
+
+func TestMain(m *testing.M) {
+	// Run tests
+	exitCode := m.Run()
+
+	// Exit with appropriate code
+	os.Exit(exitCode)
+}
 
 func Test_RuntimeWorkflow(t *testing.T) {
 	// 1. Setup initial resources
@@ -216,6 +233,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
+	setupTestRuntime(rt)
 
 	// 3. First sync - should resolve static variables
 	cont, err := rt.Synchronize()
@@ -443,6 +461,7 @@ func Test_NewResourceGraphDefinitionRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
+	setupTestRuntime(rt)
 
 	// Test 1: Check expressionsCache initialization
 	expectedExpressions := map[string]struct{}{
@@ -778,6 +797,7 @@ func Test_Synchronize(t *testing.T) {
 				resolvedResources: tt.resolvedResources,
 				expressionsCache:  tt.expressionsCache,
 				runtimeVariables:  tt.runtimeVariables,
+				celCostBudget:     testBudget,
 			}
 
 			gotContinue, err := rt.Synchronize()
@@ -1439,6 +1459,7 @@ func Test_evaluateStaticVariables(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
 				instance:         tt.instance,
 				expressionsCache: tt.expressionsCache,
+				celCostBudget:    testBudget,
 			}
 
 			err := rt.evaluateStaticVariables()
@@ -1695,6 +1716,7 @@ func Test_evaluateDynamicVariables(t *testing.T) {
 				),
 				expressionsCache:  tt.expressionsCache,
 				resolvedResources: tt.resolvedResources,
+				celCostBudget:     testBudget,
 			}
 
 			err := rt.evaluateDynamicVariables()
@@ -1926,6 +1948,49 @@ func Test_evaluateInstanceStatuses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func Test_evaluateExpressionCumulativeCostTracking(t *testing.T) {
+	rt := &ResourceGraphDefinitionRuntime{
+		celCostBudget: testBudget,
+		celCostUsed:   0,
+	}
+
+	env, _ := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"test"}))
+	context := map[string]interface{}{
+		"test": map[string]interface{}{"value": 10},
+	}
+
+	expressions := []string{
+		"test.value * 2",
+		"[1,2,3].map(x,x * 10)",
+	}
+
+	for _, expr := range expressions {
+		val, err := rt.evaluateExpression(env, context, expr)
+
+		if err != nil {
+			t.Fatalf("Expression %s failed : %v", expr, err)
+		}
+
+		t.Logf("Expression: %s, value: %v, cost used: %d", expr, val, rt.celCostUsed)
+
+		if rt.celCostUsed == 0 {
+			t.Error("Cost tracking not working - no cost recorded")
+		}
+	}
+
+	rt.celCostBudget = 1
+	_, err := rt.evaluateExpression(env, context, "test.value * 2")
+	if err == nil {
+		t.Error("Expected error for cost budget exceeded, but got nil")
+	} else {
+		t.Logf("Got error: %v", err)
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "CEL Cost budget exceeded") {
+			t.Errorf("Expected error to contain 'CEL Cost budget exceeded', got: %v", err)
+		}
 	}
 }
 
@@ -2260,6 +2325,7 @@ func Test_IsResourceReady(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
 				resources:         map[string]Resource{"test": tt.resource},
 				resolvedResources: map[string]*unstructured.Unstructured{},
+				celCostBudget:     testBudget,
 			}
 
 			if tt.resolvedObject != nil {
@@ -2366,6 +2432,7 @@ func Test_WantToCreateResource(t *testing.T) {
 				resources: map[string]Resource{
 					"test": tt.resource,
 				},
+				celCostBudget: testBudget,
 			}
 
 			got, err := rt.WantToCreateResource("test")
@@ -2469,7 +2536,7 @@ func setupTestEnv(names []string) (*cel.Env, error) {
 	return krocel.DefaultEnvironment(krocel.WithResourceIDs(names))
 }
 
-func Test_evaluateExpression(t *testing.T) {
+func (rt *ResourceGraphDefinitionRuntime) Test_evaluateExpression(t *testing.T) {
 	env, err := setupTestEnv([]string{"data"})
 	if err != nil {
 		t.Fatalf("failed to create environment: %v", err)
@@ -2514,7 +2581,7 @@ func Test_evaluateExpression(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evaluateExpression(env, tt.context, tt.expression)
+			got, err := rt.evaluateExpression(env, tt.context, tt.expression)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -2643,7 +2710,6 @@ func (m *mockResource) GetReadyWhenExpressions() []string {
 func (m *mockResource) GetIncludeWhenExpressions() []string {
 	return m.conditions
 }
-
 
 func (m *mockResource) IsNamespaced() bool {
 	return m.namespaced

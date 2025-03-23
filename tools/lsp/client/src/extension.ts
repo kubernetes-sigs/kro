@@ -45,9 +45,16 @@ async function isKroFile(document: TextDocument): Promise<boolean> {
 
 export function activate(context: ExtensionContext) {
   // Server executable path
-  const serverPath = context.asAbsolutePath(
-    path.join("..", "server", "kro-language-server")
+  const serverPath = path.join(
+    context.extensionPath,
+    "..",
+    "server",
+    "kro-language-server"
   );
+
+  // Log the server path for debugging
+  outputChannel.appendLine(`Server path: ${serverPath}`);
+  outputChannel.show();
 
   // Server options
   const serverOptions: ServerOptions = {

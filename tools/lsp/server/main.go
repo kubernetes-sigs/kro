@@ -14,6 +14,7 @@ import (
 	_ "github.com/tliron/commonlog/simple"
 )
 
+// Language server name for LSP identification
 const lsName = "kro-language-server"
 
 var (
@@ -21,11 +22,13 @@ var (
 	handler lspProtocol.Handler
 )
 
+// main initializes and starts the KRO Language Server
 func main() {
 	commonlog.Configure(1, nil)
 	log := commonlog.GetLogger("server")
 	log.Infof("KRO Language Server starting...")
 
+	// Configure LSP method handlers
 	handler = lspProtocol.Handler{
 		Initialize:  initialize,
 		Initialized: initialized,
@@ -65,14 +68,15 @@ func initialize(context *glsp.Context, params *lspProtocol.InitializeParams) (an
 
 	capabilities := handler.CreateServerCapabilities()
 
+	// Configure text document synchronization
 	openClose := true
 	changeValue := lspProtocol.TextDocumentSyncKindFull
-
 	capabilities.TextDocumentSync = &lspProtocol.TextDocumentSyncOptions{
 		OpenClose: &openClose,
 		Change:    &changeValue,
 	}
 
+	// Enable code action support for quick fixes
 	codeActionProvider := true
 	capabilities.CodeActionProvider = &codeActionProvider
 

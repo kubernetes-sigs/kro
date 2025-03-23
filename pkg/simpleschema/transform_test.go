@@ -298,7 +298,15 @@ func TestBuildOpenAPISchema(t *testing.T) {
 func TestLoadPreDefinedTypes(t *testing.T) {
 	transformer := newTransformer()
 
-	preDefinedTypes := map[string]interface{}{
+	tests := []struct {
+		name    string
+		obj     map[string]interface{}
+		want    map[string]extv1.JSONSchemaProps
+		wantErr bool
+	}{
+		{
+			name: "Valid types",
+			obj: map[string]interface{}{
 		"Person": map[string]interface{}{
 			"name": "string",
 			"age":  "integer",
@@ -311,24 +319,9 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 			"name":      "string",
 			"employees": "[]string",
 		},
-	}
-
-	err := transformer.loadPreDefinedTypes(preDefinedTypes)
-	if err != nil {
-		t.Fatalf("LoadPreDefinedTypes() error = %v", err)
-	}
-
-	if len(transformer.preDefinedTypes) != 2 {
-		t.Errorf("LoadPreDefinedTypes() loaded %d types, want 2", len(transformer.preDefinedTypes))
-	}
-
-	// Check Person type
-	personType, ok := transformer.preDefinedTypes["Person"]
-	if !ok {
-		t.Errorf("LoadPreDefinedTypes() did not load 'Person' type")
-	}
-
-	expectedPersonType := extv1.JSONSchemaProps{
+			},
+			want: map[string]extv1.JSONSchemaProps{
+				"Person": extv1.JSONSchemaProps{
 		Type: "object",
 		Properties: map[string]extv1.JSONSchemaProps{
 			"name": {Type: "string"},
@@ -341,19 +334,8 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	if !reflect.DeepEqual(personType, expectedPersonType) {
-		t.Errorf("LoadPreDefinedTypes() 'Person' type = %v, want %v", personType, expectedPersonType)
-	}
-
-	// Check Company type
-	companyType, ok := transformer.preDefinedTypes["Company"]
-	if !ok {
-		t.Errorf("LoadPreDefinedTypes() did not load 'Company' type")
-	}
-
-	expectedCompanyType := extv1.JSONSchemaProps{
+				},
+				"Company": extv1.JSONSchemaProps{
 		Type: "object",
 		Properties: map[string]extv1.JSONSchemaProps{
 			"name": {Type: "string"},
@@ -366,9 +348,30 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				},
 			},
 		},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid type",
+			obj: map[string]interface{}{
+				"invalid": 123,
+			},
+			want:    map[string]extv1.JSONSchemaProps{},
+			wantErr: true,
+		},
 	}
 
-	if !reflect.DeepEqual(companyType, expectedCompanyType) {
-		t.Errorf("LoadPreDefinedTypes() 'Company' type = %v, want %v", companyType, expectedCompanyType)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := transformer.loadPreDefinedTypes(tt.obj)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("LoadPreDefinedTypes() error = %v", err)
+				return
+			}
+			if !reflect.DeepEqual(transformer.preDefinedTypes, tt.want) {
+				t.Errorf("LoadPreDefinedTypes() = %+v, want %+v", transformer.preDefinedTypes, tt.want)
+			}
+		})
 	}
 }

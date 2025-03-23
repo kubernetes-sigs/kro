@@ -105,34 +105,25 @@ func validateSchemaFields(fields map[string]interface{}, doc *YAMLDocument, path
 	return errors
 }
 
-// validateTypeString validates a type definition string according to Kro schema rules
+// validateTypeString validates a type definition string
 func validateTypeString(typeStr string, path string, doc *YAMLDocument) *ValidationError {
-	// Find the position of this field in the document
-	fieldPosition, found := doc.NestedFields[path]
-
-	// If not found through direct path lookup, try a more flexible approach
-	if !found {
-		// We don't have position - this shouldn't happen with our improved tracking
-		return &ValidationError{
-			Message: fmt.Sprintf("Invalid type definition at %s: %s", path, typeStr),
-			Line:    0, // Default to start of document
-			Column:  0,
-			EndLine: 0,
-			EndCol:  10,
-		}
-	}
+	// Get position for this field
+	fieldPosition := getFieldPosition(path, doc)
 
 	// Skip validation for CEL expressions (used in status fields)
 	if strings.HasPrefix(typeStr, "${") && strings.HasSuffix(typeStr, "}") {
 		return nil // Valid CEL expression
 	}
 
-	// Check for array type syntax: []type
+	// Check for array type syntax
 	if strings.HasPrefix(typeStr, "[]") {
-		subType := strings.TrimPrefix(typeStr, "[]")
-		if !isValidBaseType(subType) && !isValidComplexType(subType) {
+		// Extract the element type
+		elementType := strings.TrimPrefix(typeStr, "[]")
+
+		// Verify that the element type is valid
+		if !isValidBaseType(elementType) && !isValidComplexType(elementType) {
 			return &ValidationError{
-				Message: fmt.Sprintf("Invalid array element type '%s' at %s", subType, path),
+				Message: fmt.Sprintf("Invalid array element type '%s' at %s", elementType, path),
 				Line:    fieldPosition.Line,
 				Column:  fieldPosition.Column,
 				EndLine: fieldPosition.EndLine,
@@ -142,10 +133,10 @@ func validateTypeString(typeStr string, path string, doc *YAMLDocument) *Validat
 		return nil
 	}
 
-	// Check for map type syntax: map[keyType]valueType
-	if strings.HasPrefix(typeStr, "map[") {
-		mapRegex := typePatterns["map"]
-		if !mapRegex.MatchString(typeStr) {
+	// Check for map type syntax
+	if strings.HasPrefix(typeStr, "map[") && strings.Contains(typeStr, "]") {
+		// Check if it matches the map pattern
+		if !typePatterns["map"].MatchString(typeStr) {
 			return &ValidationError{
 				Message: fmt.Sprintf("Invalid map type syntax '%s' at %s", typeStr, path),
 				Line:    fieldPosition.Line,
@@ -155,15 +146,16 @@ func validateTypeString(typeStr string, path string, doc *YAMLDocument) *Validat
 			}
 		}
 
-		matches := mapRegex.FindStringSubmatch(typeStr)
+		// Extract key and value types
+		matches := typePatterns["map"].FindStringSubmatch(typeStr)
 		if len(matches) >= 3 {
 			keyType := matches[1]
 			valueType := matches[2]
 
-			// Key type should be simple (usually string)
-			if !isValidBaseType(keyType) {
+			// Key type must be a simple type like string
+			if keyType != "string" {
 				return &ValidationError{
-					Message: fmt.Sprintf("Invalid map key type '%s' at %s", keyType, path),
+					Message: fmt.Sprintf("Invalid map key type '%s' at %s. Only 'string' is supported as key type.", keyType, path),
 					Line:    fieldPosition.Line,
 					Column:  fieldPosition.Column,
 					EndLine: fieldPosition.EndLine,
@@ -186,7 +178,8 @@ func validateTypeString(typeStr string, path string, doc *YAMLDocument) *Validat
 	}
 
 	// Check for base type with modifiers
-	typeWithModifiers := strings.Split(typeStr, "|")
+	// Use a special splitter that respects quotes
+	typeWithModifiers := splitOutsideQuotes(typeStr, '|')
 	baseType := strings.TrimSpace(typeWithModifiers[0])
 
 	// Check if the base type is valid
@@ -247,10 +240,18 @@ func isValidComplexType(typeName string) bool {
 
 // validateModifier validates a type modifier
 func validateModifier(modifier string, baseType string) error {
-	// Check if there are multiple modifiers in one expression
+	// Handle quoted description values specially
+	if strings.HasPrefix(modifier, "description=") &&
+		(strings.Contains(modifier, "\"") || strings.Contains(modifier, "'")) {
+
+		// Extract just the description name
+		return validateDescriptionModifier(modifier)
+	}
+
+	// Check if there are multiple modifiers in one expression (but not inside quotes)
 	if strings.Contains(modifier, " ") {
-		// Split by space and validate each modifier separately
-		subModifiers := strings.Split(modifier, " ")
+		// Split by space outside of quotes
+		subModifiers := splitOutsideQuotes(modifier, ' ')
 		for _, subMod := range subModifiers {
 			if subMod == "" {
 				continue
@@ -322,6 +323,29 @@ func validateModifier(modifier string, baseType string) error {
 	return nil
 }
 
+// validateDescriptionModifier specially handles the description modifier which may contain spaces and quotes
+func validateDescriptionModifier(modifier string) error {
+	if !strings.HasPrefix(modifier, "description=") {
+		return fmt.Errorf("expected description modifier")
+	}
+
+	// Extract the value part (everything after "description=")
+	value := strings.TrimPrefix(modifier, "description=")
+
+	// Check if properly quoted
+	if len(value) < 2 {
+		return fmt.Errorf("description value should be a valid string")
+	}
+
+	// Check for proper quotes
+	if (value[0] == '"' && value[len(value)-1] == '"') ||
+		(value[0] == '\'' && value[len(value)-1] == '\'') {
+		return nil // Properly quoted description
+	}
+
+	return fmt.Errorf("description value should be properly quoted")
+}
+
 // isValidQuotedString checks if a string is properly quoted
 func isValidQuotedString(s string) bool {
 	if len(s) < 2 {
@@ -356,4 +380,61 @@ func isSimpleString(s string) bool {
 	}
 
 	return true
+}
+
+// splitOutsideQuotes splits a string by a delimiter, but only outside of quoted sections
+func splitOutsideQuotes(s string, delimiter rune) []string {
+	var result []string
+	var builder strings.Builder
+	inSingleQuotes := false
+	inDoubleQuotes := false
+
+	for _, r := range s {
+		if r == '\'' && !inDoubleQuotes {
+			inSingleQuotes = !inSingleQuotes
+			builder.WriteRune(r)
+		} else if r == '"' && !inSingleQuotes {
+			inDoubleQuotes = !inDoubleQuotes
+			builder.WriteRune(r)
+		} else if r == delimiter && !inSingleQuotes && !inDoubleQuotes {
+			// Split here
+			result = append(result, builder.String())
+			builder.Reset()
+		} else {
+			builder.WriteRune(r)
+		}
+	}
+
+	// Add the last part
+	if builder.Len() > 0 {
+		result = append(result, builder.String())
+	}
+
+	return result
+}
+
+// getFieldPosition finds the position for a field path in the document
+func getFieldPosition(path string, doc *YAMLDocument) YAMLField {
+	// Try direct lookup first
+	if fieldPosition, found := doc.NestedFields[path]; found {
+		return fieldPosition
+	}
+
+	// If not found through direct path lookup, try a more flexible approach
+	// Split the path and try to find the closest parent
+	parts := strings.Split(path, ".")
+	for i := len(parts) - 1; i >= 0; i-- {
+		parentPath := strings.Join(parts[:i], ".")
+		if fieldPosition, found := doc.NestedFields[parentPath]; found {
+			return fieldPosition
+		}
+	}
+
+	// Default position if we really can't find anything
+	return YAMLField{
+		Line:    0, // Default to start of document
+		Column:  0,
+		EndLine: 0,
+		EndCol:  10,
+	}
 }

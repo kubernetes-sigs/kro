@@ -23,7 +23,10 @@ import {
 let client: LanguageClient;
 let outputChannel = window.createOutputChannel("KRO Language Server");
 
-// Custom error handler
+/**
+ * Custom error handler for the language client.
+ * Logs errors to output channel and determines appropriate actions.
+ */
 const customErrorHandler: ErrorHandler = {
   error: (error, message, count) => {
     outputChannel.appendLine(`[Error] ${error.toString()}`);
@@ -35,7 +38,10 @@ const customErrorHandler: ErrorHandler = {
   },
 };
 
-// Function to check if a YAML file is a Kro file
+/**
+ * Determines if a document is a KRO resource file.
+ * Checks for KRO API version strings in YAML files.
+ */
 async function isKroFile(document: TextDocument): Promise<boolean> {
   if (document.languageId !== "yaml") {
     return false;
@@ -45,8 +51,11 @@ async function isKroFile(document: TextDocument): Promise<boolean> {
   return text.includes("apiVersion: kro.run/v1alpha");
 }
 
+/**
+ * Activates the extension.
+ * Sets up language client, event handlers, and command registrations.
+ */
 export function activate(context: ExtensionContext) {
-  // Server executable path
   const serverPath = path.join(
     context.extensionPath,
     "..",
@@ -54,11 +63,9 @@ export function activate(context: ExtensionContext) {
     "kro-language-server"
   );
 
-  // Log the server path for debugging
   outputChannel.appendLine(`Server path: ${serverPath}`);
   outputChannel.show();
 
-  // Server options
   const serverOptions: ServerOptions = {
     run: {
       command: serverPath,
@@ -70,7 +77,6 @@ export function activate(context: ExtensionContext) {
     },
   };
 
-  // Client options
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "yaml" }],
     synchronize: {
@@ -81,7 +87,6 @@ export function activate(context: ExtensionContext) {
     errorHandler: customErrorHandler,
   };
 
-  // Create and start client
   client = new LanguageClient(
     "kroLanguageServer",
     "KRO Language Server",
@@ -89,7 +94,6 @@ export function activate(context: ExtensionContext) {
     clientOptions
   );
 
-  // Set up diagnostics listener
   const diagnosticsDisposable = languages.onDidChangeDiagnostics((e) => {
     for (const uri of e.uris) {
       const diagnostics = languages.getDiagnostics(uri);
@@ -103,10 +107,9 @@ export function activate(context: ExtensionContext) {
     }
   });
 
-  // Start client and add to subscriptions
   client.start();
 
-  // Register command to restart the server
+  // Register server restart command
   const restartCommand = commands.registerCommand("kro.restartServer", () => {
     outputChannel.appendLine("Manually restarting server...");
     if (client) {
@@ -117,7 +120,7 @@ export function activate(context: ExtensionContext) {
     }
   });
 
-  // Register a listener for when document is opened/changed to apply Kro-specific settings
+  // Track KRO YAML files
   context.subscriptions.push(
     workspace.onDidOpenTextDocument(async (document) => {
       if (await isKroFile(document)) {
@@ -128,7 +131,6 @@ export function activate(context: ExtensionContext) {
     }),
     workspace.onDidChangeTextDocument(async (event) => {
       if (await isKroFile(event.document)) {
-        // This is a Kro YAML file that changed
         outputChannel.appendLine(
           `Kro file changed: ${event.document.uri.toString()}`
         );
@@ -139,6 +141,10 @@ export function activate(context: ExtensionContext) {
   context.subscriptions.push(client, restartCommand, diagnosticsDisposable);
 }
 
+/**
+ * Deactivates the extension.
+ * Stops the language client if active.
+ */
 export function deactivate(): Thenable<void> | undefined {
   if (!client) {
     return undefined;

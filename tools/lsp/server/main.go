@@ -22,7 +22,6 @@ var (
 )
 
 func main() {
-	// Configure logging
 	commonlog.Configure(1, nil)
 	log := commonlog.GetLogger("server")
 	log.Infof("KRO Language Server starting...")
@@ -46,7 +45,7 @@ func main() {
 
 	log.Infof("Starting server...")
 
-	// Signal that server is ready for debugging if in direct debug mode
+	// Support direct debugging mode if enabled
 	if os.Getenv("KRO_DIRECT_DEBUG") == "true" {
 		go func() {
 			log.Infof("Signaling server is ready for direct debug connection...")
@@ -54,15 +53,12 @@ func main() {
 		}()
 	}
 
-	// Create a new server
 	server := server.NewServer(&handler, lsName, false)
-
 	log.Infof("Running server on stdio...")
-
-	// Run on stdio
 	server.RunStdio()
 }
 
+// initialize provides LSP server capabilities during client connection initialization
 func initialize(context *glsp.Context, params *lspProtocol.InitializeParams) (any, error) {
 	log := commonlog.GetLogger("server")
 	log.Infof("Initializing server...")
@@ -72,14 +68,11 @@ func initialize(context *glsp.Context, params *lspProtocol.InitializeParams) (an
 	openClose := true
 	changeValue := lspProtocol.TextDocumentSyncKindFull
 
-	// Set specific capabilities with manual pointer values
 	capabilities.TextDocumentSync = &lspProtocol.TextDocumentSyncOptions{
 		OpenClose: &openClose,
 		Change:    &changeValue,
 	}
 
-	// Add code action provider capability
-	// Using a simpler approach that avoids type issues
 	codeActionProvider := true
 	capabilities.CodeActionProvider = &codeActionProvider
 
@@ -92,12 +85,14 @@ func initialize(context *glsp.Context, params *lspProtocol.InitializeParams) (an
 	}, nil
 }
 
+// initialized handles post-initialization tasks
 func initialized(context *glsp.Context, params *lspProtocol.InitializedParams) error {
 	log := commonlog.GetLogger("server")
 	log.Infof("Server initialized")
 	return nil
 }
 
+// shutdown handles server shutdown requests
 func shutdown(context *glsp.Context) error {
 	log := commonlog.GetLogger("server")
 	log.Infof("Server shutting down")

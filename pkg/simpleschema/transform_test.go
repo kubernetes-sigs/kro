@@ -307,47 +307,47 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 		{
 			name: "Valid types",
 			obj: map[string]interface{}{
-		"Person": map[string]interface{}{
-			"name": "string",
-			"age":  "integer",
-			"address": map[string]interface{}{
-				"street": "string",
-				"city":   "string",
-			},
-		},
-		"Company": map[string]interface{}{
-			"name":      "string",
-			"employees": "[]string",
-		},
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+					"address": map[string]interface{}{
+						"street": "string",
+						"city":   "string",
+					},
+				},
+				"Company": map[string]interface{}{
+					"name":      "string",
+					"employees": "[]string",
+				},
 			},
 			want: map[string]extv1.JSONSchemaProps{
 				"Person": extv1.JSONSchemaProps{
-		Type: "object",
-		Properties: map[string]extv1.JSONSchemaProps{
-			"name": {Type: "string"},
-			"age":  {Type: "integer"},
-			"address": {
-				Type: "object",
-				Properties: map[string]extv1.JSONSchemaProps{
-					"street": {Type: "string"},
-					"city":   {Type: "string"},
-				},
-			},
-		},
-				},
-				"Company": extv1.JSONSchemaProps{
-		Type: "object",
-		Properties: map[string]extv1.JSONSchemaProps{
-			"name": {Type: "string"},
-			"employees": {
-				Type: "array",
-				Items: &extv1.JSONSchemaPropsOrArray{
-					Schema: &extv1.JSONSchemaProps{
-						Type: "string",
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"name": {Type: "string"},
+						"age":  {Type: "integer"},
+						"address": {
+							Type: "object",
+							Properties: map[string]extv1.JSONSchemaProps{
+								"street": {Type: "string"},
+								"city":   {Type: "string"},
+							},
+						},
 					},
 				},
-			},
-		},
+				"Company": extv1.JSONSchemaProps{
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"name": {Type: "string"},
+						"employees": {
+							Type: "array",
+							Items: &extv1.JSONSchemaPropsOrArray{
+								Schema: &extv1.JSONSchemaProps{
+									Type: "string",
+								},
+							},
+						},
+					},
 				},
 			},
 			wantErr: false,

@@ -41,6 +41,7 @@ func main() {
 		},
 		TextDocumentDidClose:           protocol.TextDocumentDidClose,
 		WorkspaceDidChangeWatchedFiles: protocol.DidChangeWatchedFiles,
+		TextDocumentCodeAction:         protocol.HandleCodeAction,
 	}
 
 	log.Infof("Starting server...")
@@ -76,6 +77,11 @@ func initialize(context *glsp.Context, params *lspProtocol.InitializeParams) (an
 		OpenClose: &openClose,
 		Change:    &changeValue,
 	}
+
+	// Add code action provider capability
+	// Using a simpler approach that avoids type issues
+	codeActionProvider := true
+	capabilities.CodeActionProvider = &codeActionProvider
 
 	return lspProtocol.InitializeResult{
 		Capabilities: capabilities,

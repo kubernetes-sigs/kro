@@ -35,16 +35,16 @@ func ValidateKroFile(data map[string]interface{}) []error {
 	}
 
 	// // 2. Convert to ResourceGraphDefinition
-	// rgd, err := mapToResourceGraphDefinition(data)
-	// if err != nil {
-	// 	errors = append(errors, fmt.Errorf("failed to convert to ResourceGraphDefinition: %w", err))
-	// 	return errors
-	// }
+	rgd, err := mapToResourceGraphDefinition(data)
+	if err != nil {
+		errors = append(errors, fmt.Errorf("failed to convert to ResourceGraphDefinition: %w", err))
+		return errors
+	}
 
 	// // 3. Validate using custom validation logic
-	// if err := validateResourceGraphDefinition(rgd); err != nil {
-	// 	errors = append(errors, err)
-	// }
+	if err := validateResourceGraphDefinition(rgd); err != nil {
+		errors = append(errors, err)
+	}
 
 	return errors
 }

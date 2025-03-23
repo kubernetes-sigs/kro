@@ -11,7 +11,7 @@ image:
   # The location of the container image repository
   repository: ghcr.io/kro-run/kro/controller
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.2.2"
+  tag: ${VERSION}
   # Ignores the repository and tag settings and uses the controllers ko entrypoint.
   ko: false
   # Image pull policy (IfNotPresent: pull the image only if it is not present locally)

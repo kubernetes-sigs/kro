@@ -1,7 +1,7 @@
 # Steps to deploy ack-controllers to cluster
 
 ## Deploying Controllers
-Conbined ResourseGroup for ACK Controllers
+Combined ResourseGroup for ACK Controllers
 - IAM
 - EC2
 - EKS

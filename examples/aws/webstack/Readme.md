@@ -3,7 +3,7 @@
 This example creates a ResourceGraphDefinition called `WebStack` comprised of
 three other RGs: `WebApp`, `S3Bucket`, and `PodIdentity`
 
-![Netsted RGD Instance](../../../images/architecture-diagrams/kro-WebStack.png)
+![Nested RGD Instance](../../../images/architecture-diagrams/kro-WebStack.png)
 _Figure 1: Nested RGD Example_
 
 ### Create ResourceGraphDefinitions

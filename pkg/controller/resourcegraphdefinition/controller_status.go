@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
+
 	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/metadata"
 )

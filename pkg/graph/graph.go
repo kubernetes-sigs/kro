@@ -24,7 +24,7 @@ import (
 // and everything needed to "manage" the resources defined in the resource graph definition.
 type Graph struct {
 	// DAG is the directed acyclic graph representation of the resource graph definition.
-	DAG *dag.DirectedAcyclicGraph
+	DAG *dag.DirectedAcyclicGraph[string]
 	// Instance is the processed resource graph definition instance.
 	Instance *Resource
 	// Resources is a map of the processed resources in the resource graph definition.

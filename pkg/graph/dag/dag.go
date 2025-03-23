@@ -14,71 +14,87 @@
 package dag
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
-
-	"golang.org/x/exp/maps"
 )
 
 // Vertex represents a node/vertex in a directed acyclic graph.
-type Vertex struct {
+type Vertex[T cmp.Ordered] struct {
 	// ID is a unique identifier for the node
-	ID string
-	// Order records the original order, and is used to preserve the original user-provided ordering as far as posible.
+	ID T
+	// Order records the original order, and is used to preserve the original user-provided ordering as far as possible.
 	Order int
 	// DependsOn stores the IDs of the nodes that this node depends on.
 	// If we depend on another vertex, we must appear after that vertex in the topological sort.
-	DependsOn map[string]struct{}
+	DependsOn map[T]struct{}
 }
 
-func (v Vertex) String() string {
-	dependsOn := strings.Join(maps.Keys(v.DependsOn), ",")
-	return fmt.Sprintf("Vertex[ID: %s, Order: %d, DependsOn: %s]", v.ID, v.Order, dependsOn)
+func (v Vertex[T]) String() string {
+	var builder strings.Builder
+	builder.Grow(len(v.DependsOn))
+	for i, s := range slices.Collect(maps.Keys(v.DependsOn)) {
+		builder.WriteString(fmt.Sprintf("%v", s))
+		if i < len(v.DependsOn)-1 {
+			builder.WriteString(",")
+		}
+	}
+	return fmt.Sprintf("Vertex[ID: %v, Order: %d, DependsOn: %s]", v.ID, v.Order, builder.String())
 }
 
 // DirectedAcyclicGraph represents a directed acyclic graph
-type DirectedAcyclicGraph struct {
+type DirectedAcyclicGraph[T cmp.Ordered] struct {
 	// Vertices stores the nodes in the graph
-	Vertices map[string]*Vertex
+	Vertices map[T]*Vertex[T]
 }
 
 // NewDirectedAcyclicGraph creates a new directed acyclic graph.
-func NewDirectedAcyclicGraph() *DirectedAcyclicGraph {
-	return &DirectedAcyclicGraph{
-		Vertices: make(map[string]*Vertex),
+func NewDirectedAcyclicGraph[T cmp.Ordered]() *DirectedAcyclicGraph[T] {
+	return &DirectedAcyclicGraph[T]{
+		Vertices: make(map[T]*Vertex[T]),
 	}
 }
 
 // AddVertex adds a new node to the graph.
-func (d *DirectedAcyclicGraph) AddVertex(id string, order int) error {
+func (d *DirectedAcyclicGraph[T]) AddVertex(id T, order int) error {
 	if _, exists := d.Vertices[id]; exists {
-		return fmt.Errorf("node %s already exists", id)
+		return fmt.Errorf("node %v already exists", id)
 	}
-	d.Vertices[id] = &Vertex{
+	d.Vertices[id] = &Vertex[T]{
 		ID:        id,
 		Order:     order,
-		DependsOn: make(map[string]struct{}),
+		DependsOn: make(map[T]struct{}),
 	}
 	return nil
 }
 
-type CycleError struct {
-	Cycle []string
+type CycleError[T cmp.Ordered] struct {
+	Cycle []T
 }
 
-func (e *CycleError) Error() string {
+func (e *CycleError[T]) Error() string {
 	return fmt.Sprintf("graph contains a cycle: %s", formatCycle(e.Cycle))
 }
 
-func formatCycle(cycle []string) string {
-	return strings.Join(cycle, " -> ")
+func formatCycle[T cmp.Ordered](cycle []T) string {
+	var builder strings.Builder
+	builder.Grow(len(cycle))
+	for i, s := range cycle {
+		builder.WriteString(fmt.Sprintf("%v", s))
+		if i < len(cycle)-1 {
+			builder.WriteString(" -> ")
+		}
+	}
+	return builder.String()
 }
 
 // AsCycleError returns the (potentially wrapped) CycleError, or nil if it is not a CycleError.
-func AsCycleError(err error) *CycleError {
-	cycleError := &CycleError{}
+func AsCycleError[T cmp.Ordered](err error) *CycleError[T] {
+	cycleError := &CycleError[T]{}
 	if errors.As(err, &cycleError) {
 		return cycleError
 	}
@@ -87,16 +103,16 @@ func AsCycleError(err error) *CycleError {
 
 // AddDependencies adds a set of dependencies to the "from" vertex.
 // This indicates that all the vertexes in "dependencies" must occur before "from".
-func (d *DirectedAcyclicGraph) AddDependencies(from string, dependencies []string) error {
+func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) error {
 	fromNode, fromExists := d.Vertices[from]
 	if !fromExists {
-		return fmt.Errorf("node %s does not exist", from)
+		return fmt.Errorf("node %v does not exist", from)
 	}
 
 	for _, dependency := range dependencies {
 		_, toExists := d.Vertices[dependency]
 		if !toExists {
-			return fmt.Errorf("node %s does not exist", dependency)
+			return fmt.Errorf("node %v does not exist", dependency)
 		}
 		if from == dependency {
 			return fmt.Errorf("self references are not allowed")
@@ -111,7 +127,7 @@ func (d *DirectedAcyclicGraph) AddDependencies(from string, dependencies []strin
 		for _, dependency := range dependencies {
 			delete(fromNode.DependsOn, dependency)
 		}
-		return &CycleError{
+		return &CycleError[T]{
 			Cycle: cycle,
 		}
 	}
@@ -121,12 +137,12 @@ func (d *DirectedAcyclicGraph) AddDependencies(from string, dependencies []strin
 
 // TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
 // and preserving order of nodes within each "depth" of the topological ordering.
-func (d *DirectedAcyclicGraph) TopologicalSort() ([]string, error) {
-	visited := make(map[string]bool)
-	var order []string
+func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
+	visited := make(map[T]bool)
+	var order []T
 
 	// Make a list of vertices, sorted by Order
-	vertices := make([]*Vertex, 0, len(d.Vertices))
+	vertices := make([]*Vertex[T], 0, len(d.Vertices))
 	for _, vertex := range d.Vertices {
 		vertices = append(vertices, vertex)
 	}
@@ -162,9 +178,9 @@ func (d *DirectedAcyclicGraph) TopologicalSort() ([]string, error) {
 			hasCycle, cycle := d.hasCycle()
 			if !hasCycle {
 				// Unexpected!
-				return nil, &CycleError{}
+				return nil, &CycleError[T]{}
 			}
-			return nil, &CycleError{
+			return nil, &CycleError[T]{
 				Cycle: cycle,
 			}
 		}
@@ -173,13 +189,13 @@ func (d *DirectedAcyclicGraph) TopologicalSort() ([]string, error) {
 	return order, nil
 }
 
-func (d *DirectedAcyclicGraph) hasCycle() (bool, []string) {
-	visited := make(map[string]bool)
-	recStack := make(map[string]bool)
-	var cyclePath []string
+func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {
+	visited := make(map[T]bool)
+	recStack := make(map[T]bool)
+	var cyclePath []T
 
-	var dfs func(string) bool
-	dfs = func(node string) bool {
+	var dfs func(T) bool
+	dfs = func(node T) bool {
 		visited[node] = true
 		recStack[node] = true
 		cyclePath = append(cyclePath, node)
@@ -203,7 +219,7 @@ func (d *DirectedAcyclicGraph) hasCycle() (bool, []string) {
 
 	for node := range d.Vertices {
 		if !visited[node] {
-			cyclePath = []string{}
+			cyclePath = []T{}
 			if dfs(node) {
 				// Trim the cycle path to start from the repeated node
 				start := 0

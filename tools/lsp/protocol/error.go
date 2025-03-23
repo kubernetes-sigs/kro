@@ -10,18 +10,12 @@ func CreateDiagnostic(message string, severity lspProtocol.DiagnosticSeverity, r
 	source := "kro-language-server"
 	severityValue := severity
 
-	// Create a properly formatted diagnostic
+	// Create a minimalist diagnostic with only required fields
 	return lspProtocol.Diagnostic{
 		Range:    rng,
 		Severity: &severityValue,
 		Source:   &source,
 		Message:  message,
-		// Ensure these fields are properly initialized
-		Code:               nil,
-		CodeDescription:    nil,
-		Tags:               nil,
-		RelatedInformation: nil,
-		Data:               nil,
 	}
 }
 

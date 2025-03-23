@@ -5,6 +5,8 @@ import {
   window,
   commands,
   TextDocument,
+  TextDocumentChangeEvent,
+  languages,
 } from "vscode";
 import {
   LanguageClient,
@@ -75,7 +77,7 @@ export function activate(context: ExtensionContext) {
       fileEvents: workspace.createFileSystemWatcher("**/*.{yaml,yml}"),
     },
     outputChannel: outputChannel,
-    revealOutputChannelOn: RevealOutputChannelOn.Never,
+    revealOutputChannelOn: RevealOutputChannelOn.Info,
     errorHandler: customErrorHandler,
   };
 
@@ -86,6 +88,23 @@ export function activate(context: ExtensionContext) {
     serverOptions,
     clientOptions
   );
+
+  // Set up diagnostics listener
+  const diagnosticsDisposable = languages.onDidChangeDiagnostics((e) => {
+    for (const uri of e.uris) {
+      const diagnostics = languages.getDiagnostics(uri);
+      outputChannel.appendLine(`Diagnostics for ${uri}: ${diagnostics.length}`);
+
+      if (diagnostics.length > 0) {
+        outputChannel.appendLine(
+          `First diagnostic: ${diagnostics[0].message} [${diagnostics[0].severity}]`
+        );
+      }
+    }
+  });
+
+  // Start client and add to subscriptions
+  client.start();
 
   // Register command to restart the server
   const restartCommand = commands.registerCommand("kro.restartServer", () => {
@@ -117,9 +136,7 @@ export function activate(context: ExtensionContext) {
     })
   );
 
-  // Start client and add to subscriptions
-  client.start();
-  context.subscriptions.push(client, restartCommand);
+  context.subscriptions.push(client, restartCommand, diagnosticsDisposable);
 }
 
 export function deactivate(): Thenable<void> | undefined {

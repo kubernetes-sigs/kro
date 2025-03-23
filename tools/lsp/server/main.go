@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+
 	"github.com/kro-run/kro/tools/lsp/protocol"
 
 	"github.com/tliron/commonlog"
@@ -36,10 +39,19 @@ func main() {
 			log.Infof("Document changed: %s", params.TextDocument.URI)
 			return protocol.TextDocumentDidChange(context, params)
 		},
-		TextDocumentDidClose: protocol.TextDocumentDidClose,
+		TextDocumentDidClose:           protocol.TextDocumentDidClose,
+		WorkspaceDidChangeWatchedFiles: protocol.DidChangeWatchedFiles,
 	}
 
 	log.Infof("Starting server...")
+
+	// Signal that server is ready for debugging if in direct debug mode
+	if os.Getenv("KRO_DIRECT_DEBUG") == "true" {
+		go func() {
+			log.Infof("Signaling server is ready for direct debug connection...")
+			exec.Command("/Users/himanshu/Desktop/open-source/kro/tools/lsp/debug-server.sh", "signal").Run()
+		}()
+	}
 
 	// Create a new server
 	server := server.NewServer(&handler, lsName, false)

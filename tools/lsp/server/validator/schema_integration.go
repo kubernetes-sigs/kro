@@ -11,6 +11,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// ValidationError stores error information with line position
+type ValidationError struct {
+	Message string
+	Line    int
+	Column  int
+	EndLine int
+	EndCol  int
+}
+
+func (e ValidationError) Error() string {
+	return e.Message
+}
+
 // ValidateKroFile validates a Kro resource definition file using the main Kro codebase validators
 func ValidateKroFile(data map[string]interface{}) []error {
 	var errors []error
@@ -32,6 +45,21 @@ func ValidateKroFile(data map[string]interface{}) []error {
 	// if err := validateResourceGraphDefinition(rgd); err != nil {
 	// 	errors = append(errors, err)
 	// }
+
+	return errors
+}
+
+// ValidateKroFileWithPositions validates a Kro document with position information
+func ValidateKroFileWithPositions(doc *YAMLDocument) []ValidationError {
+	var errors []ValidationError
+
+	// 1. Validate apiVersion and kind
+	if err := validateAPIVersionAndKindWithPosition(doc); err != nil {
+		errors = append(errors, err...)
+	}
+
+	// 2. Validate metadata
+	// Additional validation will follow similar pattern
 
 	return errors
 }
@@ -80,6 +108,85 @@ func validateAPIVersionAndKind(data map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+// validateAPIVersionAndKindWithPosition validates apiVersion and kind fields with position info
+func validateAPIVersionAndKindWithPosition(doc *YAMLDocument) []ValidationError {
+	var errors []ValidationError
+
+	// Check if apiVersion exists
+	apiVersionField, apiVersionExists := doc.Positions["apiVersion"]
+	if !apiVersionExists {
+		// Since apiVersion is missing, create error at start of document
+		errors = append(errors, ValidationError{
+			Message: "apiVersion is required and must be the first field",
+			Line:    0,
+			Column:  0,
+			EndLine: 0,
+			EndCol:  10,
+		})
+	} else {
+		// Check apiVersion value
+		apiVersionValue, ok := apiVersionField.Value.(string)
+		if !ok || !strings.HasPrefix(apiVersionValue, "kro.run/v1alpha") {
+			errors = append(errors, ValidationError{
+				Message: fmt.Sprintf("apiVersion must be 'kro.run/v1alpha1', got '%v'", apiVersionField.Value),
+				Line:    apiVersionField.Line,
+				Column:  apiVersionField.Column,
+				EndLine: apiVersionField.EndLine,
+				EndCol:  apiVersionField.EndCol,
+			})
+		}
+
+		// Check if apiVersion is the first field (line 0 or 1 in the document)
+		if apiVersionField.Line > 1 {
+			errors = append(errors, ValidationError{
+				Message: "apiVersion must be the first field in the document",
+				Line:    apiVersionField.Line,
+				Column:  apiVersionField.Column,
+				EndLine: apiVersionField.EndLine,
+				EndCol:  apiVersionField.EndCol,
+			})
+		}
+	}
+
+	// Check if kind exists
+	kindField, kindExists := doc.Positions["kind"]
+	if !kindExists {
+		// Since kind is missing, create error at start of document
+		errors = append(errors, ValidationError{
+			Message: "kind is required and must be the second field",
+			Line:    1, // Assume it should be on the second line
+			Column:  0,
+			EndLine: 1,
+			EndCol:  4,
+		})
+	} else {
+		// Check kind value
+		kindValue, ok := kindField.Value.(string)
+		if !ok || kindValue != "ResourceGraphDefinition" {
+			errors = append(errors, ValidationError{
+				Message: fmt.Sprintf("kind must be 'ResourceGraphDefinition', got '%v'", kindField.Value),
+				Line:    kindField.Line,
+				Column:  kindField.Column,
+				EndLine: kindField.EndLine,
+				EndCol:  kindField.EndCol,
+			})
+		}
+
+		// Check if kind is the second field
+		if kindField.Line != 1 && apiVersionExists && kindField.Line != apiVersionField.Line+1 {
+			errors = append(errors, ValidationError{
+				Message: "kind must be the second field after apiVersion",
+				Line:    kindField.Line,
+				Column:  kindField.Column,
+				EndLine: kindField.EndLine,
+				EndCol:  kindField.EndCol,
+			})
+		}
+	}
+
+	return errors
 }
 
 // validateMetadata validates the metadata section

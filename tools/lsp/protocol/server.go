@@ -4,6 +4,8 @@ import (
 	"github.com/kro-run/kro/tools/lsp/server/diagnostics"
 	"github.com/kro-run/kro/tools/lsp/server/validator"
 
+	"strings"
+
 	"github.com/tliron/commonlog"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -72,8 +74,11 @@ func validateDocument(ctx *glsp.Context, uri string, content string) {
 
 	// Parse YAML
 	parser := validator.NewYAMLParser(content)
-	data, err := parser.Parse()
+
+	// First try the enhanced position-aware parsing
+	yamlDoc, err := parser.ParseWithPositions()
 	if err != nil {
+		// If position-aware parsing fails, fall back to regular error
 		diagnostic := CreateDiagnostic(
 			err.Error(),
 			protocol.DiagnosticSeverityError,
@@ -81,17 +86,50 @@ func validateDocument(ctx *glsp.Context, uri string, content string) {
 		)
 		diagnosticManager.AddDiagnostic(uri, diagnostic)
 	} else {
-		// Validate KRO file
-		errors := validator.ValidateKroFile(data)
+		// Use the position-aware validation
+		validationErrors := validator.ValidateKroFileWithPositions(yamlDoc)
 
-		// Add diagnostics for each error
-		for _, err := range errors {
+		// Add diagnostics for each error with precise positions
+		for _, validationErr := range validationErrors {
+			// Create range directly from the validation error's position info
+			rng := protocol.Range{
+				Start: protocol.Position{
+					Line:      uint32(validationErr.Line),
+					Character: uint32(validationErr.Column),
+				},
+				End: protocol.Position{
+					Line:      uint32(validationErr.EndLine),
+					Character: uint32(validationErr.EndCol),
+				},
+			}
+
 			diagnostic := CreateDiagnostic(
-				err.Error(),
+				validationErr.Message,
 				protocol.DiagnosticSeverityError,
-				CreateErrorRange(content, err.Error()),
+				rng,
 			)
 			diagnosticManager.AddDiagnostic(uri, diagnostic)
+		}
+
+		// Also perform regular validation for other errors
+		data, _ := parser.Parse()
+		if data != nil {
+			errors := validator.ValidateKroFile(data)
+
+			// Add diagnostics for each error
+			for _, err := range errors {
+				// Skip validation errors related to apiVersion and kind since we handled those above
+				if strings.Contains(err.Error(), "apiVersion") || strings.Contains(err.Error(), "kind") {
+					continue
+				}
+
+				diagnostic := CreateDiagnostic(
+					err.Error(),
+					protocol.DiagnosticSeverityError,
+					CreateErrorRange(content, err.Error()),
+				)
+				diagnosticManager.AddDiagnostic(uri, diagnostic)
+			}
 		}
 	}
 

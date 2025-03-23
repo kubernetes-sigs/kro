@@ -6,11 +6,11 @@ import (
 	lspProtocol "github.com/tliron/glsp/protocol_3_16"
 )
 
+// constructs a diagnostic notification with standard fields
 func CreateDiagnostic(message string, severity lspProtocol.DiagnosticSeverity, rng lspProtocol.Range) lspProtocol.Diagnostic {
 	source := "kro-language-server"
 	severityValue := severity
 
-	// Create a minimalist diagnostic with only required fields
 	return lspProtocol.Diagnostic{
 		Range:    rng,
 		Severity: &severityValue,
@@ -19,7 +19,7 @@ func CreateDiagnostic(message string, severity lspProtocol.DiagnosticSeverity, r
 	}
 }
 
-// CreateErrorRange creates a range for an error, attempting to find the relevant position in the content
+// creates a range for an error by attempting to find the relevant position in the content
 func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 	// Default position at the start of the document
 	startLine := uint32(0)
@@ -27,17 +27,15 @@ func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 	endLine := uint32(0)
 	endChar := uint32(0)
 
-	// Try to extract field name or key from error message
+	// Extract field name from error message
 	fieldName := extractFieldName(errorMessage)
 
 	if fieldName != "" && content != "" {
-		// Find the line containing the field
 		lines := strings.Split(content, "\n")
 
 		// First try to find exact field match
 		for i, line := range lines {
 			trimmedLine := strings.TrimSpace(line)
-			// Check for field: or "field": pattern
 			fieldPattern := fieldName + ":"
 			if strings.Contains(trimmedLine, fieldPattern) {
 				startLine = uint32(i)
@@ -48,9 +46,8 @@ func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 			}
 		}
 
-		// If not found, try to find partial matches for nested fields
+		// Handle nested fields in schema section
 		if strings.Contains(errorMessage, "spec.schema") {
-			// Look for schema section
 			inSchemaSection := false
 			for i, line := range lines {
 				trimmedLine := strings.TrimSpace(line)
@@ -61,7 +58,6 @@ func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 					endLine = startLine
 					endChar = startChar + uint32(len("schema"))
 				} else if inSchemaSection && strings.Contains(trimmedLine, fieldName+":") {
-					// Found the specific field within schema section
 					startLine = uint32(i)
 					startChar = uint32(strings.Index(line, fieldName))
 					endLine = startLine
@@ -70,7 +66,6 @@ func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 				}
 			}
 
-			// If we found schema but not the specific field, return schema position
 			if inSchemaSection {
 				return createRange(startLine, startChar, endLine, endChar)
 			}
@@ -88,11 +83,10 @@ func CreateErrorRange(content string, errorMessage string) lspProtocol.Range {
 		}
 	}
 
-	// Fallback to beginning of document
 	return createRange(startLine, startChar, endLine, endChar)
 }
 
-// Helper function to create a range
+// createRange creates a protocol Range object from line and character positions
 func createRange(startLine, startChar, endLine, endChar uint32) lspProtocol.Range {
 	return lspProtocol.Range{
 		Start: lspProtocol.Position{
@@ -106,7 +100,7 @@ func createRange(startLine, startChar, endLine, endChar uint32) lspProtocol.Rang
 	}
 }
 
-// CreateSimpleErrorRange creates a range for an error at a specific line
+// CreateSimpleErrorRange creates a range for an error at a specific line position
 func CreateSimpleErrorRange(line int, startChar int, endChar int) lspProtocol.Range {
 	return lspProtocol.Range{
 		Start: lspProtocol.Position{
@@ -120,16 +114,13 @@ func CreateSimpleErrorRange(line int, startChar int, endChar int) lspProtocol.Ra
 	}
 }
 
-// extractFieldName attempts to extract a field name from an error message
+// extractFieldName extracts a field name from an error message using pattern matching strategies
 func extractFieldName(errorMessage string) string {
-	// Check for specific error patterns first
 	if strings.Contains(errorMessage, "spec.schema.apiVersion is required") {
 		return "schema"
 	}
 
-	// Check for type errors
 	if strings.Contains(errorMessage, "invalid type") {
-		// Extract field name from "invalid type 'X' for field 'Y'"
 		parts := strings.Split(errorMessage, "for field '")
 		if len(parts) > 1 {
 			fieldPart := parts[1]
@@ -149,10 +140,8 @@ func extractFieldName(errorMessage string) string {
 
 	for _, pattern := range patterns {
 		if strings.Contains(errorMessage, pattern) {
-			// Extract field name after pattern
 			parts := strings.Split(errorMessage, pattern)
 			if len(parts) > 1 {
-				// Extract until next space, quote, or comma
 				fieldPart := parts[1]
 				for _, sep := range []string{" ", "'", ",", ":", "."} {
 					if idx := strings.Index(fieldPart, sep); idx > 0 {

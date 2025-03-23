@@ -94,30 +94,13 @@ func (p *YAMLParser) ParseWithPositions() (*YAMLDocument, error) {
 				return nil, err
 			}
 
-			// Special processing for different sections
-			switch key {
-			case "metadata":
-				processNestedFields(doc, valueNode, "metadata", keyNode.Line-1)
-			case "spec":
-				processNestedFields(doc, valueNode, "spec", keyNode.Line-1)
-				// Special handling for schema section which has complex nesting
-				if specMap, ok := value.(map[string]interface{}); ok {
-					if schema, found := specMap["schema"]; found {
-						if schemaMap, ok := schema.(map[string]interface{}); ok {
-							// Process schema.spec and schema.status if they exist
-							if schemaSpec, ok := schemaMap["spec"]; ok {
-								if specMap, ok := schemaSpec.(map[string]interface{}); ok {
-									trackSchemaFields(doc, specMap, "spec.schema.spec")
-								}
-							}
-							if schemaStatus, ok := schemaMap["status"]; ok {
-								if statusMap, ok := schemaStatus.(map[string]interface{}); ok {
-									trackSchemaFields(doc, statusMap, "spec.schema.status")
-								}
-							}
-						}
-					}
-				}
+			// Process nested fields and attach position information
+			processNestedFields(doc, valueNode, key, keyNode.Line-1)
+
+			// Special handling for schema section
+			if key == "spec" {
+				// Look for spec.schema and process schema fields with precise positions
+				findAndProcessSchemaNode(doc, valueNode, "spec")
 			}
 		case yaml.SequenceNode:
 			// For arrays/lists
@@ -190,24 +173,110 @@ func processNestedFields(doc *YAMLDocument, node *yaml.Node, prefix string, pare
 	}
 }
 
-// trackSchemaFields recursively tracks schema fields and their positions
-func trackSchemaFields(doc *YAMLDocument, schemaFields map[string]interface{}, prefix string) {
-	for key, value := range schemaFields {
-		fieldPath := prefix + "." + key
-
-		switch v := value.(type) {
-		case string:
-			// Track the string type definition
-			doc.NestedFields[fieldPath] = YAMLField{
-				Value:   v,
-				Line:    0, // We don't have line/column info here,
-				Column:  0, // this will be approximated during validation
-				EndLine: 0,
-				EndCol:  0,
-			}
-		case map[string]interface{}:
-			// Recursively track nested schema fields
-			trackSchemaFields(doc, v, fieldPath)
+// findAndProcessSchemaNode searches for the schema node in spec and processes its fields with positions
+func findAndProcessSchemaNode(doc *YAMLDocument, specNode *yaml.Node, prefix string) {
+	// We need to find the "schema" key in the spec node
+	for i := 0; i < len(specNode.Content); i += 2 {
+		if i+1 >= len(specNode.Content) {
+			break
 		}
+
+		keyNode := specNode.Content[i]
+		valueNode := specNode.Content[i+1]
+
+		if keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+
+		// Found schema key
+		if keyNode.Value == "schema" && valueNode.Kind == yaml.MappingNode {
+			// Process schema fields with positions
+			processSchemaNode(doc, valueNode, prefix+".schema")
+			break
+		}
+	}
+}
+
+// processSchemaNode processes schema contents including spec and status fields with positions
+func processSchemaNode(doc *YAMLDocument, schemaNode *yaml.Node, prefix string) {
+	// Process schema node pairs to find spec and status
+	for i := 0; i < len(schemaNode.Content); i += 2 {
+		if i+1 >= len(schemaNode.Content) {
+			break
+		}
+
+		keyNode := schemaNode.Content[i]
+		valueNode := schemaNode.Content[i+1]
+
+		if keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+
+		// We found either spec or status in schema
+		if (keyNode.Value == "spec" || keyNode.Value == "status") && valueNode.Kind == yaml.MappingNode {
+			sectionPrefix := prefix + "." + keyNode.Value
+			processSchemaFields(doc, valueNode, sectionPrefix)
+		}
+	}
+}
+
+// processSchemaFields processes schema fields and records their exact positions
+func processSchemaFields(doc *YAMLDocument, fieldNode *yaml.Node, prefix string) {
+	// Process each key-value pair in the mapping
+	for i := 0; i < len(fieldNode.Content); i += 2 {
+		if i+1 >= len(fieldNode.Content) {
+			break
+		}
+
+		keyNode := fieldNode.Content[i]
+		valueNode := fieldNode.Content[i+1]
+
+		if keyNode.Kind != yaml.ScalarNode {
+			continue
+		}
+
+		nestedKey := prefix + "." + keyNode.Value
+		var fieldValue interface{}
+
+		// Determine the value based on node kind
+		switch valueNode.Kind {
+		case yaml.ScalarNode:
+			// Store the value for type definitions
+			fieldValue = valueNode.Value
+		case yaml.MappingNode:
+			// For nested structures
+			var mapValue map[string]interface{}
+			valueNode.Decode(&mapValue)
+			fieldValue = mapValue
+
+			// Record the field then process deeper nested fields
+			field := YAMLField{
+				Value:   fieldValue,
+				Line:    keyNode.Line - 1, // Convert to 0-based
+				Column:  keyNode.Column - 1,
+				EndLine: valueNode.Line - 1,
+				EndCol:  valueNode.Column + len(valueNode.Value),
+			}
+			doc.NestedFields[nestedKey] = field
+
+			// Continue processing deeper nested fields
+			processSchemaFields(doc, valueNode, nestedKey)
+			continue // Skip the assignment at the end since we already did it
+		case yaml.SequenceNode:
+			// For arrays
+			var arrayValue []interface{}
+			valueNode.Decode(&arrayValue)
+			fieldValue = arrayValue
+		}
+
+		// Create and store the complete field
+		field := YAMLField{
+			Value:   fieldValue,
+			Line:    keyNode.Line - 1, // Convert to 0-based
+			Column:  keyNode.Column - 1,
+			EndLine: valueNode.Line - 1,
+			EndCol:  valueNode.Column + len(valueNode.Value),
+		}
+		doc.NestedFields[nestedKey] = field
 	}
 }

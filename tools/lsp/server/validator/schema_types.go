@@ -108,21 +108,11 @@ func validateSchemaFields(fields map[string]interface{}, doc *YAMLDocument, path
 // validateTypeString validates a type definition string according to Kro schema rules
 func validateTypeString(typeStr string, path string, doc *YAMLDocument) *ValidationError {
 	// Find the position of this field in the document
-	var fieldPosition YAMLField
-	found := false
+	fieldPosition, found := doc.NestedFields[path]
 
-	// Try to find exact field in nested fields
-	for nestedPath, pos := range doc.NestedFields {
-		if strings.HasSuffix(nestedPath, "."+path) || nestedPath == path {
-			fieldPosition = pos
-			found = true
-			break
-		}
-	}
-
-	// If not found, it's harder to pinpoint the exact location
+	// If not found through direct path lookup, try a more flexible approach
 	if !found {
-		// We don't have position - this shouldn't happen often, but let's handle it
+		// We don't have position - this shouldn't happen with our improved tracking
 		return &ValidationError{
 			Message: fmt.Sprintf("Invalid type definition at %s: %s", path, typeStr),
 			Line:    0, // Default to start of document
@@ -130,6 +120,11 @@ func validateTypeString(typeStr string, path string, doc *YAMLDocument) *Validat
 			EndLine: 0,
 			EndCol:  10,
 		}
+	}
+
+	// Skip validation for CEL expressions (used in status fields)
+	if strings.HasPrefix(typeStr, "${") && strings.HasSuffix(typeStr, "}") {
+		return nil // Valid CEL expression
 	}
 
 	// Check for array type syntax: []type
@@ -252,6 +247,21 @@ func isValidComplexType(typeName string) bool {
 
 // validateModifier validates a type modifier
 func validateModifier(modifier string, baseType string) error {
+	// Check if there are multiple modifiers in one expression
+	if strings.Contains(modifier, " ") {
+		// Split by space and validate each modifier separately
+		subModifiers := strings.Split(modifier, " ")
+		for _, subMod := range subModifiers {
+			if subMod == "" {
+				continue
+			}
+			if err := validateModifier(subMod, baseType); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	// Extract the modifier name and value
 	parts := strings.SplitN(modifier, "=", 2)
 	if len(parts) != 2 {
@@ -283,6 +293,12 @@ func validateModifier(modifier string, baseType string) error {
 	case "default":
 		// Default value validation would depend on the base type
 		// This could be extended with more detailed validation
+	case "description":
+		// Any string value is valid for description
+		// Check if it's properly quoted
+		if !isValidQuotedString(modifierValue) && !isSimpleString(modifierValue) {
+			return fmt.Errorf("description value should be a valid string")
+		}
 	case "minimum", "maximum":
 		if baseType != "integer" && baseType != "number" {
 			return fmt.Errorf("%s modifier can only be used with numeric types", modifierName)
@@ -304,4 +320,40 @@ func validateModifier(modifier string, baseType string) error {
 	}
 
 	return nil
+}
+
+// isValidQuotedString checks if a string is properly quoted
+func isValidQuotedString(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+
+	// Check for double quotes
+	if s[0] == '"' && s[len(s)-1] == '"' {
+		return true
+	}
+
+	// Check for single quotes
+	if s[0] == '\'' && s[len(s)-1] == '\'' {
+		return true
+	}
+
+	return false
+}
+
+// isSimpleString checks if a string is a valid unquoted identifier
+func isSimpleString(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+
+	// Check if it's a simple identifier (no spaces or special chars needed)
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+
+	return true
 }

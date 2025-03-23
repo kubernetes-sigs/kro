@@ -59,7 +59,9 @@ func ValidateKroFileWithPositions(doc *YAMLDocument) []ValidationError {
 	}
 
 	// 2. Validate metadata
-	// Additional validation will follow similar pattern
+	if err := validateMetadataWithPosition(doc); err != nil {
+		errors = append(errors, err...)
+	}
 
 	return errors
 }
@@ -74,9 +76,9 @@ func validateBasicStructure(data map[string]interface{}) []error {
 	}
 
 	// 2. Validate metadata
-	if err := validateMetadata(data); err != nil {
-		errors = append(errors, err)
-	}
+	// if err := validateMetadata(data); err != nil {
+	// 	errors = append(errors, err)
+	// }
 
 	// 3. Validate that spec exists
 	_, ok := data["spec"].(map[string]interface{})
@@ -202,6 +204,82 @@ func validateMetadata(data map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+// validateMetadataWithPosition validates metadata section with position info
+func validateMetadataWithPosition(doc *YAMLDocument) []ValidationError {
+	var errors []ValidationError
+
+	// Check if metadata exists
+	metadataField, metadataExists := doc.Positions["metadata"]
+	if !metadataExists {
+		// Metadata is missing, report error at line after kind
+		kindLine := 1 // Default position if we don't have kind data
+		if kindField, exists := doc.Positions["kind"]; exists {
+			kindLine = kindField.Line
+		}
+
+		errors = append(errors, ValidationError{
+			Message: "metadata section is required",
+			Line:    kindLine + 1, // Assume it should be right after kind
+			Column:  0,
+			EndLine: kindLine + 1,
+			EndCol:  8, // Length of "metadata"
+		})
+		return errors // Return early since we can't check metadata.name
+	}
+
+	// Extract metadata value
+	metadataValue, ok := metadataField.Value.(map[string]interface{})
+	if !ok {
+		// Metadata is not a map, report error
+		errors = append(errors, ValidationError{
+			Message: "metadata must be a mapping",
+			Line:    metadataField.Line,
+			Column:  0,
+			EndLine: metadataField.Line,
+			EndCol:  100,
+		})
+		return errors // Return early since we can't check metadata.name
+	}
+
+	// Check if name exists in metadata
+	nameField, nameExists := doc.NestedFields["metadata.name"]
+	_, nameInMap := metadataValue["name"]
+
+	if !nameExists && !nameInMap {
+		// Name is missing completely, determine where it should be
+		metadataLine := metadataField.Line
+
+		errors = append(errors, ValidationError{
+			Message: "metadata.name is required and must be a non-empty string",
+			Line:    metadataLine + 1, // Assume name should be on next line after metadata
+			Column:  2,                // Assume indentation of 2 spaces
+			EndLine: metadataLine + 1,
+			EndCol:  6, // Length of "name"
+		})
+	} else if nameExists && (nameField.Value == nil || nameField.Value == "") {
+		// Name exists but is empty
+		errors = append(errors, ValidationError{
+			Message: "metadata.name must be a non-empty string",
+			Line:    nameField.Line,
+			Column:  0,
+			EndLine: nameField.Line,
+			EndCol:  100,
+		})
+	} else if nameInMap && !nameExists {
+		// Name exists in the map but not in nested fields
+		// This is a fallback case if our nested field tracking didn't work correctly
+		errors = append(errors, ValidationError{
+			Message: "metadata.name must be a valid string",
+			Line:    metadataField.Line + 1,
+			Column:  2,
+			EndLine: metadataField.Line + 1,
+			EndCol:  6,
+		})
+	}
+
+	return errors
 }
 
 // mapToResourceGraphDefinition converts a map to a ResourceGraphDefinition

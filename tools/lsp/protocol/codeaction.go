@@ -101,6 +101,46 @@ func HandleCodeAction(context *glsp.Context, params *protocol.CodeActionParams) 
 				}
 			}
 		}
+
+		// Add metadata section quick fix
+		if strings.Contains(diag.Message, "metadata section is required") {
+			log.Infof("  Creating metadata section quick fix")
+			action := createMetadataQuickFix(params.TextDocument.URI, diag, yamlDoc, doc.Content)
+			if action != nil {
+				codeActions = append(codeActions, *action)
+				log.Infof("  Added metadata quick fix with title: %s", action.Title)
+				if action.Edit != nil && action.Edit.Changes != nil {
+					for _, edits := range action.Edit.Changes {
+						for _, edit := range edits {
+							log.Infof("  Edit range: line %d:%d to %d:%d",
+								edit.Range.Start.Line, edit.Range.Start.Character,
+								edit.Range.End.Line, edit.Range.End.Character)
+							log.Infof("  New text: '%s'", edit.NewText)
+						}
+					}
+				}
+			}
+		}
+
+		// Add metadata.name quick fix
+		if strings.Contains(diag.Message, "metadata.name") {
+			log.Infof("  Creating metadata.name quick fix")
+			action := createMetadataNameQuickFix(params.TextDocument.URI, diag, yamlDoc, doc.Content)
+			if action != nil {
+				codeActions = append(codeActions, *action)
+				log.Infof("  Added metadata.name quick fix with title: %s", action.Title)
+				if action.Edit != nil && action.Edit.Changes != nil {
+					for _, edits := range action.Edit.Changes {
+						for _, edit := range edits {
+							log.Infof("  Edit range: line %d:%d to %d:%d",
+								edit.Range.Start.Line, edit.Range.Start.Character,
+								edit.Range.End.Line, edit.Range.End.Character)
+							log.Infof("  New text: '%s'", edit.NewText)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	log.Infof("Returning %d code actions", len(codeActions))
@@ -326,4 +366,129 @@ func createKindQuickFix(uri string, diagnostic protocol.Diagnostic, yamlDoc *val
 	}
 
 	return nil
+}
+
+// Create quick fix for metadata section errors
+func createMetadataQuickFix(uri string, diagnostic protocol.Diagnostic, yamlDoc *validator.YAMLDocument, content string) *protocol.CodeAction {
+	title := "Add metadata section"
+
+	// Get the line content to analyze context
+	lines := strings.Split(content, "\n")
+	if int(diagnostic.Range.Start.Line) >= len(lines) {
+		return nil
+	}
+
+	// Get the original line and its indentation
+	originalLine := lines[diagnostic.Range.Start.Line]
+	leadingSpaces := len(originalLine) - len(strings.TrimLeft(originalLine, " \t"))
+	indentation := originalLine[:leadingSpaces]
+
+	// Create a range that covers the entire line
+	fullLineRange := protocol.Range{
+		Start: protocol.Position{
+			Line:      diagnostic.Range.Start.Line,
+			Character: 0,
+		},
+		End: protocol.Position{
+			Line:      diagnostic.Range.Start.Line,
+			Character: 0, // Insert at beginning of line
+		},
+	}
+
+	// Create insertion text for metadata section with default name
+	newText := indentation + "metadata:\n" + indentation + "  name: default-name\n"
+
+	// Create text edit to insert metadata section
+	edit := protocol.TextEdit{
+		Range:   fullLineRange,
+		NewText: newText,
+	}
+
+	// Create document changes with a WorkspaceEdit
+	workspaceEdit := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			uri: {edit},
+		},
+	}
+
+	// Create code action
+	kind := protocol.CodeActionKindQuickFix
+	return &protocol.CodeAction{
+		Title:       title,
+		Kind:        &kind,
+		Diagnostics: []protocol.Diagnostic{diagnostic},
+		Edit:        workspaceEdit,
+	}
+}
+
+// Create quick fix for metadata.name errors
+func createMetadataNameQuickFix(uri string, diagnostic protocol.Diagnostic, yamlDoc *validator.YAMLDocument, content string) *protocol.CodeAction {
+	title := "Add metadata.name field"
+
+	// Get the line content to analyze context
+	lines := strings.Split(content, "\n")
+	if int(diagnostic.Range.Start.Line) >= len(lines) {
+		return nil
+	}
+
+	// Get the original line and its indentation
+	originalLine := lines[diagnostic.Range.Start.Line]
+	leadingSpaces := len(originalLine) - len(strings.TrimLeft(originalLine, " \t"))
+	indentation := originalLine[:leadingSpaces]
+
+	// Create a range that starts at the beginning of the line to insert/replace
+	insertRange := protocol.Range{
+		Start: protocol.Position{
+			Line:      diagnostic.Range.Start.Line,
+			Character: 0,
+		},
+		End: protocol.Position{
+			Line:      diagnostic.Range.Start.Line,
+			Character: 0,
+		},
+	}
+
+	// Check if we're inside metadata section already
+	isInsideMetadata := false
+	metadataIndentation := ""
+
+	// Find the metadata line by looking for "metadata:" prefix
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "metadata:" || strings.HasPrefix(strings.TrimSpace(line), "metadata:") {
+			isInsideMetadata = true
+			metadataIndentation = line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			break
+		}
+	}
+
+	var newText string
+	if isInsideMetadata {
+		// We're inside metadata, add the name field with proper indentation
+		newText = metadataIndentation + "  name: default-name\n"
+	} else {
+		// Metadata section not found, add both metadata and name
+		newText = indentation + "metadata:\n" + indentation + "  name: default-name\n"
+	}
+
+	// Create text edit to insert metadata.name
+	edit := protocol.TextEdit{
+		Range:   insertRange,
+		NewText: newText,
+	}
+
+	// Create document changes with a WorkspaceEdit
+	workspaceEdit := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			uri: {edit},
+		},
+	}
+
+	// Create code action
+	kind := protocol.CodeActionKindQuickFix
+	return &protocol.CodeAction{
+		Title:       title,
+		Kind:        &kind,
+		Diagnostics: []protocol.Diagnostic{diagnostic},
+		Edit:        workspaceEdit,
+	}
 }

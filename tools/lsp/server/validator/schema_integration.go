@@ -75,17 +75,8 @@ func ValidateKroFileWithPositions(doc *YAMLDocument) []ValidationError {
 			})
 		} else if rgd != nil {
 			// Perform additional validation
-			if err := validateResourceGraphDefinition(rgd); err != nil {
-				// Add validation error near the spec section
-				specField, _ := doc.Positions["spec"]
-				errors = append(errors, ValidationError{
-					Message: err.Error(),
-					Line:    specField.Line,
-					Column:  specField.Column,
-					EndLine: specField.EndLine,
-					EndCol:  specField.EndCol,
-				})
-			}
+			validationErrors := validateResourceGraphDefinitionWithPositions(rgd, doc)
+			errors = append(errors, validationErrors...)
 		}
 	}
 
@@ -264,71 +255,185 @@ func mapToResourceGraphDefinition(data map[string]interface{}) (*v1alpha1.Resour
 	return rgd, nil
 }
 
-// validateResourceGraphDefinition implements custom validation for ResourceGraphDefinition
-func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition) error {
-	// Validate naming conventions
-	if err := validateNamingConventions(rgd); err != nil {
-		return fmt.Errorf("naming convention validation failed: %w", err)
-	}
+// validateResourceGraphDefinitionWithPositions performs validation with position tracking
+func validateResourceGraphDefinitionWithPositions(rgd *v1alpha1.ResourceGraphDefinition, doc *YAMLDocument) []ValidationError {
+	var errors []ValidationError
 
-	// Validate resources
-	if err := validateResourceIDs(rgd); err != nil {
-		return fmt.Errorf("resource validation failed: %w", err)
-	}
-
-	// Validate Kubernetes resources in templates
-	for _, resource := range rgd.Spec.Resources {
-		if resource.Template.Raw != nil {
-			var obj map[string]interface{}
-			if err := json.Unmarshal(resource.Template.Raw, &obj); err != nil {
-				return fmt.Errorf("invalid template for resource '%s': %w", resource.ID, err)
-			}
-
-			if err := validateKubernetesObjectStructure(obj); err != nil {
-				return fmt.Errorf("invalid Kubernetes object in resource '%s': %w", resource.ID, err)
-			}
-		}
-	}
-
-	// Validate schema
+	// Validate schema kind naming conventions
 	if rgd.Spec.Schema != nil {
-		if err := validateKubernetesVersion(rgd.Spec.Schema.APIVersion); err != nil {
-			return fmt.Errorf("invalid schema apiVersion: %w", err)
+		// Check if kind name follows UpperCamelCase
+		if rgd.Spec.Schema.Kind != "" {
+			kindField, found := doc.NestedFields["spec.schema.kind"]
+			if !found {
+				// Fallback if we can't find the exact position
+				kindField = findClosestField(doc, "spec.schema")
+			}
+
+			if len(rgd.Spec.Schema.Kind) > 0 && (rgd.Spec.Schema.Kind[0] < 'A' || rgd.Spec.Schema.Kind[0] > 'Z') {
+				errors = append(errors, ValidationError{
+					Message: fmt.Sprintf("kind '%s' is not a valid KRO kind name: must be UpperCamelCase", rgd.Spec.Schema.Kind),
+					Line:    kindField.Line,
+					Column:  kindField.Column,
+					EndLine: kindField.EndLine,
+					EndCol:  kindField.EndCol,
+				})
+			}
+		} else {
+			schemaField := findClosestField(doc, "spec.schema")
+			errors = append(errors, ValidationError{
+				Message: "spec.schema.kind is required",
+				Line:    schemaField.Line,
+				Column:  schemaField.Column,
+				EndLine: schemaField.EndLine,
+				EndCol:  schemaField.EndCol,
+			})
+		}
+
+		// Validate schema apiVersion
+		if rgd.Spec.Schema.APIVersion != "" {
+			apiVersionField, found := doc.NestedFields["spec.schema.apiVersion"]
+			if !found {
+				// Fallback if we can't find the exact position
+				apiVersionField = findClosestField(doc, "spec.schema")
+			}
+
+			if !strings.HasPrefix(rgd.Spec.Schema.APIVersion, "v") {
+				errors = append(errors, ValidationError{
+					Message: fmt.Sprintf("apiVersion '%s' is not a valid Kubernetes version, must start with 'v'", rgd.Spec.Schema.APIVersion),
+					Line:    apiVersionField.Line,
+					Column:  apiVersionField.Column,
+					EndLine: apiVersionField.EndLine,
+					EndCol:  apiVersionField.EndCol,
+				})
+			}
 		}
 	}
 
-	return nil
+	// Validate resource IDs and templates
+	if rgd.Spec.Resources != nil && len(rgd.Spec.Resources) > 0 {
+		seen := make(map[string]struct{})
+
+		for i, resource := range rgd.Spec.Resources {
+			// Find position of this resource
+			resourcePath := fmt.Sprintf("spec.resources[%d]", i)
+			resourceIDPath := fmt.Sprintf("spec.resources[%d].id", i)
+			resourceTemplatePath := fmt.Sprintf("spec.resources[%d].template", i)
+
+			// Look for resource position
+			resourceIDField, idFound := doc.NestedFields[resourceIDPath]
+			resourceField := findClosestField(doc, resourcePath)
+
+			// Check if ID is valid (starts with lowercase)
+			if len(resource.ID) > 0 && (resource.ID[0] < 'a' || resource.ID[0] > 'z') {
+				if idFound {
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("id '%s' is not a valid KRO resource id: must be lower camelCase", resource.ID),
+						Line:    resourceIDField.Line,
+						Column:  resourceIDField.Column,
+						EndLine: resourceIDField.EndLine,
+						EndCol:  resourceIDField.EndCol,
+					})
+				} else {
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("id '%s' is not a valid KRO resource id: must be lower camelCase", resource.ID),
+						Line:    resourceField.Line,
+						Column:  resourceField.Column,
+						EndLine: resourceField.EndLine,
+						EndCol:  resourceField.EndCol,
+					})
+				}
+			}
+
+			// Check for duplicate resource IDs
+			if _, ok := seen[resource.ID]; ok {
+				if idFound {
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("found duplicate resource ID '%s'", resource.ID),
+						Line:    resourceIDField.Line,
+						Column:  resourceIDField.Column,
+						EndLine: resourceIDField.EndLine,
+						EndCol:  resourceIDField.EndCol,
+					})
+				} else {
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("found duplicate resource ID '%s'", resource.ID),
+						Line:    resourceField.Line,
+						Column:  resourceField.Column,
+						EndLine: resourceField.EndLine,
+						EndCol:  resourceField.EndCol,
+					})
+				}
+			}
+			seen[resource.ID] = struct{}{}
+
+			// Validate template structure
+			if resource.Template.Raw != nil {
+				var obj map[string]interface{}
+				if err := json.Unmarshal(resource.Template.Raw, &obj); err != nil {
+					templateField, found := doc.NestedFields[resourceTemplatePath]
+					if !found {
+						templateField = resourceField
+					}
+
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("invalid template for resource '%s': %s", resource.ID, err.Error()),
+						Line:    templateField.Line,
+						Column:  templateField.Column,
+						EndLine: templateField.EndLine,
+						EndCol:  templateField.EndCol,
+					})
+					continue
+				}
+
+				if err := validateKubernetesObjectStructure(obj); err != nil {
+					templateField, found := doc.NestedFields[resourceTemplatePath]
+					if !found {
+						templateField = resourceField
+					}
+
+					errors = append(errors, ValidationError{
+						Message: fmt.Sprintf("invalid Kubernetes object in resource '%s': %s", resource.ID, err.Error()),
+						Line:    templateField.Line,
+						Column:  templateField.Column,
+						EndLine: templateField.EndLine,
+						EndCol:  templateField.EndCol,
+					})
+				}
+			}
+		}
+	}
+
+	return errors
 }
 
-// validateNamingConventions checks if kind name follows UpperCamelCase
-func validateNamingConventions(rgd *v1alpha1.ResourceGraphDefinition) error {
-	if rgd.Spec.Schema == nil || rgd.Spec.Schema.Kind == "" {
-		return fmt.Errorf("spec.schema.kind is required")
+// findClosestField finds the closest parent field if the exact field is not found
+func findClosestField(doc *YAMLDocument, path string) YAMLField {
+	// Try direct lookup first
+	if field, found := doc.NestedFields[path]; found {
+		return field
 	}
 
-	// Check if first letter is uppercase
-	if len(rgd.Spec.Schema.Kind) > 0 && (rgd.Spec.Schema.Kind[0] < 'A' || rgd.Spec.Schema.Kind[0] > 'Z') {
-		return fmt.Errorf("kind '%s' is not a valid KRO kind name: must be UpperCamelCase", rgd.Spec.Schema.Kind)
-	}
-
-	return nil
-}
-
-// validateResourceIDs checks for duplicate resource IDs and valid naming
-func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
-	seen := make(map[string]struct{})
-	for _, res := range rgd.Spec.Resources {
-		// Check if ID is valid (starts with lowercase)
-		if len(res.ID) > 0 && (res.ID[0] < 'a' || res.ID[0] > 'z') {
-			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID)
+	// Try parent paths
+	parts := strings.Split(path, ".")
+	for i := len(parts) - 1; i > 0; i-- {
+		parentPath := strings.Join(parts[:i], ".")
+		if field, found := doc.NestedFields[parentPath]; found {
+			return field
 		}
-
-		if _, ok := seen[res.ID]; ok {
-			return fmt.Errorf("found duplicate resource IDs %s", res.ID)
-		}
-		seen[res.ID] = struct{}{}
 	}
-	return nil
+
+	// Fallback to spec if nothing else works
+	if field, found := doc.Positions["spec"]; found {
+		return field
+	}
+
+	// Last resort fallback
+	return YAMLField{
+		Line:    0,
+		Column:  0,
+		EndLine: 0,
+		EndCol:  10,
+	}
 }
 
 // validateKubernetesObjectStructure checks if the given object is a valid Kubernetes object
@@ -360,13 +465,5 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 		return fmt.Errorf("metadata field is not a map")
 	}
 
-	return nil
-}
-
-// validateKubernetesVersion checks if the given version is a valid Kubernetes version
-func validateKubernetesVersion(version string) error {
-	if !strings.HasPrefix(version, "v") {
-		return fmt.Errorf("version %s is not a valid Kubernetes version, must start with 'v'", version)
-	}
 	return nil
 }

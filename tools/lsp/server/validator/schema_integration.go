@@ -24,31 +24,6 @@ func (e ValidationError) Error() string {
 	return e.Message
 }
 
-// ValidateKroFile validates a Kro resource definition file using the main Kro codebase validators
-func ValidateKroFile(data map[string]interface{}) []error {
-	var errors []error
-
-	// 1. Basic structure validation
-	if err := validateBasicStructure(data); err != nil {
-		errors = append(errors, err...)
-		return errors // Return early if basic structure validation fails
-	}
-
-	// // 2. Convert to ResourceGraphDefinition
-	rgd, err := mapToResourceGraphDefinition(data)
-	if err != nil {
-		errors = append(errors, fmt.Errorf("failed to convert to ResourceGraphDefinition: %w", err))
-		return errors
-	}
-
-	// // 3. Validate using custom validation logic
-	if err := validateResourceGraphDefinition(rgd); err != nil {
-		errors = append(errors, err)
-	}
-
-	return errors
-}
-
 // ValidateKroFileWithPositions validates a Kro document with position information
 func ValidateKroFileWithPositions(doc *YAMLDocument) []ValidationError {
 	var errors []ValidationError
@@ -63,53 +38,58 @@ func ValidateKroFileWithPositions(doc *YAMLDocument) []ValidationError {
 		errors = append(errors, err...)
 	}
 
+	// 3. Validate spec section exists
+	if _, specExists := doc.Positions["spec"]; !specExists {
+		// Determine where spec should be (after metadata)
+		line := 2 // Default position if metadata not found
+		if metadataField, exists := doc.Positions["metadata"]; exists {
+			line = metadataField.EndLine + 1
+		}
+
+		errors = append(errors, ValidationError{
+			Message: "spec section is required",
+			Line:    line,
+			Column:  0,
+			EndLine: line,
+			EndCol:  4, // Length of "spec"
+		})
+		return errors // Return early if spec missing
+	}
+
+	// 4. Validate schema types in spec.schema
+	schemaTypeErrors := ValidateSchemaTypes(doc)
+	errors = append(errors, schemaTypeErrors...)
+
+	// 5. Additional validation using ResourceGraphDefinition
+	// Extract data to validate through conversion to structured type
+	if len(errors) == 0 && doc.Data != nil {
+		rgd, err := mapToResourceGraphDefinition(doc.Data)
+		if err != nil {
+			// Add conversion error at the start of the document
+			errors = append(errors, ValidationError{
+				Message: fmt.Sprintf("Invalid format: %s", err.Error()),
+				Line:    0,
+				Column:  0,
+				EndLine: 0,
+				EndCol:  10,
+			})
+		} else if rgd != nil {
+			// Perform additional validation
+			if err := validateResourceGraphDefinition(rgd); err != nil {
+				// Add validation error near the spec section
+				specField, _ := doc.Positions["spec"]
+				errors = append(errors, ValidationError{
+					Message: err.Error(),
+					Line:    specField.Line,
+					Column:  specField.Column,
+					EndLine: specField.EndLine,
+					EndCol:  specField.EndCol,
+				})
+			}
+		}
+	}
+
 	return errors
-}
-
-// validateBasicStructure checks required fields in the Kro resource definition
-func validateBasicStructure(data map[string]interface{}) []error {
-	var errors []error
-
-	// 1. Validate apiVersion and kind
-	if err := validateAPIVersionAndKind(data); err != nil {
-		errors = append(errors, err)
-	}
-
-	// 2. Validate metadata
-	// if err := validateMetadata(data); err != nil {
-	// 	errors = append(errors, err)
-	// }
-
-	// 3. Validate that spec exists
-	_, ok := data["spec"].(map[string]interface{})
-	if !ok {
-		errors = append(errors, fmt.Errorf("spec section is required"))
-	}
-
-	return errors
-}
-
-// validateAPIVersionAndKind validates the apiVersion and kind fields
-func validateAPIVersionAndKind(data map[string]interface{}) error {
-	// Check apiVersion
-	apiVersion, ok := data["apiVersion"].(string)
-	if !ok {
-		return fmt.Errorf("apiVersion is required")
-	}
-	if !strings.HasPrefix(apiVersion, "kro.run/v1alpha") {
-		return fmt.Errorf("apiVersion must start with 'kro.run/v1alpha', got '%s'", apiVersion)
-	}
-
-	// Check kind
-	kind, ok := data["kind"].(string)
-	if !ok {
-		return fmt.Errorf("kind is required")
-	}
-	if kind != "ResourceGraphDefinition" {
-		return fmt.Errorf("kind must be 'ResourceGraphDefinition', got '%s'", kind)
-	}
-
-	return nil
 }
 
 // validateAPIVersionAndKindWithPosition validates apiVersion and kind fields with position info
@@ -189,21 +169,6 @@ func validateAPIVersionAndKindWithPosition(doc *YAMLDocument) []ValidationError 
 	}
 
 	return errors
-}
-
-// validateMetadata validates the metadata section
-func validateMetadata(data map[string]interface{}) error {
-	metadata, ok := data["metadata"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("metadata section is required")
-	}
-
-	name, ok := metadata["name"].(string)
-	if !ok || name == "" {
-		return fmt.Errorf("metadata.name is required and must be a non-empty string")
-	}
-
-	return nil
 }
 
 // validateMetadataWithPosition validates metadata section with position info

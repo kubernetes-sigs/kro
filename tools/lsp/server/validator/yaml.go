@@ -94,9 +94,30 @@ func (p *YAMLParser) ParseWithPositions() (*YAMLDocument, error) {
 				return nil, err
 			}
 
-			// Track nested fields for metadata
-			if key == "metadata" {
+			// Special processing for different sections
+			switch key {
+			case "metadata":
 				processNestedFields(doc, valueNode, "metadata", keyNode.Line-1)
+			case "spec":
+				processNestedFields(doc, valueNode, "spec", keyNode.Line-1)
+				// Special handling for schema section which has complex nesting
+				if specMap, ok := value.(map[string]interface{}); ok {
+					if schema, found := specMap["schema"]; found {
+						if schemaMap, ok := schema.(map[string]interface{}); ok {
+							// Process schema.spec and schema.status if they exist
+							if schemaSpec, ok := schemaMap["spec"]; ok {
+								if specMap, ok := schemaSpec.(map[string]interface{}); ok {
+									trackSchemaFields(doc, specMap, "spec.schema.spec")
+								}
+							}
+							if schemaStatus, ok := schemaMap["status"]; ok {
+								if statusMap, ok := schemaStatus.(map[string]interface{}); ok {
+									trackSchemaFields(doc, statusMap, "spec.schema.status")
+								}
+							}
+						}
+					}
+				}
 			}
 		case yaml.SequenceNode:
 			// For arrays/lists
@@ -165,6 +186,28 @@ func processNestedFields(doc *YAMLDocument, node *yaml.Node, prefix string, pare
 		// Recursively process this node if it's a mapping
 		if valueNode.Kind == yaml.MappingNode {
 			processNestedFields(doc, valueNode, nestedKey, keyNode.Line-1)
+		}
+	}
+}
+
+// trackSchemaFields recursively tracks schema fields and their positions
+func trackSchemaFields(doc *YAMLDocument, schemaFields map[string]interface{}, prefix string) {
+	for key, value := range schemaFields {
+		fieldPath := prefix + "." + key
+
+		switch v := value.(type) {
+		case string:
+			// Track the string type definition
+			doc.NestedFields[fieldPath] = YAMLField{
+				Value:   v,
+				Line:    0, // We don't have line/column info here,
+				Column:  0, // this will be approximated during validation
+				EndLine: 0,
+				EndCol:  0,
+			}
+		case map[string]interface{}:
+			// Recursively track nested schema fields
+			trackSchemaFields(doc, v, fieldPath)
 		}
 	}
 }

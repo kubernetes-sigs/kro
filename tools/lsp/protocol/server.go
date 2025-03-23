@@ -5,7 +5,6 @@ import (
 	"github.com/kro-run/kro/tools/lsp/server/validator"
 
 	"reflect"
-	"strings"
 
 	"github.com/tliron/commonlog"
 	"github.com/tliron/glsp"
@@ -170,12 +169,8 @@ func validateDocument(ctx *glsp.Context, uri string, content string) {
 		validationErrors := validator.ValidateKroFileWithPositions(yamlDoc)
 		log.Infof("Position-aware validation found %d errors", len(validationErrors))
 
-		// Add diagnostics for each error with precise positions
-		for i, validationErr := range validationErrors {
-			log.Infof("Validation error %d: %s at line %d, col %d",
-				i, validationErr.Message, validationErr.Line, validationErr.Column)
-
-			// Create range directly from the validation error's position info
+		// Add diagnostics for each validation error
+		for _, validationErr := range validationErrors {
 			rng := protocol.Range{
 				Start: protocol.Position{
 					Line:      uint32(validationErr.Line),
@@ -195,32 +190,9 @@ func validateDocument(ctx *glsp.Context, uri string, content string) {
 			diagnosticManager.AddDiagnostic(uri, diagnostic)
 		}
 
-		// Also perform regular validation for other errors
-		data, parseErr := parser.Parse()
-		if parseErr != nil {
-			log.Errorf("Regular parsing failed: %v", parseErr)
-		} else if data != nil {
-			log.Infof("Regular parsing succeeded")
-			errors := validator.ValidateKroFile(data)
-			log.Infof("Regular validation found %d errors", len(errors))
-
-			// Add diagnostics for each error
-			for i, err := range errors {
-				// Skip validation errors related to apiVersion and kind since we handled those above
-				if strings.Contains(err.Error(), "apiVersion") || strings.Contains(err.Error(), "kind") {
-					log.Infof("Skipping regular validation error %d about apiVersion/kind: %s", i, err.Error())
-					continue
-				}
-
-				log.Infof("Regular validation error %d: %s", i, err.Error())
-				diagnostic := CreateDiagnostic(
-					err.Error(),
-					protocol.DiagnosticSeverityError,
-					CreateErrorRange(content, err.Error()),
-				)
-				diagnosticManager.AddDiagnostic(uri, diagnostic)
-			}
-		}
+		// Position-aware validation has captured all errors, no need for additional validation
+		// We're removing the use of ValidateKroFile as requested
+		log.Infof("Validation complete with %d errors", len(validationErrors))
 	}
 
 	// Get all diagnostics for this URI

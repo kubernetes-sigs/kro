@@ -18,7 +18,10 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -182,4 +185,104 @@ func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1a
 
 func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
 	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, status, reason, "Custom Resource Definition is synced")
+}
+
+// reconcileStatus updates the status of the RGD instance based on the status of its child resources
+func (r *ResourceGraphDefinitionReconciler) reconcileStatus(ctx context.Context, instance *v1alpha1.ResourceGraphDefinition) error {
+	// Get all child resources
+	children, err := r.getChildResources(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("failed to get child resources: %w", err)
+	}
+
+	// Check status of all child resources
+	allReady := true
+	for _, child := range children {
+		ready, err := r.isResourceReady(ctx, child)
+		if err != nil {
+			return fmt.Errorf("failed to check resource status: %w", err)
+		}
+		if !ready {
+			allReady = false
+			break
+		}
+	}
+
+	// Update instance status
+	if allReady {
+		instance.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
+		instance.Status.ObservedGeneration = instance.Generation
+
+		// Update status conditions
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             "ResourcesReady",
+			Message:            "All resources are ready",
+			ObservedGeneration: instance.Generation,
+		})
+	} else {
+		instance.Status.State = v1alpha1.ResourceGraphDefinitionStateInProgress
+
+		// Update status conditions
+		meta.SetStatusCondition(&instance.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             "ResourcesPending",
+			Message:            "Waiting for resources to be ready",
+			ObservedGeneration: instance.Generation,
+		})
+	}
+
+	// Update the status
+	if err := r.Status().Update(ctx, instance); err != nil {
+		return fmt.Errorf("failed to update instance status: %w", err)
+	}
+
+	return nil
+}
+
+// isResourceReady checks if a resource is in ready state
+func (r *ResourceGraphDefinitionReconciler) isResourceReady(ctx context.Context, obj client.Object) (bool, error) {
+	// Get latest resource state
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return false, err
+	}
+
+	// Check resource specific conditions
+	switch o := obj.(type) {
+	case *ec2v1alpha1.SecurityGroup:
+		return o.Status.ACK.Conditions.IsReady(), nil
+	// Add cases for other resource types
+	default:
+		// For resources without specific status checks, consider them ready if they exist
+		return true, nil
+	}
+}
+
+// getChildResources returns all child resources owned by the RGD instance
+func (r *ResourceGraphDefinitionReconciler) getChildResources(ctx context.Context, instance *v1alpha1.ResourceGraphDefinition) ([]client.Object, error) {
+	var children []client.Object
+
+	// List all resources with owner reference to this instance
+	for _, resource := range instance.Spec.Resources {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   resource.Template.APIVersion,
+			Kind:    resource.Template.Kind,
+			Version: "v1alpha1", // This should be dynamic based on the resource
+		})
+
+		if err := r.List(ctx, list, client.MatchingFields{
+			"metadata.ownerReferences.uid": string(instance.UID),
+		}); err != nil {
+			return nil, err
+		}
+
+		for _, item := range list.Items {
+			children = append(children, &item)
+		}
+	}
+
+	return children, nil
 }

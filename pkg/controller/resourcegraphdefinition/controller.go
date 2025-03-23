@@ -15,9 +15,10 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -85,9 +86,14 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, resourcegraphdefinition *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
-	rlog := r.log.WithValues("resourcegraphdefinition", types.NamespacedName{Namespace: resourcegraphdefinition.Namespace, Name: resourcegraphdefinition.Name})
+func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	rlog := r.log.WithValues("resourcegraphdefinition", req.NamespacedName)
 	ctx = log.IntoContext(ctx, rlog)
+
+	resourcegraphdefinition := &v1alpha1.ResourceGraphDefinition{}
+	if err := r.Get(ctx, req.NamespacedName, resourcegraphdefinition); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
 	if !resourcegraphdefinition.DeletionTimestamp.IsZero() {
 		rlog.V(1).Info("ResourceGraphDefinition is being deleted")
@@ -114,6 +120,18 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, resou
 	rlog.V(1).Info("Setting resourcegraphdefinition status")
 	if err := r.setResourceGraphDefinitionStatus(ctx, resourcegraphdefinition, topologicalOrder, resourcesInformation, reconcileErr); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Add status reconciliation
+	if err := r.reconcileStatus(ctx, resourcegraphdefinition); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile status: %w", err)
+	}
+
+	// Requeue if not ready
+	if resourcegraphdefinition.Status.State != v1alpha1.StateActive {
+		return ctrl.Result{
+			RequeueAfter: 10 * time.Second,
+		}, nil
 	}
 
 	return ctrl.Result{}, nil

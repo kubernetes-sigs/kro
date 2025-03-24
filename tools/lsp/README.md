@@ -62,6 +62,7 @@ This directory contains a Language Server Protocol (LSP) implementation for Kro 
 
    ```bash
    git clone https://github.com/kro-run/kro.git
+   git checkout lsp
    cd kro/tools/lsp
    ```
 
@@ -80,10 +81,10 @@ This directory contains a Language Server Protocol (LSP) implementation for Kro 
 
 #### Run in Development Mode
 
-1. Open the `tools/lsp` directory in VS Code:
+1. Open the `tools/lsp/client` directory in VS Code:
 
    ```bash
-   cd /path/to/kro/tools/lsp
+   cd /path/to/kro/tools/lsp/client
    code .
    ```
 

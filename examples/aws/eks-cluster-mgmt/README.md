@@ -310,12 +310,6 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    ack-system         efs-chart-7558bdd9d7-2n9q9                          1/1     Running   0             3m51s
    ack-system         eks-chart-7c8f7fd76c-pz49q                          1/1     Running   0             5m50s
    ack-system         iam-chart-6846dfc7bc-kqccf                          1/1     Running   0             5m50s
-   carts              carts-84cd5747cf-v4h56                              1/1     Running   1 (23m ago)   25m
-   carts              carts-dynamodb-6b64c98c4c-rh4xk                     1/1     Running   0             25m
-   catalog            catalog-5756744b6b-2tzmf                            1/1     Running   2 (24m ago)   25m
-   catalog            catalog-mysql-0                                     1/1     Running   0             25m
-   checkout           checkout-d4c999847-2zvx7                            1/1     Running   0             25m
-   checkout           checkout-redis-5c649558b6-d5h88                     1/1     Running   0             25m
    external-secrets   external-secrets-cert-controller-586c6cbfd7-m5x94   1/1     Running   0             5m14s
    external-secrets   external-secrets-d699ddc68-hhgps                    1/1     Running   0             5m14s
    external-secrets   external-secrets-webhook-7f467cd6bf-ppzd5           1/1     Running   0             5m14s
@@ -329,12 +323,38 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    kyverno            kyverno-cleanup-controller-cd4ccdd8c-4b4gp          1/1     Running   0             5m5s
    kyverno            kyverno-reports-controller-55c9f8d645-h8d57         1/1     Running   0             5m5s
    kyverno            policy-reporter-5c6c868c66-7jlxm                    1/1     Running   0             5m19s
-   orders             orders-67bc58f79f-m8bc2                             1/1     Running   1 (23m ago)   25m
-   orders             orders-mysql-75cbd7d89-86t5d                        1/1     Running   0             25m
-   rabbitmq           rabbitmq-0                                          1/1     Running   0             25m
    ```
 
-   > In this case we can see that our gitops solution have deployed our addons and our application in the cluster
+   > In this case we can see that our gitops solution have deployed our addons in the cluster
+
+7. Deploy workload example application
+
+   If you want you can ask argo to syn the namespace application that will enable the workload deployment on the spoke cluster:
+
+   ```sh
+   argocd app sync namespaces-workload-cluster1-frontend
+   argocd app sync namespaces-workload-cluster1-backend
+   ```
+
+   Wait a little for sync to proceed..
+
+   ```sh
+   kubectl get pods -A | egrep "carts|ui|rabbitmq|checkout|catalog|assets"
+   ```
+
+   ```sh
+   assets             assets-6fd5c856d-chg7z                              1/1     Running   0              4m3s
+   carts              carts-84cd5747cf-pnqg6                              1/1     Running   2 (4m8s ago)   4m46s
+   carts              carts-dynamodb-6b64c98c4c-8mc86                     1/1     Running   0              4m4s
+   catalog            catalog-5756744b6b-s4fzv                            1/1     Running   0              4m3s
+   catalog            catalog-mysql-0                                     1/1     Running   0              5m44s
+   checkout           checkout-d4c999847-jmlv5                            1/1     Running   0              4m3s
+   checkout           checkout-redis-5c649558b6-stsvz                     1/1     Running   0              5m47s
+   rabbitmq           rabbitmq-0                                          1/1     Running   0              5m45s
+   ui                 ui-76c759877f-wgz69                                 1/1     Running   0              5m44s
+   ```
+
+   > We can now also see the namespaces for our application
 
 ## Conclusion
 

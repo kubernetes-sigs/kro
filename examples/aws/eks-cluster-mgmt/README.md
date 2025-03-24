@@ -216,8 +216,8 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
    ```yaml
       workload-cluster1:
-      managementAccountId: "515966522948" # replace the AWS account ID used for management cluster
-      accountId: "012345678910" # replace the AWS account ID used for spoke workload cluster (It can be the same)
+      managementAccountId: "012345678910" # replace the AWS account ID used for management cluster
+      accountId: "123456789101" # replace the AWS account ID used for spoke workload cluster (It can be the same)
       tenant: "tenant1" # We have only configure tenant1 in the repo, If you change it, you need to duplicate all tenant1 directories
       k8sVersion: "1.30"
       gitops:
@@ -243,18 +243,35 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    kubectl rollout restart deployment -n kro-system kro
    ```
 
-4. After some times, the cluster sould have been created in the spoke account.
+4. Check that the ResourceGraph definition is properly reconciled and active, if not, restart agin kro like in previous 3.
+
+   ```sh
+   kubectl get resourcegraphdefinitions.kro.run
+   ```
+
+   Output expected:
+
+   ```sh
+   NAME                        APIVERSION   KIND                STATE    AGE
+   ekscluster.kro.run          v1alpha1     EksCluster          Active   13m
+   eksclusterwithvpc.kro.run   v1alpha1     EksclusterWithVpc   Active   12m
+   vpc.kro.run                 v1alpha1     Vpc                 Active   13m
+   ```
+
+5. After some times, the cluster sould have been created in the spoke account.
 
    ```sh
    kubectl get EksClusterwithvpcs -A
    ```
 
-   ```
+   ```sh
    NAMESPACE   NAME                STATE    SYNCED   AGE
    argocd      workload-cluster1   ACTIVE   True     36m
    ```
 
-5. You can then connect to the spoke cluster
+   > If You see STATE=ERROR, that's may be normal as it will take some times for all dependencies to be OK, but you may want to see the logs of kro and ACK controllers in case you may have some configuration errors.
+
+6. You can then connect to the spoke cluster
 
    ```sh
    export AWS_PROFILE=spoke_account1 # use your own profile or be sure to be connected to the appropriate account
@@ -272,7 +289,7 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    kubectl get pods -A
    ```
 
-   ```
+   ```sh
    NAMESPACE          NAME                                                READY   STATUS    RESTARTS      AGE
    ack-system         efs-chart-7558bdd9d7-2n9q9                          1/1     Running   0             3m51s
    ack-system         eks-chart-7c8f7fd76c-pz49q                          1/1     Running   0             5m50s
@@ -302,7 +319,6 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    ```
 
    > In this case we can see that our gitops solution have deployed our addons and our application in the cluster
-
 
 ## Conclusion
 

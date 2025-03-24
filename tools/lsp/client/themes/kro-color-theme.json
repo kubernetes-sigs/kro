@@ -1,0 +1,175 @@
+{
+  "$schema": "vscode://schemas/color-theme",
+  "name": "Kro Theme",
+  "colors": {
+    "editor.background": "#1E1E1E",
+    "editor.foreground": "#D4D4D4"
+  },
+  "tokenColors": [
+    {
+      "name": "Comments",
+      "scope": ["comment.line.number-sign.yaml"],
+      "settings": {
+        "foreground": "#6A9955"
+      }
+    },
+    {
+      "name": "Kro Keywords",
+      "scope": ["keyword.control.kro"],
+      "settings": {
+        "foreground": "#569CD6",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Entity Types",
+      "scope": ["entity.name.type.kro"],
+      "settings": {
+        "foreground": "#36D6C2",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "API Version",
+      "scope": ["storage.type.kro"],
+      "settings": {
+        "foreground": "#C586C0"
+      }
+    },
+    {
+      "name": "Variables",
+      "scope": ["variable.other.kro"],
+      "settings": {
+        "foreground": "#9CDCFE"
+      }
+    },
+    {
+      "name": "Resource Types",
+      "scope": ["storage.type.kro.resource"],
+      "settings": {
+        "foreground": "#DCDCAA",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "Strings",
+      "scope": ["string.quoted.double.yaml", "string.quoted.single.yaml"],
+      "settings": {
+        "foreground": "#CE9178"
+      }
+    },
+    {
+      "name": "Constants",
+      "scope": ["constant.language.yaml", "constant.numeric.yaml"],
+      "settings": {
+        "foreground": "#B5CEA8"
+      }
+    },
+    {
+      "name": "CEL Expression",
+      "scope": ["variable.other.readwrite.cel"],
+      "settings": {
+        "foreground": "#FF9D00"
+      }
+    },
+    {
+      "name": "CEL Expression Delimiters",
+      "scope": [
+        "punctuation.definition.template-expression.begin.cel",
+        "punctuation.definition.template-expression.end.cel"
+      ],
+      "settings": {
+        "foreground": "#FF7B00",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "CEL Variables",
+      "scope": ["support.variable.cel"],
+      "settings": {
+        "foreground": "#FFC66D"
+      }
+    },
+    {
+      "name": "CEL Conditionals and Operators",
+      "scope": ["keyword.control.cel"],
+      "settings": {
+        "foreground": "#C586C0",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "CEL Functions",
+      "scope": ["support.function.cel"],
+      "settings": {
+        "foreground": "#DCDCAA"
+      }
+    },
+    {
+      "name": "CEL Spec Variable",
+      "scope": ["support.class.cel"],
+      "settings": {
+        "foreground": "#56C1E9",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "CEL Punctuation",
+      "scope": ["punctuation.accessor.cel"],
+      "settings": {
+        "foreground": "#FF9D00"
+      }
+    },
+    {
+      "name": "CEL Array Index",
+      "scope": ["constant.numeric.array-index.cel"],
+      "settings": {
+        "foreground": "#FF9D00"
+      }
+    },
+    {
+      "name": "Property Names",
+      "scope": ["support.type.property-name.yaml"],
+      "settings": {
+        "foreground": "#9CDCFE"
+      }
+    },
+    {
+      "name": "Schema Data Types",
+      "scope": ["support.type.primitive.schema", "support.type.complex.schema"],
+      "settings": {
+        "foreground": "#4EC9B0",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "Schema Attributes",
+      "scope": ["entity.other.attribute-name.schema"],
+      "settings": {
+        "foreground": "#DCDCAA"
+      }
+    },
+    {
+      "name": "Value Names",
+      "scope": ["entity.name.function.yaml"],
+      "settings": {
+        "foreground": "#A1BCFF"
+      }
+    },
+    {
+      "name": "Pipe Operator",
+      "scope": ["keyword.operator.pipe.yaml"],
+      "settings": {
+        "foreground": "#D4D4D4"
+      }
+    },
+    {
+      "name": "Dependency Resources",
+      "scope": ["entity.name.tag.dependency.kro"],
+      "settings": {
+        "foreground": "#E06C75",
+        "fontStyle": "italic"
+      }
+    }
+  ]
+}

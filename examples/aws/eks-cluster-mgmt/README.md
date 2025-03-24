@@ -28,7 +28,7 @@ bootstrapping workload clusters (spokes) are installed on top.
    Use thoses variables that should not need some changes
 
    ```sh
-   export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
+   export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account) # Or update to the AWS account to use for your management cluster
    export KRO_REPO_URL="https://github.com/kro-run/kro.git"
    export WORKING_REPO="eks-cluster-mgmt" # If you can avoid changing this, as you'll need to update in both terraform and gitops configurations
    export TF_VAR_FILE="terraform.tfvars" # the name of terraform configuration file to use
@@ -39,7 +39,7 @@ bootstrapping workload clusters (spokes) are installed on top.
    ```sh
    export MGMT_ACCOUNT_ID="012345678910" # specify your management AWS account ID
    export AWS_REGION="eu-west-2" # change to your prefered region
-   export WORKSPACE_PATH="~/environment" # the directory where repos will be cloned e.g. ~/environment
+   export WORKSPACE_PATH="$HOME/environment" # the directory where repos will be cloned e.g. ~/environment
    export GITHUB_ORG_NAME="xxxxx" # your Github User-name or Organisation you want to use for the work
    ```
 
@@ -86,8 +86,8 @@ bootstrapping workload clusters (spokes) are installed on top.
 
    ```yaml
    clusters:
-      workload-cluster1: "012345678910" # Spoke AWS account 1
-      workload-cluster2: "123456789101" # Spoke AWS account 2
+      workload-cluster1: "012345678910" # AWS account for workload cluster 1
+      workload-cluster2: "123456789101" # AWS account for workload cluster 2
    ```
 
    > We have configure our gitops tooling to uses of workload-clusterX namespace names, where X can go from 1 to 6, please don't change the names, just the values.

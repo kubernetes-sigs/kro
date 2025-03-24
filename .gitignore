@@ -29,7 +29,7 @@ rendered/
 
 kro-controller
 kro-chart*
-kro-*
+#kro-*
 cover.html
 .read
 .snapshots

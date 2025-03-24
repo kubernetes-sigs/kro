@@ -1,9 +1,0 @@
-useSelectors: false
-globalSelectors:
-  fleet_member: control-plane    
-argocd:
-  enabled: false   
-external-secrets:
-  enabled: false
-metrics-server:
-  enabled: false

@@ -18,9 +18,8 @@ spec:
       accountId: string
       managementAccountId: string
       adminRoleName: string | default="Admin"
-      #nodesCount: integer
       fleetSecretManagerSecretNameSuffix: string | default="argocd-secret"
-      domainName: string | default=""
+      domainName: string | default="cluster.example.com"
       cidr:
         vpcCidr: string | default="10.0.0.0/16"
         publicSubnet1Cidr: string | default="10.0.1.0/24"
@@ -31,26 +30,22 @@ spec:
         addonsRepoBasePath: string | default="addons/"
         addonsRepoPath: string | default="bootstrap"
         addonsRepoRevision: string | default="main"
-        addonsRepoSecretKey: string | default="gitops-fleet-management-repo-addons"
-        addonsRepoUrl: string | default="https://github.com/allamand/gitops-fleet-management"
+        addonsRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
 
         fleetRepoBasePath: string | default="fleet/"
         fleetRepoPath: string | default="bootstrap"
         fleetRepoRevision: string | default="main"
-        fleetRepoSecretKey: string | default="gitops-fleet-management-repo-fleet"
-        fleetRepoUrl: string | default="https://github.com/allamand/gitops-fleet-management"
+        fleetRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
 
         platformRepoBasePath: string | default="platform/"
         platformRepoPath: string | default="bootstrap"
         platformRepoRevision: string | default="main"
-        platformRepoSecretKey: string | default="gitops-fleet-management-repo-platform"
-        platformRepoUrl: string | default="https://github.com/allamand/gitops-fleet-management"
+        platformRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
 
         workloadRepoBasePath: string | default="apps/"
         workloadRepoPath: string | default=""
         workloadRepoRevision: string | default="main"
-        workloadRepoSecretKey: string | default="gitops-fleet-management-repo-workloads"
-        workloadRepoUrl: string | default="https://github.com/allamand/gitops-fleet-management"
+        workloadRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
 
       addons:
 
@@ -128,7 +123,6 @@ spec:
           managementAccountId: ${schema.spec.managementAccountId}
           k8sVersion: ${schema.spec.k8sVersion}
           adminRoleName: ${schema.spec.adminRoleName}
-          #nodesCount: ${schema.spec.nodesCount}
           fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
           domainName: ${schema.spec.domainName}
           network:
@@ -144,22 +138,18 @@ spec:
             addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
             addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
             addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
-            addonsRepoSecretKey: ${schema.spec.gitops.addonsRepoSecretKey}
             addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
             fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
             fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
             fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
-            fleetRepoSecretKey: ${schema.spec.gitops.fleetRepoSecretKey}
             fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
             platformRepoBasePath: ${schema.spec.gitops.platformRepoBasePath}
             platformRepoPath: ${schema.spec.gitops.platformRepoPath}
             platformRepoRevision: ${schema.spec.gitops.platformRepoRevision}
-            platformRepoSecretKey: ${schema.spec.gitops.platformRepoSecretKey}
             platformRepoUrl: ${schema.spec.gitops.platformRepoUrl}
             workloadRepoBasePath: ${schema.spec.gitops.workloadRepoBasePath}
             workloadRepoPath: ${schema.spec.gitops.workloadRepoPath}
             workloadRepoRevision: ${schema.spec.gitops.workloadRepoRevision}
-            workloadRepoSecretKey: ${schema.spec.gitops.workloadRepoSecretKey}
             workloadRepoUrl: ${schema.spec.gitops.workloadRepoUrl}
           addons:
             enable_metrics_server: ${schema.spec.addons.enable_metrics_server}

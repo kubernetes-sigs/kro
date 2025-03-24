@@ -2,7 +2,7 @@ useSelectors: true # necessary to enable addons with cluster secret labels
 
 #We are using this to enable applicationSets, then use cluster secret to enable applications
 # globalSelectors:
-#   fleet_member: control-plane    
+#   fleet_member: control-plane #If we activate this, only cluster from this selector will have the applicationsets enabled
 argocd:
   enabled: true   
 external-secrets:

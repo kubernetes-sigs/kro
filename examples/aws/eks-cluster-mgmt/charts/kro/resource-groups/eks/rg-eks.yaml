@@ -37,22 +37,18 @@ spec:
         addonsRepoBasePath: string
         addonsRepoPath: string
         addonsRepoRevision: string
-        addonsRepoSecretKey: string
         addonsRepoUrl: string
         fleetRepoBasePath: string
         fleetRepoPath: string
         fleetRepoRevision: string
-        fleetRepoSecretKey: string
         fleetRepoUrl: string
         platformRepoBasePath: string
         platformRepoPath: string
         platformRepoRevision: string
-        platformRepoSecretKey: string
         platformRepoUrl: string
         workloadRepoBasePath: string
         workloadRepoPath: string
         workloadRepoRevision: string
-        workloadRepoSecretKey: string
         workloadRepoUrl: string
       addons:
 
@@ -309,22 +305,18 @@ spec:
             addons_repo_basepath: "${schema.spec.gitops.addonsRepoBasePath}"
             addons_repo_path: "${schema.spec.gitops.addonsRepoPath}"
             addons_repo_revision: "${schema.spec.gitops.addonsRepoRevision}"
-            addons_repo_secret_key: "${schema.spec.gitops.addonsRepoSecretKey}"
             addons_repo_url: "${schema.spec.gitops.addonsRepoUrl}"
             fleet_repo_basepath: "${schema.spec.gitops.fleetRepoBasePath}"
             fleet_repo_path: "${schema.spec.gitops.fleetRepoPath}"
             fleet_repo_revision: "${schema.spec.gitops.fleetRepoRevision}"
-            fleet_repo_secret_key: "${schema.spec.gitops.fleetRepoSecretKey}"
             fleet_repo_url: "${schema.spec.gitops.fleetRepoUrl}"
             platform_repo_basepath: "${schema.spec.gitops.platformRepoBasePath}"
             platform_repo_path: "${schema.spec.gitops.platformRepoPath}"
             platform_repo_revision: "${schema.spec.gitops.platformRepoRevision}"
-            platform_repo_secret_key: "${schema.spec.gitops.platformRepoSecretKey}"
             platform_repo_url: "${schema.spec.gitops.platformRepoUrl}"
             workload_repo_basepath: "${schema.spec.gitops.workloadRepoBasePath}"
             workload_repo_path: "${schema.spec.gitops.workloadRepoPath}"
             workload_repo_revision: "${schema.spec.gitops.workloadRepoRevision}"
-            workload_repo_secret_key: "${schema.spec.gitops.workloadRepoSecretKey}"
             workload_repo_url: "${schema.spec.gitops.workloadRepoUrl}"
             # Specific for External-DNS
             external_dns_domain_filters: "${schema.spec.domainName}"

@@ -41,10 +41,10 @@ spec:
         namespace: argocd
         name: '{{.name}}'
       syncPolicy:
-        # automated:
-        #   selfHeal: false
-        #   allowEmpty: true
-        #   prune: false
+        automated:
+          selfHeal: false
+          allowEmpty: true
+          prune: false
         retry:
           limit: 100
         syncOptions:

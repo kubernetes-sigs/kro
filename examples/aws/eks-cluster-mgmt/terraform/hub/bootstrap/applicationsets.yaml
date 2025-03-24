@@ -28,4 +28,4 @@ spec:
         namespace: 'argocd'
         name: '{{.name}}'
       syncPolicy:
-        #automated: {}
+        automated: {}

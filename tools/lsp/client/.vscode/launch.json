@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Kro Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: watch",
+      "env": {
+        "KRO_LSP_DEBUG": "true"
+      }
+    },
+    {
+      "name": "Launch Kro Extension (Direct Debug)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "Wait for Server Ready",
+      "env": {
+        "KRO_DIRECT_DEBUG": "true"
+      }
+    }
+  ]
+}

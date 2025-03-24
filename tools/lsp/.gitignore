@@ -1,49 +1,43 @@
-# Compiled binary
+# Build outputs
 server/kro-language-server
+client/out/
+client/dist/
+**/*.vsix
+
+# Dependencies
+client/node_modules/
+client/package-lock.json
 
 # Debug files
-/tmp/kro-server-debug.log
-/tmp/kro-protocol-debug.log
+/tmp/kro-*
 server-pid.txt
-.vscode-test/
-*.vsix
 *debug*.log
-debug-*.json
-*debug*.sh
-
-# Client build artifacts
-client/out/
-client/node_modules/
-client/dist/
-client/package-lock.json
-client/.vscode-test/
-client/test-resources/
 
 # Logs
-logs
-*.log
+**/*.log
 npm-debug.log*
 
-# OS generated files
+# OS specific files
 .DS_Store
-.DS_Store?
+**/.DS_Store
 ._*
 .Spotlight-V100
 .Trashes
-ehthumbs.db
 Thumbs.db
+ehthumbs.db
 
 # Temporary files
-*.swp
-*.swo
+learning.js
+*.tmp
+*.bak
 *~
 .*.un~
+*.swp
+*.swo
 
-# Go build files
-*.o
-*.a
-*.so
-*.exe
-*.dll
-*.dylib
-*.test 
+# IDE specific files
+.idea/
+**/.idea/
+
+# Go specific
+vendor/ 

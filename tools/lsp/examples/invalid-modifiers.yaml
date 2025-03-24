@@ -1,0 +1,53 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: web-application
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebApplication
+    spec:
+      # Valid basic types
+      name: 'string | required=true description="My Name"'
+      replicas: "integer | default=1 minimum=1 maximum=100"
+      image: "string | required=true"
+
+      # Valid structured type
+      ingress:
+        enabled: "boolean | default=false"
+        host: 'string | default="example.com"'
+        path: 'string | default="/"'
+
+      # Valid array type
+      ports: "[]integer"
+
+      # Valid map type
+      env: "map[string]string"
+
+      # Invalid type - missing base type
+      badField1: "| required=true"
+
+      # Invalid type - wrong base type
+      badField2: "stringg | required=true"
+
+      # Invalid array type
+      badArray: "[]badtype"
+
+      # Invalid map type - wrong syntax
+      badMap1: "map[string->string]"
+
+      # Invalid map type - invalid key type
+      badMap2: "map[array]string"
+
+      # Invalid modifier - wrong format
+      badModifier1: "string | required:true"
+
+      # Invalid modifier - unknown modifier
+      badModifier2: "string | unknown=true"
+
+      # Invalid modifier - min/max on wrong type
+      badModifier3: "string | minimum=1 maximum=100"
+
+    status:
+      availableReplicas: "${deployment.status.availableReplicas}"
+      serviceEndpoint: "${service.status.loadBalancer.ingress[0].hostname}"

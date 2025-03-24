@@ -1,0 +1,76 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: valid-web-service
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ResourceGroup
+    spec:
+      # String type with required modifier and description
+      name: string | required=true description="Service name"
+
+      # Integer type with default value
+      replicas: integer | default=2 description="Number of replicas"
+
+      # String type with required modifier
+      image: string | required=true
+
+      # Object type with nested properties
+      config:
+        type: object
+        properties:
+          port:
+            type: integer
+            default: 8080
+            description: string | description="Container port"
+          env:
+            type: object
+            additionalProperties:
+              type: string
+
+    # Status schema definition
+    status:
+      url: string | description="Service URL"
+      ready: boolean
+
+  # Kubernetes templates
+  templates:
+    - apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${spec.name}
+      spec:
+        replicas: ${spec.replicas}
+        selector:
+          matchLabels:
+            app: ${spec.name}
+        template:
+          metadata:
+            labels:
+              app: ${spec.name}
+          spec:
+            containers:
+              - name: ${spec.name}
+                image: ${spec.image}
+                ports:
+                  - containerPort: ${spec.config.port}
+
+    - apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${spec.name}
+      spec:
+        selector:
+          app: ${spec.name}
+        ports:
+          - port: 80
+            targetPort: ${spec.config.port}
+        type: LoadBalancer
+
+  # Status mappings using CEL expressions
+  statusMappings:
+    - name: url
+      mapping: ${service.status.loadBalancer.ingress[0].hostname}
+    - name: ready
+      mapping: ${deployment.status.readyReplicas == spec.replicas}

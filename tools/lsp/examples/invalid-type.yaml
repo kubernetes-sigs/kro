@@ -1,0 +1,44 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: invalid-type-example
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ResourceGroup
+    spec:
+      # ERROR: "strings" is not a valid type (should be "string")
+      name: strings | required=true
+
+      # ERROR: "int" is not a valid type (should be "integer")
+      replicas: int | default=2
+
+      # ERROR: "number" is valid but "min" is not a valid modifier (should be "minimum")
+      port: number | min=80 max=9000
+
+      # ERROR: "array" is not properly specified (should have "items" field)
+      labels: array
+
+      # ERROR: "bool" is not a valid type (should be "boolean")
+      enabled: bool
+
+      # Valid specification for comparison
+      image: string | required=true description="Container image"
+
+    status:
+      # ERROR: Invalid format - pipe character outside of quotes
+      ready: string | description="Service is ready" | default=false
+
+      # ERROR: Unknown type "map"
+      configuration: map
+
+  templates:
+    - apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${spec.name}
+      spec:
+        replicas: ${spec.replicas}
+        selector:
+          matchLabels:
+            app: ${spec.name}

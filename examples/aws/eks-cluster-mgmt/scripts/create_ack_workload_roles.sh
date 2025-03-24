@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Disable AWS CLI paging
+export AWS_PAGER=""
+
 create_ack_workload_roles() {
     local MGMT_ACCOUNT_ID="$1"
 

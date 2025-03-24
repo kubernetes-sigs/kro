@@ -280,6 +280,13 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
    > If you see errors, you may need to double check the multi-cluster accounts settings, and if IA roles in both management and workload aws accounts are properly configured.
 
+   When VPC are ok, then check for EKS resources:
+
+   ```sh
+   kubectl get eksclusters.kro.run -A
+   kubectl get clusters.eks.services.k8s.aws -A -o yaml # Check there are no errors
+   ```
+
 6. You can then connect to the spoke cluster
 
    ```sh

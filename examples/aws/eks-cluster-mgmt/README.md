@@ -271,6 +271,15 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
    > If You see STATE=ERROR, that's may be normal as it will take some times for all dependencies to be OK, but you may want to see the logs of kro and ACK controllers in case you may have some configuration errors.
 
+   You can also list resources created by kro to validate their satus:
+
+   ```sh
+   kubectl get vpcs.kro.run -A
+   kubectl get vpcs.ec2.services.k8s.aws -A -o yaml # check there is not error
+   ```
+
+   > If you see errors, you may need to double check the multi-cluster accounts settings, and if IA roles in both management and workload aws accounts are properly configured.
+
 6. You can then connect to the spoke cluster
 
    ```sh

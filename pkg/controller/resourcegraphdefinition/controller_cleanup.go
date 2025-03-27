@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-logr/logr"
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/metadata"
@@ -31,8 +31,7 @@ import (
 // 1. Shuts down the microcontroller
 // 2. Deletes the associated CRD (if CRD deletion is enabled)
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	log, _ := logr.FromContext(ctx)
-	log.V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
+	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
 	// shutdown microcontroller
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
@@ -66,8 +65,7 @@ func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicro
 // If CRD deletion is disabled, it logs the skip and returns nil.
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
 	if !r.allowCRDDeletion {
-		log, _ := logr.FromContext(ctx)
-		log.Info("skipping CRD deletion (disabled)", "crd", crdName)
+		ctrl.LoggerFrom(ctx).Info("skipping CRD deletion (disabled)", "crd", crdName)
 		return nil
 	}
 

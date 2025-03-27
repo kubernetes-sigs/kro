@@ -119,9 +119,7 @@ func (e *Environment) initializeClients() error {
 		return fmt.Errorf("creating client: %w", err)
 	}
 
-	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{
-		Log: noopLogger(),
-	})
+	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	restConfig := e.ClientSet.RESTConfig()
 	e.GraphBuilder, err = graph.NewBuilder(restConfig)
@@ -151,12 +149,12 @@ func (e *Environment) setupController() error {
 	}()
 
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
-		noopLogger(),
 		e.Client,
 		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
+		1,
 	)
 
 	var err error

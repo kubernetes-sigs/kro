@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 	instancectrl "github.com/kro-run/kro/pkg/controller/instance"
@@ -34,7 +34,7 @@ import (
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
-	log, _ := logr.FromContext(ctx)
+	log := ctrl.LoggerFrom(ctx)
 
 	// Process resource graph definition graph first to validate structure
 	log.V(1).Info("reconciling resource graph definition graph")
@@ -60,7 +60,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(ctx, gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile); err != nil {
@@ -78,13 +78,14 @@ func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceG
 
 // setupMicroController creates a new controller instance with the required configuration
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
+	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	processedRGD *graph.Graph,
 	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
 ) *instancectrl.Controller {
 
-	instanceLogger := r.rootLogger.WithName("controller." + gvr.Resource)
+	instanceLogger := ctrl.LoggerFrom(ctx).WithName(gvr.Resource)
 
 	return instancectrl.NewController(
 		instanceLogger,

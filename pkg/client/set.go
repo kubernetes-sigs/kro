@@ -117,9 +117,9 @@ func (c *Set) RESTConfig() *rest.Config {
 }
 
 // CRD returns a new CRDWrapper instance
-func (s *Set) CRD(cfg CRDWrapperConfig) *CRDWrapper {
+func (c *Set) CRD(cfg CRDWrapperConfig) *CRDWrapper {
 	if cfg.Client == nil {
-		cfg.Client = s.apiExtensionsV1
+		cfg.Client = c.apiExtensionsV1
 	}
 
 	return newCRDWrapper(cfg)

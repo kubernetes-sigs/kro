@@ -20,10 +20,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
-
 	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/metadata"
 )
@@ -143,8 +143,7 @@ func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
 // setManaged sets the resourcegraphdefinition as managed, by adding the
 // default finalizer if it doesn't exist.
 func (r *ResourceGraphDefinitionReconciler) setManaged(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	log, _ := logr.FromContext(ctx)
-	log.V(1).Info("setting resourcegraphdefinition as managed")
+	ctrl.LoggerFrom(ctx).V(1).Info("setting resourcegraphdefinition as managed")
 
 	// Skip if finalizer already exists
 	if metadata.HasResourceGraphDefinitionFinalizer(rgd) {
@@ -159,8 +158,7 @@ func (r *ResourceGraphDefinitionReconciler) setManaged(ctx context.Context, rgd 
 // setUnmanaged sets the resourcegraphdefinition as unmanaged, by removing the
 // default finalizer if it exists.
 func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	log, _ := logr.FromContext(ctx)
-	log.V(1).Info("setting resourcegraphdefinition as unmanaged")
+	ctrl.LoggerFrom(ctx).V(1).Info("setting resourcegraphdefinition as unmanaged")
 
 	// Skip if finalizer already removed
 	if !metadata.HasResourceGraphDefinitionFinalizer(rgd) {

@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	logr "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -51,7 +51,6 @@ type CRDClient interface {
 // CRDWrapper provides a simplified interface for CRD operations
 type CRDWrapper struct {
 	client       apiextensionsv1.CustomResourceDefinitionInterface
-	log          logr.Logger
 	pollInterval time.Duration
 	timeout      time.Duration
 }
@@ -59,7 +58,6 @@ type CRDWrapper struct {
 // CRDWrapperConfig contains configuration for the CRD wrapper
 type CRDWrapperConfig struct {
 	Client       *apiextensionsv1.ApiextensionsV1Client
-	Log          logr.Logger
 	PollInterval time.Duration
 	Timeout      time.Duration
 }
@@ -83,7 +81,6 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 
 	return &CRDWrapper{
 		client:       cfg.Client.CustomResourceDefinitions(),
-		log:          cfg.Log.WithName("crd-wrapper"),
 		pollInterval: cfg.PollInterval,
 		timeout:      cfg.Timeout,
 	}
@@ -95,18 +92,19 @@ func newCRDWrapper(cfg CRDWrapperConfig) *CRDWrapper {
 // The caller is responsible for ensuring the CRD, isn't introducing
 // breaking changes.
 func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
+	log := logr.FromContext(ctx)
 	_, err := w.Get(ctx, crd.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to check for existing CRD: %w", err)
 		}
 
-		w.log.Info("Creating CRD", "name", crd.Name)
+		log.Info("Creating CRD", "name", crd.Name)
 		if err := w.create(ctx, crd); err != nil {
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
 	} else {
-		w.log.Info("Updating existing CRD", "name", crd.Name)
+		log.Info("Updating existing CRD", "name", crd.Name)
 		if err := w.patch(ctx, crd); err != nil {
 			return fmt.Errorf("failed to patch CRD: %w", err)
 		}
@@ -143,7 +141,8 @@ func (w *CRDWrapper) patch(ctx context.Context, newCRD v1.CustomResourceDefiniti
 
 // Delete removes a CRD if it exists
 func (w *CRDWrapper) Delete(ctx context.Context, name string) error {
-	w.log.Info("Deleting CRD", "name", name)
+	log := logr.FromContext(ctx)
+	log.Info("Deleting CRD", "name", name)
 
 	err := w.client.Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -154,7 +153,8 @@ func (w *CRDWrapper) Delete(ctx context.Context, name string) error {
 
 // waitForReady waits for a CRD to become ready
 func (w *CRDWrapper) waitForReady(ctx context.Context, name string) error {
-	w.log.Info("Waiting for CRD to become ready", "name", name)
+	log := logr.FromContext(ctx)
+	log.Info("Waiting for CRD to become ready", "name", name)
 
 	return wait.PollUntilContextTimeout(ctx, w.pollInterval, w.timeout, true,
 		func(ctx context.Context) (bool, error) {

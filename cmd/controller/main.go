@@ -24,12 +24,9 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	xv1alpha1 "github.com/kro-run/kro/api/v1alpha1"
 	kroclient "github.com/kro-run/kro/pkg/client"
@@ -145,6 +142,7 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
+		Logger: rootLogger,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -167,26 +165,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	reconciler := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
-		rootLogger,
+	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
 		mgr.GetClient(),
 		set,
 		allowCRDDeletion,
 		dc,
 		resourceGraphDefinitionGraphBuilder,
+		resourceGraphDefinitionConcurrentReconciles,
 	)
-	err = ctrl.NewControllerManagedBy(
-		mgr,
-	).For(
-		&xv1alpha1.ResourceGraphDefinition{},
-	).WithEventFilter(
-		predicate.GenerationChangedPredicate{},
-	).WithOptions(
-		ctrlrtcontroller.Options{
-			MaxConcurrentReconciles: resourceGraphDefinitionConcurrentReconciles,
-		},
-	).Complete(reconcile.AsReconciler[*xv1alpha1.ResourceGraphDefinition](mgr.GetClient(), reconciler))
-	if err != nil {
+	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
 		os.Exit(1)
 	}

@@ -18,7 +18,7 @@ import (
 	"slices"
 	"strings"
 
-	cel "github.com/google/cel-go/cel"
+	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -68,7 +68,7 @@ func NewBuilder(
 //
 // The GraphBuild performs several key functions:
 //
-//	  1/ It validates the resource deinitions and their naming conventions.
+//	  1/ It validates the resource definitions and their naming conventions.
 //	  2/ It interacts with the API Server to retrieve the OpenAPI schema for the
 //	     resources, and validates the resources against the schema.
 //	  3/ Extracts and processes the CEL expressions from the resources definitions.
@@ -250,10 +250,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 // buildRGResource builds a resource from the given resource definition.
 // It provides a high-level understanding of the resource, by extracting the
-// OpenAPI schema, emualting the resource and extracting the cel expressions
+// OpenAPI schema, emulating the resource and extracting the cel expressions
 // from the schema.
 func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResources map[k8sschema.GroupKind]bool, order int) (*Resource, error) {
-	// 1. We need to unmashal the resource into a map[string]interface{} to
+	// 1. We need to unmarshal the resource into a map[string]interface{} to
 	//    make it easier to work with.
 	resourceObject := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
@@ -355,7 +355,7 @@ func (b *Builder) buildDependencyGraph(
 	resources map[string]*Resource,
 ) (
 	// directed acyclic graph
-	*dag.DirectedAcyclicGraph,
+	*dag.DirectedAcyclicGraph[string],
 	// map of runtime variables per resource
 	error,
 ) {
@@ -369,7 +369,7 @@ func (b *Builder) buildDependencyGraph(
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
-	directedAcyclicGraph := dag.NewDirectedAcyclicGraph()
+	directedAcyclicGraph := dag.NewDirectedAcyclicGraph[string]()
 	// Set the vertices of the graph to be the resources defined in the resource graph definition.
 	for _, resource := range resources {
 		if err := directedAcyclicGraph.AddVertex(resource.id, resource.order); err != nil {

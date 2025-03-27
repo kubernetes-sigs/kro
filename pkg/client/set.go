@@ -13,11 +13,15 @@
 package client
 
 import (
+	"fmt"
+
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/kro-run/kro/pkg"
 )
 
 // Set provides a unified interface for different Kubernetes clients
@@ -62,7 +66,7 @@ func NewSet(cfg Config) (*Set, error) {
 	if config.Burst == 0 {
 		config.Burst = cfg.Burst
 	}
-	config.UserAgent = "kro/0.2.1"
+	config.UserAgent = fmt.Sprintf("kro/%s", pkg.Version)
 
 	c := &Set{config: config}
 	if err := c.init(); err != nil {

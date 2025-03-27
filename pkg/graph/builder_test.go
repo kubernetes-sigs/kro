@@ -83,6 +83,20 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "naming convention violation",
 		},
 		{
+			name: "invalid KRO kind name",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"invalidKind", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+			},
+			wantErr: true,
+			errMsg:  "is not a valid KRO kind name",
+		},
+		{
 			name: "resource without a valid GVK",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

@@ -52,12 +52,14 @@ type Schema struct {
 	// and create the CRD for the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Z][a-zA-Z0-9]{0,62}$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
 	// The APIVersion of the resourcegraphdefinition. This is used to generate
 	// and create the CRD for the resourcegraphdefinition.
 	//
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
 	// The group of the resourcegraphdefinition. This is used to set the API group

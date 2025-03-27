@@ -101,6 +101,7 @@ spec:
                     description: |-
                       The APIVersion of the resourcegraphdefinition. This is used to generate
                       and create the CRD for the resourcegraphdefinition.
+                    pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                     type: string
                     x-kubernetes-validations:
                     - message: apiVersion is immutable
@@ -115,6 +116,7 @@ spec:
                     description: |-
                       The kind of the resourcegraphdefinition. This is used to generate
                       and create the CRD for the resourcegraphdefinition.
+                    pattern: ^[A-Z][a-zA-Z0-9]{0,62}$
                     type: string
                     x-kubernetes-validations:
                     - message: kind is immutable
@@ -167,7 +169,7 @@ spec:
                       format: date-time
                       type: string
                     message:
-                      description: A human readable message indicating details about
+                      description: A human-readable message indicating details about
                         the transition.
                       type: string
                     observedGeneration:

@@ -4,7 +4,7 @@
 
 <!-- template begins here-->
 
-This governance document explains how the Kube Resource Orchestratory project is run.
+This governance document explains how the Kube Resource Orchestrator project is run.
 
 - [Kube Resource Orchestrator Project Governance](#kube-resource-orchestrator-project-governance)
   - [Values](#values)
@@ -113,7 +113,7 @@ accused of a CoC violation.
 
 ## Code of Conduct
 
-[Code of Conduct](./code-of-conduct.md)
+[Code of Conduct](./CODE_OF_CONDUCT.md)
 violations by community members will be discussed and resolved
 on the [private Maintainer mailing list](TODO). 
 

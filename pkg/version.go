@@ -16,9 +16,9 @@ package pkg
 // These variables are populated by the go compiler using -ldflags
 var (
 	// Version is the version of the kro binary.
-	Version string // -X github.com/your/repo/pkg.Version=$(VERSION)
+	Version string = "unknown" // -X github.com/your/repo/pkg.Version=$(VERSION)
 	// GitCommit is the git commit that was compiled.
-	GitCommit string // -X github.com/your/repo/pkg.GitCommit=$(GIT_COMMIT)
+	GitCommit string = "unknown" // -X github.com/your/repo/pkg.GitCommit=$(GIT_COMMIT)
 	// BuildDate is the date that the kro binary was built.
-	BuildDate string // -X github.com/your/repo/pkg.BuildDate=$(BUILD_DATE)
+	BuildDate string = "unknown" // -X github.com/your/repo/pkg.BuildDate=$(BUILD_DATE)
 )

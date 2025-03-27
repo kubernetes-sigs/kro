@@ -142,7 +142,7 @@ func NewKROMetaLabeler() GenericLabeler {
 }
 
 func booleanFromString(s string) bool {
-	// for the sake of simplicy we'll avoid doing any kind
+	// for the sake of simplicity we'll avoid doing any kind
 	// of parsing here. Since those labels are set by the controller
 	// it self. We'll expect the same values back.
 	return s == "true"

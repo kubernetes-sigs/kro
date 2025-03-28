@@ -33,6 +33,7 @@ spec:
           workers:
             subnet1ID: string
             subnet2ID: string
+      workloads: string # Define if we want to deploy workloads application
       gitops:
         addonsRepoBasePath: string
         addonsRepoPath: string
@@ -81,6 +82,11 @@ spec:
         external_secrets_service_account: string
 
         amp_endpoint_url: string
+    status:
+      clusterARN: ${ekscluster.status.ackResourceMetadata.arn}
+      cdata: ${ekscluster.status.certificateAuthority.data}
+      endpoint: ${ekscluster.status.endpoint}
+      clusterState: ${ekscluster.status.status}
 
 
   resources:
@@ -168,7 +174,7 @@ spec:
         spec:
           name: "${schema.spec.name}"
           roleARN: "${clusterRole.status.ackResourceMetadata.arn}"
-          version: "${schema.spec.k8sVersion}" # a bug needs to be fixed for this to work
+          version: "${schema.spec.k8sVersion}"
           accessConfig:
             authenticationMode: "API_AND_CONFIG_MAP"
             bootstrapClusterCreatorAdminPermissions: true
@@ -270,7 +276,7 @@ spec:
             tenant: "${schema.spec.tenant}"
             environment: "${schema.spec.environment}"
             aws_cluster_name: "${schema.spec.name}"
-            workloads: "true"
+            workloads: "${schema.spec.workloads}"
             #using : useSelector: true for centralized mode
 
             enable_metrics_server: "${schema.spec.addons.enable_metrics_server}"
@@ -430,6 +436,8 @@ spec:
               ]
             }
     - id: externalSecretsPodIdentityAssociation
+      readyWhen:
+      - ${externalSecretsPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -521,6 +529,8 @@ spec:
             }
 
     - id: externalDnsPodIdentity
+      readyWhen:
+      - ${externalDnsPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -570,6 +580,8 @@ spec:
             }
 
     - id: adotCollectorPodIdentityAssociation
+      readyWhen:
+      - ${adotCollectorPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -623,6 +635,8 @@ spec:
             }
 
     - id: kyvernoPolicyReporterPodIdentityAssociation
+      readyWhen:
+      - ${kyvernoPolicyReporterPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -701,6 +715,8 @@ spec:
             }
 
     - id: cniMetricsHelperPodIdentityAssociation
+      readyWhen:
+      - ${cniMetricsHelperPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -753,6 +769,8 @@ spec:
             }
 
     - id: cloudwatchObservabilityPodIdentityAssociation
+      readyWhen:
+      - ${cloudwatchObservabilityPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -892,6 +910,8 @@ spec:
             }
 
     - id: ackIAMPodIdentity
+      readyWhen:
+      - ${ackIAMPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation
@@ -971,6 +991,8 @@ spec:
             }
 
     - id: ackEksPodIdentity
+      readyWhen:
+      - ${ackEksPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: PodIdentityAssociation

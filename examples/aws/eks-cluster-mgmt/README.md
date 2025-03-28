@@ -121,6 +121,7 @@ bootstrapping workload clusters (spokes) are installed on top.
 2. log-in into your aws management account.
 
    You need to connect to your AWS management account, I'm doing it with specific Profile, but this is up to your setup.
+
    ```sh
    export AWS_PROFILE=management_account # use your own profile or be sore to be connected to the appropriate account
    ```
@@ -157,7 +158,7 @@ bootstrapping workload clusters (spokes) are installed on top.
    Authenticate with argocd cli:
 
    ```sh
-   argocd login --grpc-web $(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}') --username admin --password $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d) --insecure 
+   argocd login --grpc-web $(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}') --username admin --password $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d) --insecure
    ```
 
    Set a valid Github Token in GITHUB_TOKEN variable and then insert it in your argo cd instance:
@@ -216,10 +217,11 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
    ```yaml
       workload-cluster1:
-      managementAccountId: "012345678910" # replace the AWS account ID used for management cluster
-      accountId: "123456789101" # replace the AWS account ID used for spoke workload cluster (It can be the same)
-      tenant: "tenant1" # We have only configure tenant1 in the repo, If you change it, you need to duplicate all tenant1 directories
+      managementAccountId: "012345678910"    # replace the AWS account ID used for management cluster
+      accountId: "123456789101"              # replace the AWS account ID used for spoke workload cluster (It can be the same)
+      tenant: "tenant1"                      # We have only configure tenant1 in the repo, If you change it, you need to duplicate all tenant1 directories
       k8sVersion: "1.30"
+      workloads: "true"                      # If You want to deploy the workloads namespaces and applications
       gitops:
          addonsRepoUrl: "https://github.com/XXXXX/eks-cluster-mgmt"    # replace the gitops repo in the file with your github account
          fleetRepoUrl: "https://github.com/XXXXX/eks-cluster-mgmt"
@@ -329,6 +331,13 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
 7. Deploy workload example application
 
+   If you want to activate workloads, you can put the workloads parameter to true.
+   Then you can sync the cluster app
+
+   ```sh
+   argocd app sync clusters 
+   ```
+
    If you want you can ask argo to syn the namespace application that will enable the workload deployment on the spoke cluster:
 
    ```sh
@@ -368,20 +377,62 @@ As our spoke workloads have been bootstrapped by Argo CD and kro/ACK, we need to
 
 To be sure that I can delete the workload namespaces, there is 2 options: I can remove the Argo CD auto-sync or we can defined exception using the cluster name we want to delete
 
-1. Check namespace application set configuration
+1. Deactivate workloads:
 
    ```sh
-   code $WORKSPACE_PATH/$WORKING_REPO/fleet/bootstrap/namespaces-appset.yaml
+   code examples/aws/eks-cluster-mgmt/fleet/kro-values/tenants/tenant1/kro-clusters/values.yaml
    ```
 
-2. Delete workload namespace in spoke cluster
+   ```yaml
+   workload-cluster1:
+      ...
+      workloads: "false"
+      ...
+   ```
 
    ```sh
-   kubectl delete application -n argocd namespaces-workload-cluster1-backend
-   kubectl delete application -n argocd namespaces-workload-cluster1-frontend
+   cd $WORKSPACE_PATH/$WORKING_REPO/
+   git status
+   git add .
+   git commit -s -m "remove workloads from workload-cluster1"
+   git push
+   ```
+
+   Sync RGD:
+
+   ```bash
+   argocd app sync clusters
    ```
 
    So if our workload created some aws ressources like Load balancers, the Kubernetes addons, can clean thoses ressources properly.
+
+2. Deactivate addons that create resources:
+
+   In our case the efs-addon, is creating some IAM roles and EKS pod identity associations in the workload environment. In order to not keep thoses orphaned, we need to disable thoses addons:
+
+   ```yaml
+   workload-cluster1:
+      ...
+      workloads: "false"
+      ...
+      addons:
+         enable_ack_efs: "false"
+   ```
+
+   ```sh
+   cd $WORKSPACE_PATH/$WORKING_REPO/
+   git status
+   git add .
+   git commit -s -m "remove ack efs addon"
+   git push
+   ```
+
+   Sync RGD:
+
+   ```bash
+   argocd app sync clusters
+   ```
+
    Once this is done, we can remove the spoke cluster creation from our management cluster
 
 3. De-register spoke account
@@ -392,8 +443,6 @@ To be sure that I can delete the workload namespaces, there is 2 options: I can 
    code $WORKSPACE_PATH/$WORKING_REPO/fleet/kro-values/tenants/tenant1/kro-clusters/values.yaml
    ```
 
-4. Commit and Push
-
    ```sh
    cd $WORKSPACE_PATH/$WORKING_REPO/
    git status
@@ -402,15 +451,27 @@ To be sure that I can delete the workload namespaces, there is 2 options: I can 
    git push
    ```
 
-5. Prune the cluster in Argo CD UI.
+4. Prune the cluster in Argo CD UI.
 
-   Go to ArgoCD UI, and synchronise the cluster Applicationset clicking on the prune option to allow it for removal
+   Go to ArgoCD UI, and synchronise the cluster Applicationset clicking on the prune option to allow it for removal, or do it with the cli:
 
-6. Delete Management Cluster
+   ```bash
+   argocd app sync clusters --prune
+   ```
 
-Once you have successfuly de-register all your spoke accounts, you can remove the workload cluster created with Terraform
+5. Delete Management Cluster
 
-```sh
-   cd $WORKSPACE_PATH/$WORKING_REPO/terraform/hub
-   ./destroy.sh
-```
+   Once you have successfuly de-register all your spoke accounts, you can remove the workload cluster created with Terraform
+
+   ```sh
+      cd $WORKSPACE_PATH/$WORKING_REPO/terraform/hub
+      ./destroy.sh
+   ```
+
+6. Remove ACK IAM Roles in workloads accounts
+
+   Finlly you can connnect to each of your workloads accounts and delete the necessary IAM roles and policy we created initially
+
+   ```bash
+   ./scripts/delete_ack_workload_roles.sh
+   ```

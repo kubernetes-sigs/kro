@@ -44,7 +44,7 @@ spec:
         automated:
           selfHeal: false
           allowEmpty: true
-          prune: false
+          prune: true
         retry:
           limit: 100
         syncOptions:

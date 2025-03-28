@@ -67,8 +67,8 @@ spec:
       destination:
         name: '{{.name}}'
       syncPolicy:
-        # automated:
-        #   allowEmpty: true
+        automated:
+          allowEmpty: true
         retry:
           backoff:
             duration: 1m

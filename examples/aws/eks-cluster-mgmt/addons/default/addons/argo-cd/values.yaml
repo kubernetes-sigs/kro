@@ -37,7 +37,66 @@ configs:
     # Changing this to `false` significantly reduce number of Application CRD updates and improves controller performance.
     controller.resource.health.persist: "false"
     ui.bannerpermanent: "false"
-    controller.auto-sync: "false" # Seb test to see If I can disable it
+    controller.auto-sync: "true"
+    resource.customizations: |
+      services.k8s.aws/AdoptedResource:
+        health.lua: |
+          hs = {}
+          if obj.status ~= nil then
+            if obj.status.conditions ~= nil then
+              for i, condition in ipairs(obj.status.conditions) do
+                if condition.type == "ACK.Adopted" and condition.status == "False" then
+                  hs.status = "Degraded"
+                  hs.message = condition.message
+                  return hs
+                end
+                if condition.type == "ACK.Adopted" and condition.status == "True" then
+                  hs.status = "Healthy"
+                  hs.message = condition.message
+                  return hs
+                end
+              end
+            end
+          end
+
+          hs.status = "Progressing"
+          hs.message = "Waiting for Status conditions"
+          return hs
+      "*.services.k8s.aws/*":
+        health.lua.useOpenLibs: true
+        health.lua: |
+          hs = {}
+          if obj.status and obj.status.conditions then
+              for i, condition in ipairs(obj.status.conditions) do
+                  if condition.status == "Unknown" then
+                      hs.status = "Degraded"
+                      hs.message = condition.reason
+                      return hs
+                  elseif condition.type == "ACK.Recoverable" and condition.status == "True" then
+                      hs.status = "Degraded"
+                      hs.message = condition.message
+                      return hs
+                  elseif condition.type == "ACK.Terminal" and condition.status == "True" then
+                      hs.status = "Degraded"
+                      hs.message = condition.message
+                      return hs
+                  elseif condition.type == "ACK.ResourceSynced" then
+                      if condition.status == "True" then
+                          hs.status = "Healthy"
+                          hs.message = condition.message
+                          return hs
+                      elseif condition.status == "False" then
+                          hs.status = "Progressing"
+                          hs.message = condition.reason
+                          return hs
+                      end
+                  end
+              end
+          end
+          hs.status = "Progressing"
+          hs.message = "Waiting for Status conditions"
+          return hs
+
   repositories:
     # Required when using helm repository with oci formal like karpenter and aws-gateway-api-controller
     aws-public-ecr:

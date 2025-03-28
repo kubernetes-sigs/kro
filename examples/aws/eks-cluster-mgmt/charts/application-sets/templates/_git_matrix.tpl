@@ -14,7 +14,7 @@
 #       - clusters:
 #           selector:
 #               matchLabels:
-#                 argocd.argoproj.io/secret-type: cluster2
+#                 argocd.argoproj.io/secret-type: cluster
 #                 {{- if $selectors }}
 #                 {{- toYaml $selectors | nindent 16 }}
 #                                 - key: fleet_member

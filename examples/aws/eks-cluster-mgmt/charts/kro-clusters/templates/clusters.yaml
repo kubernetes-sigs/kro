@@ -9,16 +9,17 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   name: {{ $name }}
-  tenant: {{ $cluster.tenant | default "auto1" }}
-  environment: {{ $cluster.environment | default "staging" }}
-  region: {{ $cluster.region | default "us-west-2" }}
+  tenant: {{ $cluster.tenant | default "tenant1" | quote }}
+  environment: {{ $cluster.environment | default "staging" | quote }}
+  region: {{ $cluster.region | default "us-west-2" | quote }}
   k8sVersion: {{ $cluster.k8sVersion | default "1.32" | quote }}
   accountId: {{ $cluster.accountId | quote }}
   managementAccountId: {{ $cluster.managementAccountId | quote }}
-  adminRoleName: {{ $cluster.adminRoleName | default "Admin" }}
-  fleetSecretManagerSecretNameSuffix: {{ $cluster.fleetSecretManagerSecretNameSuffix | default "argocd-secret" }}
-  domainName: {{ $cluster.domainName | default "" }}
-  {{- if $cluster.subHostedZone }}
+  adminRoleName: {{ $cluster.adminRoleName | default "Admin" | quote }}
+  fleetSecretManagerSecretNameSuffix: {{ $cluster.fleetSecretManagerSecretNameSuffix | default "argocd-secret" | quote }}
+  domainName: {{ $cluster.domainName | default "" | quote }}
+  workloads: {{ $cluster.workloads | default "false" | quote }}
+  {{- if $cluster.subHostedZone | quote }}
   subHostedZone:
     {{- toYaml $cluster.subHostedZone | nindent 4 }}
   {{- end }}

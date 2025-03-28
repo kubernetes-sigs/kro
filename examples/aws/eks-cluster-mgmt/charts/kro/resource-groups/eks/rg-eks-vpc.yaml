@@ -26,6 +26,7 @@ spec:
         publicSubnet2Cidr: string | default="10.0.2.0/24"
         privateSubnet1Cidr: string | default="10.0.11.0/24"
         privateSubnet2Cidr: string | default="10.0.12.0/24"
+      workloads: string | default="false" # Define if we want to deploy workloads application
       gitops:
         addonsRepoBasePath: string | default="addons/"
         addonsRepoPath: string | default="bootstrap"
@@ -88,12 +89,16 @@ spec:
 
   resources:
   - id: vpc
+    readyWhen:
+    - ${vpc.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
     template:
       apiVersion: kro.run/v1alpha1
       kind: Vpc
       metadata:
         name: ${schema.spec.name}
         namespace: ${schema.spec.name}
+        labels:
+          app.kubernetes.io/instance: ${schema.spec.name}
         annotations:
           argocd.argoproj.io/tracking-id: clusters:kro.run/Vpc:${schema.spec.name}/${schema.spec.name}
       spec:
@@ -106,12 +111,16 @@ spec:
           privateSubnet1Cidr: ${schema.spec.cidr.privateSubnet1Cidr}
           privateSubnet2Cidr: ${schema.spec.cidr.privateSubnet2Cidr}
   - id: eks
+    readyWhen:
+    - ${eks.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
     template:
       apiVersion: kro.run/v1alpha1
       kind: EksCluster
       metadata:
         name: ${schema.spec.name}
         namespace: ${schema.spec.name}
+        labels:
+          app.kubernetes.io/instance: ${schema.spec.name}
         annotations:
           argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}                     
       spec:
@@ -134,6 +143,7 @@ spec:
               workers:
                 subnet1ID: ${vpc.status.privateSubnet1ID}
                 subnet2ID: ${vpc.status.privateSubnet2ID}
+          workloads: ${schema.spec.workloads}
           gitops:
             addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
             addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}

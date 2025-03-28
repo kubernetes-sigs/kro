@@ -165,6 +165,9 @@ ack-efs:
       - key: enable_ack_efs
         operator: In
         values: ['true']
+      - key: fleet_member
+        operator: NotIn
+        values: ['control-plane']
   valuesObject:
     aws:
       region: '{{.metadata.annotations.aws_region}}'

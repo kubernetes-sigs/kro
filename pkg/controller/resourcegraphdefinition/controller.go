@@ -47,7 +47,7 @@ type ResourceGraphDefinitionReconciler struct {
 	metadataLabeler         metadata.Labeler
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
-	MaxConcurrentReconciles int
+	maxConcurrentReconciles int
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -55,7 +55,7 @@ func NewResourceGraphDefinitionReconciler(
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
-	MaxConcurrentReconciles int,
+	maxConcurrentReconciles int,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
@@ -66,7 +66,7 @@ func NewResourceGraphDefinitionReconciler(
 		dynamicController:       dynamicController,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
-		MaxConcurrentReconciles: MaxConcurrentReconciles,
+		maxConcurrentReconciles: maxConcurrentReconciles,
 	}
 }
 
@@ -94,7 +94,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
-				MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))

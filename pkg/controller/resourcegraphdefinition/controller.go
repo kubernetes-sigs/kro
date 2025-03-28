@@ -16,17 +16,16 @@ package resourcegraphdefinition
 import (
 	"context"
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
 	"github.com/kro-run/kro/api/v1alpha1"
 	kroclient "github.com/kro-run/kro/pkg/client"
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 //+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
@@ -37,7 +36,11 @@ import (
 type ResourceGraphDefinitionReconciler struct {
 	allowCRDDeletion bool
 
+	// Client and instanceLogger are set with SetupWithManager
+
 	client.Client
+	instanceLogger logr.Logger
+
 	clientSet  *kroclient.Set
 	crdManager kroclient.CRDClient
 
@@ -48,7 +51,6 @@ type ResourceGraphDefinitionReconciler struct {
 }
 
 func NewResourceGraphDefinitionReconciler(
-	mgrClient client.Client,
 	clientSet *kroclient.Set,
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
@@ -59,7 +61,6 @@ func NewResourceGraphDefinitionReconciler(
 
 	return &ResourceGraphDefinitionReconciler{
 		clientSet:               clientSet,
-		Client:                  mgrClient,
 		allowCRDDeletion:        allowCRDDeletion,
 		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
@@ -71,6 +72,9 @@ func NewResourceGraphDefinitionReconciler(
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Client = mgr.GetClient()
+	r.instanceLogger = mgr.GetLogger()
+
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(
 			"controller", "ResourceGraphDefinition",

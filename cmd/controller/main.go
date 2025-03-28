@@ -166,7 +166,6 @@ func main() {
 	}
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
-		mgr.GetClient(),
 		set,
 		allowCRDDeletion,
 		dc,

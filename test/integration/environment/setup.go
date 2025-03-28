@@ -149,7 +149,6 @@ func (e *Environment) setupController() error {
 	}()
 
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
-		e.Client,
 		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,

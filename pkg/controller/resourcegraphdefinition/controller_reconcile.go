@@ -60,9 +60,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(ctx, gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
+	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
+	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
+	// rather than have it ignore this context and use the background context.
 	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile); err != nil {
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
@@ -78,14 +81,16 @@ func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceG
 
 // setupMicroController creates a new controller instance with the required configuration
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
-	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	processedRGD *graph.Graph,
 	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
 ) *instancectrl.Controller {
-
-	instanceLogger := ctrl.LoggerFrom(ctx).WithName(gvr.Resource)
+	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
+		"controller", gvr.Resource,
+		"controllerGroup", processedRGD.Instance.GetCRD().Spec.Group,
+		"controllerKind", processedRGD.Instance.GetCRD().Spec.Names.Kind,
+	)
 
 	return instancectrl.NewController(
 		instanceLogger,

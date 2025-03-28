@@ -51,6 +51,26 @@ func TestParseFieldSchema(t *testing.T) {
 			wantMarkers: nil,
 			wantErr:     true,
 		},
+		{
+			name:        "integer field with min and max",
+			fieldSchema: "integer | minimum=0 maximum=100",
+			wantType:    "integer",
+			wantMarkers: []*Marker{
+				{MarkerType: MarkerTypeMinimum, Key: "minimum", Value: "0"},
+				{MarkerType: MarkerTypeMaximum, Key: "maximum", Value: "100"},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "number field with decimal constraints",
+			fieldSchema: "float | minimum=0.1 maximum=1.0",
+			wantType:    "float",
+			wantMarkers: []*Marker{
+				{MarkerType: MarkerTypeMinimum, Key: "minimum", Value: "0.1"},
+				{MarkerType: MarkerTypeMaximum, Key: "maximum", Value: "1.0"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -13,49 +13,49 @@ spec:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas * 10}
   resources:
-  - id: deployment
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${schema.spec.name}
-      spec:
-        replicas: 1
-        selector:
-          matchLabels:
-            app: deployment
-        template:
-          metadata:
-            labels:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
               app: deployment
-          spec:
-            containers:
-            - name: ${schema.spec.name}-deployment
-              image: nginx
-              ports:
-              - containerPort: 80
-              env:
-              - name: FULL_DNS_NAME
-                value: ${schema.spec.fullDNSName}
-              - name: DNS_FIRST_PART
-                value: ${schema.spec.fullDNSName.split('.')[0]}
-              - name: DNS_PARTIALS
-                value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
-  - id: service
-    template:
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: ${schema.spec.name}
-        labels:
-          app: deployment
-          dns: ${schema.spec.fullDNSName}
-          partials: "${size(schema.spec.fullDNSName.split('.')) > 2 ? schema.spec.fullDNSName.split('.').slice(0, 3).join('.') : schema.spec.fullDNSName}"
-          first_part: ${schema.schema.spec.fullDNSName.split('.')[0]}
-      spec:
-        selector:
-          app: deployment
-        ports:
-        - protocol: TCP
-          port: 80
-          targetPort: 80
+          template:
+            metadata:
+              labels:
+                app: deployment
+            spec:
+              containers:
+                - name: ${schema.spec.name}-deployment
+                  image: nginx
+                  ports:
+                    - containerPort: 80
+                  env:
+                    - name: FULL_DNS_NAME
+                      value: ${schema.spec.fullDNSName}
+                    - name: DNS_FIRST_PART
+                      value: ${schema.spec.fullDNSName.split('.')[0]}
+                    - name: DNS_PARTIALS
+                      value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+          labels:
+            app: deployment
+            dns: ${schema.spec.fullDNSName}
+            partials: "${size(schema.spec.fullDNSName.split('.')) > 2 ? schema.spec.fullDNSName.split('.').slice(0, 3).join('.') : schema.spec.fullDNSName}"
+            first_part: ${schema.spec.fullDNSName.split('.')[0]}
+        spec:
+          selector:
+            app: deployment
+          ports:
+            - protocol: TCP
+              port: 80
+              targetPort: 80

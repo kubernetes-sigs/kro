@@ -1,0 +1,46 @@
+clusters:
+#New cluster
+  # workload-cluster1:
+  #   managementAccountId: "XXXXXX"
+  #   accountId: "XXXXXX"
+  #   tenant: "tenant1"
+  #   k8sVersion: "1.30"
+  #   gitops:
+  #     addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     platformRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     workloadRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+
+  # workload-cluster2:
+  #   managementAccountId: "XXXXXX"
+  #   accountId: "XXXXXX"
+  #   tenant: "tenant1"
+  #   k8sVersion: "1.30"
+  #   domainName: "workload-cluster2.mydomain.com"
+  #   gitops:
+  #     addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     platformRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     workloadRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #     addonsRepoRevision: "main"
+  #     fleetRepoRevision: "main"
+  #     platformRepoRevision: "main"
+  #     workloadRepoRevision: "main"
+  #   addons:
+  #     enable_metrics_server: "true"
+  #     enable_external_secrets: "true"
+  #     enable_external_dns: "true"
+  #     enable_adot_collector: "true"
+  #     enable_cw_prometheus: "true"
+  #     enable_kyverno: "true"
+  #     enable_kyverno_policies: "true"
+  #     enable_kyverno_policy_reporter: "true"
+  #     enable_cni_metrics_helper: "false"
+  #     enable_prometheus_node_exporter: "true"
+  #     enable_kube_state_metrics: "true"
+  #     enable_opentelemetry_operator: "true"
+  #     enable_cert_manager: "true"
+  #     enable_ack_iam: "true"
+  #     enable_ack_eks: "true"
+  #     enable_ack_efs: "true"
+  #     enable_aws_efs_csi_driver: "true"

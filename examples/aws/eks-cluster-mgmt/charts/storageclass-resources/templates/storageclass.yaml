@@ -1,0 +1,39 @@
+{{- $fileSystemId := "" -}}
+{{- if .Values.storageClasses.efs }}
+  {{- $fileSystemId = .Values.storageClasses.efs.fileSystemId | default "" -}}
+{{- end }}
+
+{{- range $storageClassType, $storageClasses := .Values.storageClasses }}
+  {{- range $storageClassName, $storageClass := $storageClasses }}
+    {{- if ne $storageClassName "fileSystemId" }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $storageClassName }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: {{ if eq $storageClassType "efs" }}efs.csi.aws.com{{ else }}ebs.csi.aws.com{{ end }}
+{{- if and (eq $storageClassType "efs") $fileSystemId }}
+parameters:
+  fileSystemId: {{ $fileSystemId }}
+  directoryPerms: "{{ $storageClass.directoryPerms | default "700" }}"
+  provisioningMode: {{ $storageClass.provisioningMode | default "efs-ap" }}
+  basePath: {{ $storageClass.basePath | default "/" }}
+mountOptions:
+{{- range $storageClass.mountOptions }}
+  - {{ . }}
+{{- end }}
+{{- else if eq $storageClassType "ebs" }}
+parameters:
+  type: {{ $storageClass.volumeType }}
+  fsType: ext4
+  iopsPerGiB: "{{ $storageClass.iops | default "3000" }}"
+  throughput: "{{ $storageClass.throughput | default "125" }}"
+{{- end }}
+reclaimPolicy: {{ $storageClass.reclaimPolicy | default "Delete" }}
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+    {{- end }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,78 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webapp.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebApp
+    spec:
+      name: string
+      namespace: string | default=default
+      image: string | default=nginx
+      port: integer | default=80
+      replicas: integer | default=3
+      service:
+        enabled: boolean | default=true
+      serviceAccount: string | default=default
+    status:
+      deploymentConditions: ${deployment.status.conditions}
+      availableReplicas: ${deployment.status.availableReplicas}
+
+  resources:
+  - id: deployment
+    readyWhen:
+      - ${deployment.spec.replicas == deployment.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            serviceAccountName: ${schema.spec.serviceAccount}
+            containers:
+            - name: ${schema.spec.name}
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: ${schema.spec.port}
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1"
+            restartPolicy: Always
+
+  - id: service
+    includeWhen:
+    - ${schema.spec.service.enabled}  
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${deployment.metadata.name}
+        namespace: ${deployment.metadata.namespace}
+      spec:
+        selector:
+          app: ${schema.spec.name}
+        ports:
+        - name: http
+          protocol: TCP
+          port: ${schema.spec.port}
+          targetPort: ${schema.spec.port}

@@ -43,7 +43,7 @@ _Fugure 1: End user interface - Custom API_
 
 When you install **Kro** in your cluster, it installs a Custom Resource
 Definition (CRD) called **ResourceGraphDefinition (RG)**. The **Platform**, **Security**,
-and **Compliance** teams, can collaborate to create custom APIs by defining
+and **Compliance** teams can collaborate to create custom APIs by defining
 Custom Resources for the ResourceGraphDefinition CRD.
 
 In the depicted example, the **Platform Team** has created a **RG** with

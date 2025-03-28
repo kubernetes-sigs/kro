@@ -21,7 +21,7 @@ import (
 )
 
 func TestDAGAddNode(t *testing.T) {
-	d := NewDirectedAcyclicGraph()
+	d := NewDirectedAcyclicGraph[string]()
 
 	if err := d.AddVertex("A", 1); err != nil {
 		t.Errorf("Failed to add node: %v", err)
@@ -37,7 +37,7 @@ func TestDAGAddNode(t *testing.T) {
 }
 
 func TestDAGAddEdge(t *testing.T) {
-	d := NewDirectedAcyclicGraph()
+	d := NewDirectedAcyclicGraph[string]()
 	if err := d.AddVertex("A", 1); err != nil {
 		t.Fatalf("error from AddVertex(A, 1): %v", err)
 	}
@@ -59,7 +59,7 @@ func TestDAGAddEdge(t *testing.T) {
 }
 
 func TestDAGHasCycle(t *testing.T) {
-	d := NewDirectedAcyclicGraph()
+	d := NewDirectedAcyclicGraph[string]()
 	if err := d.AddVertex("A", 1); err != nil {
 		t.Fatalf("error from AddVertex(A, 1): %v", err)
 	}
@@ -94,7 +94,7 @@ func TestDAGHasCycle(t *testing.T) {
 
 	if _, err := d.TopologicalSort(); err == nil {
 		t.Errorf("TopologicalSort failed to detect cycle")
-	} else if AsCycleError(err) == nil {
+	} else if AsCycleError[string](err) == nil {
 		t.Errorf("TopologicalSort returned unexpected error: %T %v", err, err)
 	}
 }
@@ -117,7 +117,7 @@ func TestDAGTopologicalSort(t *testing.T) {
 
 	for i, g := range grid {
 		t.Run(fmt.Sprintf("[%d] nodes=%s,edges=%s", i, g.Nodes, g.Edges), func(t *testing.T) {
-			d := NewDirectedAcyclicGraph()
+			d := NewDirectedAcyclicGraph[string]()
 			for i, node := range strings.Split(g.Nodes, ",") {
 				if err := d.AddVertex(node, i); err != nil {
 					t.Fatalf("adding vertex: %v", err)
@@ -149,7 +149,7 @@ func TestDAGTopologicalSort(t *testing.T) {
 	}
 }
 
-func checkValidTopologicalOrder(t *testing.T, d *DirectedAcyclicGraph, order []string) {
+func checkValidTopologicalOrder(t *testing.T, d *DirectedAcyclicGraph[string], order []string) {
 	pos := make(map[string]int)
 	for i, node := range order {
 		pos[node] = i

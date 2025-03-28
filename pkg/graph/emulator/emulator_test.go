@@ -501,6 +501,24 @@ func TestGenerateValueWithIntOrString(t *testing.T) {
 
 }
 
+func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
+	e := NewEmulator()
+
+	t.Run("x-kubernetes-preserve-unknown-fields present, does not produce error", func(t *testing.T) {
+		schema := &spec.Schema{
+			VendorExtensible: spec.VendorExtensible{
+				Extensions: map[string]interface{}{
+					"x-kubernetes-preserve-unknown-fields": true,
+				},
+			},
+		}
+
+		_, err := e.generateValue(schema)
+		require.NoError(t, err)
+	})
+
+}
+
 func ptr[T comparable](v T) *T {
 	return &v
 }

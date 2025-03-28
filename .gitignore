@@ -29,7 +29,7 @@ rendered/
 
 kro-controller
 kro-chart*
-kro-*
+#kro-*
 cover.html
 .read
 .snapshots
@@ -37,4 +37,6 @@ cover.html
 .design
 .DS_Store
 TODO.*
+*.envrc*
+*kube-config.yaml*
 # package-lock.json

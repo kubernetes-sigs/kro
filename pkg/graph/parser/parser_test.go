@@ -1196,6 +1196,18 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		if !reflect.DeepEqual(expressions[0].Path, expected.Path) {
 			t.Errorf("Expected path %s, got %s", expected.Path, expressions[0].Path)
 		}
+
+		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
+			t.Errorf("Expressions mismatch: got %v, want %v", expressions[0].Expressions, expected.Expressions)
+		}
+
+		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
+			t.Errorf("ExpectedTypes mismatch: got %v, want %v", expressions[0].ExpectedTypes, expected.ExpectedTypes)
+		}
+
+		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
+			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
+		}
 	})
 
 	t.Run("networkRef with external reference", func(t *testing.T) {
@@ -1283,6 +1295,10 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
 			t.Errorf("Expected types %v, got %v", expected.ExpectedTypes, expressions[0].ExpectedTypes)
+		}
+
+		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
+			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
 		}
 	})
 }
@@ -1491,6 +1507,86 @@ func TestPreserveUnknownFields(t *testing.T) {
 						t.Errorf("Path %s: expected StandaloneExpression %v, got %v", path, expectedExpr.StandaloneExpression, actualExpr.StandaloneExpression)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestCollectTypesFromSubSchemas(t *testing.T) {
+	testCases := []struct {
+		name       string
+		subSchemas []spec.Schema
+		wantTypes  []string
+	}{
+		{
+			name: "simple types without constraints",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				{SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+			},
+			wantTypes: []string{"string", "integer"},
+		},
+		{
+			name: "with Required constraint",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{
+					Type:     []string{"string"},
+					Required: []string{"field"},
+				}},
+			},
+			wantTypes: []string{"object", "string"},
+		},
+		{
+			name: "with Not constraint",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{
+					Type: []string{"string"},
+					Not: &spec.Schema{
+						SchemaProps: spec.SchemaProps{Type: []string{"integer"}},
+					},
+				}},
+			},
+			wantTypes: []string{"object", "string"},
+		},
+		{
+			name: "with both Required and Not constraints",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{
+					Type:     []string{"string"},
+					Required: []string{"field"},
+					Not: &spec.Schema{
+						SchemaProps: spec.SchemaProps{Type: []string{"integer"}},
+					},
+				}},
+			},
+			wantTypes: []string{"object", "string"},
+		},
+		{
+			name: "duplicate types",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				{SchemaProps: spec.SchemaProps{
+					Type:     []string{"string"},
+					Required: []string{"field"},
+				}},
+			},
+			wantTypes: []string{"object", "string"},
+		},
+		{
+			name: "empty type",
+			subSchemas: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{Type: []string{""}}},
+			},
+			wantTypes: []string{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTypes := collectTypesFromSubSchemas(tc.subSchemas)
+			if !areEqualSlices(gotTypes, tc.wantTypes) {
+				t.Errorf("collectTypesFromSubSchemas() = %v, want %v", gotTypes, tc.wantTypes)
 			}
 		})
 	}

@@ -23,7 +23,7 @@ To test and run the project with your local changes, follow these steps to set u
 
 3. Install the Custom Resource Definitions (CRDs): Apply the latest CRDs to your cluster:
     ```bash
-    make generate
+    make manifests
     kubectl apply -k ./config/crd
     ```
 

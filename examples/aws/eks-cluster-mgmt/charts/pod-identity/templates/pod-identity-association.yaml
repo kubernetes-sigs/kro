@@ -1,0 +1,27 @@
+{{- if .Values.create | default false }}
+{{- $cluster := .Values.podIdentityAssociation.clusterName -}}
+{{- $namespace := .Values.podIdentityAssociation.namespace -}}
+{{- $tags := .Values.podIdentityAssociation.tags -}}
+{{- $root := . -}}
+{{- $serviceAccounts := .Values.podIdentityAssociation.serviceAccounts -}}
+{{- range $serviceAccounts }}
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: PodIdentityAssociation
+metadata:
+  name: "{{ include "pod-identity.fullname" $root }}-{{ . }}"
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  clusterName: {{ $cluster }}
+  roleRef: 
+    from: 
+      name: "{{ include "pod-identity.fullname" $root }}"
+  namespace: {{ $namespace }}
+  serviceAccount: {{ . }}
+  {{- if $tags}}
+  tags:
+    {{- $tags| toYaml | nindent 10  }}
+  {{- end }}
+---
+{{- end }}
+{{- end }}

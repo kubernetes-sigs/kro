@@ -66,7 +66,7 @@ func eksCluster(
 	instanceGenerator := func(namespace, name, version string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "EKSCluster",
 				"metadata": map[string]interface{}{
 					"name":      name,

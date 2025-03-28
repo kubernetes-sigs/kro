@@ -1,0 +1,111 @@
+# resources for the addon
+global:
+  tolerations:
+  - key: "CriticalAddonsOnly"
+    operator: "Exists"
+  nodeSelector:
+    eks.amazonaws.com/compute-type: auto
+    kubernetes.io/os: linux
+    karpenter.sh/nodepool: system
+
+server:
+  autoscaling:
+    enabled: true
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  resources: # Adjust based on your specific use case (required for HPA)
+    requests:
+      cpu: '500m'
+      memory: '512Mi'
+    limits:
+      memory: '1Gi'
+  metrics:
+    enabled: true
+    service:
+      annotations:
+        prometheus.io/scrape: true
+  service:
+   type: LoadBalancer
+   annotations:
+     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+configs:
+  cm:
+    controller.self.heal.timeout.seconds: "600"
+    # Specifies if resource health should be persisted in app CRD (default true)
+    # Changing this to `false` significantly reduce number of Application CRD updates and improves controller performance.
+    controller.resource.health.persist: "false"
+    ui.bannerpermanent: "false"
+    controller.auto-sync: "true"
+    resource.customizations: |
+      services.k8s.aws/AdoptedResource:
+        health.lua: |
+          hs = {}
+          if obj.status ~= nil then
+            if obj.status.conditions ~= nil then
+              for i, condition in ipairs(obj.status.conditions) do
+                if condition.type == "ACK.Adopted" and condition.status == "False" then
+                  hs.status = "Degraded"
+                  hs.message = condition.message
+                  return hs
+                end
+                if condition.type == "ACK.Adopted" and condition.status == "True" then
+                  hs.status = "Healthy"
+                  hs.message = condition.message
+                  return hs
+                end
+              end
+            end
+          end
+
+          hs.status = "Progressing"
+          hs.message = "Waiting for Status conditions"
+          return hs
+      "*.services.k8s.aws/*":
+        health.lua.useOpenLibs: true
+        health.lua: |
+          hs = {}
+          if obj.status and obj.status.conditions then
+              for i, condition in ipairs(obj.status.conditions) do
+                  if condition.status == "Unknown" then
+                      hs.status = "Degraded"
+                      hs.message = condition.reason
+                      return hs
+                  elseif condition.type == "ACK.Recoverable" and condition.status == "True" then
+                      hs.status = "Degraded"
+                      hs.message = condition.message
+                      return hs
+                  elseif condition.type == "ACK.Terminal" and condition.status == "True" then
+                      hs.status = "Degraded"
+                      hs.message = condition.message
+                      return hs
+                  elseif condition.type == "ACK.ResourceSynced" then
+                      if condition.status == "True" then
+                          hs.status = "Healthy"
+                          hs.message = condition.message
+                          return hs
+                      elseif condition.status == "False" then
+                          hs.status = "Progressing"
+                          hs.message = condition.reason
+                          return hs
+                      end
+                  end
+              end
+          end
+          hs.status = "Progressing"
+          hs.message = "Waiting for Status conditions"
+          return hs
+
+  repositories:
+    # Required when using helm repository with oci formal like karpenter and aws-gateway-api-controller
+    aws-public-ecr:
+      name: aws-public-ecr
+      type: helm
+      url: public.ecr.aws
+      enableOCI: 'true'
+    ghcr.io:
+      name: ghcr.io
+      type: helm
+      url: ghcr.io
+      enableOCI: 'true'

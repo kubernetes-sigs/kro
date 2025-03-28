@@ -250,3 +250,49 @@ func TestValidateKubernetesVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateResourceGraphDefinitionNamingConventions(t *testing.T) {
+	tests := []struct {
+		name       string
+		resourceID string
+		kind       string
+		wantErr    bool
+	}{
+		{
+			name:       "Valid naming conventions",
+			resourceID: "validResourceID",
+			kind:       "ValidKindName",
+			wantErr:    false,
+		},
+		{
+			name:       "Invalid kind name",
+			resourceID: "validResourceID",
+			kind:       "invalidKindName",
+			wantErr:    true,
+		},
+		{
+			name:       "Invalid resource ID",
+			resourceID: "invalid_ResourceID",
+			kind:       "ValidKindName",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: tt.resourceID},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: tt.kind,
+					},
+				},
+			}
+			if err := validateResourceGraphDefinitionNamingConventions(rgd); (err != nil) != tt.wantErr {
+				t.Errorf("validateResourceGraphDefinitionNamingConventions() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

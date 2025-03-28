@@ -18,6 +18,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/release-utils/version"
 )
 
 // mockObject is a simple implementation of metav1.Object for testing
@@ -30,19 +32,19 @@ func (m *mockObject) GetObjectMeta() metav1.Object {
 	return m
 }
 
-func TestIsKroOwned(t *testing.T) {
+func TestIsKROOwned(t *testing.T) {
 	cases := []struct {
 		name     string
 		labels   map[string]string
 		expected bool
 	}{
 		{
-			name:     "owned by Kro",
+			name:     "owned by kro",
 			labels:   map[string]string{OwnedLabel: "true"},
 			expected: true,
 		},
 		{
-			name:     "not owned by Kro",
+			name:     "not owned by kro",
 			labels:   map[string]string{OwnedLabel: "false"},
 			expected: false,
 		},
@@ -56,13 +58,13 @@ func TestIsKroOwned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.labels}
-			result := IsKroOwned(meta)
+			result := IsKROOwned(meta)
 			assert.Equal(t, tc.expected, result)
 		})
 	}
 }
 
-func TestSetKroOwned(t *testing.T) {
+func TestSetKROOwned(t *testing.T) {
 	cases := []struct {
 		name          string
 		initialLabels map[string]string
@@ -83,13 +85,13 @@ func TestSetKroOwned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKroOwned(meta)
+			SetKROOwned(meta)
 			assert.Equal(t, tc.expected, meta.Labels)
 		})
 	}
 }
 
-func TestSetKroUnowned(t *testing.T) {
+func TestSetKROUnowned(t *testing.T) {
 	cases := []struct {
 		name          string
 		initialLabels map[string]string
@@ -110,7 +112,7 @@ func TestSetKroUnowned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKroUnowned(meta)
+			SetKROUnowned(meta)
 			assert.Equal(t, tc.expected, meta.Labels)
 		})
 	}
@@ -119,25 +121,28 @@ func TestSetKroUnowned(t *testing.T) {
 func TestGenericLabeler(t *testing.T) {
 	t.Run("ApplyLabels", func(t *testing.T) {
 		cases := []struct {
-			name     string
-			labeler  GenericLabeler
-			expected map[string]string
+			name         string
+			labeler      GenericLabeler
+			objectLabels map[string]string
+			expected     map[string]string
 		}{
 			{
-				name:     "Apply labels to empty object",
-				labeler:  GenericLabeler{"key1": "value1", "key2": "value2"},
-				expected: map[string]string{"key1": "value1", "key2": "value2"},
+				name:         "Apply labels to empty object",
+				labeler:      GenericLabeler{"key1": "value1", "key2": "value2"},
+				objectLabels: nil,
+				expected:     map[string]string{"key1": "value1", "key2": "value2"},
 			},
 			{
-				name:     "Apply labels to object with existing labels",
-				labeler:  GenericLabeler{"key2": "newvalue2", "key3": "value3"},
-				expected: map[string]string{"key1": "value1", "key2": "newvalue2", "key3": "value3"},
+				name:         "Apply labels to object with existing labels",
+				labeler:      GenericLabeler{"key2": "newvalue2", "key3": "value3"},
+				objectLabels: map[string]string{"key1": "value1", "key2": "value2"},
+				expected:     map[string]string{"key1": "value1", "key2": "newvalue2", "key3": "value3"},
 			},
 		}
 
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"key1": "value1"}}}
+				obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Labels: tc.objectLabels}}
 				tc.labeler.ApplyLabels(obj)
 				assert.Equal(t, tc.expected, obj.Labels)
 			})
@@ -179,5 +184,40 @@ func TestGenericLabeler(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
+	t.Run("NewResourceGraphDefinitionLabeler", func(t *testing.T) {
+		name := "rgd-name"
+		uid := types.UID("rgd-uid")
+		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
+		labeler := NewResourceGraphDefinitionLabeler(obj)
+		assert.Equal(t, GenericLabeler{
+			ResourceGraphDefinitionNameLabel: name,
+			ResourceGraphDefinitionIDLabel:   string(uid),
+		}, labeler)
+	})
+}
+
+func TestNewInstanceLabeler(t *testing.T) {
+	t.Run("NewInstanceLabeler", func(t *testing.T) {
+		name := "instance-name"
+		namespace := "instance-namespace"
+		uid := types.UID("instance-uid")
+		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: uid}}
+		labeler := NewInstanceLabeler(obj)
+		assert.Equal(t, GenericLabeler{
+			InstanceLabel:          name,
+			InstanceNamespaceLabel: namespace,
+			InstanceIDLabel:        string(uid),
+		}, labeler)
+	})
+}
+
+func TestNewKROMetaLabeler(t *testing.T) {
+	t.Run("NewKROMetaLabeler", func(t *testing.T) {
+		labeler := NewKROMetaLabeler()
+		assert.Equal(t, GenericLabeler{OwnedLabel: "true", KROVersionLabel: version.GetVersionInfo().GitVersion}, labeler)
 	})
 }

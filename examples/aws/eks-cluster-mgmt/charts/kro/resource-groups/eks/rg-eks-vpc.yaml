@@ -1,0 +1,195 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: eksclusterwithvpc.kro.run
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EksclusterWithVpc
+    spec:
+      name: string
+      tenant: string | default="auto1"
+      environment: string | default="staging"
+      region: string | default="us-west-2"
+      k8sVersion: string | default="1.32"
+      accountId: string
+      managementAccountId: string
+      adminRoleName: string | default="Admin"
+      fleetSecretManagerSecretNameSuffix: string | default="argocd-secret"
+      domainName: string | default="cluster.example.com"
+      cidr:
+        vpcCidr: string | default="10.0.0.0/16"
+        publicSubnet1Cidr: string | default="10.0.1.0/24"
+        publicSubnet2Cidr: string | default="10.0.2.0/24"
+        privateSubnet1Cidr: string | default="10.0.11.0/24"
+        privateSubnet2Cidr: string | default="10.0.12.0/24"
+      workloads: string | default="false" # Define if we want to deploy workloads application
+      gitops:
+        addonsRepoBasePath: string | default="addons/"
+        addonsRepoPath: string | default="bootstrap"
+        addonsRepoRevision: string | default="main"
+        addonsRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
+
+        fleetRepoBasePath: string | default="fleet/"
+        fleetRepoPath: string | default="bootstrap"
+        fleetRepoRevision: string | default="main"
+        fleetRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
+
+        platformRepoBasePath: string | default="platform/"
+        platformRepoPath: string | default="bootstrap"
+        platformRepoRevision: string | default="main"
+        platformRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
+
+        workloadRepoBasePath: string | default="apps/"
+        workloadRepoPath: string | default=""
+        workloadRepoRevision: string | default="main"
+        workloadRepoUrl: string | default="https://github.com/allamand/eks-cluster-mgmt"
+
+      addons:
+
+        enable_metrics_server: string | default="false"
+        enable_external_secrets: string | default="true"
+        enable_external_dns: string | default="false"
+        enable_adot_collector: string | default="false"
+        enable_cw_prometheus: string | default="false"
+        enable_kyverno: string | default="true"
+        enable_kyverno_policies: string | default="true"
+        enable_kyverno_policy_reporter: string | default="true"
+        enable_cni_metrics_helper: string | default="false"
+        enable_prometheus_node_exporter: string | default="false"
+        enable_kube_state_metrics: string | default="false"
+        enable_opentelemetry_operator: string | default="false"
+        enable_cert_manager: string | default="false"
+        enable_ack_iam: string | default="true"
+        enable_ack_eks: string | default="true"
+        enable_ack_efs: string | default="true"
+        enable_aws_efs_csi_driver: string | default="true"
+
+        adot_collector_namespace: string | default="adot-collector-kubeprometheus"
+        adot_collector_service_account: string | default="adot-collector-kubeprometheus"
+
+        external_dns_namespace: string | default="external-dns"
+        external_dns_service_account: string | default="external-dns-sa"
+        external_dns_policy: string | default="sync"
+
+        external_secrets_namespace: string | default="external-secrets"
+        external_secrets_service_account: string | default="external-secrets-sa"
+
+        # aws_load_balancer_controller_namespace: string | default="kube-system"
+        # aws_load_balancer_controller_service_account: string | default="aws-load-balancer-controller-sa"
+
+        amp_endpoint_url: string | default=""
+
+        # karpenter_namespace: string | default="karpenter"
+        # karpenter_service_account: string | default="karpenter-sa"
+        # karpenter_sqs_queue_name: string | default=""
+
+  resources:
+  - id: vpc
+    readyWhen:
+    - ${vpc.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: Vpc
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.name}
+        labels:
+          app.kubernetes.io/instance: ${schema.spec.name}
+        annotations:
+          argocd.argoproj.io/tracking-id: clusters:kro.run/Vpc:${schema.spec.name}/${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        region: ${schema.spec.region}
+        cidr:
+          vpcCidr: ${schema.spec.cidr.vpcCidr}
+          publicSubnet1Cidr: ${schema.spec.cidr.publicSubnet1Cidr}
+          publicSubnet2Cidr: ${schema.spec.cidr.publicSubnet2Cidr}
+          privateSubnet1Cidr: ${schema.spec.cidr.privateSubnet1Cidr}
+          privateSubnet2Cidr: ${schema.spec.cidr.privateSubnet2Cidr}
+  - id: eks
+    readyWhen:
+    - ${eks.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: EksCluster
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.name}
+        labels:
+          app.kubernetes.io/instance: ${schema.spec.name}
+        annotations:
+          argocd.argoproj.io/tracking-id: clusters:kro.run/EksCluster:${schema.spec.name}/${schema.spec.name}                     
+      spec:
+          name: ${schema.spec.name}
+          tenant: ${schema.spec.tenant}
+          environment: ${schema.spec.environment}
+          region: ${schema.spec.region}
+          accountId: ${schema.spec.accountId}
+          managementAccountId: ${schema.spec.managementAccountId}
+          k8sVersion: ${schema.spec.k8sVersion}
+          adminRoleName: ${schema.spec.adminRoleName}
+          fleetSecretManagerSecretNameSuffix: ${schema.spec.fleetSecretManagerSecretNameSuffix}
+          domainName: ${schema.spec.domainName}
+          network:
+            vpcID: ${vpc.status.vpcID}
+            subnets:
+              controlplane:
+                subnet1ID: ${vpc.status.privateSubnet1ID}
+                subnet2ID: ${vpc.status.privateSubnet2ID}
+              workers:
+                subnet1ID: ${vpc.status.privateSubnet1ID}
+                subnet2ID: ${vpc.status.privateSubnet2ID}
+          workloads: ${schema.spec.workloads}
+          gitops:
+            addonsRepoBasePath: ${schema.spec.gitops.addonsRepoBasePath}
+            addonsRepoPath: ${schema.spec.gitops.addonsRepoPath}
+            addonsRepoRevision: ${schema.spec.gitops.addonsRepoRevision}
+            addonsRepoUrl: ${schema.spec.gitops.addonsRepoUrl}
+            fleetRepoBasePath: ${schema.spec.gitops.fleetRepoBasePath}
+            fleetRepoPath: ${schema.spec.gitops.fleetRepoPath}
+            fleetRepoRevision: ${schema.spec.gitops.fleetRepoRevision}
+            fleetRepoUrl: ${schema.spec.gitops.fleetRepoUrl}
+            platformRepoBasePath: ${schema.spec.gitops.platformRepoBasePath}
+            platformRepoPath: ${schema.spec.gitops.platformRepoPath}
+            platformRepoRevision: ${schema.spec.gitops.platformRepoRevision}
+            platformRepoUrl: ${schema.spec.gitops.platformRepoUrl}
+            workloadRepoBasePath: ${schema.spec.gitops.workloadRepoBasePath}
+            workloadRepoPath: ${schema.spec.gitops.workloadRepoPath}
+            workloadRepoRevision: ${schema.spec.gitops.workloadRepoRevision}
+            workloadRepoUrl: ${schema.spec.gitops.workloadRepoUrl}
+          addons:
+            enable_metrics_server: ${schema.spec.addons.enable_metrics_server}
+            enable_external_secrets: ${schema.spec.addons.enable_external_secrets}
+            enable_external_dns: ${schema.spec.addons.enable_external_dns}
+            enable_adot_collector: ${schema.spec.addons.enable_adot_collector}
+            enable_cw_prometheus: ${schema.spec.addons.enable_cw_prometheus}
+            enable_kyverno: ${schema.spec.addons.enable_kyverno}
+            enable_kyverno_policies: ${schema.spec.addons.enable_kyverno_policies}
+            enable_kyverno_policy_reporter: ${schema.spec.addons.enable_kyverno_policy_reporter}
+            enable_cni_metrics_helper: ${schema.spec.addons.enable_cni_metrics_helper}
+            enable_prometheus_node_exporter: ${schema.spec.addons.enable_prometheus_node_exporter}
+            enable_kube_state_metrics: ${schema.spec.addons.enable_kube_state_metrics}
+            enable_opentelemetry_operator: ${schema.spec.addons.enable_opentelemetry_operator}
+            enable_cert_manager: ${schema.spec.addons.enable_cert_manager}
+            enable_ack_iam: ${schema.spec.addons.enable_ack_iam}
+            enable_ack_eks: ${schema.spec.addons.enable_ack_eks}
+            enable_ack_efs: ${schema.spec.addons.enable_ack_efs}
+            enable_aws_efs_csi_driver: ${schema.spec.addons.enable_aws_efs_csi_driver}
+
+            adot_collector_namespace: ${schema.spec.addons.adot_collector_namespace}
+            adot_collector_service_account: ${schema.spec.addons.adot_collector_service_account}
+            external_dns_namespace: ${schema.spec.addons.external_dns_namespace}
+            external_dns_service_account: ${schema.spec.addons.external_dns_service_account}
+            external_dns_policy: ${schema.spec.addons.external_dns_policy}
+            external_secrets_namespace: ${schema.spec.addons.external_secrets_namespace}
+            external_secrets_service_account: ${schema.spec.addons.external_secrets_service_account}
+            # aws_load_balancer_controller_namespace: ${schema.spec.addons.aws_load_balancer_controller_namespace}
+            # aws_load_balancer_controller_service_account: ${schema.spec.addons.aws_load_balancer_controller_service_account}
+            amp_endpoint_url: ${schema.spec.addons.amp_endpoint_url}
+            # karpenter_namespace: ${schema.spec.addons.karpenter_namespace}
+            # karpenter_service_account: ${schema.spec.addons.karpenter_service_account}
+

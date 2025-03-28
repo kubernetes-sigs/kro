@@ -1,0 +1,13 @@
+podIdentityPolicyCreate: true
+podIdentityRole:
+  description: "EFS Controler Default Role"
+podIdentityAssociation:
+  serviceAccounts:
+      - ack-efs-controller
+podIdentityPolicy:
+   description: "EFS Role"
+   policies:
+     - resourceType: efs
+       resourceName: "*"
+       actions: 
+       - "elasticfilesystem:*"

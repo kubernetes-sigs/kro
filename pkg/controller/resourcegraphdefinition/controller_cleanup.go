@@ -42,7 +42,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 
 	group := rgd.Spec.Schema.Group
 	if group == "" {
-		group = v1alpha1.KroDomainName
+		group = v1alpha1.KRODomainName
 	}
 	// cleanup CRD
 	crdName := extractCRDName(group, rgd.Spec.Schema.Kind)
@@ -78,7 +78,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ct
 }
 
 // extractCRDName generates the CRD name from a given kind by converting it to plural form
-// and appending the Kro domain name.
+// and appending the kro domain name.
 func extractCRDName(group, kind string) string {
 	return fmt.Sprintf("%s.%s",
 		flect.Pluralize(strings.ToLower(kind)),

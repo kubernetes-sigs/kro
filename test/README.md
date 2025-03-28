@@ -19,7 +19,7 @@ deployed in production clusters.
 2. Focus on kro's logic, not on other controllers or Kubernetes components. e.g
    avoid testing native controllers, ACK or Karpenter's behaviour...
 3. Prioritize integration tests, validate with end to end tests.
-4. Maintain seperation of concerns, controller logic, integration tests, and e2e
+4. Maintain separation of concerns, controller logic, integration tests, and e2e
    tests
 5. Ensure readability: similar to the codebase, tests should be easy to read,
    understand and maintain.
@@ -87,7 +87,7 @@ should:
 12. Delete the `ResourceGraphDefinition` custom resource
 13. Verify that the corresponding CRD is removed from the cluster
 
-### Addional scenarios
+### Additional scenarios
 
 1. Cross namespace resource management
 2. Scaling testing: Create a large number of ResourceGraphDefinitions and ResourceGraphDefinition

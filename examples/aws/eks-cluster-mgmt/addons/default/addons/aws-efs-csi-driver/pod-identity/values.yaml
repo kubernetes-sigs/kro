@@ -1,0 +1,29 @@
+podIdentityPolicyCreate: true
+podIdentityRole:
+  description: "EFS CSI Default Role"
+podIdentityAssociation:
+  serviceAccounts:
+      - efs-csi-controller-sa
+      - efs-csi-node-sa
+podIdentityPolicy:
+  description: "EFS CSI Default Policy"
+  policies:
+    - resourceType: ec2
+      resourceName: "*"
+      actions:
+        - "ec2:DescribeAvailabilityZones"
+    - resourceType: elasticfilesystem
+      resourceName: "*"
+      actions:
+        - "elasticfilesystem:DescribeAccessPoints"
+        - "elasticfilesystem:DescribeFileSystems"
+        - "elasticfilesystem:DescribeMountTargets"
+        - "elasticfilesystem:DescribeMountTargetSecurityGroups"
+    - resourceType: elasticfilesystem
+      resourceName: "*"
+      actions:
+        - "elasticfilesystem:CreateAccessPoint"
+        - "elasticfilesystem:DeleteAccessPoint"
+        - "elasticfilesystem:CreateFileSystem"
+        - "elasticfilesystem:CreateMountTarget"
+        - "elasticfilesystem:ModifyMountTargetSecurityGroups"

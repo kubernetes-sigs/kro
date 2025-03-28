@@ -1,0 +1,113 @@
+# using upstream argo chart https://github.com/argoproj/argo-helm/tree/main/charts/argocd-apps
+projects:
+- name: backend
+  sourceRepos:
+  - 'tobereplace'
+  namespace: argocd
+  additionalLabels: {}
+  additionalAnnotations: {}
+  description: Team Project
+  destinations:
+  - namespace: carts
+    name: workload-cluster1
+  - namespace: catalog
+    name: workload-cluster1
+  - namespace: checkout
+    name: workload-cluster1
+  - namespace: orders
+    name: workload-cluster1
+  - namespace: rabbitmq
+    name: workload-cluster1
+
+  - namespace: carts
+    name: workload-cluster2
+  - namespace: catalog
+    name: workload-cluster2
+  - namespace: checkout
+    name: workload-cluster2
+  - namespace: orders
+    name: workload-cluster2
+  - namespace: rabbitmq
+    name: workload-cluster2
+
+  - namespace: carts
+    name: workload-cluster3
+  - namespace: catalog
+    name: workload-cluster3
+  - namespace: checkout
+    name: workload-cluster3
+  - namespace: orders
+    name: workload-cluster3
+  - namespace: rabbitmq
+    name: workload-cluster3
+
+  - namespace: carts
+    name: workload-cluster4
+  - namespace: catalog
+    name: workload-cluster4
+  - namespace: checkout
+    name: workload-cluster4
+  - namespace: orders
+    name: workload-cluster4
+  - namespace: rabbitmq
+    name: workload-cluster4
+
+  - namespace: carts
+    name: workload-cluster5
+  - namespace: catalog
+    name: workload-cluster5
+  - namespace: checkout
+    name: workload-cluster5
+  - namespace: orders
+    name: workload-cluster5
+  - namespace: rabbitmq
+    name: workload-cluster5
+
+  - namespace: carts
+    name: workload-cluster6
+  - namespace: catalog
+    name: workload-cluster6
+  - namespace: checkout
+    name: workload-cluster6
+  - namespace: orders
+    name: workload-cluster6
+  - namespace: rabbitmq
+    name: workload-cluster6
+
+  - namespace: "*"
+    server: 'https://kubernetes.default.svc'
+  
+  # Allow all namespaced-scoped resources to be created, except for ResourceQuota, LimitRange, NetworkPolicy
+  namespaceResourceBlacklist:
+  - group: ''
+    kind: ResourceQuota
+  - group: ''
+    kind: LimitRange
+  - group: ''
+    kind: NetworkPolicy
+  # Deny all namespaced-scoped resources from being created, except for these
+  namespaceResourceWhitelist:
+  - group: ''
+    kind: Pod
+  - group: 'apps'
+    kind: Deployment
+  - group: 'apps'
+    kind: StatefulSet
+  - group: 'apps'
+    kind: ReplicaSet
+  - group: ''
+    kind: Service
+  - group: ''
+    kind: ServiceAccount
+  - group: ''
+    kind: ConfigMap
+  - group: ''
+    kind: Secret
+  - group: 'rbac.authorization.k8s.io'
+    kind: RoleBinding
+  - group: 'rbac.authorization.k8s.io'
+    kind: Role
+  - group: 'dynamodb.services.k8s.aws'
+    kind: Table
+  - group: 'autoscaling'
+    kind: HorizontalPodAutoscaler

@@ -1,5 +1,3 @@
-
-RELEASE_VERSION ?= dev-$(shell git rev-parse --short HEAD)
 OCI_REPO ?= ghcr.io/kro-run/kro
 
 HELM_IMAGE ?= ${OCI_REPO}
@@ -8,6 +6,27 @@ KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
 export KIND_CLUSTER_NAME ?= kro
+
+GIT_TAG ?= dirty-tag
+GIT_VERSION ?= $(shell git describe --tags --always --dirty)
+GIT_HASH ?= $(shell git rev-parse HEAD)
+DATE_FMT = +%Y-%m-%dT%H:%M:%SZ
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --no-show-signature --pretty=%ct)
+ifdef SOURCE_DATE_EPOCH
+    BUILD_DATE ?= $(shell date -u -d "@$(SOURCE_DATE_EPOCH)" "$(DATE_FMT)" 2>/dev/null || date -u -r "$(SOURCE_DATE_EPOCH)" "$(DATE_FMT)" 2>/dev/null || date -u "$(DATE_FMT)")
+else
+    BUILD_DATE ?= $(shell date "$(DATE_FMT)")
+endif
+GIT_TREESTATE = "clean"
+DIFF = $(shell git diff --quiet >/dev/null 2>&1; if [ $$? -eq 1 ]; then echo "1"; fi)
+ifeq ($(DIFF), 1)
+    GIT_TREESTATE = "dirty"
+endif
+
+LDFLAGS=-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION) \
+        -X sigs.k8s.io/release-utils/version.gitCommit=$(GIT_HASH) \
+        -X sigs.k8s.io/release-utils/version.gitTreeState=$(GIT_TREESTATE) \
+        -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
@@ -106,7 +125,7 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 .PHONY: build
 build: manifests generate fmt vet ## Build controller binary.
-	go build -o bin/controller ./cmd/controller/main.go
+	go build -ldflags=${LDFLAGS} -o bin/controller ./cmd/controller/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -194,7 +213,7 @@ build-image: ko ## Build the kro controller images using ko build
 
 .PHONY: publish
 publish-image: ko ## Publish the kro controller images to ghcr.io
-	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) \
+	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kro-run/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
@@ -229,13 +248,17 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy-kind
 deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind:
+deploy-kind: ko
 	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system
 	make install
-	# This generates deployment with ko://... used in image. 
+	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
 	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
+
+.PHONY: ko-apply
+ko-apply: ko
+	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -

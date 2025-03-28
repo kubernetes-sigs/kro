@@ -1,0 +1,60 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: lattice.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Lattice
+    spec:
+      name: string
+      namespace: string | default=default
+      port: integer | default=80
+      vpcLatticeName: string | default="kro-vpc-lattice-demo"
+      listenerProtocol: string | default="HTTP"
+
+  resources:
+  - id: targetgrouppolicy
+    template:
+      apiVersion: application-networking.k8s.aws/v1alpha1
+      kind: TargetGroupPolicy
+      metadata:
+        name: ${schema.spec.vpcLatticeName}
+        namespace: ${schema.spec.namespace}
+      spec:
+        targetRef:
+          group: ""
+          kind: Service
+          name: ${schema.spec.name}
+        protocol: ${schema.spec.listenerProtocol}
+        protocolVersion: HTTP1
+        healthCheck:
+          enabled: true
+          intervalSeconds: 10
+          timeoutSeconds: 1
+          healthyThresholdCount: 3
+          unhealthyThresholdCount: 2
+          path: "/"
+          port: ${schema.spec.port}
+          protocol: HTTP
+          protocolVersion: HTTP1
+          statusMatch: "200"
+
+  - id: httproute
+    template:
+      apiVersion: gateway.networking.k8s.io/v1beta1
+      kind: HTTPRoute
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+      spec:
+        parentRefs:
+          - name: ${schema.spec.vpcLatticeName}
+            sectionName: http
+        rules:
+          - backendRefs:
+              - name: ${schema.spec.name}
+                namespace: ${schema.spec.namespace}
+                kind: Service
+                port: ${schema.spec.port}
+                weight: 100

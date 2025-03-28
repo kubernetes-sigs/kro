@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	KroInstancesGroupSuffix = v1alpha1.KroDomainName
+	KROInstancesGroupSuffix = v1alpha1.KRODomainName
 )
 
 // ExtractGVKFromUnstructured extracts the GroupVersionKind from an unstructured object.

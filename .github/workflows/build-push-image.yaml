@@ -4,8 +4,16 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
   pull_request:
     branches: [ main ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
 
 env:
   KO_DOCKER_REPO: ghcr.io/${{ github.repository }}/controller

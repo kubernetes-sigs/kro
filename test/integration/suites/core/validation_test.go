@@ -285,6 +285,7 @@ var _ = Describe("Validation", func() {
 				"123Test",       // Starts with number
 				"Test.Resource", // Contains dot
 				"Test!",         // Special character
+				"TestThisIsAValidButReallyLongNameSoLongThatItIsGreaterThan63Characters", // Greater than 63 characters
 			}
 
 			for _, kind := range invalidKinds {
@@ -298,15 +299,7 @@ var _ = Describe("Validation", func() {
 					),
 				)
 
-				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-				Eventually(func(g Gomega) {
-					err := env.Client.Get(ctx, types.NamespacedName{
-						Name: rgd.Name,
-					}, rgd)
-					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-				}, 10*time.Second, time.Second).Should(Succeed())
+				Expect(env.Client.Create(ctx, rgd)).ToNot(Succeed())
 			}
 		})
 	})

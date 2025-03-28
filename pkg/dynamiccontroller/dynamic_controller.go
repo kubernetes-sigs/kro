@@ -38,7 +38,7 @@
 //
 // Why not use k8s.io/controller-runtime:
 //
-//  1. Staticc nature: controller-runtime is optimized for statically defined
+//  1. Static nature: controller-runtime is optimized for statically defined
 //     controllers, however kro requires runtime creation and management
 //     of controllers for various GVRs.
 //
@@ -90,7 +90,7 @@ type Config struct {
 	// will be retried before being dropped.
 	//
 	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
-	// situations where reconcile errors exauhst the queue.
+	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
 	// ShutdownTimeout is the maximum duration to wait for the controller to
 	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving

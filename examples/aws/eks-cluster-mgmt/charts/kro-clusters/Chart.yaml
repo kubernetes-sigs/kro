@@ -1,0 +1,6 @@
+apiVersion: v2
+name: eks-fleet-clusters
+description: A Helm chart for managing EKS Fleet clusters
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

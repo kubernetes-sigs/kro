@@ -243,7 +243,7 @@ var _ = Describe("Conditions", func() {
 		// Create instance
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestConditions",
 				"metadata": map[string]interface{}{
 					"name":      name,

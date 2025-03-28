@@ -1,13 +1,13 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "kro.fullname" . }}-role-binding
+  name: {{ include "kro.fullname" . }}{{- if eq .Values.rbac.mode "unrestricted" -}}-cluster-role-binding{{- else -}}:controller{{- end }}
   labels:
     {{- include "kro.labels" . | nindent 4 }}
 roleRef:
   kind: ClusterRole
   apiGroup: rbac.authorization.k8s.io
-  name: {{ include "kro.fullname" . }}-cluster-role
+  name: {{ include "kro.fullname" . }}{{- if eq .Values.rbac.mode "unrestricted" -}}-cluster-role{{- else -}}:controller{{- end }}
 subjects:
 - kind: ServiceAccount
   name: {{ include "kro.serviceAccountName" . }}

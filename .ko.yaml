@@ -5,3 +5,4 @@ defaultPlatforms:
 defaultLdflags:
   - -s
   - -w
+  - "{{ .Env.LDFLAGS }}"

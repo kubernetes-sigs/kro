@@ -28,9 +28,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/release-utils/version"
 
 	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
 	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
+	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/test/integration/environment"
 )
 
@@ -161,6 +163,9 @@ var _ = Describe("DeploymentService", func() {
 			g.Expect(service.Spec.Ports).To(HaveLen(1))
 			g.Expect(service.Spec.Ports[0].Port).To(Equal(int32(8080)))
 			g.Expect(service.Spec.Ports[0].TargetPort.IntVal).To(Equal(int32(8080)))
+			g.Expect(service.ObjectMeta.Labels).To(HaveKeyWithValue(metadata.OwnedLabel, "true"))
+			g.Expect(service.ObjectMeta.Labels).
+				To(HaveKeyWithValue(metadata.KROVersionLabel, version.GetVersionInfo().GitVersion))
 		}, 20*time.Second, time.Second).Should(Succeed())
 
 		// Verify instance status is updated

@@ -108,7 +108,7 @@ var _ = Describe("Update", func() {
 		// Create initial instance
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "TestUpdate",
 				"metadata": map[string]interface{}{
 					"name":      "test-instance-for-updates",

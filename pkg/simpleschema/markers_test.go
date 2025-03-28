@@ -87,6 +87,24 @@ func TestParseMarkers(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:  "minimum and maximum markers",
+			input: "minimum=0 maximum=100",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinimum, Key: "minimum", Value: "0"},
+				{MarkerType: MarkerTypeMaximum, Key: "maximum", Value: "100"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "decimal minimum and maximum",
+			input: "minimum=0.1 maximum=1.5",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinimum, Key: "minimum", Value: "0.1"},
+				{MarkerType: MarkerTypeMaximum, Key: "maximum", Value: "1.5"},
+			},
+			wantErr: false,
+		},
+		{
 			name:  "Markers with spaces in values",
 			input: "description=\"This has spaces\" default=5 required=true",
 			want: []*Marker{

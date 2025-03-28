@@ -22,21 +22,21 @@ import (
 	"github.com/kro-run/kro/api/v1alpha1"
 )
 
-const kroFinalizer = v1alpha1.KroDomainName + "/finalizer"
+const kroFinalizer = v1alpha1.KRODomainName + "/finalizer"
 
-// SetResourceGraphDefinitionFinalizer adds the Kro finalizer to the object if it's not already present.
+// SetResourceGraphDefinitionFinalizer adds the kro finalizer to the object if it's not already present.
 func SetResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	if !HasResourceGraphDefinitionFinalizer(obj) {
 		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
 	}
 }
 
-// RemoveResourceGraphDefinitionFinalizer removes the Kro finalizer from the object.
+// RemoveResourceGraphDefinitionFinalizer removes the kro finalizer from the object.
 func RemoveResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
 }
 
-// HasResourceGraphDefinitionFinalizer checks if the object has the Kro finalizer.
+// HasResourceGraphDefinitionFinalizer checks if the object has the kro finalizer.
 func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
 	return containsString(obj.GetFinalizers(), kroFinalizer)
 }

@@ -1,0 +1,23 @@
+apiVersion: dynamodb.services.k8s.aws/v1alpha1
+kind: Table
+metadata:
+  name: items
+spec:
+  tableName: Items
+  billingMode: PAY_PER_REQUEST
+  tableClass: STANDARD
+  attributeDefinitions:
+    - attributeName: id
+      attributeType: S
+    - attributeName: customerId
+      attributeType: S
+  keySchema:
+    - attributeName: id
+      keyType: HASH
+  globalSecondaryIndexes:
+  - indexName: idx_global_customerId
+    keySchema: 
+    - attributeName: customerId
+      keyType: HASH
+    projection:
+      projectionType: ALL

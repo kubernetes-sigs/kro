@@ -1,0 +1,95 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: serviceingress.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ServiceIngress
+    spec:
+      name: string | default=ingress-service
+      ingressClassName: string | default=alb
+      namespace: string
+      subDomain: string
+      image: string | default=nginx
+  resources:
+  - id: ingresstriangle
+    readyWhen:
+      - ${ingresstriangle.status.loadBalancerARN != null}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: IngressTriangle
+      metadata:
+        name: ${schema.spec.name}-tri
+      spec:
+        name: ${schema.spec.name}
+        ingressClassName: ${schema.spec.ingressClassName}
+        namespace: ${schema.spec.namespace}
+        subDomain: ${schema.spec.subDomain}
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        replicas: 3
+        selector:
+          matchLabels:
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app: ${schema.spec.name}
+          spec:
+            initContainers:
+              - name: webpage-creator
+                image: busybox
+                command: ["/bin/sh", "-c"]
+                args:
+                  - |
+                    cat <<EOF > /workspace/index.html
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Welcome</title>
+                        <style>
+                            body { 
+                                font-family: Arial, sans-serif;
+                                margin: 40px;
+                                text-align: center;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Welcome to ${schema.spec.name}</h1>
+                        <p>This is a custom welcome page</p>
+                    </body>
+                    </html>
+                    EOF
+                volumeMounts:
+                  - name: shared-files
+                    mountPath: /workspace
+            containers:
+              - name: ${schema.spec.name}
+                image: ${schema.spec.image}
+                ports:
+                  - containerPort: 80
+                volumeMounts:
+                  - name: shared-files
+                    mountPath: /usr/share/nginx/html
+            volumes:
+              - name: shared-files
+                emptyDir: {}
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        selector: ${deployment.spec.selector.matchLabels}
+        ports:
+          - protocol: TCP
+            port: 80
+            targetPort: 80

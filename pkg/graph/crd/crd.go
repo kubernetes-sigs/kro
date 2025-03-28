@@ -29,7 +29,7 @@ import (
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool) *extv1.CustomResourceDefinition {
 	crdGroup := group
 	if crdGroup == "" {
-		crdGroup = v1alpha1.KroDomainName
+		crdGroup = v1alpha1.KRODomainName
 	}
 	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride))
 }

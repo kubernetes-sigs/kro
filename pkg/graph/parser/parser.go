@@ -68,51 +68,22 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 }
 
 func getExpectedTypes(schema *spec.Schema) ([]string, error) {
-	// Handle "x-kubernetes-preserve-unknown-fields" extension first
-	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-		return []string{schemaTypeAny}, nil
-	}
-
-	// Handle "x-kubernetes-int-or-string" extension
-	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) {
-		return []string{"string", "integer"}, nil
-	}
-
-	// Handle OneOf schemas
-	if len(schema.OneOf) > 0 {
-		var types []string
-
-		for _, subSchema := range schema.OneOf {
-			// If there are structural constraints, inject object
-			if len(subSchema.Required) > 0 || subSchema.Not != nil {
-				if !slices.Contains(types, "object") {
-					types = append(types, "object")
-				}
-			}
-			// Collect types if present
-			if len(subSchema.Type) > 0 {
-				types = append(types, subSchema.Type...)
-			}
-		}
-		// If we found any types, return them
-		if len(types) > 0 {
-			return types, nil
-		}
-	}
-
-	// Handle AnyOf schemas
-	if len(schema.AnyOf) > 0 {
-		var types []string
-		for _, subType := range schema.AnyOf {
-			types = append(types, subType.Type...)
-		}
+	// Handle extensions (like x-kubernetes-int-or-string)
+	if types, found := handleSchemaExtensions(schema); found {
 		return types, nil
 	}
 
+	// Handle composite schemas (like OneOf, AnyOf)
+	if types, found := handleCompositeSchemas(schema); found {
+		return types, nil
+	}
+
+	// Handle direct type definitions
 	if len(schema.Type) > 0 && schema.Type[0] != "" {
 		return schema.Type, nil
 	}
 
+	// Handle additional properties
 	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
 		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
 		// in the future; just haven't really thought about it yet.
@@ -120,7 +91,71 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 		// the ExpectedSchema field.
 		return []string{schemaTypeAny}, nil
 	}
+
 	return nil, fmt.Errorf("unknown schema type")
+}
+
+// handleSchemaExtensions processes Kubernetes-specific schema extensions
+// and returns appropriate types if extensions are present.
+func handleSchemaExtensions(schema *spec.Schema) ([]string, bool) {
+	// Handle "x-kubernetes-preserve-unknown-fields" extension
+	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
+		return []string{schemaTypeAny}, true
+	}
+
+	// Handle "x-kubernetes-int-or-string" extension
+	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) {
+		return []string{"string", "integer"}, true
+	}
+
+	return nil, false
+}
+
+// handleCompositeSchemas processes OneOf and AnyOf schemas
+// and returns collected types if present.
+func handleCompositeSchemas(schema *spec.Schema) ([]string, bool) {
+	// Handle OneOf schemas
+	if len(schema.OneOf) > 0 {
+		types := collectTypesFromSubSchemas(schema.OneOf)
+		if len(types) > 0 {
+			return types, true
+		}
+	}
+
+	// Handle AnyOf schemas
+	if len(schema.AnyOf) > 0 {
+		types := collectTypesFromSubSchemas(schema.AnyOf)
+		if len(types) > 0 {
+			return types, true
+		}
+	}
+
+	return nil, false
+}
+
+// collectTypesFromSubSchemas extracts types from a slice of schemas,
+// handling structural constraints like Required and Not.
+func collectTypesFromSubSchemas(subSchemas []spec.Schema) []string {
+	var types []string
+
+	for _, subSchema := range subSchemas {
+		// If there are structural constraints, inject object type
+		if len(subSchema.Required) > 0 || subSchema.Not != nil {
+			if !slices.Contains(types, "object") {
+				types = append(types, "object")
+			}
+		}
+		// Collect types if present
+		if len(subSchema.Type) > 0 {
+			for _, t := range subSchema.Type {
+				if t != "" && !slices.Contains(types, t) {
+					types = append(types, t)
+				}
+			}
+		}
+	}
+
+	return types
 }
 
 func validateSchema(schema *spec.Schema, path string) error {
@@ -236,7 +271,7 @@ func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTy
 	// perform type checks for scalar types
 	switch {
 	case slices.Contains(expectedTypes, "number"):
-		if _, ok := field.(float64); !ok {
+		if !isNumber(field) {
 			return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
 		}
 	case slices.Contains(expectedTypes, "int"), slices.Contains(expectedTypes, "integer"):
@@ -286,9 +321,22 @@ func getArrayItemSchema(schema *spec.Schema, path string) (*spec.Schema, error) 
 	return nil, fmt.Errorf("invalid array schema for path %s: neither Items.Schema nor Properties are defined", path)
 }
 
+func isNumber(v interface{}) bool {
+	return isInteger(v) || isFloat(v)
+}
+
+func isFloat(v interface{}) bool {
+	switch v.(type) {
+	case float32, float64:
+		return true
+	default:
+		return false
+	}
+}
+
 func isInteger(v interface{}) bool {
 	switch v.(type) {
-	case int, int64, int32:
+	case int, int8, int32, int64:
 		return true
 	default:
 		return false

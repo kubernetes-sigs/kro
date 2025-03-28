@@ -45,7 +45,6 @@ spec:
       kind: StorageClass
       metadata:
         name: ${schema.spec.name}-storage-class
-        namespace: ${schema.spec.namespace}
         annotations:
           storageclass.kubernetes.io/is-default-class: "true"
       parameters:

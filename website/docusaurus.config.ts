@@ -32,7 +32,23 @@ const config: Config = {
     defaultLocale: "en",
     locales: ["en"],
   },
-
+  headTags: [
+    {
+      tagName: "meta",
+      attributes: {
+        name: "go-import",
+        content: "kro.run/pkg git https://github.com/kro-run/kro",
+      },
+    },
+    {
+      tagName: "meta",
+      attributes: {
+        name: "go-source",
+        content: "kro.run/pkg git https://github.com/kro-run/kro https://github.com/kro-run/kro/tree/main{/dir} https://github.com/kro-run/kro/blob/main{/dir}/{file}#L{line}",
+      },
+    },
+  ],
+  
   presets: [
     [
       "classic",
@@ -129,6 +145,10 @@ const config: Config = {
               label: "Tutorial",
               to: "/docs/overview",
             },
+            {
+              label: "Examples",
+              to: "/examples/",
+            },
           ],
         },
         {
@@ -138,6 +158,10 @@ const config: Config = {
               label: "Slack",
               href: "https://kubernetes.slack.com/archives/C081TMY9D6Y",
             },
+            {
+              label: "Contribution Guide",
+              href: "https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md",
+            },
           ],
         },
         {
@@ -146,6 +170,10 @@ const config: Config = {
             {
               label: "GitHub",
               href: "https://github.com/kro-run/kro",
+            },
+            {
+              label: "YouTube",
+              href: "https://www.youtube.com/channel/UCUlcI3NYq9ehl5wsdfbJzSA",
             },
           ],
         },

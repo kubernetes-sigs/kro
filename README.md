@@ -1,5 +1,13 @@
 # kro | Kube Resource Orchestrator
 
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/kro-run/kro)](https://goreportcard.com/report/github.com/kro-run/kro)
+[![unit tests](https://github.com/kro-run/kro/actions/workflows/unit-tests.yaml/badge.svg)](https://github.com/kro-run/kro/actions/workflows/unit-tests.yaml)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/kro-run/Kro)
+![GitHub License](https://img.shields.io/github/license/kro-run/kro)
+[![Build and Publish](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml/badge.svg?branch=main)](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml)
+![GitHub Repo stars](https://img.shields.io/github/stars/kro-run/kro)
+
 This project aims to simplify the creation and management of complex custom resources for Kubernetes.
 
 Kube Resource Orchestrator (**kro**) helps you to define complex multi-resource constructs as reusable components in your applications and systems. It does this by providing a Kubernetes-native, vendor agnostic way to define groupings of Kubernetes resources. 

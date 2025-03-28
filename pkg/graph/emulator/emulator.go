@@ -81,6 +81,11 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		return nil, fmt.Errorf("schema is nil")
 	}
 
+	if enabled, ok := schema.VendorExtensible.Extensions["x-kubernetes-preserve-unknown-fields"]; ok && enabled.(bool) {
+		// Handle x-kubernetes-preserve-unknown-fields
+		return e.generateObject(schema)
+	}
+
 	if enabled, ok := schema.VendorExtensible.Extensions["x-kubernetes-int-or-string"]; ok && enabled.(bool) {
 		// Default to integer for dummy CRs
 		return e.generateInteger(schema), nil

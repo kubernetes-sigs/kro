@@ -1,0 +1,59 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webservice.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebService
+    spec:
+      name: string
+      namespace: string | default=default
+      image: string | default=nginx
+      port: integer | default=80
+      replicas: integer | default=3
+      service:
+        enabled: boolean | default=true
+      serviceAccount: string | default=default
+      vpclattice:
+        enabled: boolean | default=false
+      vpcLatticeName: string | default="kro-vpc-lattice-demo"
+      gatewayClassName: string | default=amazon-vpc-lattice
+      listenerProtocol: string | default="HTTP"
+
+
+  resources:
+  - id: webapp
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: WebApp
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        image: ${schema.spec.image}
+        port: ${schema.spec.port}
+        replicas: ${schema.spec.replicas}
+        service:
+          enabled: ${schema.spec.service.enabled}
+        serviceAccount: ${schema.spec.serviceAccount}
+
+  - id: lattice
+    includeWhen:
+    - ${schema.spec.vpclattice.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: Lattice
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        port: ${schema.spec.port}
+        vpcLatticeName: ${schema.spec.vpcLatticeName}
+        listenerProtocol: ${schema.spec.listenerProtocol}
+        gatewayClassName: ${schema.spec.gatewayClassName}

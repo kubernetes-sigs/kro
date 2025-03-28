@@ -1,9 +1,24 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "kro.fullname" . }}-cluster-role
+  annotations:
+    kubernetes.io/description: |
+{{- if .Values.rbac.legacy }}
+      This ClusterRole grants cluster-wide admin access for the kro controller.
+{{- else }}
+      This ClusterRole grants access for the kro controller.
+
+      The kro installation comes with enough for the controller to run, and start watching the relevant resources
+      (e.g. ResourceGraphDefinitions), but in order to allow kro to create and manage other types of resoruces you
+      must manually grant access to those separately.
+
+      The easiest way to accomplish this is to create a new ClusterRole with the label `rbac.kro.run/aggregate-to-controller: "true"`
+      which will be automatically aggregated into this one.
+{{- end }}
+  name: {{ include "kro.fullname" . }}{{- if eq .Values.rbac.mode "unrestricted" -}}-cluster-role{{- else -}}:controller{{- end }}
   labels:
     {{- include "kro.labels" . | nindent 4 }}
+{{ if eq .Values.rbac.mode "unrestricted" -}}
 rules:
 - apiGroups:
   - "*"
@@ -11,3 +26,58 @@ rules:
   - "*"
   verbs:
   - '*'
+{{ else if eq .Values.rbac.mode "aggregation" -}}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        'rbac.kro.run/aggregate-to-controller': "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    kubernetes.io/description: |
+      This ClusterRole grants access for the kro controller to resources it always needs access to.
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+    rbac.kro.run/aggregate-to-controller: "true"
+  name: {{ include "kro.fullname" . }}:controller:static
+rules:
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+  - update
+  - delete
+{{- end }}

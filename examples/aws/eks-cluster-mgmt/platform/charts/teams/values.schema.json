@@ -1,0 +1,262 @@
+{
+    "$schema": "http://json-schema.org/schema#",
+    "type": "object",
+    "properties": {
+        "fullnameOverride": {
+            "type": "string"
+        },
+        "limitRange": {
+            "type": "object",
+            "properties": {
+                "additionalAnnotations": {
+                    "type": "object"
+                },
+                "additionalLabels": {
+                    "type": "object"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "limits": {
+                    "type": "array"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "nameOverride": {
+            "type": "string"
+        },
+        "namespace": {
+            "type": "object",
+            "properties": {
+                "annotations": {
+                    "type": "object",
+                    "properties": {
+                        "additionalAnnotations": {
+                            "type": "object"
+                        },
+                        "openShift": {
+                            "type": "object",
+                            "properties": {
+                                "description": {
+                                    "type": "string"
+                                },
+                                "displayName": {
+                                    "type": "string"
+                                },
+                                "requester": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "scheduler": {
+                            "type": "object",
+                            "properties": {
+                                "defaultTolerations": {
+                                    "type": "array"
+                                },
+                                "nodeSelector": {
+                                    "type": "string"
+                                },
+                                "tolerationsWhitelist": {
+                                    "type": "array"
+                                }
+                            }
+                        }
+                    }
+                },
+                "labels": {
+                    "type": "object",
+                    "properties": {
+                        "additionalLabels": {
+                            "type": "object"
+                        },
+                        "podSecurityAdmission": {
+                            "type": "object",
+                            "properties": {
+                                "audit": {
+                                    "type": "object",
+                                    "properties": {
+                                        "standard": {
+                                            "type": "string"
+                                        },
+                                        "version": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "enforce": {
+                                    "type": "object",
+                                    "properties": {
+                                        "standard": {
+                                            "type": "string"
+                                        },
+                                        "version": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "warning": {
+                                    "type": "object",
+                                    "properties": {
+                                        "standard": {
+                                            "type": "string"
+                                        },
+                                        "version": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "networkPolicies": {
+            "type": "object",
+            "properties": {
+                "additionalAnnotations": {
+                    "type": "object"
+                },
+                "additionalLabels": {
+                    "type": "object"
+                },
+                "egress": {
+                    "type": "object",
+                    "properties": {
+                        "allow": {
+                            "type": "object",
+                            "properties": {
+                                "dns": {
+                                    "type": "object",
+                                    "properties": {
+                                        "enabled": {
+                                            "type": "boolean"
+                                        },
+                                        "namespace": {
+                                            "type": "string"
+                                        },
+                                        "podLabels": {
+                                            "type": "object",
+                                            "properties": {
+                                                "k8s-app": {
+                                                    "type": "string"
+                                                }
+                                            }
+                                        },
+                                        "podSelector": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "deny": {
+                            "type": "object",
+                            "properties": {
+                                "all": {
+                                    "type": "object",
+                                    "properties": {
+                                        "enabled": {
+                                            "type": "boolean"
+                                        },
+                                        "podSelector": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "ingress": {
+                    "type": "object",
+                    "properties": {
+                        "allow": {
+                            "type": "object",
+                            "properties": {
+                                "openShift": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ingressController": {
+                                            "type": "object",
+                                            "properties": {
+                                                "enabled": {
+                                                    "type": "boolean"
+                                                },
+                                                "podSelector": {
+                                                    "type": "object"
+                                                }
+                                            }
+                                        },
+                                        "monitoring": {
+                                            "type": "object",
+                                            "properties": {
+                                                "enabled": {
+                                                    "type": "boolean"
+                                                },
+                                                "podSelector": {
+                                                    "type": "object"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "deny": {
+                            "type": "object",
+                            "properties": {
+                                "all": {
+                                    "type": "object",
+                                    "properties": {
+                                        "enabled": {
+                                            "type": "boolean"
+                                        },
+                                        "podSelector": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "openShift": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        }
+                    }
+                }
+            }
+        },
+        "resourceQuotas": {
+            "type": "object",
+            "properties": {
+                "additionalAnnotations": {
+                    "type": "object"
+                },
+                "additionalLabels": {
+                    "type": "object"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "quotas": {
+                    "type": "array"
+                }
+            }
+        }
+    }
+}

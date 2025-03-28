@@ -3,12 +3,16 @@
 This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
 
 ### Installation
+If you're using other tools than `npm`, you can refer to the `docusaurs documentation` for build and installation https://docusaurus.io/docs/installation#build
+
+If you are using `yarn`, use:
 
 ```
 $ yarn
 ```
-
 ### Local Development
+
+To start a local development server, use:
 
 ```
 $ yarn start
@@ -17,6 +21,8 @@ $ yarn start
 This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
 
 ### Build
+
+To generate static content for deployment, use:
 
 ```
 $ yarn build

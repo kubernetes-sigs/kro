@@ -16,46 +16,49 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kro-run/kro/api/v1alpha1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-	// LabelKro is the label key used to identify Kro owned resources.
-	LabelKroPrefix = v1alpha1.KroDomainName + "/"
+	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
+	LabelKROPrefix = v1alpha1.KRODomainName + "/"
 )
 
 const (
-	NodeIDLabel = LabelKroPrefix + "node-id"
+	NodeIDLabel = LabelKROPrefix + "node-id"
 
-	OwnedLabel           = LabelKroPrefix + "owned"
-	KroVersionLabel      = LabelKroPrefix + "kro-version"
-	ControllerPodIDLabel = LabelKroPrefix + "controller-pod-id"
+	OwnedLabel      = LabelKROPrefix + "owned"
+	KROVersionLabel = LabelKROPrefix + "kro-version"
 
-	InstanceIDLabel        = LabelKroPrefix + "instance-id"
-	InstanceLabel          = LabelKroPrefix + "instance-name"
-	InstanceNamespaceLabel = LabelKroPrefix + "instance-namespace"
+	InstanceIDLabel        = LabelKROPrefix + "instance-id"
+	InstanceLabel          = LabelKROPrefix + "instance-name"
+	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
 
-	ResourceGraphDefinitionIDLabel        = LabelKroPrefix + "resource-graph-definition-id"
-	ResourceGraphDefinitionNameLabel      = LabelKroPrefix + "resource-graph-definition-name"
-	ResourceGraphDefinitionNamespaceLabel = LabelKroPrefix + "resource-graph-definition-namespace"
-	ResourceGraphDefinitionVersionLabel   = LabelKroPrefix + "resource-graph-definition-version"
+	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
+	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
+	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
+	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
 )
 
-// IsKroOwned returns true if the resource is owned by Kro.
-func IsKroOwned(meta metav1.ObjectMeta) bool {
+// IsKROOwned returns true if the resource is owned by KRO.
+func IsKROOwned(meta metav1.ObjectMeta) bool {
 	v, ok := meta.Labels[OwnedLabel]
 	return ok && booleanFromString(v)
 }
 
-// SetKroOwned sets the OwnedLabel to true on the resource.
-func SetKroOwned(meta metav1.ObjectMeta) {
+// SetKROOwned sets the OwnedLabel to true on the resource.
+func SetKROOwned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
 }
 
-// SetKroUnowned sets the OwnedLabel to false on the resource.
-func SetKroUnowned(meta metav1.ObjectMeta) {
+// SetKROUnowned sets the OwnedLabel to false on the resource.
+func SetKROUnowned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
 }
 
@@ -115,8 +118,8 @@ func (gl GenericLabeler) Copy() map[string]string {
 // ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
 func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
-		ResourceGraphDefinitionIDLabel:        string(rgMeta.GetUID()),
-		ResourceGraphDefinitionNameLabel:      rgMeta.GetName(),
+		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
+		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
 	}
 }
 
@@ -131,21 +134,26 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 	}
 }
 
-// NewKroMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KroVersion, and ControllerPodID labels on a resource.
-func NewKroMetaLabeler(
-	kroVersion string,
-	controllerPodID string,
-) GenericLabeler {
+// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
+// KROVersion, and ControllerPodID labels on a resource.
+func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:           "true",
-		KroVersionLabel:      kroVersion,
-		ControllerPodIDLabel: controllerPodID,
+		OwnedLabel:      "true",
+		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
 	}
 }
 
+func safeVersion(version string) string {
+	if validation.IsValidLabelValue(version) == nil {
+		return version
+	}
+	// The script we use might add '+dirty' to development branches,
+	// so let's try replacing '+' with '-'.
+	return strings.ReplaceAll(version, "+", "-")
+}
+
 func booleanFromString(s string) bool {
-	// for the sake of simplicy we'll avoid doing any kind
+	// for the sake of simplicity we'll avoid doing any kind
 	// of parsing here. Since those labels are set by the controller
 	// it self. We'll expect the same values back.
 	return s == "true"

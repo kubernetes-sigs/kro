@@ -53,7 +53,7 @@ func networkingStack(
 	instanceGenerator := func(namespace, name string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{
 			Object: map[string]interface{}{
-				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KroDomainName, "v1alpha1"),
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
 				"kind":       "NetworkingStack",
 				"metadata": map[string]interface{}{
 					"name":      name,

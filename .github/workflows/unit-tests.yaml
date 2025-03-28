@@ -2,8 +2,16 @@ name: unit tests
 on:
   push:
     branches: [ main ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
   pull_request:
     branches: [ main ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
 
 jobs:
   build:

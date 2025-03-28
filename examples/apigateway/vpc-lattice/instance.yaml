@@ -1,0 +1,10 @@
+apiVersion: kro.run/v1alpha1
+kind: WebService
+metadata:
+  name: test-app
+spec:
+  name: test-app
+  image: nginx
+  service: {}
+  vpclattice:
+    enabled: true

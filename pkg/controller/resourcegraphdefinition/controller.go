@@ -15,17 +15,19 @@ package resourcegraphdefinition
 
 import (
 	"context"
+
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/kro-run/kro/api/v1alpha1"
+	kroclient "github.com/kro-run/kro/pkg/client"
+	"github.com/kro-run/kro/pkg/dynamiccontroller"
+	"github.com/kro-run/kro/pkg/graph"
+	"github.com/kro-run/kro/pkg/metadata"
 )
 
 //+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete

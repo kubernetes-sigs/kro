@@ -402,7 +402,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				},
 			},
 			want: map[string]extv1.JSONSchemaProps{
-				"Person": extv1.JSONSchemaProps{
+				"Person": {
 					Type: "object",
 					Properties: map[string]extv1.JSONSchemaProps{
 						"name": {Type: "string"},
@@ -416,7 +416,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 						},
 					},
 				},
-				"Company": extv1.JSONSchemaProps{
+				"Company": {
 					Type: "object",
 					Properties: map[string]extv1.JSONSchemaProps{
 						"name": {Type: "string"},

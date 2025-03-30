@@ -40,7 +40,7 @@ To send create a Pull Request, please:
    * If your change includes large scale reformats, please separate these changes into their own commits. It is difficult to review reformats and implementation changes together.
 3. Please ensure local tests pass.
 4. Commit to your fork using clear commit messages.
-5. Crete a PR from your fork, answering any default questions in the pull request interface.
+5. Create a PR from your fork, answering any default questions in the pull request interface.
 6. Monitor for automated CI failures reported in the pull request, and stay involved in the conversation (followups, rebases, etc are all part of the process).
 
 GitHub provides nice documentation on [forking a repository](https://help.github.com/articles/fork-a-repo/) and [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).

@@ -1240,3 +1240,45 @@ func TestNewBuilder(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
 }
+
+func TestCELEnvironmentCaching(t *testing.T) {
+	env1, err1 := getOrCreateCELEnv(krocel, []string{"res1"})
+	require.NoError(t, err1)
+
+	env2, err2 := getOrCreateCELEnv(krocel, []string{"res1"})
+	require.NoError(t, err2)
+
+	assert.Same(t, env1, env2)
+}
+
+func TestCELExpressionAnalysis(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want CELExpressionType
+	}{
+		{
+			name: "size comparison",
+			expr: "size() > 0",
+			want: ExpressionTypeSizeComparison,
+		},
+		{
+			name: "direct comparison",
+			expr: "foo > bar",
+			want: ExpressionTypeDirectComparison,
+		},
+		{
+			name: "complex expression",
+			expr: "foo && bar || baz",
+			want: ExpressionTypeComplex,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := analyzeCELExpression(tt.expr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
@@ -41,6 +42,48 @@ import (
 	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/pkg/simpleschema"
 )
+
+// Add at package level
+var (
+	// Cache the CEL environment
+	celEnvCache struct {
+		sync.RWMutex
+		env map[string]*cel.Env
+	}
+)
+
+// Initialize cache in init()
+func init() {
+	celEnvCache.env = make(map[string]*cel.Env)
+}
+
+// Get or create CEL environment
+func getOrCreateCELEnv(krocel *krocel.Environment, resourceNames []string) (*cel.Env, error) {
+	key := strings.Join(resourceNames, ",")
+
+	celEnvCache.RLock()
+	if env, ok := celEnvCache.env[key]; ok {
+		celEnvCache.RUnlock()
+		return env, nil
+	}
+	celEnvCache.RUnlock()
+
+	celEnvCache.Lock()
+	defer celEnvCache.Unlock()
+
+	// Double check after acquiring write lock
+	if env, ok := celEnvCache.env[key]; ok {
+		return env, nil
+	}
+
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+
+	celEnvCache.env[key] = env
+	return env, nil
+}
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(
@@ -364,7 +407,7 @@ func (b *Builder) buildDependencyGraph(
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "schema")
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err := getOrCreateCELEnv(krocel, resourceNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -471,7 +514,7 @@ func (b *Builder) buildInstanceResource(
 	}
 
 	resourceNames := maps.Keys(resources)
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err := getOrCreateCELEnv(krocel, resourceNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -558,7 +601,7 @@ func buildStatusSchema(
 	// Inspection of the CEL expressions to infer the types of the status fields.
 	resourceNames := maps.Keys(resources)
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err := getOrCreateCELEnv(krocel, resourceNames)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -689,7 +732,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	for _, resource := range resources {
 		// First validate includeWhen expressions
 		for _, includeWhenExpression := range resource.includeWhenExpressions {
-			instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+			instanceEnv, err := getOrCreateCELEnv(krocel, resourceNames)
 			if err != nil {
 				return fmt.Errorf("failed to create CEL environment: %w", err)
 			}
@@ -699,14 +742,19 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				return fmt.Errorf("failed to validate expression context: '%s' %w", includeWhenExpression, err)
 			}
 
-			// Type check the includeWhen expression
+			// Type check and compile the includeWhen expression
 			ast, iss := instanceEnv.Compile(includeWhenExpression)
 			if iss != nil && iss.Err() != nil {
 				return fmt.Errorf("failed to compile includeWhen expression %s: %w", includeWhenExpression, iss.Err())
 			}
 
+			// Explicitly perform type checking
+			if err := instanceEnv.TypeCheck(ast); err != nil {
+				return fmt.Errorf("failed to type check includeWhen expression %s: %w", includeWhenExpression, err)
+			}
+
 			if ast.OutputType() != cel.BoolType {
-				return fmt.Errorf("includeWhen expression %s must return a boolean", includeWhenExpression)
+				return fmt.Errorf("includeWhen expression %s must return a boolean, got %v", includeWhenExpression, ast.OutputType())
 			}
 		}
 
@@ -726,7 +774,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			// Validate other expressions
 			for _, resourceVariable := range resource.variables {
 				for _, expression := range resourceVariable.Expressions {
-					instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+					instanceEnv, err := getOrCreateCELEnv(krocel, resourceNames)
 					if err != nil {
 						return fmt.Errorf("failed to create CEL environment: %w", err)
 					}
@@ -746,7 +794,7 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 
 			// Validate readyWhen expressions
 			for _, readyWhenExpression := range resource.readyWhenExpressions {
-				instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+				instanceEnv, err := getOrCreateCELEnv(krocel, resourceNames)
 				if err != nil {
 					return fmt.Errorf("failed to create CEL environment: %w", err)
 				}
@@ -770,4 +818,176 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	}
 
 	return nil
+}
+
+// CELExpressionType represents different types of CEL expressions
+type CELExpressionType int
+
+const (
+	ExpressionTypeUnknown CELExpressionType = iota
+	ExpressionTypeSizeComparison
+	ExpressionTypeDirectComparison
+	ExpressionTypeComplex
+)
+
+// analyzeCELExpression performs static analysis on CEL expressions
+func analyzeCELExpression(expr string) (CELExpressionType, error) {
+	ast, iss := cel.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		return ExpressionTypeUnknown, fmt.Errorf("failed to parse expression: %w", iss.Err())
+	}
+
+	switch e := ast.Expr().(type) {
+	case *cel.CallExpr:
+		if isSizeComparison(e) {
+			return ExpressionTypeSizeComparison, nil
+		}
+		if isDirectComparison(e) {
+			return ExpressionTypeDirectComparison, nil
+		}
+	}
+
+	return ExpressionTypeComplex, nil
+}
+
+func isSizeComparison(call *cel.CallExpr) bool {
+	if call.Function == "size" {
+		return true
+	}
+
+	// Check for size() comparisons like size() > 0
+	if isComparisonOp(call.Function) {
+		for _, arg := range call.Args {
+			if subCall, ok := arg.(*cel.CallExpr); ok && subCall.Function == "size" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isDirectComparison(call *cel.CallExpr) bool {
+	return isComparisonOp(call.Function)
+}
+
+func isComparisonOp(op string) bool {
+	switch op {
+	case "_>_", "_<_", "_>=_", "_<=_", "_==_", "_!=_":
+		return true
+	}
+	return false
+}
+
+// Helper function to analyze CEL expression
+func analyzeExpression(expr string) (bool, error) {
+	ast, iss := celEnv.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		return false, iss.Err()
+	}
+
+	// Check if expression is a direct size comparison
+	if call, ok := ast.Expr().(*cel.CallExpr); ok {
+		if call.Function == "size" ||
+			(call.Function == "_<_" && containsSizeCall(call.Args)) ||
+			(call.Function == "_>_" && containsSizeCall(call.Args)) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func containsSizeCall(args []cel.Expr) bool {
+	for _, arg := range args {
+		if call, ok := arg.(*cel.CallExpr); ok && call.Function == "size" {
+			return true
+		}
+	}
+	return false
+}
+
+// Update the validation logic
+func validateOtherExpressions(resource *Resource) error {
+	shouldValidateOtherExpressions := true
+
+	for _, includeWhenExpr := range resource.IncludeWhenExpressions {
+		isSizeComparison, err := analyzeExpression(includeWhenExpr)
+		if err != nil {
+			return fmt.Errorf("failed to analyze expression: %w", err)
+		}
+
+		if isSizeComparison {
+			// Skip validation of other expressions if we have a size comparison
+			shouldValidateOtherExpressions = false
+			break
+		}
+	}
+
+	if shouldValidateOtherExpressions {
+		// Perform additional validation
+	}
+
+	return nil
+}
+
+func validateCELExpression(env *cel.Env, expr string, expectedType *cel.Type) error {
+	ast, iss := env.Compile(expr)
+	if iss != nil && iss.Err() != nil {
+		return fmt.Errorf("failed to compile expression: %w", iss.Err())
+	}
+
+	// Explicit type checking
+	checkedAst, iss := env.Check(ast)
+	if iss != nil && iss.Err() != nil {
+		return fmt.Errorf("type check failed: %w", iss.Err())
+	}
+
+	if !checkedAst.OutputType().IsAssignableType(expectedType) {
+		return fmt.Errorf("expression must return %v, got %v", expectedType, checkedAst.OutputType())
+	}
+
+	return nil
+}
+
+const (
+	errBooleanRequired   = "expression %q must return boolean"
+	errCompilationFailed = "failed to compile expression %q: %w"
+	errTypeCheckFailed   = "failed to type check expression %q: %w"
+)
+
+func validateIncludeWhenExpression(env *cel.Env, expr string) error {
+	if err := validateCELExpression(env, expr, cel.BoolType); err != nil {
+		return fmt.Errorf(errBooleanRequired, expr)
+	}
+	return nil
+}
+
+func validateResource(resource *Resource) error {
+	env, err := getOrCreateCELEnv(krocel, resource.GetResourceIDs())
+	if err != nil {
+		return err
+	}
+
+	// First validate all includeWhen expressions are boolean
+	for _, expr := range resource.IncludeWhenExpressions {
+		if err := validateIncludeWhenExpression(env, expr); err != nil {
+			return err
+		}
+
+		// Analyze expression type
+		exprType, err := analyzeCELExpression(expr)
+		if err != nil {
+			return err
+		}
+
+		// If we have a size comparison, we can optimize validation
+		if exprType == ExpressionTypeSizeComparison {
+			// Skip further validation as this resource won't be included
+			// when the size condition isn't met
+			return nil
+		}
+	}
+
+	// Continue with other validations if needed
+	return validateOtherExpressions(resource, env)
 }

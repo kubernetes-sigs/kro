@@ -50,7 +50,7 @@ kro supports these foundational types:
 - `string`: Text values
 - `integer`: Whole numbers
 - `boolean`: True/False values
-- `number`: Decimal numbers
+- `float`: Decimal numbers
 
 For example:
 
@@ -58,7 +58,7 @@ For example:
 name: string
 age: integer
 enabled: boolean
-price: number
+price: float
 ```
 
 ### Structure Types
@@ -106,7 +106,7 @@ Examples:
 
 ```yaml
 labels: "map[string]string"
-metrics: "map[string]number"
+metrics: "map[string]float"
 ```
 
 ## Validation and Documentation
@@ -134,6 +134,9 @@ For example:
 
 ```yaml
 name: string | required=true default="app" description="Application name"
+replicas: integer | default=3 minimum=1 maximum=10
+price: float | minimum=0.01 maximum=999.99
+mode: string | enum="debug,info,warn,error" default="info"
 ```
 
 ## Status Fields

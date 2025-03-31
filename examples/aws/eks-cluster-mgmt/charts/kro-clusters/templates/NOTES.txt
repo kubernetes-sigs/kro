@@ -1,0 +1,21 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Your EKS Fleet clusters have been configured with the following details:
+
+{{- range $name, $cluster := .Values.clusters }}
+Cluster: {{ $name }}
+  - Tenant: {{ $cluster.tenant }}
+  - K8s Version: {{ $cluster.k8sVersion }}
+  - Domain: {{ $cluster.domainName }}
+{{- end }}
+
+To manage your clusters:
+1. Edit the values.yaml file to add, modify, or remove cluster configurations
+2. Use helm upgrade to apply changes:
+   helm upgrade <release-name> ./chart
+
+To verify the cluster resources:
+  kubectl get eksclusterwithvpc
+
+For more information about the chart and available configuration options,
+please refer to the chart's documentation.

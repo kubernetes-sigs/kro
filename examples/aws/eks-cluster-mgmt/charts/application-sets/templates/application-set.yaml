@@ -1,0 +1,177 @@
+{{- $values := .Values }}
+{{- $chartType := .Values.chartType }}
+{{- $namespace := .Values.namespace }}
+{{- $syncPolicy := .Values.syncPolicy -}}
+{{- $syncPolicyAppSet := .Values.syncPolicyAppSet -}}
+{{- $goTemplateOptions := .Values.goTemplateOptions -}}
+{{- $repoURLGit := .Values.repoURLGit -}}
+{{- $repoURLGitRevision := .Values.repoURLGitRevision -}}
+{{- $repoURLGitBasePath := .Values.repoURLGitBasePath -}}
+{{- $valueFiles := .Values.valueFiles -}}
+{{- $valuesFilePrefix :=  .Values.valuesFilePrefix -}}
+{{- $useValuesFilePrefix := (default false .Values.useValuesFilePrefix )  -}}
+{{- $useSelectors:= .Values.useSelectors  -}}
+{{- $globalSelectors  := .Values.globalSelectors   -}}
+
+{{- range $chartName, $chartConfig := .Values }}
+{{- if and (kindIs "map" $chartConfig) (hasKey $chartConfig "enabled") }}
+{{- if eq (toString $chartConfig.enabled) "true" }}
+{{- $nameNormalize := printf "%s" $chartName | replace "_" "-" | trunc 63 | trimSuffix "-"  -}}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ $nameNormalize }}
+  namespace: {{ default "argocd" $namespace }}
+  annotations:
+    {{- include "application-sets.annotations" $ | nindent 4 }}
+    {{- if $chartConfig.annotationsAppSet }}{{- toYaml $chartConfig.annotationsAppSet | nindent 4 }}{{- end }}
+  labels:
+    {{- include "application-sets.labels" $ | nindent 4 }}
+    {{- if $chartConfig.labelsAppSet }}{{- toYaml $chartConfig.labelsAppSet | nindent 4 }}{{- end }}
+spec:
+  goTemplate: true
+  {{- if $chartConfig.goTemplateOptions }}
+  goTemplateOptions:
+  {{ toYaml $chartConfig.goTemplateOptions | nindent 2 }}
+  {{- else }}
+  goTemplateOptions: {{ default (list "missingkey=error") $goTemplateOptions }}
+  {{- end }}
+  {{- if $chartConfig.syncPolicyAppSet }}
+  syncPolicy:
+  {{- toYaml $chartConfig.syncPolicyAppSet | nindent 4 }}
+  {{- else }}
+  syncPolicy:
+  {{- toYaml $syncPolicyAppSet | nindent 4 }}
+  {{- end }}
+  {{- if $chartConfig.gitMatrix }}
+  {{ include "application-sets.git-matrix" (dict 
+  "chartName" $nameNormalize "chartConfig" $chartConfig 
+  "repoURLGit" $repoURLGit "repoURLGitRevision" $repoURLGitRevision
+  "selectors" $globalSelectors "useSelectors" $useSelectors
+    ) | nindent 2 }}
+  {{- else }}
+  generators:
+  {{- if $chartConfig.environments }}
+    - merge:
+        mergeKeys: [server]
+        generators:
+  {{- end }}
+          - clusters:
+              selector:
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster
+                  {{- if $globalSelectors }}
+                  {{- toYaml $globalSelectors | nindent 18 }}
+                  {{- end }}
+                  {{- if $chartConfig.selectorMatchLabels }}
+                  {{- toYaml $chartConfig.selectorMatchLabels | nindent 18 }}
+                  {{- end }}
+              {{- if and $chartConfig.selector $useSelectors }}
+                {{- toYaml $chartConfig.selector | nindent 16 }}
+                # If you want you can excluste some clusters based on their membership
+                # - key: fleet_member
+                #   operator: NotIn
+                #   values: ['control-plane']
+              {{- end }}
+              {{- if not $chartConfig.resourceGroup }}
+              values:
+                addonChart: {{ $chartConfig.chartName | default $nameNormalize | quote }}
+                {{- if $chartConfig.defaultVersion }}
+                addonChartVersion: {{ $chartConfig.defaultVersion | quote }}
+                {{- end }}
+                {{- if $chartConfig.chartRepository }}
+                addonChartRepository: {{ $chartConfig.chartRepository | quote }}
+                {{- end }}
+                {{- if $chartConfig.chartNamespace }}
+                addonChartRepositoryNamespace: {{ $chartConfig.chartNamespace | quote }}
+                chart: {{ printf "%s/%s" $chartConfig.chartNamespace ($chartConfig.chartName | default $nameNormalize) | quote }}
+                {{- else }}
+                chart: {{ $chartConfig.chartName | default $nameNormalize | quote }}
+                {{- end }}
+              {{- end }}
+          {{- if $chartConfig.environments }}
+          {{- range $chartConfig.environments }}
+          - clusters:
+              selector:
+                matchLabels:
+                {{- toYaml .selector | nindent 18 }}
+              values:
+                addonChartVersion: {{ .chartVersion | default $chartConfig.defaultVersion | quote }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+  template:
+    metadata:
+      {{- if $chartConfig.appSetName }}
+      name: {{ $chartConfig.appSetName }}
+      {{- else }}
+      name: '{{ $nameNormalize }}-{{`{{ .name }}`}}'
+      {{- end }}
+    spec:
+      project: default
+      sources:
+      - repoURL: {{ $repoURLGit | squote}}
+        targetRevision: {{ $repoURLGitRevision | squote }}
+        ref: values
+        {{- if eq (toString $chartConfig.enableACK ) "true" }}
+        {{ include "application-sets.pod-identity" (dict 
+          "chartName" ($chartConfig.chartName | default $nameNormalize)
+          "valueFiles" $valueFiles 
+          "chartConfig" $chartConfig "values" $values ) | nindent 6 }}
+        {{- end }}
+        {{- if $chartConfig.path }}
+      - repoURL: {{ $repoURLGit | squote }}
+        path: {{$chartConfig.path | squote }}
+        targetRevision: {{ $repoURLGitRevision | squote }}
+        {{- else }}
+      - repoURL: '{{`{{ .values.addonChartRepository }}`}}'
+        chart: '{{`{{ .values.chart }}`}}'
+        targetRevision: '{{`{{.values.addonChartVersion }}`}}'
+        {{- end }}
+        {{- if ne (default "" $chartConfig.type) "manifest" }}
+        helm:
+          releaseName: {{ default "{{ .values.addonChart }}" $chartConfig.releaseName | squote }}
+          ignoreMissingValueFiles: true
+          {{- if $chartConfig.valuesObject }}
+          valuesObject:
+          {{- $chartConfig.valuesObject | toYaml | nindent 12 }}
+          {{- end }}
+          {{- if $valueFiles }}
+          valueFiles:
+          {{- include "application-sets.valueFiles" (dict 
+            "nameNormalize" ($chartConfig.chartName | default $nameNormalize)
+            "chartConfig" $chartConfig  
+            "valueFiles" $valueFiles "values" $values) | nindent 12 }}
+          {{- end }}
+          {{- if $chartConfig.additionalResources}}
+          {{ include "application-sets.additionalResources" (dict 
+            "chartName" ($chartConfig.chartName | default $nameNormalize)
+            "valueFiles" $valueFiles 
+            "chartConfig" $chartConfig 
+            "values" $values 
+            "additionalResourcesType" $chartConfig.additionalResources.type 
+            "additionalResourcesPath" $chartConfig.additionalResources.path ) | nindent 6 }}
+          {{- end}}
+        {{- end }}
+      destination:
+        namespace: '{{ $chartConfig.namespace }}'
+        name: '{{`{{ .name }}`}}'
+      {{- if $chartConfig.syncPolicy }}
+      syncPolicy:
+        {{- toYaml $chartConfig.syncPolicy | nindent 8 }}
+      {{ else }}
+      syncPolicy:
+        {{- toYaml $syncPolicy | nindent 8 }}
+      {{- end }}
+      {{- with $chartConfig.ignoreDifferences }}
+      ignoreDifferences:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $chartConfig.ignoreDifferences}}
+      ignoreDifferences:
+        {{- $chartConfig.ignoreDifferences | toYaml | nindent 8 }}
+      {{- end }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

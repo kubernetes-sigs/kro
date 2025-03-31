@@ -16,11 +16,13 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg"
 )
 
 const (
@@ -137,8 +139,17 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
 		OwnedLabel:      "true",
-		KROVersionLabel: pkg.Version,
+		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
 	}
+}
+
+func safeVersion(version string) string {
+	if validation.IsValidLabelValue(version) == nil {
+		return version
+	}
+	// The script we use might add '+dirty' to development branches,
+	// so let's try replacing '+' with '-'.
+	return strings.ReplaceAll(version, "+", "-")
 }
 
 func booleanFromString(s string) bool {

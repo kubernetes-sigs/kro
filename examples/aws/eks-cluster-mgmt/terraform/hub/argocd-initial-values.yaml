@@ -1,0 +1,16 @@
+global:
+  tolerations:
+  - key: "CriticalAddonsOnly"
+    operator: "Exists"
+    effect: "NoSchedule"
+server:
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+controller:
+  env:
+    - name: ARGOCD_SYNC_WAVE_DELAY
+      value: '30'

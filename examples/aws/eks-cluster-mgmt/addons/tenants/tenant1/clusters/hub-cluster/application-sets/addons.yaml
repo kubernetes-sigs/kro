@@ -1,0 +1,52 @@
+useSelectors: true # necessary to enable addons with cluster secret labels
+
+#We are using this to enable applicationSets, then use cluster secret to enable applications
+# globalSelectors:
+#   fleet_member: control-plane #If we activate this, only cluster from this selector will have the applicationsets enabled
+argocd:
+  enabled: true   
+external-secrets:
+  enabled: true
+metrics-server:
+  enabled: true
+metrics-server:
+  enabled: true
+aws_efs_csi_driver:
+  enabled: true
+aws_for_fluentbit:
+  enabled: false
+cert_manager:
+  enabled: false
+external_dns:
+  enabled: true
+opentelemetry_operator:
+  enabled: false
+kyverno:
+  enabled: true
+kyverno_policy_reporter:
+  enabled: true
+kyverno_policies:
+  enabled: true
+cni_metrics_helper:
+  enabled: false
+kube_state_metrics:
+  enabled: false
+prometheus_node_exporter:
+  enabled: false
+cw_prometheus:
+  enabled: false
+
+ack-iam:
+  enabled: true
+ack-eks:
+  enabled: true
+ack-ec2:
+  enabled: true
+ack-efs:
+  enabled: true
+kro:
+  enabled: true
+kro-eks-rgs:
+  enabled: true
+multi-acct:
+  enabled: true

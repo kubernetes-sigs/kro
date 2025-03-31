@@ -90,12 +90,10 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, resou
 	ctx = log.IntoContext(ctx, rlog)
 
 	if !resourcegraphdefinition.DeletionTimestamp.IsZero() {
-		rlog.V(1).Info("ResourceGraphDefinition is being deleted")
 		if err := r.cleanupResourceGraphDefinition(ctx, resourcegraphdefinition); err != nil {
 			return ctrl.Result{}, err
 		}
 
-		rlog.V(1).Info("Setting resourcegraphdefinition as unmanaged")
 		if err := r.setUnmanaged(ctx, resourcegraphdefinition); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -103,15 +101,12 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, resou
 		return ctrl.Result{}, nil
 	}
 
-	rlog.V(1).Info("Setting resource graph definition as managed")
 	if err := r.setManaged(ctx, resourcegraphdefinition); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	rlog.V(1).Info("Syncing resourcegraphdefinition")
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, resourcegraphdefinition)
 
-	rlog.V(1).Info("Setting resourcegraphdefinition status")
 	if err := r.setResourceGraphDefinitionStatus(ctx, resourcegraphdefinition, topologicalOrder, resourcesInformation, reconcileErr); err != nil {
 		return ctrl.Result{}, err
 	}

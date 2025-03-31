@@ -2,6 +2,6 @@ apiVersion: v2
 name: kro
 description: A Helm chart for kro
 type: application
-version: ${VERSION}
-appVersion: ${VERSION}
+version: 0.0.0-dev
+appVersion: 0.0.0-dev
 home: https://kro.run/

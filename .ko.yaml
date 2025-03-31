@@ -5,6 +5,4 @@ defaultPlatforms:
 defaultLdflags:
   - -s
   - -w
-  - -X github.com/kro-run/kro/pkg.Version={{.Env.RELEASE_VERSION}}
-  - -X github.com/kro-run/kro/pkg.GitCommit={{.Env.GIT_COMMIT}}
-  - -X github.com/kro-run/kro/pkg.BuildDate={{.Env.BUILD_DATE}}
+  - "{{ .Env.LDFLAGS }}"

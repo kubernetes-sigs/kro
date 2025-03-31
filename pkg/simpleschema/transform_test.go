@@ -279,6 +279,87 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "Schema with multiple enum types",
+			obj: map[string]interface{}{
+				"logLevel": "string | enum=\"debug,info,warn,error\" default=\"info\"",
+				"features": map[string]interface{}{
+					"logFormat": "string | enum=\"json,text,csv\" default=\"json\"",
+					"errorCode": "integer | enum=\"400,404,500\" default=500",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"logLevel": {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte("\"info\"")},
+						Enum: []extv1.JSON{
+							{Raw: []byte("\"debug\"")},
+							{Raw: []byte("\"info\"")},
+							{Raw: []byte("\"warn\"")},
+							{Raw: []byte("\"error\"")},
+						},
+					},
+					"features": {
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"logFormat": {
+								Type:    "string",
+								Default: &extv1.JSON{Raw: []byte("\"json\"")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("\"json\"")},
+									{Raw: []byte("\"text\"")},
+									{Raw: []byte("\"csv\"")},
+								},
+							},
+							"errorCode": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("500")},
+								Enum: []extv1.JSON{
+									{Raw: []byte("400")},
+									{Raw: []byte("404")},
+									{Raw: []byte("500")},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid enum type",
+			obj: map[string]interface{}{
+				"threshold": "integer | enum=\"1,2,three\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid integer enum - empty values",
+			obj: map[string]interface{}{
+				"errorCode": "integer | enum=\"1,,3\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid integer enum - parsing failure",
+			obj: map[string]interface{}{
+				"errorCode": "integer | enum=\"1,2,3,abc\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "invalid string enum marker",
+			obj: map[string]interface{}{
+				"status": "string | enum=\"a,b,,c\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -298,77 +379,80 @@ func TestBuildOpenAPISchema(t *testing.T) {
 func TestLoadPreDefinedTypes(t *testing.T) {
 	transformer := newTransformer()
 
-	preDefinedTypes := map[string]interface{}{
-		"Person": map[string]interface{}{
-			"name": "string",
-			"age":  "integer",
-			"address": map[string]interface{}{
-				"street": "string",
-				"city":   "string",
-			},
-		},
-		"Company": map[string]interface{}{
-			"name":      "string",
-			"employees": "[]string",
-		},
-	}
-
-	err := transformer.loadPreDefinedTypes(preDefinedTypes)
-	if err != nil {
-		t.Fatalf("LoadPreDefinedTypes() error = %v", err)
-	}
-
-	if len(transformer.preDefinedTypes) != 2 {
-		t.Errorf("LoadPreDefinedTypes() loaded %d types, want 2", len(transformer.preDefinedTypes))
-	}
-
-	// Check Person type
-	personType, ok := transformer.preDefinedTypes["Person"]
-	if !ok {
-		t.Errorf("LoadPreDefinedTypes() did not load 'Person' type")
-	}
-
-	expectedPersonType := extv1.JSONSchemaProps{
-		Type: "object",
-		Properties: map[string]extv1.JSONSchemaProps{
-			"name": {Type: "string"},
-			"age":  {Type: "integer"},
-			"address": {
-				Type: "object",
-				Properties: map[string]extv1.JSONSchemaProps{
-					"street": {Type: "string"},
-					"city":   {Type: "string"},
+	tests := []struct {
+		name    string
+		obj     map[string]interface{}
+		want    map[string]extv1.JSONSchemaProps
+		wantErr bool
+	}{
+		{
+			name: "Valid types",
+			obj: map[string]interface{}{
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+					"address": map[string]interface{}{
+						"street": "string",
+						"city":   "string",
+					},
+				},
+				"Company": map[string]interface{}{
+					"name":      "string",
+					"employees": "[]string",
 				},
 			},
-		},
-	}
-
-	if !reflect.DeepEqual(personType, expectedPersonType) {
-		t.Errorf("LoadPreDefinedTypes() 'Person' type = %v, want %v", personType, expectedPersonType)
-	}
-
-	// Check Company type
-	companyType, ok := transformer.preDefinedTypes["Company"]
-	if !ok {
-		t.Errorf("LoadPreDefinedTypes() did not load 'Company' type")
-	}
-
-	expectedCompanyType := extv1.JSONSchemaProps{
-		Type: "object",
-		Properties: map[string]extv1.JSONSchemaProps{
-			"name": {Type: "string"},
-			"employees": {
-				Type: "array",
-				Items: &extv1.JSONSchemaPropsOrArray{
-					Schema: &extv1.JSONSchemaProps{
-						Type: "string",
+			want: map[string]extv1.JSONSchemaProps{
+				"Person": {
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"name": {Type: "string"},
+						"age":  {Type: "integer"},
+						"address": {
+							Type: "object",
+							Properties: map[string]extv1.JSONSchemaProps{
+								"street": {Type: "string"},
+								"city":   {Type: "string"},
+							},
+						},
+					},
+				},
+				"Company": {
+					Type: "object",
+					Properties: map[string]extv1.JSONSchemaProps{
+						"name": {Type: "string"},
+						"employees": {
+							Type: "array",
+							Items: &extv1.JSONSchemaPropsOrArray{
+								Schema: &extv1.JSONSchemaProps{
+									Type: "string",
+								},
+							},
+						},
 					},
 				},
 			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid type",
+			obj: map[string]interface{}{
+				"invalid": 123,
+			},
+			want:    map[string]extv1.JSONSchemaProps{},
+			wantErr: true,
 		},
 	}
 
-	if !reflect.DeepEqual(companyType, expectedCompanyType) {
-		t.Errorf("LoadPreDefinedTypes() 'Company' type = %v, want %v", companyType, expectedCompanyType)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := transformer.loadPreDefinedTypes(tt.obj)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("LoadPreDefinedTypes() error = %v", err)
+				return
+			}
+			if !reflect.DeepEqual(transformer.preDefinedTypes, tt.want) {
+				t.Errorf("LoadPreDefinedTypes() = %+v, want %+v", transformer.preDefinedTypes, tt.want)
+			}
+		})
 	}
 }

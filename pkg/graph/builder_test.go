@@ -1197,6 +1197,89 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				})
 			},
 		},
+		{
+			name: "crds not failing when cel is present in other resources",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("somecrd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "somecrd.ec2.services.k8s.aws",
+					},
+					"spec": map[string]interface{}{
+						"group":   "ec2.services.k8s.aws",
+						"version": "v1alpha1",
+						"names": map[string]interface{}{
+							"kind":     "SomeCRD",
+							"listKind": "SomeCRDList",
+							"singular": "SomeCRD",
+							"plural":   "SomeCRDs",
+						},
+						"scope": "Namespaced",
+					},
+				}, nil, nil),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, []string{
+					"${vpc.status.state == 'available'}",
+					"${vpc.status.vpcID != ''}",
+				}, nil),
+				generator.WithResource("subnet1", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "subnet1",
+					},
+					"spec": map[string]interface{}{
+						"vpcID":     "${vpc.metadata.name}",
+						"cidrBlock": "10.0.1.0/24",
+					},
+				}, nil, nil),
+			},
+			validateVars: func(t *testing.T, g *Graph) {
+				somecrd := g.Resources["somecrd"]
+				assert.Empty(t, somecrd.variables)
+				assert.Empty(t, somecrd.GetReadyWhenExpressions())
+				assert.Empty(t, somecrd.GetIncludeWhenExpressions())
+
+				// Verify resource with only readyWhen
+				vpc := g.Resources["vpc"]
+				assert.Empty(t, vpc.variables)
+				assert.Equal(t, []string{
+					"vpc.status.state == 'available'",
+					"vpc.status.vpcID != ''",
+				}, vpc.GetReadyWhenExpressions())
+				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+
+				// Verify resource with mixed expressions
+				subnet := g.Resources["subnet1"]
+				assert.Len(t, subnet.variables, 1)
+				// Create expected variables to match against
+				validateVariables(t, subnet.variables, []expectedVar{
+					{
+						path:                 "spec.vpcID",
+						expressions:          []string{"vpc.metadata.name"},
+						kind:                 variable.ResourceVariableKindDynamic,
+						standaloneExpression: true,
+					},
+				})
+
+			},
+		},
 	}
 
 	for _, tt := range tests {

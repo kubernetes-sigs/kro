@@ -1,0 +1,284 @@
+name: backend
+labels:
+  environment: staging
+  app.kubernetes.io/created-by: eks-workshop
+networkPolicies:
+  enabled: true
+  egress:
+    deny:
+      all:
+        # -- create a NetworkPolicy that denies all outgoing traffic
+        enabled: true
+    allow:
+      dns:
+        # -- create a NetworkPolicy that allows outgoing traffic to the Kubernetes DNS
+        enabled: true
+        # -- The namespace where the Kubneretes DNS is running
+        namespace: "kube-system"
+  ingress:
+    deny:
+      all:
+        # -- create a NetworkPolicy that denies all incoming traffic
+        enabled: true
+namespaces:
+  carts:
+    limitRanges:
+    - name: default
+      limits:
+        - defaultRequest: # this section defines default requests
+            cpu: 500m
+          #max: # max and min define the limit range
+          #  cpu: "2" # max cpu is not best practice
+          min:
+            cpu: 100m
+          type: Container
+    resourceQuotas:
+    - name: default
+      spec:
+        hard:
+          cpu: "4"
+          memory: 4Gi
+          pods: "4"
+    networkPolicies:
+    - name: allow-egress-same-namespace
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+          - podSelector: {}
+    - name: allow-ingress-same-namespace-and-from-ui
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        ingress:
+        - from:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ui
+    roleBindings:
+    - name: view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: backend-team-view
+
+  catalog:
+    labels:
+    limitRanges:
+    - name: default
+      limits:
+        - defaultRequest: # this section defines default requests
+            cpu: 500m
+          #max: # max and min define the limit range
+          #  cpu: "2" # max cpu is not best practice
+          min:
+            cpu: 100m
+          type: Container
+    resourceQuotas:
+    - name: default
+      spec:
+        hard:
+          cpu: "4"
+          memory: 4Gi
+          pods: "4"
+    networkPolicies:
+    - name: allow-egress-same-namespace
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+          - podSelector: {}
+    - name: allow-ingress-same-namespace-and-from-ui
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        ingress:
+        - from:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ui
+    roleBindings:
+    - name: view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: backend-team-view
+
+  checkout:
+    labels:
+    limitRanges:
+    - name: default
+      limits:
+        - defaultRequest: # this section defines default requests
+            cpu: 500m
+          #max: # max and min define the limit range
+          #  cpu: "2" # max cpu is not best practice
+          min:
+            cpu: 100m
+          type: Container
+    resourceQuotas:
+    - name: default
+      spec:
+        hard:
+          cpu: "4"
+          memory: 4Gi
+          pods: "4"
+    networkPolicies:
+    - name: allow-egress-same-namespace-and-orders
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: orders
+    - name: allow-ingress-same-namespace-and-from-ui
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        ingress:
+        - from:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ui
+    roleBindings:
+    - name: view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: backend-team-view
+
+  orders:
+    labels:
+    limitRanges:
+    - name: default
+      limits:
+        - defaultRequest: # this section defines default requests
+            cpu: 500m
+          #max: # max and min define the limit range
+          #  cpu: "2" # max cpu is not best practice
+          min:
+            cpu: 100m
+          type: Container
+    resourceQuotas:
+    - name: default
+      spec:
+        hard:
+          cpu: "4"
+          memory: 4Gi
+          pods: "4"
+    networkPolicies:
+    - name: allow-egress-same-namespace-and-rabbitmq
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: rabbitmq
+    - name: allow-ingress-same-namespace-and-from-ui-checkout
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        ingress:
+        - from:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ui
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: checkout
+    roleBindings:
+    - name: view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: backend-team-view
+  rabbitmq:
+    labels:
+    limitRanges:
+    - name: default
+      limits:
+        - defaultRequest: # this section defines default requests
+            cpu: 500m
+          #max: # max and min define the limit range
+          #  cpu: "2" # max cpu is not best practice
+          min:
+            cpu: 100m
+          type: Container
+    resourceQuotas:
+    - name: default
+      spec:
+        hard:
+          cpu: "4"
+          memory: 4Gi
+          pods: "4"
+    networkPolicies:
+    - name: allow-egress-same-namespace
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+    - name: allow-ingress-same-namespace-from-orders
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        ingress:
+        - from:
+          - podSelector: {}
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: rabbitmq          
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: orders
+
+    roleBindings:
+    - name: view
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: view
+      subjects:
+      - apiGroup: rbac.authorization.k8s.io
+        kind: Group
+        name: backend-team-view

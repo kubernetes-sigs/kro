@@ -16,6 +16,7 @@ package simpleschema
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
@@ -116,7 +117,9 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 		fieldJSONSchemaProps = &preDefinedType
 	}
 
-	tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema)
+	if err := tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema); err != nil {
+		return nil, fmt.Errorf("failed to apply markers: %w", err)
+	}
 
 	return fieldJSONSchemaProps, nil
 }
@@ -184,7 +187,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) {
+func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
@@ -205,15 +208,47 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeDescription:
 			schema.Description = marker.Value
 		case MarkerTypeMinimum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
-				schema.Minimum = &val
+			val, err := strconv.ParseFloat(marker.Value, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse minimum enum value: %w", err)
 			}
+			schema.Minimum = &val
 		case MarkerTypeMaximum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
-				schema.Maximum = &val
+			val, err := strconv.ParseFloat(marker.Value, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse maximum enum value: %w", err)
+			}
+			schema.Maximum = &val
+		case MarkerTypeEnum:
+			var enumJSONValues []extv1.JSON
+
+			enumValues := strings.Split(marker.Value, ",")
+			for _, val := range enumValues {
+				val = strings.TrimSpace(val)
+				if val == "" {
+					return fmt.Errorf("empty enum values are not allowed")
+				}
+
+				var rawValue []byte
+				switch schema.Type {
+				case "string":
+					rawValue = []byte(fmt.Sprintf("%q", val))
+				case "integer":
+					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+						return fmt.Errorf("failed to parse integer enum value: %w", err)
+					}
+					rawValue = []byte(val)
+				default:
+					return fmt.Errorf("enum values only supported for string and integer types, got type: %s", schema.Type)
+				}
+				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
+			}
+			if len(enumJSONValues) > 0 {
+				schema.Enum = enumJSONValues
 			}
 		}
 	}
+	return nil
 }
 
 // Other functions (LoadPreDefinedTypes, transformMap) remain unchanged

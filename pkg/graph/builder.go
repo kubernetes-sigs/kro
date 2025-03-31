@@ -676,7 +676,9 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 
 	context := map[string]interface{}{}
 	for resourceName, resource := range resources {
-		context[resourceName] = resource.emulatedObject.Object
+		if resource.emulatedObject != nil {
+			context[resourceName] = resource.emulatedObject.Object
+		}
 	}
 
 	output, _, err := program.Eval(context)

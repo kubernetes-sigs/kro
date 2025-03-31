@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: carts
+data:
+  CARTS_DYNAMODB_TABLENAME: Items
+  CARTS_DYNAMODB_CREATETABLE: "false"
+  #AWS_ACCESS_KEY_ID: key
+  #AWS_SECRET_ACCESS_KEY: secret
+  #CARTS_DYNAMODB_ENDPOINT: http://carts-dynamodb:8000

@@ -1,0 +1,1012 @@
+# yamllint disable rule:line-length
+---
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: ekscluster.kro.run
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EksCluster
+    spec:
+      name: string
+      tenant: string
+      environment: string
+      region: string
+      accountId: string
+      managementAccountId: string
+      k8sVersion: string
+      adminRoleName: string
+      fleetSecretManagerSecretNameSuffix: string
+      domainName: string
+      aws_partition: string | default="aws"
+      aws_dns_suffix: string | default="amazonaws.com"
+      network:
+        vpcID: string
+        subnets:
+          controlplane:
+            subnet1ID: string
+            subnet2ID: string
+          workers:
+            subnet1ID: string
+            subnet2ID: string
+      workloads: string # Define if we want to deploy workloads application
+      gitops:
+        addonsRepoBasePath: string
+        addonsRepoPath: string
+        addonsRepoRevision: string
+        addonsRepoUrl: string
+        fleetRepoBasePath: string
+        fleetRepoPath: string
+        fleetRepoRevision: string
+        fleetRepoUrl: string
+        platformRepoBasePath: string
+        platformRepoPath: string
+        platformRepoRevision: string
+        platformRepoUrl: string
+        workloadRepoBasePath: string
+        workloadRepoPath: string
+        workloadRepoRevision: string
+        workloadRepoUrl: string
+      addons:
+
+        enable_metrics_server: string
+        enable_external_secrets: string
+        enable_external_dns: string
+        enable_adot_collector: string
+        enable_cw_prometheus: string
+        enable_kyverno: string
+        enable_kyverno_policies: string
+        enable_kyverno_policy_reporter: string
+        enable_cni_metrics_helper: string
+        enable_prometheus_node_exporter: string
+        enable_kube_state_metrics: string
+        enable_opentelemetry_operator: string
+        enable_cert_manager: string
+        enable_ack_iam: string
+        enable_ack_eks: string
+        enable_ack_efs: string
+        enable_aws_efs_csi_driver: string
+
+        adot_collector_namespace: string
+        adot_collector_service_account: string
+
+        external_dns_namespace: string
+        external_dns_service_account: string
+        external_dns_policy: string
+
+        external_secrets_namespace: string
+        external_secrets_service_account: string
+
+        amp_endpoint_url: string
+    status:
+      clusterARN: ${ekscluster.status.ackResourceMetadata.arn}
+      cdata: ${ekscluster.status.certificateAuthority.data}
+      endpoint: ${ekscluster.status.endpoint}
+      clusterState: ${ekscluster.status.status}
+
+
+  resources:
+
+    ###########################################################
+    # EKS Cluster
+    ###########################################################
+    - id: clusterRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-cluster-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-cluster-role"
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+            - arn:aws:iam::aws:policy/AmazonEKSComputePolicy
+            - arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy
+            - arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy
+            - arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+    - id: nodeRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-cluster-node-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-cluster-node-role"
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy
+            - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly
+            - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+            - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "ec2.amazonaws.com"
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+    # https://aws-controllers-k8s.github.io/community/reference/eks/v1alpha1/cluster/
+    - id: ekscluster
+      readyWhen:
+        - ${ekscluster.status.status == "ACTIVE"}
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Cluster
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}"
+          # implicit dependencies with roles
+          annotations:
+            clusterRoleArn: "${clusterRole.status.ackResourceMetadata.arn}"
+            nodeRoleArn: "${nodeRole.status.ackResourceMetadata.arn}"
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}"
+          roleARN: "${clusterRole.status.ackResourceMetadata.arn}"
+          version: "${schema.spec.k8sVersion}"
+          accessConfig:
+            authenticationMode: "API_AND_CONFIG_MAP"
+            bootstrapClusterCreatorAdminPermissions: true
+          computeConfig:
+            enabled: true
+            nodeRoleARN: ${nodeRole.status.ackResourceMetadata.arn}
+            nodePools:
+              - system
+              - general-purpose
+          kubernetesNetworkConfig:
+            ipFamily: ipv4
+            elasticLoadBalancing:
+              enabled: true
+          logging: 
+            clusterLogging:
+            - enabled: true
+              types:
+              - api
+              - audit
+              - authenticator
+              - controllerManager
+              - scheduler
+          storageConfig:
+            blockStorage:
+              enabled: true
+          resourcesVPCConfig:
+            endpointPrivateAccess: true
+            endpointPublicAccess: true
+            subnetIDs:
+              - ${schema.spec.network.subnets.controlplane.subnet1ID}
+              - ${schema.spec.network.subnets.controlplane.subnet2ID}
+          zonalShiftConfig: 
+            enabled: true
+          tags: 
+            kro-management: ${schema.spec.name}
+            tenant: ${schema.spec.tenant}
+            environment: ${schema.spec.environment}
+
+    - id: podIdentityAddon
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Addon
+        metadata:
+          name: eks-pod-identity-agent
+          namespace: "${schema.spec.name}"
+          annotations:
+            clusterArn: "${ekscluster.status.ackResourceMetadata.arn}"
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: eks-pod-identity-agent
+          addonVersion: v1.3.4-eksbuild.1
+          clusterName: "${schema.spec.name}"
+
+    ###########################################################
+    # ArgoCD Integration
+    ###########################################################
+    - id: argocdRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: "${schema.spec.name}-argocd-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            #force dependency on ekscluster
+            eksclusterArn: "${ekscluster.status.ackResourceMetadata.arn}"
+            #force dependency on podIdentityAddon so that we create argo cluster secret after podIdentity correctly configured
+            podIdentityAddonArn: "${ackEksPodIdentity.status.ackResourceMetadata.arn}"
+        spec:
+          name: "${schema.spec.name}-argocd-role"
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "AWS": "arn:aws:iam::${schema.spec.managementAccountId}:role/argocd-hub-mgmt"
+                  },
+                  "Action": [
+                    "sts:TagSession",
+                    "sts:AssumeRole"
+                  ]
+                }
+              ]
+            }
+
+    - id: argocdSecret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: "${schema.spec.name}"
+          namespace: argocd
+          labels:
+            argocd.argoproj.io/secret-type: cluster
+            # Compatible fleet-management
+            fleet_member: spoke
+            tenant: "${schema.spec.tenant}"
+            environment: "${schema.spec.environment}"
+            aws_cluster_name: "${schema.spec.name}"
+            workloads: "${schema.spec.workloads}"
+            #using : useSelector: true for centralized mode
+
+            enable_metrics_server: "${schema.spec.addons.enable_metrics_server}"
+            enable_external_secrets: "${schema.spec.addons.enable_external_secrets}"
+            enable_external_dns: "${schema.spec.addons.enable_external_dns}"
+            enable_adot_collector: "${schema.spec.addons.enable_adot_collector}"
+            enable_cw_prometheus: "${schema.spec.addons.enable_cw_prometheus}"
+            enable_kyverno: "${schema.spec.addons.enable_kyverno}"
+            enable_kyverno_policies: "${schema.spec.addons.enable_kyverno_policies}"
+            enable_kyverno_policy_reporter: "${schema.spec.addons.enable_kyverno_policy_reporter}"
+            enable_cni_metrics_helper: "${schema.spec.addons.enable_cni_metrics_helper}"
+            enable_prometheus_node_exporter: "${schema.spec.addons.enable_prometheus_node_exporter}"
+            enable_kube_state_metrics: "${schema.spec.addons.enable_kube_state_metrics}"
+            enable_opentelemetry_operator: "${schema.spec.addons.enable_opentelemetry_operator}"
+            enable_cert_manager: "${schema.spec.addons.enable_cert_manager}"
+            enable_ack_iam: "${schema.spec.addons.enable_ack_iam}"
+            enable_ack_eks: "${schema.spec.addons.enable_ack_eks}"
+            enable_ack_efs: "${schema.spec.addons.enable_ack_efs}"
+            enable_aws_efs_csi_driver: "${schema.spec.addons.enable_aws_efs_csi_driver}"
+
+          annotations:
+            # GitOps Bridge
+            accountId: "${schema.spec.accountId}"
+            aws_account_id: "${schema.spec.accountId}"
+            region: "${schema.spec.region}"
+            aws_region: "${schema.spec.region}"
+            aws_central_region: "${schema.spec.region}"   # used in fleet-management gitops
+            oidcProvider: "${ekscluster.status.identity.oidc.issuer}"
+            aws_cluster_name: "${schema.spec.name}"
+            aws_vpc_id: "${schema.spec.network.vpcID}"
+            # GitOps Configuration
+            addons_repo_basepath: "${schema.spec.gitops.addonsRepoBasePath}"
+            addons_repo_path: "${schema.spec.gitops.addonsRepoPath}"
+            addons_repo_revision: "${schema.spec.gitops.addonsRepoRevision}"
+            addons_repo_url: "${schema.spec.gitops.addonsRepoUrl}"
+            fleet_repo_basepath: "${schema.spec.gitops.fleetRepoBasePath}"
+            fleet_repo_path: "${schema.spec.gitops.fleetRepoPath}"
+            fleet_repo_revision: "${schema.spec.gitops.fleetRepoRevision}"
+            fleet_repo_url: "${schema.spec.gitops.fleetRepoUrl}"
+            platform_repo_basepath: "${schema.spec.gitops.platformRepoBasePath}"
+            platform_repo_path: "${schema.spec.gitops.platformRepoPath}"
+            platform_repo_revision: "${schema.spec.gitops.platformRepoRevision}"
+            platform_repo_url: "${schema.spec.gitops.platformRepoUrl}"
+            workload_repo_basepath: "${schema.spec.gitops.workloadRepoBasePath}"
+            workload_repo_path: "${schema.spec.gitops.workloadRepoPath}"
+            workload_repo_revision: "${schema.spec.gitops.workloadRepoRevision}"
+            workload_repo_url: "${schema.spec.gitops.workloadRepoUrl}"
+            # Specific for External-DNS
+            external_dns_domain_filters: "${schema.spec.domainName}"
+            external_dns_namespace: "${schema.spec.addons.external_dns_namespace}"
+            external_dns_policy: "${schema.spec.addons.external_dns_policy}"
+            external_dns_service_account: "${schema.spec.addons.external_dns_service_account}"
+
+            # Generic
+            external_secrets_namespace: "${schema.spec.addons.external_secrets_namespace}"
+            external_secrets_service_account: "${schema.spec.addons.external_secrets_service_account}"
+
+            # aws_load_balancer_controller_namespace: "${schema.spec.addons.aws_load_balancer_controller_namespace}"
+            # aws_load_balancer_controller_service_account: "${schema.spec.addons.aws_load_balancer_controller_service_account}"
+
+            adot_collector_namespace: "${schema.spec.addons.adot_collector_namespace}"
+            adot_collector_service_account: "${schema.spec.addons.adot_collector_service_account}"
+            amp_endpoint_url: "${schema.spec.addons.amp_endpoint_url}"
+
+            fleet_secret_manager_secret_name: "${schema.spec.name}-${schema.spec.fleetSecretManagerSecretNameSuffix}"
+
+            # karpenter_namespace: "${schema.spec.addons.karpenter_namespace}"
+            # karpenter_node_iam_role_name: "${nodeRole.metadata.name}"
+            # karpenter_service_account: "${schema.spec.addons.karpenter_service_account}"
+            # karpenter_sqs_queue_name: "${schema.spec.addons.karpenter_sqs_queue_name}"
+
+        type: Opaque
+        # TODO bug in KRO, it always see some drifts..
+        stringData:
+          name: "${schema.spec.name}"
+          server: "${ekscluster.status.endpoint}"
+          config: |
+            {
+              "awsAuthConfig": {
+                "clusterName": "${schema.spec.name}",
+                "roleARN": "${argocdRole.status.ackResourceMetadata.arn}"
+              },
+              "tlsClientConfig": {
+                "caData": "${ekscluster.status.certificateAuthority.data}",
+                "insecure": false
+              }
+            }
+
+
+    - id: accessEntry
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-access-entry"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          accessPolicies:
+            - accessScope:
+                type: "cluster"
+              policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          principalARN: "${argocdRole.status.ackResourceMetadata.arn}"
+          type: STANDARD
+
+    - id: accessEntryAdmin
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-access-entry-admin"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          accessPolicies:
+            - accessScope:
+                type: "cluster"
+              policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          principalARN: "arn:aws:iam::${schema.spec.accountId}:role/${schema.spec.adminRoleName}"
+          type: STANDARD
+
+
+    ###########################################################
+    # External Secrets AddOn Pod Identity
+    ###########################################################
+    - id: externalSecretsRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-external-secrets-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-external-secrets-role"
+          policies:
+            - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+    - id: externalSecretsPodIdentityAssociation
+      readyWhen:
+      - ${externalSecretsPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: "${schema.spec.name}-external-secrets"
+          namespace: "${schema.spec.name}"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: argocd
+          roleARN: "${externalSecretsRole.status.ackResourceMetadata.arn}"
+          serviceAccount: external-secrets-sa
+          tags:
+            environment: "${schema.spec.environment}"
+            managedBy: ACK
+            application: external-secrets
+
+    ###########################################################
+    # External DNS AddOn Pod Identity
+    ###########################################################
+    - id: externalDnsPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-iam"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-ack-iam"
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "route53:ChangeResourceRecordSets"
+                  ],
+                  "Resource": [
+                    "arn:aws:route53:::hostedzone/*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "route53:ListHostedZones",
+                    "route53:ListResourceRecordSets"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+
+    - id: externalDnsRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-external-dns-role"
+          annotations:
+            policy: "${externalDnsPolicy.status.ackResourceMetadata.arn}"
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-external-dns-role"
+          policyRefs:
+            - from:
+                name: "${schema.spec.name}-ack-iam"
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: externalDnsPodIdentity
+      readyWhen:
+      - ${externalDnsPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-external-dns"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: external-dns
+          roleARN: "${externalDnsRole.status.ackResourceMetadata.arn}"
+          serviceAccount: external-dns
+
+
+    ###########################################################
+    # ADOT Collector Pod Identity
+    ###########################################################
+    - id: adotCollectorRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-adot-collector-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-adot-collector-role"
+          policies:
+            - arn:aws:iam::aws:policy/AmazonPrometheusRemoteWriteAccess
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: adotCollectorPodIdentityAssociation
+      readyWhen:
+      - ${adotCollectorPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: "${schema.spec.name}-adot-collector"
+          namespace: "${schema.spec.name}"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: "${schema.spec.addons.adot_collector_namespace}"
+          roleARN: "${adotCollectorRole.status.ackResourceMetadata.arn}"
+          serviceAccount: "${schema.spec.addons.adot_collector_service_account}"
+          tags:
+            environment: "${schema.spec.environment}"
+            managedBy: ACK
+            application: adot-collector
+
+
+    ###########################################################
+    # Kyverno Reporter Pod Identity
+    ###########################################################
+    - id: kyvernoPolicyReporterRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-kyverno-policy-reporter-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-kyverno-policy-reporter-role"
+          policies:
+            - arn:aws:iam::aws:policy/AWSSecurityHubFullAccess
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: kyvernoPolicyReporterPodIdentityAssociation
+      readyWhen:
+      - ${kyvernoPolicyReporterPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: "${schema.spec.name}-kyverno-policy-reporter"
+          namespace: "${schema.spec.name}"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: kyverno
+          roleARN: "${kyvernoPolicyReporterRole.status.ackResourceMetadata.arn}"
+          serviceAccount: policy-reporter
+          tags:
+            environment: "${schema.spec.environment}"
+            managedBy: ACK
+            application: kyverno-policy-reporter
+
+    ###########################################################
+    # CNI Metrics Helper Pod Identity
+    ###########################################################
+    - id: cniMetricsHelperPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-cni-metrics-helper-policy"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-cni-metrics-helper-policy"
+          description: "Policy to allow cni metrics helper put metrics to CloudWatch"
+          policyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cloudwatch:PutMetricData"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+
+    - id: cniMetricsHelperRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-cni-metrics-helper-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-cni-metrics-helper-role"
+          policies:
+            - ${cniMetricsHelperPolicy.status.ackResourceMetadata.arn}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: cniMetricsHelperPodIdentityAssociation
+      readyWhen:
+      - ${cniMetricsHelperPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: "${schema.spec.name}-cni-metrics-helper"
+          namespace: "${schema.spec.name}"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: kube-system
+          roleARN: "${cniMetricsHelperRole.status.ackResourceMetadata.arn}"
+          serviceAccount: cni-metrics-helper
+          tags:
+            environment: "${schema.spec.environment}"
+            managedBy: ACK
+            application: cni-metrics-helper
+
+    ###########################################################
+    # CloudWatch Observability Pod Identity
+    ###########################################################
+    - id: cloudwatchObservabilityRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-cloudwatch-observability-role"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-cloudwatch-observability-role"
+          policies:
+            - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: cloudwatchObservabilityPodIdentityAssociation
+      readyWhen:
+      - ${cloudwatchObservabilityPodIdentityAssociation.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: "${schema.spec.name}-cloudwatch-observability"
+          namespace: "${schema.spec.name}"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: amazon-cloudwatch
+          roleARN: "${cloudwatchObservabilityRole.status.ackResourceMetadata.arn}"
+          serviceAccount: cloudwatch-agent
+          tags:
+            environment: "${schema.spec.environment}"
+            managedBy: ACK
+            application: cloudwatch-observability
+
+    ###########################################################
+    # ACK IAM Pod Identity
+    ###########################################################
+    - id: ackIamPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-iam-policy"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-ack-iam-policy"
+          policyDocument: |
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Action": [
+                            "iam:GetGroup",
+                            "iam:CreateGroup",
+                            "iam:DeleteGroup",
+                            "iam:UpdateGroup",
+                            "iam:GetRole",
+                            "iam:CreateRole",
+                            "iam:DeleteRole",
+                            "iam:UpdateRole",
+                            "iam:PutRolePermissionsBoundary",
+                            "iam:PutUserPermissionsBoundary",
+                            "iam:GetUser",
+                            "iam:CreateUser",
+                            "iam:DeleteUser",
+                            "iam:UpdateUser",
+                            "iam:GetPolicy",
+                            "iam:CreatePolicy",
+                            "iam:DeletePolicy",
+                            "iam:GetPolicyVersion",
+                            "iam:CreatePolicyVersion",
+                            "iam:DeletePolicyVersion",
+                            "iam:ListPolicyVersions",
+                            "iam:ListPolicyTags",
+                            "iam:ListAttachedGroupPolicies",
+                            "iam:GetGroupPolicy",
+                            "iam:PutGroupPolicy",
+                            "iam:AttachGroupPolicy",
+                            "iam:DetachGroupPolicy",
+                            "iam:DeleteGroupPolicy",
+                            "iam:ListAttachedRolePolicies",
+                            "iam:ListRolePolicies",
+                            "iam:GetRolePolicy",
+                            "iam:PutRolePolicy",
+                            "iam:AttachRolePolicy",
+                            "iam:DetachRolePolicy",
+                            "iam:DeleteRolePolicy",
+                            "iam:ListAttachedUserPolicies",
+                            "iam:ListUserPolicies",
+                            "iam:GetUserPolicy",
+                            "iam:PutUserPolicy",
+                            "iam:AttachUserPolicy",
+                            "iam:DetachUserPolicy",
+                            "iam:DeleteUserPolicy",
+                            "iam:ListRoleTags",
+                            "iam:ListUserTags",
+                            "iam:TagPolicy",
+                            "iam:UntagPolicy",
+                            "iam:TagRole",
+                            "iam:UntagRole",
+                            "iam:TagUser",
+                            "iam:UntagUser",
+                            "iam:RemoveClientIDFromOpenIDConnectProvider",
+                            "iam:ListOpenIDConnectProviderTags",
+                            "iam:UpdateOpenIDConnectProviderThumbprint",
+                            "iam:UntagOpenIDConnectProvider",
+                            "iam:AddClientIDToOpenIDConnectProvider",
+                            "iam:DeleteOpenIDConnectProvider",
+                            "iam:GetOpenIDConnectProvider",
+                            "iam:TagOpenIDConnectProvider",
+                            "iam:CreateOpenIDConnectProvider",
+                            "iam:UpdateAssumeRolePolicy"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*",
+                        "Sid": "VisualEditor0"
+                    }
+                ]
+            }
+
+    - id: ackIAMRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-iam-role"
+          annotations:
+            policy: "${ackIamPolicy.status.ackResourceMetadata.arn}"
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-ack-iam-role"
+          policyRefs:
+            - from:
+                name: "${schema.spec.name}-ack-iam-policy"
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: ackIAMPodIdentity
+      readyWhen:
+      - ${ackIAMPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-iam"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: ack-system
+          roleARN: "${ackIAMRole.status.ackResourceMetadata.arn}"
+          serviceAccount: ack-iam-controller
+
+    ###########################################################
+    # ACK eks Pod Identity
+    ###########################################################
+    - id: ackEksPolicy
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Policy
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-eks-policy"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-ack-eks-policy"
+          policyDocument: |
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Action": [
+                            "eks:*",
+                            "iam:GetRole",
+                            "iam:PassRole",
+                            "iam:ListAttachedRolePolicies",
+                            "ec2:DescribeSubnets"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*"
+                    }
+                ]
+            }
+
+    - id: ackEksRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-eks-role"
+          annotations:
+            policy: "${ackEksPolicy.status.ackResourceMetadata.arn}"
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: "${schema.spec.name}-ack-eks-role"
+          policyRefs:
+            - from:
+                name: "${schema.spec.name}-ack-eks-policy"
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "pods.eks.amazonaws.com"
+                  },
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
+                }
+              ]
+            }
+
+    - id: ackEksPodIdentity
+      readyWhen:
+      - ${ackEksPodIdentity.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          namespace: "${schema.spec.name}"
+          name: "${schema.spec.name}-ack-eks"
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: "${schema.spec.name}"
+          namespace: ack-system
+          roleARN: "${ackEksRole.status.ackResourceMetadata.arn}"
+          serviceAccount: ack-eks-controller
+
+    ###########################################################
+    # XXX Pod Identity
+    ###########################################################

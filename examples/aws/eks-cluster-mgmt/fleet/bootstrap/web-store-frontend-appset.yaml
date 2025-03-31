@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: web-store-frontend
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"  
+spec:
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  workloads: 'true'              
+                matchExpressions:
+                  - key: environment
+                    operator: In
+                    values:
+                      - staging
+                      - prod
+                # matchExpressions: # This can be used to clean resources before deleting specific clusters
+                #   - key: aws_cluster_name
+                #     operator: NotIn
+                #     values:
+                #       - workload-cluster2                      
+              values:
+                team: frontend
+          - git:
+              repoURL: '{{metadata.annotations.workload_repo_url}}'
+              revision: '{{metadata.annotations.workload_repo_revision}}'
+              directories:
+                - path: '{{metadata.annotations.workload_repo_basepath}}{{values.team}}/*'
+
+  template:
+    metadata:
+      name: 'web-store-{{name}}-{{path.basename}}'
+      labels:
+        environment: '{{metadata.labels.environment}}'
+        team: '{{values.team}}'
+        component: '{{path.basename}}'
+        workloads: 'true'
+      finalizers:
+      # This is here only for workshop purposes. In a real-world scenario, you should not use this
+      - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: '{{values.team}}'
+      source:
+        repoURL: '{{metadata.annotations.workload_repo_url}}'
+        path: '{{path}}/{{metadata.labels.environment}}'
+        targetRevision: '{{metadata.annotations.workload_repo_revision}}'
+      destination:
+        namespace: '{{path.basename}}'
+        name: '{{name}}'
+      syncPolicy:
+        automated:
+          allowEmpty: true
+          prune: true
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100

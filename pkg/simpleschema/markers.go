@@ -50,12 +50,14 @@ const (
 	MarkerTypeMinimum MarkerType = "minimum"
 	// MarkerTypeMaximum represents the `maximum` marker.
 	MarkerTypeMaximum MarkerType = "maximum"
+	// MarkerTypeEnum represents the `enum` marker.
+	MarkerTypeEnum MarkerType = "enum"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
 	switch MarkerType(s) {
 	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription,
-		MarkerTypeMinimum, MarkerTypeMaximum:
+		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeEnum:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("unknown marker type: %s", s)

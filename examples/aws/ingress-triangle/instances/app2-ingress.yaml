@@ -1,0 +1,10 @@
+apiVersion: kro.run/v1alpha1
+kind: ServiceIngress
+metadata:
+  name: app2-ingress
+spec:
+  name: app2-ingress
+  subDomain: app2-ingress
+  namespace: ingress-triangle
+  ingressClassName: alb
+  image: nginx

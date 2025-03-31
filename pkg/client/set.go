@@ -20,8 +20,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
-
-	"github.com/kro-run/kro/pkg"
+	"sigs.k8s.io/release-utils/version"
 )
 
 // Set provides a unified interface for different Kubernetes clients
@@ -66,7 +65,7 @@ func NewSet(cfg Config) (*Set, error) {
 	if config.Burst == 0 {
 		config.Burst = cfg.Burst
 	}
-	config.UserAgent = fmt.Sprintf("kro/%s", pkg.Version)
+	config.UserAgent = fmt.Sprintf("kro/%s", version.GetVersionInfo().GitVersion)
 
 	c := &Set{config: config}
 	if err := c.init(); err != nil {

@@ -1,0 +1,12 @@
+# region: eu-west-2
+# name: myname
+# serviceAccounts: 
+#  - "test"
+#  - "test2"
+# piNamespace: "default"
+# clusterName: "spoke-workload2"
+# policyDocument:
+#   - resourceType: ssm
+#     resourceName: "*"
+#     actions:
+#       - "ssm:DescribeParameters"

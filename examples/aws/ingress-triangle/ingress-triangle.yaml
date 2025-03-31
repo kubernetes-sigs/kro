@@ -1,0 +1,73 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: ingresstriangle.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: IngressTriangle
+    spec:
+      name: string
+      namespace: string
+      subDomain: string
+      ingressClassName: string
+      domain: string | default=example.com
+      hostedZoneID: string | default=R53HOSTEDZONEID
+      recordType: string | default=CNAME
+    status:
+      validationStatus: ${certificateResource.status.domainValidations[0].validationStatus}
+      certificateARN:  ${certificateResource.status.ackResourceMetadata.arn}
+      loadBalancerARN: ${ingress.status.loadBalancer.ingress[0].hostname}
+  resources:
+  - id: certificateResource
+    template:
+      apiVersion: acm.services.k8s.aws/v1alpha1
+      kind: Certificate
+      metadata:
+        name: ${schema.spec.name}-cert
+      spec:
+        domainName: ${schema.spec.subDomain}.${schema.spec.domain}
+        domainValidationOptions:
+          - domainName: ${schema.spec.subDomain}.${schema.spec.domain}
+            validationDomain: ${schema.spec.domain}
+  - id: dnsValidationRecord
+    template:
+      apiVersion: route53.services.k8s.aws/v1alpha1
+      kind: RecordSet
+      metadata:
+        name: ${schema.spec.name}-cert-validation
+      spec:
+        ttl: 300
+        hostedZoneID: ${schema.spec.hostedZoneID}
+        recordType: ${certificateResource.status.domainValidations[0].resourceRecord.type_}
+        name: ${certificateResource.status.domainValidations[0].resourceRecord.name.split("." + schema.spec.domain)[0]}
+        resourceRecords:
+        - value: ${certificateResource.status.domainValidations[0].resourceRecord.value}
+  - id: ingress
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ${schema.spec.name}-ingress
+        annotations:
+          alb.ingress.kubernetes.io/target-type: ip
+          alb.ingress.kubernetes.io/healthcheck-path: /
+          alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+          alb.ingress.kubernetes.io/certificate-arn: '${certificateResource.status.domainValidations[0].validationStatus == "SUCCESS" ? certificateResource.status.ackResourceMetadata.arn : null}'
+          alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+          alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=60
+          external-dns.alpha.kubernetes.io/hostname:  ${schema.spec.subDomain}.${schema.spec.domain}
+          external-dns.alpha.kubernetes.io/ttl: "300"
+      spec:
+        ingressClassName: ${schema.spec.ingressClassName}
+        rules:
+          - host:  ${schema.spec.subDomain}.${schema.spec.domain}
+            http:
+              paths:
+                - path: "/"
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${schema.spec.name}
+                      port:
+                        number: 80

@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-addons
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  syncPolicy:
+    preserveResourcesOnDeletion: false # to be able to cleanup
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=error
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          fleet_member: control-plane          
+      values:
+        addonChart: application-sets
+  template:
+    metadata:
+      name: cluster-addons
+    spec:
+      project: default
+      sources:
+      - ref: values
+        repoURL: '{{.metadata.annotations.addons_repo_url}}'
+        targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+      - repoURL: '{{.metadata.annotations.addons_repo_url}}'
+        path: 'charts/{{.values.addonChart}}'
+        targetRevision: '{{.metadata.annotations.addons_repo_revision}}'
+        helm:
+          ignoreMissingValueFiles: true
+          valueFiles:
+            - $values/{{.metadata.annotations.addons_repo_basepath}}bootstrap/default/addons.yaml
+            - $values/{{.metadata.annotations.addons_repo_basepath}}environments/{{ .metadata.labels.environment }}/addons.yaml
+            - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/default/{{ .values.addonChart }}/addons.yaml
+            - $values/{{.metadata.annotations.addons_repo_basepath}}tenants/{{ .metadata.labels.tenant }}/clusters/{{ .name }}/{{.values.addonChart}}/addons.yaml
+      destination:
+        namespace: argocd
+        name: '{{.name}}'
+      syncPolicy:
+        automated:
+          selfHeal: false
+          allowEmpty: true
+          prune: false
+        retry:
+          limit: 100
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true  # Big CRDs.

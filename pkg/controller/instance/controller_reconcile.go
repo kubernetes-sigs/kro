@@ -100,7 +100,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	// Set managed state and handle instance labels
 	if err := igr.setupInstance(ctx, instance); err != nil {
-		return fmt.Errorf("failed to setup instance: %w", err)
+		return fmt.Errorf("failed to setup instance %s: %w", instance.GetName(), err)
 	}
 
 	// Initialize resource states
@@ -170,6 +170,16 @@ func (igr *instanceGraphReconciler) handleResourceReconciliation(
 ) error {
 	log := igr.log.WithValues("resourceID", resourceID)
 
+	// Validating input parameters
+	if err := igr.validateResource(resource); err != nil {
+		log.Error(err, "Invalid resource")
+		return fmt.Errorf("invalid resource for reconciliation: %w", err)
+	}
+	if err := igr.validateState(resourceState); err != nil {
+		log.Error(err, "Invalid resource state")
+		return fmt.Errorf("invalid resource state for reconciliation: %w", err)
+	}
+
 	// Get resource client and namespace
 	rc := igr.getResourceClient(resourceID)
 
@@ -180,8 +190,15 @@ func (igr *instanceGraphReconciler) handleResourceReconciliation(
 			return igr.handleResourceCreation(ctx, rc, resource, resourceID, resourceState)
 		}
 		resourceState.State = "ERROR"
-		resourceState.Err = fmt.Errorf("failed to get resource: %w", err)
+		resourceState.Err = fmt.Errorf("failed to get resource %s/%s: %w",
+			resource.GetNamespace(), resource.GetName(), err)
 		return resourceState.Err
+	}
+
+	// Validating observed resource
+	if err := igr.validateResource(observed); err != nil {
+		log.Error(err, "Invalid observed resource")
+		return fmt.Errorf("invalid observed resource: %w", err)
 	}
 
 	// Update runtime with observed state
@@ -225,7 +242,13 @@ func (igr *instanceGraphReconciler) handleResourceCreation(
 	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
 	if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {
 		resourceState.State = "ERROR"
-		resourceState.Err = fmt.Errorf("failed to create resource: %w", err)
+		resourceState.Err = fmt.Errorf("failed to create resource %s/%s: %w",
+			resource.GetNamespace(), resource.GetName(), err)
+		igr.log.Error(resourceState.Err, "Resource creation failed",
+			"resource_id", resourceID,
+			"namespace", resource.GetNamespace(),
+			"name", resource.GetName(),
+			"resource_type", resource.GetKind())
 		return resourceState.Err
 	}
 
@@ -243,6 +266,20 @@ func (igr *instanceGraphReconciler) updateResource(
 	resourceState *ResourceState,
 ) error {
 	igr.log.V(1).Info("Processing resource update", "resourceID", resourceID)
+
+	// Validating input parameters
+	if err := igr.validateResource(desired); err != nil {
+		igr.log.Error(err, "Invalid desired resource")
+		return fmt.Errorf("invalid desired resource: %w", err)
+	}
+	if err := igr.validateResource(observed); err != nil {
+		igr.log.Error(err, "Invalid observed resource")
+		return fmt.Errorf("invalid observed resource: %w", err)
+	}
+	if err := igr.validateState(resourceState); err != nil {
+		igr.log.Error(err, "Invalid resource state")
+		return fmt.Errorf("invalid resource state: %w", err)
+	}
 
 	// Compare desired and observed states
 	differences, err := delta.Compare(desired, observed)
@@ -276,7 +313,8 @@ func (igr *instanceGraphReconciler) updateResource(
 	_, err = rc.Update(ctx, desired, metav1.UpdateOptions{})
 	if err != nil {
 		resourceState.State = "ERROR"
-		resourceState.Err = fmt.Errorf("failed to update resource: %w", err)
+		resourceState.Err = fmt.Errorf("failed to update resource %s/%s: %w",
+			desired.GetNamespace(), desired.GetName(), err)
 		return resourceState.Err
 	}
 
@@ -292,7 +330,8 @@ func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) 
 
 	// Initialize deletion state for all resources
 	if err := igr.initializeDeletionState(); err != nil {
-		return fmt.Errorf("failed to initialize deletion state: %w", err)
+		instance := igr.runtime.GetInstance()
+		return fmt.Errorf("failed to initialize deletion state for instance %s/%s: %w", instance.GetNamespace(), instance.GetName(), err)
 	}
 
 	// Delete resources in reverse order
@@ -407,7 +446,11 @@ func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error 
 
 // setManaged ensures the instance has the necessary finalizer and labels.
 func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
-	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj); exist {
+	exist, err := metadata.HasInstanceFinalizerUnstructured(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check finalizer existence: %w", err)
+	}
+	if exist {
 		return obj, nil
 	}
 
@@ -415,7 +458,7 @@ func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstruc
 
 	copy := obj.DeepCopy()
 	if err := metadata.SetInstanceFinalizerUnstructured(copy); err != nil {
-		return nil, fmt.Errorf("failed to set finalizer: %w", err)
+		return nil, fmt.Errorf("failed to set finalizer for %s/%s: %w", obj.GetNamespace(), obj.GetName(), err)
 	}
 
 	igr.instanceLabeler.ApplyLabels(copy)
@@ -471,7 +514,8 @@ func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) stri
 	if ns := resource.GetNamespace(); ns != "" {
 		igr.log.V(2).Info("Using resource-specified namespace",
 			"resourceID", resourceID,
-			"namespace", ns)
+			"namespace", ns,
+			"resource_name", resource.GetName())
 		return ns
 	}
 
@@ -488,4 +532,29 @@ func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) stri
 		"resourceID", resourceID,
 		"namespace", metav1.NamespaceDefault)
 	return metav1.NamespaceDefault
+}
+
+// validates the basic properties of a resource
+func (igr *instanceGraphReconciler) validateResource(resource *unstructured.Unstructured) error {
+	if resource == nil {
+		return fmt.Errorf("resource cannot be nil")
+	}
+	if resource.GetName() == "" {
+		return fmt.Errorf("resource name cannot be empty")
+	}
+	if resource.GetNamespace() == "" {
+		return fmt.Errorf("resource namespace cannot be empty")
+	}
+	return nil
+}
+
+// validates the basic properties of a resource state
+func (igr *instanceGraphReconciler) validateState(state *ResourceState) error {
+	if state == nil {
+		return fmt.Errorf("resource state cannot be nil")
+	}
+	if state.State == "" {
+		return fmt.Errorf("resource state cannot be empty")
+	}
+	return nil
 }

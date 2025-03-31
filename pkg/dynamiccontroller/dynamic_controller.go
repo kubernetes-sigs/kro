@@ -247,7 +247,13 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	queueLength.Set(float64(dc.queue.Len()))
 
 	err := dc.syncFunc(ctx, item)
-	if err == nil || apierrors.IsNotFound(err) {
+	if err == nil {
+		dc.log.V(2).Info("Successfully processe item", "item", item)
+		dc.queue.Forget(item)
+		return true
+	}
+	if apierrors.IsNotFound(err) {
+		dc.log.V(1).Info("Resource not found, removing from queue", "item", item)
 		dc.queue.Forget(item)
 		return true
 	}
@@ -369,12 +375,12 @@ type ObjectIdentifiers struct {
 func (dc *DynamicController) updateFunc(old, new interface{}) {
 	newObj, ok := new.(*unstructured.Unstructured)
 	if !ok {
-		dc.log.Error(nil, "failed to cast new object to unstructured")
+		dc.log.Error(nil, "failed to cast new object to unstructured", "object_type", fmt.Sprintf("%T", new))
 		return
 	}
 	oldObj, ok := old.(*unstructured.Unstructured)
 	if !ok {
-		dc.log.Error(nil, "failed to cast old object to unstructured")
+		dc.log.Error(nil, "failed to cast old object to unstructured", "object_type", fmt.Sprintf("%T", old))
 		return
 	}
 
@@ -393,14 +399,14 @@ func (dc *DynamicController) updateFunc(old, new interface{}) {
 func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
-		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
+		dc.log.Error(err, "Failed to get key for object", "eventType", eventType, "object_type", fmt.Sprintf("%T", obj))
 		return
 	}
 
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		err := fmt.Errorf("object is not an Unstructured")
-		dc.log.Error(err, "Failed to cast object to Unstructured", "eventType", eventType, "namespacedKey", namespacedKey)
+		dc.log.Error(err, "Failed to cast object to Unstructured", "eventType", eventType, "namespacedKey", namespacedKey, "object_type", fmt.Sprintf("%T", obj))
 		return
 	}
 
@@ -451,7 +457,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 		DeleteFunc: func(obj interface{}) { dc.enqueueObject(obj, "delete") },
 	})
 	if err != nil {
-		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)
+		dc.log.Error(err, "Failed to add event handler", "gvr", gvr, "handler_type", fmt.Sprintf("%T", handler))
 		return fmt.Errorf("failed to add event handler for GVR %s: %w", gvr, err)
 	}
 	informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {

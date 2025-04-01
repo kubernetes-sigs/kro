@@ -14,11 +14,15 @@ package dynamiccontroller
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -137,4 +141,66 @@ func TestEnqueueObject(t *testing.T) {
 	dc.enqueueObject(obj, "add")
 
 	assert.Equal(t, 1, dc.queue.Len())
+}
+
+func TestInstanceUpdatePolicy(t *testing.T) {
+	logger := noopLogger()
+
+	scheme := runtime.NewScheme()
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"}
+	annotations := []map[string]string{
+		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate},
+		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate},
+		{v1alpha1.InstanceUpdatePolicy: ""},
+		{},
+	}
+	objs := make(map[string]runtime.Object, len(annotations))
+	index := 0
+	for _, annotation := range annotations {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		obj.SetName(fmt.Sprintf("test-object-%d", index))
+		obj.SetAnnotations(annotation)
+		objs[obj.GetName()] = obj
+		index++
+	}
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+		gvr: "TestList",
+	}, slices.Collect(maps.Values(objs))...)
+
+	config := Config{
+		Workers:         1,
+		ResyncPeriod:    1 * time.Second,
+		QueueMaxRetries: 5,
+		ShutdownTimeout: 5 * time.Second,
+	}
+	dc := NewDynamicController(logger, config, client)
+
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		fmt.Println("reconciling instance", req)
+		return nil
+	})
+
+	// simulate initial creation of the resource graph
+	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	assert.NoError(t, err)
+
+	// simulate reconciling the instances
+	for dc.queue.Len() > 0 {
+		item, _ := dc.queue.Get()
+		dc.queue.Done(item)
+		dc.queue.Forget(item)
+	}
+	// simulate updating the resource graph
+	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	assert.NoError(t, err)
+
+	assert.Equal(t, dc.queue.Len(), 3)
+	for dc.queue.Len() > 0 {
+		name, _ := dc.queue.Get()
+		item := objs[name.NamespacedKey]
+		annotation, _ := item.(*unstructured.Unstructured).GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
+		assert.NotEqual(t, annotation, v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate)
+	}
 }

@@ -62,6 +62,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/kro-run/kro/api/v1alpha1"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -422,7 +423,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	_, exists := dc.informers.Load(gvr)
 	if exists {
 		// Even thought the informer is already registered, we should still
-		// still update the handler, as it might have changed.
+		// update the handler, as it might have changed.
 		dc.handlers.Store(gvr, handler)
 		// trigger reconciliation of the corresponding gvr's
 		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
@@ -430,7 +431,16 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
 		}
 		for _, obj := range objs.Items {
-			dc.enqueueObject(&obj, "update")
+			update, ok := obj.GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
+			if !ok || update == "" {
+				update = v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate
+			}
+			switch update {
+			case v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate:
+				dc.enqueueObject(&obj, "update")
+			case v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate:
+				dc.log.V(1).Info("Ignoring RGD update for object", "object", obj.GetName(), "gvr", gvr)
+			}
 		}
 		return nil
 	}

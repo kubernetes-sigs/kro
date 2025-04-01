@@ -15,7 +15,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -106,6 +106,17 @@ const (
 	ResourceGraphDefinitionStateActive ResourceGraphDefinitionState = "Active"
 	// ResourceGraphDefinitionStateInactive represents the inactive state of the resource graph definition
 	ResourceGraphDefinitionStateInactive ResourceGraphDefinitionState = "Inactive"
+
+	// InstanceUpdatePolicy is the annotation key for the instance update policy
+	InstanceUpdatePolicy = "kro.run/instance-update-policy"
+
+	// InstanceUpdatePolicyOnResourceGraphUpdate represents the update policy that leads to
+	// a reconciliation of the instance after the corresponding resource graph is updated
+	InstanceUpdatePolicyOnResourceGraphUpdate = "on-resource-graph-update"
+
+	// InstanceUpdatePolicyIgnoreResourceGraphUpdate represents the update policy that explicitly
+	// avoids reconciliation of the instance after the corresponding resource graph is updated
+	InstanceUpdatePolicyIgnoreResourceGraphUpdate = "ignore-resource-graph-update"
 )
 
 // ResourceGraphDefinitionStatus defines the observed state of ResourceGraphDefinition
@@ -154,7 +165,7 @@ type ResourceGraphDefinition struct {
 	Status ResourceGraphDefinitionStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
 type ResourceGraphDefinitionList struct {

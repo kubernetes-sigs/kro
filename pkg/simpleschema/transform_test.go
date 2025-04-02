@@ -360,6 +360,103 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "Schema with CEL validation - immutable filed",
+			obj: map[string]interface{}{
+				"immutableFoo": "string | validation={\"rule\": \"self == oldSelf\", \"message\": \"can't be changed\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"immutableFoo": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "can't be changed",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Schema with invalid CEL value",
+			obj: map[string]interface{}{
+				"badValidation": "string | validation={\"message\": \"Missing rule\"}",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Schema with multiple validations",
+			obj: map[string]interface{}{
+				"username": "string | validation={\"rule\": \"size(self) >= 3\", \"message\": \"Username too short\"} validation={\"rule\": \"self.matches('^[a-zA-Z0-9_-]+$')\", \"message\": \"Invalid characters in username\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"username": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "size(self) >= 3",
+								Message: "Username too short",
+							},
+							{
+								Rule:    "self.matches('^[a-zA-Z0-9_-]+$')",
+								Message: "Invalid characters in username",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Validation with quoted string",
+			obj: map[string]interface{}{
+				"environment": `string | validation={"rule": "self == \"foobar\"", "message": "must equal foobar"}`,
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"environment": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == \"foobar\"",
+								Message: "must equal foobar",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Schema with CEL validation and other markers",
+			obj: map[string]interface{}{
+				"name": "string | required=true validation={\"rule\": \"size(self) >= 3\", \"message\": \"Name must be at least 3 characters long\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"name"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "size(self) >= 3",
+								Message: "Name must be at least 3 characters long",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -14,6 +14,7 @@
 package simpleschema
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -219,6 +220,24 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				return fmt.Errorf("failed to parse maximum enum value: %w", err)
 			}
 			schema.Maximum = &val
+		case MarkerTypeValidation:
+			validationRules, err := parseValidationRules(marker.Value)
+			if err != nil {
+				return fmt.Errorf("invalid validation rules for field %s: %w", key, err)
+			}
+
+			if len(validationRules) > 0 {
+				if schema.XValidations == nil {
+					schema.XValidations = []extv1.ValidationRule{}
+				}
+
+				for _, rule := range validationRules {
+					schema.XValidations = append(schema.XValidations, extv1.ValidationRule{
+						Rule:    rule.Rule,
+						Message: rule.Message,
+					})
+				}
+			}
 		case MarkerTypeEnum:
 			var enumJSONValues []extv1.JSON
 
@@ -249,6 +268,34 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		}
 	}
 	return nil
+}
+
+type ValidationRule struct {
+	Rule    string
+	Message string
+}
+
+func parseValidationRules(value string) ([]ValidationRule, error) {
+	var singleRule ValidationRule
+	var multipleRules []ValidationRule
+
+	err := json.Unmarshal([]byte(value), &singleRule)
+	if err == nil && singleRule.Rule != "" {
+		return []ValidationRule{singleRule}, nil
+	}
+
+	err = json.Unmarshal([]byte(value), &multipleRules)
+	if err != nil {
+		return nil, fmt.Errorf("invalid validation rules format: %w", err)
+	}
+
+	for i := range multipleRules {
+		if multipleRules[i].Rule == "" {
+			return nil, fmt.Errorf("validation rule at index %d is missing a rule field", i)
+		}
+	}
+
+	return multipleRules, nil
 }
 
 // Other functions (LoadPreDefinedTypes, transformMap) remain unchanged

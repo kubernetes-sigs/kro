@@ -196,6 +196,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
 	assert.NoError(t, err)
 
+	// check if the expected objects are queued
 	assert.Equal(t, dc.queue.Len(), 3)
 	for dc.queue.Len() > 0 {
 		name, _ := dc.queue.Get()

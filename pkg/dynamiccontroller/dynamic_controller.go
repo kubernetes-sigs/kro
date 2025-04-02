@@ -431,14 +431,15 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
 		}
 		for _, obj := range objs.Items {
-			update, ok := obj.GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
-			if !ok || update == "" {
-				update = v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate
+			updatePolicy, ok := obj.GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
+			if !ok || updatePolicy == "" {
+				// default to reconcile on update of rgd
+				updatePolicy = v1alpha1.InstanceUpdatePolicyOnRGDUpdate
 			}
-			switch update {
-			case v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate:
+			switch updatePolicy {
+			case v1alpha1.InstanceUpdatePolicyOnRGDUpdate:
 				dc.enqueueObject(&obj, "update")
-			case v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate:
+			case v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate:
 				dc.log.V(1).Info("Ignoring RGD update for object", "object", obj.GetName(), "gvr", gvr)
 			}
 		}

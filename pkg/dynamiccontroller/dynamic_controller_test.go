@@ -150,8 +150,8 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"}
 	annotations := []map[string]string{
-		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyOnResourceGraphUpdate},
-		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate},
+		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyOnRGDUpdate},
+		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate},
 		{v1alpha1.InstanceUpdatePolicy: ""},
 		{},
 	}
@@ -201,6 +201,6 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 		name, _ := dc.queue.Get()
 		item := objs[name.NamespacedKey]
 		annotation, _ := item.(*unstructured.Unstructured).GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
-		assert.NotEqual(t, annotation, v1alpha1.InstanceUpdatePolicyIgnoreResourceGraphUpdate)
+		assert.NotEqual(t, annotation, v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate)
 	}
 }

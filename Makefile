@@ -23,10 +23,10 @@ ifeq ($(DIFF), 1)
     GIT_TREESTATE = "dirty"
 endif
 
-LDFLAGS=-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION) \
+LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION) \
         -X sigs.k8s.io/release-utils/version.gitCommit=$(GIT_HASH) \
         -X sigs.k8s.io/release-utils/version.gitTreeState=$(GIT_TREESTATE) \
-        -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)
+        -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)"
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 

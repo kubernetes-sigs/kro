@@ -67,6 +67,11 @@ func main() {
 		allowCRDDeletion                            bool
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
+		// dynamic controller rate limiter parameters
+		minRetryDelay time.Duration
+		maxRetryDelay time.Duration
+		rateLimit     int
+		burstLimit    int
 		// reconciler parameters
 		resyncPeriod    int
 		queueMaxRetries int
@@ -91,6 +96,17 @@ func main() {
 		"dynamic-controller-concurrent-reconciles", 1,
 		"The number of dynamic controller reconciles to run in parallel",
 	)
+
+	// rate limiter parameters
+	flag.DurationVar(&minRetryDelay, "dynamic-controller-rate-limiter-min-delay", 200*time.Millisecond,
+		"Minimum delay for the dynamic controller rate limiter, in milliseconds.")
+	flag.DurationVar(&maxRetryDelay, "dynamic-controller-rate-limiter-max-delay", 1000*time.Second,
+		"Maximum delay for the dynamic controller rate limiter, in seconds.")
+	flag.IntVar(&rateLimit, "dynamic-controller-rate-limiter-rate-limit", 10,
+		"Rate limit to control how frequently events are allowed to happen for the dynamic controller.")
+	flag.IntVar(&burstLimit, "dynamic-controller-rate-limiter-burst-limit", 100,
+		"Burst size of events for the dynamic controller rate limiter.")
+
 	// reconciler parameters
 	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 10,
 		"interval at which the controller will re list resources even with no changes, in hours")
@@ -157,6 +173,10 @@ func main() {
 		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Hour,
 		QueueMaxRetries: queueMaxRetries,
+		MinRetryDelay:   minRetryDelay,
+		MaxRetryDelay:   maxRetryDelay,
+		RateLimit:       rateLimit,
+		BurstLimit:      burstLimit,
 	}, set.Dynamic())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(

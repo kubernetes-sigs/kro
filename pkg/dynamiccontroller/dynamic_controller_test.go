@@ -67,6 +67,10 @@ func TestNewDynamicController(t *testing.T) {
 		ResyncPeriod:    10 * time.Hour,
 		QueueMaxRetries: 20,
 		ShutdownTimeout: 60 * time.Second,
+		MinRetryDelay:   200 * time.Millisecond,
+		MaxRetryDelay:   1000 * time.Second,
+		RateLimit:       10,
+		BurstLimit:      100,
 	}
 
 	dc := NewDynamicController(logger, config, client)
@@ -80,12 +84,18 @@ func TestNewDynamicController(t *testing.T) {
 func TestRegisterAndUnregisterGVK(t *testing.T) {
 	logger := noopLogger()
 	client := setupFakeClient()
+
 	config := Config{
 		Workers:         1,
 		ResyncPeriod:    1 * time.Second,
 		QueueMaxRetries: 5,
 		ShutdownTimeout: 5 * time.Second,
+		MinRetryDelay:   200 * time.Millisecond,
+		MaxRetryDelay:   1000 * time.Second,
+		RateLimit:       10,
+		BurstLimit:      100,
 	}
+
 	dc := NewDynamicController(logger, config, client)
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
@@ -131,7 +141,11 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
 	client := setupFakeClient()
-	dc := NewDynamicController(logger, Config{}, client)
+
+	dc := NewDynamicController(logger, Config{MinRetryDelay: 200 * time.Millisecond,
+		MaxRetryDelay: 1000 * time.Second,
+		RateLimit:     10,
+		BurstLimit:    100}, client)
 
 	obj := &unstructured.Unstructured{}
 	obj.SetName("test-object")

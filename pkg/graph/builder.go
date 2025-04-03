@@ -202,6 +202,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		// We need to pass the resources to the instance resource, so we can validate
 		// the CEL expressions in the context of the resources.
 		resources,
+		rgd.Spec.AdditionalPrinterColumns,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
@@ -423,6 +424,7 @@ func (b *Builder) buildInstanceResource(
 	group, apiVersion, kind string,
 	rgDefinition *v1alpha1.Schema,
 	resources map[string]*Resource,
+	additionalPrinterColumns []extv1.CustomResourceColumnDefinition,
 ) (*Resource, error) {
 	// The instance resource is the resource users will create in their cluster,
 	// to request the creation of the resources defined in the resource graph definition.
@@ -456,7 +458,7 @@ func (b *Builder) buildInstanceResource(
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields)
+	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, additionalPrinterColumns)
 
 	// Emulate the CRD
 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema

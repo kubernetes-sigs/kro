@@ -18,6 +18,7 @@
 package v1alpha1
 
 import (
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -175,6 +176,11 @@ func (in *ResourceGraphDefinitionSpec) DeepCopyInto(out *ResourceGraphDefinition
 		for key, val := range *in {
 			(*out)[key] = val
 		}
+	}
+	if in.AdditionalPrinterColumns != nil {
+		in, out := &in.AdditionalPrinterColumns, &out.AdditionalPrinterColumns
+		*out = make([]v1.CustomResourceColumnDefinition, len(*in))
+		copy(*out, *in)
 	}
 }
 

@@ -14,6 +14,7 @@
 package v1alpha1
 
 import (
+	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -43,6 +44,11 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
+	// AdditionalPrinterColumns defines additional printer columns that will
+	// be passed down to the created CRD.
+	//
+	// +kubebuilder:validation:Optional
+	AdditionalPrinterColumns []v1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of

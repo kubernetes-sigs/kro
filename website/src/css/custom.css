@@ -175,3 +175,68 @@ div[class^="announcementBar_"] {
   height: 100%;
   opacity: 1;
 }
+
+
+@media screen and (min-width: 997px) {
+  .navbar__items {
+    display: flex !important;
+  }
+}
+
+@media screen and (min-width: 768px) and (max-width: 996px) {
+  .navbar__items--right .navbar__item,
+  .header-github-link {
+    display: none !important;
+  }
+
+  .navbar__toggle,
+  .navbar__brand,
+  .navbar__search,
+  .navbar__items--left .navbar__item {
+    display: flex !important;
+  }
+
+  .navbar__search {
+    margin-right: 1rem;
+  }
+
+  .navbar__search-input {
+    width: 8rem !important;
+  }
+
+
+  .navbar__item {
+    padding: 0.5rem;
+  }
+}
+
+
+@media screen and (max-width: 488px) {
+  .navbar__items--left .navbar__item,
+  .navbar__items--right .navbar__item,
+  .header-github-link,
+  .navbar__link.navbar__item,
+  [class*="docSidebar"] {
+    display: none !important;
+  }
+
+  .navbar__toggle,
+  .navbar__brand,
+  .navbar__search {
+    display: flex !important;
+  }
+
+
+  .navbar__search {
+    margin-right: 1rem;
+  }
+
+  .navbar__search-input {
+    width: 10rem !important;
+  }
+}
+
+.navbar__search {
+  position: relative;
+  margin-right: 0.5rem;
+}

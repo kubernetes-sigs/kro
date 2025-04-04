@@ -56,3 +56,17 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 func IsBoolType(v ref.Val) bool {
 	return v.Type() == types.BoolType
 }
+
+// IsListType checks if the given ref.Val is of type ListType
+func IsListType(v ref.Val) bool {
+	return v.Type() == types.ListType
+}
+
+// IsMapType checks if the given ref.Val is of type MapType
+func IsMapType(v ref.Val) bool {
+	return v.Type() == types.MapType
+}
+
+func IsCollectionType(v ref.Val) bool {
+	return IsListType(v) || IsMapType(v)
+}

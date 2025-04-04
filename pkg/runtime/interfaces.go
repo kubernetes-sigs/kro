@@ -109,10 +109,16 @@ type ResourceDescriptor interface {
 	// be evaluated before deciding whether to create a resource
 	GetIncludeWhenExpressions() []string
 
-
 	// IsNamespaced returns true if the resource is namespaced, and false if it's
 	// cluster-scoped.
 	IsNamespaced() bool
+
+	// IsCollection returns true if the resource is a collection, and false
+	// otherwise.
+	IsCollection() bool
+
+	// GetForEachExpression returns the forEach expression of the resource.
+	GetForEachExpression() string
 }
 
 // Resource extends `ResourceDescriptor` to include the actual resource data.

@@ -2644,13 +2644,20 @@ func (m *mockResource) GetIncludeWhenExpressions() []string {
 	return m.conditions
 }
 
-
 func (m *mockResource) IsNamespaced() bool {
 	return m.namespaced
 }
 
 func (m *mockResource) Unstructured() *unstructured.Unstructured {
 	return m.obj
+}
+
+func (m *mockResource) IsCollection() bool {
+	return false
+}
+
+func (m *mockResource) GetForEachExpression() string {
+	return ""
 }
 
 type mockResourceOption func(*mockResource)

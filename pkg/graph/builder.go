@@ -728,52 +728,22 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	for _, resource := range resources {
 		// exclude resource from the context
 		delete(expressionContext, resource.id)
-		for _, resourceVariable := range resource.variables {
-			for _, expression := range resourceVariable.Expressions {
-				_, err = dryRunExpressions(env, expression, resourceIDs, expressionContext)
-				if err != nil {
-					return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
-				}
-			}
-		}
-		// validate readyWhen Expressions for resource
-		// Only accepting expressions accessing the status and spec for now
-		// and need to evaluate to a boolean type
-		for _, readyWhenExpression := range resource.readyWhenExpressions {
-			fieldEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
-			if err != nil {
-				return fmt.Errorf("failed to create CEL environment: %w", err)
-			}
 
-			resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
-			if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
-				// ignore apiVersion and kind from readyWhenExpression context
-				delete(resourceEmulatedCopy.Object, "apiVersion")
-				delete(resourceEmulatedCopy.Object, "kind")
-			}
-			context := map[string]*Resource{}
-			context[resource.id] = &Resource{
-				emulatedObject: resourceEmulatedCopy,
-			}
-
-			output, err := dryRunExpressions(fieldEnv, readyWhenExpression, []string{resource.id}, context)
-			if err != nil {
-				return fmt.Errorf("failed to dry-run expression %s: %w", readyWhenExpression, err)
-			}
-			if !krocel.IsBoolType(output) {
-				return fmt.Errorf("output of readyWhen expression %s can only be of type bool", readyWhenExpression)
-			}
+		err := ensureResourceExpressions(env, expressionContext, resource)
+		if err != nil {
+			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
 		}
 
-		for _, includeWhenExpression := range resource.includeWhenExpressions {
-			output, err := dryRunExpressions(env, includeWhenExpression, resourceIDs, includeWhenContext)
-			if err != nil {
-				return fmt.Errorf("failed to dry-run expression %s: %w", includeWhenExpression, err)
-			}
-			if !krocel.IsBoolType(output) {
-				return fmt.Errorf("output of includeWhen expression %s can only be of type bool", includeWhenExpression)
-			}
+		err = ensureReadyWhenExpressions(resource)
+		if err != nil {
+			return fmt.Errorf("failed to ensure resource %s readyWhen expressions: %w", resource.id, err)
 		}
+
+		err = ensureIncludeWhenExpressions(env, includeWhenContext, resource)
+		if err != nil {
+			return fmt.Errorf("failed to ensure resource %s includeWhen expressions: %w", resource.id, err)
+		}
+
 		// include the resource back to the context
 		expressionContext[resource.id] = resource
 	}
@@ -781,7 +751,69 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	return nil
 }
 
-func dryRunExpressions(env *cel.Env, expression string, resources []string, context map[string]*Resource) (ref.Val, error) {
+// ensureResourceExpressions validates the CEL expressions in the resource
+// against the resources defined in the resource graph definition.
+func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
+	// We need to validate the CEL expressions in the resource.
+	for _, resourceVariable := range resource.variables {
+		for _, expression := range resourceVariable.Expressions {
+			_, err := ensureExpression(env, expression, []string{resource.id}, context)
+			if err != nil {
+				return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ensureReadyWhenExpressions validates the readyWhen expressions in the resource
+// against the resources defined in the resource graph definition.
+func ensureReadyWhenExpressions(resource *Resource) error {
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
+	for _, expression := range resource.readyWhenExpressions {
+		if err != nil {
+			return fmt.Errorf("failed to create CEL environment: %w", err)
+		}
+
+		resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
+		if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
+			// ignore apiVersion and kind from readyWhenExpression context
+			delete(resourceEmulatedCopy.Object, "apiVersion")
+			delete(resourceEmulatedCopy.Object, "kind")
+		}
+		context := map[string]*Resource{}
+		context[resource.id] = &Resource{
+			emulatedObject: resourceEmulatedCopy,
+		}
+
+		output, err := ensureExpression(env, expression, []string{resource.id}, context)
+		if err != nil {
+			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+		}
+		if !krocel.IsBoolType(output) {
+			return fmt.Errorf("output of readyWhen expression %s can only be of type bool", expression)
+		}
+	}
+	return nil
+}
+
+// ensureIncludeWhenExpressions validates the includeWhen expressions in the resource
+func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
+	// We need to validate the CEL expressions in the resource.
+	for _, expression := range resource.includeWhenExpressions {
+		output, err := ensureExpression(env, expression, []string{resource.id}, context)
+		if err != nil {
+			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+		}
+		if !krocel.IsBoolType(output) {
+			return fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression)
+		}
+	}
+	return nil
+}
+
+// ensureExpression validates the CEL expression in the context of the resources
+func ensureExpression(env *cel.Env, expression string, resources []string, context map[string]*Resource) (ref.Val, error) {
 	err := validateCELExpressionContext(env, expression, resources)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate expression %s: %w", expression, err)

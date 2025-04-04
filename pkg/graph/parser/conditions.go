@@ -43,3 +43,16 @@ func ParseConditionExpressions(conditions []string) ([]string, error) {
 
 	return expressions, nil
 }
+
+// ParseStandaloneExpression checks if the expression is a standalone expression
+// and returns the expression without the '${}' delimiter.
+func ParseStandaloneExpression(e string) (string, error) {
+	ok, err := isStandaloneExpression(e)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("only standalone expressions are allowed")
+	}
+	return strings.Trim(e, "${}"), nil
+}

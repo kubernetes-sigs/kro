@@ -2691,6 +2691,14 @@ func (m *mockResource) IsExternalRef() bool {
 	return m.isExternalRef
 }
 
+func (m *mockResource) IsCollection() bool {
+	return false
+}
+
+func (m *mockResource) GetForEachExpression() string {
+	return ""
+}
+
 type mockResourceOption func(*mockResource)
 
 /* func withGVR(group, version, resource string) mockResourceOption {

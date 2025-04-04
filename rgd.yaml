@@ -1,0 +1,25 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: my-application
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Application
+    spec:
+      name: string
+      image: string | default="nginx"
+      enums: '[]string'
+
+  resources:
+    - id: deployments
+      forEach: ${schema.spec.enums}
+      template:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: ${schema.spec.name}-${each.item}
+        spec:
+          containers:
+          - name: ${schema.spec.name}-${each.item}
+            image: ${schema.spec.image}

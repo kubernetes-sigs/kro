@@ -75,6 +75,29 @@ type Resource struct {
 	order int
 	// isExternalRef indicates if the resource should only be read and not created/updated
 	isExternalRef bool
+	// isCollection indicates if the resource is a collection or not. Collections
+	// are resources that are declared by setting the `forEach` field in the
+	// resource graph definition. This is useful to know when we need to
+	// create a collection object for the resource.
+	//
+	// NOTE(a-hilaly): Maybe we do not need this field, we can just check if the
+	// `forEach` field is set or not. But we need to keep it for now..
+	isCollection bool
+	// forEachExpression is the expression used to index the collection, the index expression
+	// is used find all the items used to generate the collection.
+	forEachExpression string
+}
+
+// GetForEachExpression returns the forEach expression of the resource.
+func (r *Resource) GetForEachExpression() string {
+	return r.forEachExpression
+}
+
+// IsCollection returns true if the resource is a collection, a.k.a. if
+// the resource is declared by setting the `forEach` field in the
+// resource graph definition.
+func (r *Resource) IsCollection() bool {
+	return r.isCollection
 }
 
 // GetDependencies returns the dependencies of the resource.
@@ -180,5 +203,7 @@ func (r *Resource) DeepCopy() *Resource {
 		includeWhenExpressions: slices.Clone(r.includeWhenExpressions),
 		namespaced:             r.namespaced,
 		isExternalRef:          r.isExternalRef,
+		isCollection:           r.isCollection,
+		forEachExpression:      r.forEachExpression,
 	}
 }

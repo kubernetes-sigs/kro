@@ -16,6 +16,8 @@ package cel
 
 import (
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
 
 	"github.com/kro-run/kro/pkg/cel/library"
@@ -57,6 +59,24 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		cel.OptionalTypes(),
 		ext.Encoders(),
 		library.Random(),
+		cel.Function("range",
+			cel.Overload("range_int_int", []*cel.Type{cel.IntType, cel.IntType}, cel.ListType(cel.IntType),
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					start, ok1 := args[0].Value().(int64)
+					end, ok2 := args[1].Value().(int64)
+					if !ok1 || !ok2 {
+						return types.NewErr("range: invalid argument types")
+					}
+					if start > end {
+						return types.NewErr("range: start cannot be greater than end")
+					}
+					var result []int64
+					for i := start; i < end; i++ {
+						result = append(result, i)
+					}
+					return types.NewDynamicList(types.DefaultTypeAdapter, result)
+				})),
+		),
 	}
 
 	opts := &envOptions{}

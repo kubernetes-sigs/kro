@@ -117,6 +117,12 @@ type ResourceDescriptor interface {
 	// IsExternalRef returns true if the resource is marked as an external reference
 	// This is used for external references
 	IsExternalRef() bool
+	// IsCollection returns true if the resource is a collection, and false
+	// otherwise.
+	IsCollection() bool
+
+	// GetForEachExpression returns the forEach expression of the resource.
+	GetForEachExpression() string
 }
 
 // Resource extends `ResourceDescriptor` to include the actual resource data.

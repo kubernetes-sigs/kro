@@ -156,6 +156,34 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "failed to parse includeWhen expressions",
 		},
 		{
+			name: "includeWhen expression reference a different resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, []string{"invalid ! syntax"}),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, []string{"${vpc.status.state == 'available'}"}),
+			},
+			wantErr: true,
+			errMsg:  "failed to parse includeWhen expressions",
+		},
+		{
 			name: "missing required field",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

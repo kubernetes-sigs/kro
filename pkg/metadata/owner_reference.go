@@ -26,7 +26,7 @@ var (
 	KRORGOwnerReferenceAPIVersion = v1alpha1.GroupVersion.String()
 )
 
-// stamped on the CRD and RGIs
+// NewResourceGraphDefinitionOwnerReference stamped on the CRD and RGIs
 func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,
@@ -37,7 +37,7 @@ func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1
 	}
 }
 
-// stamped on the RGI child resources
+// NewInstanceOwnerReference stamped on the RGI child resources
 func NewInstanceOwnerReference(gvk schema.GroupVersionKind, name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,

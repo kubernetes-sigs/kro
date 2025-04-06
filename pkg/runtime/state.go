@@ -36,15 +36,15 @@ const (
 
 	// ResourceStateWaitingOnReadiness indicates that the resource is waiting
 	// for its readiness conditions to be met. This typically occurs after the
-	// resource has been created or updated, but is not yet in a stable state
-	// according to its defined readiness criteria. e.g waiting for a Pod to
+	// resource has been created or updated, but is not yet in a stable state,
+	// according to its defined readiness criteria. E.g., waiting for a Pod to
 	// be running and ready, a PVC to be bound ...
 	ResourceStateWaitingOnReadiness ResourceState = "WaitingOnReadiness"
 
 	// ResourceStateIgnoredByConditions indicates that the resource is ignored
 	// by a condition that evaluated to false. This typically occurs before
 	// a resource is created or updated, and is decided by a variable defined
-	// in the instance spec. Eg. Deciding whether to create a Deployment or
+	// in the instance spec. E.g., Deciding whether to create a Deployment or
 	// just a simple pod based on the defined replica.
 	ResourceStateIgnoredByConditions ResourceState = "IgnoredByConditions"
 )
@@ -71,8 +71,8 @@ type expressionEvaluationState struct {
 	// dynamic. This affects when and how the expression is evaluated.
 	Kind variable.ResourceVariableKind
 
-	// Resolved indicates whether the expression has been successfully
-	// evaluated. Its set to true once the expression is evaluated without
+	// Resolved indicates whether the expression has been successfully evaluated.
+	// It's set to true once the expression is evaluated without
 	// errors and a value is obtained.
 	Resolved bool
 

@@ -60,8 +60,8 @@ func NewBuilder(
 	return rgBuilder, nil
 }
 
-// Builder is an object that is responsible of constructing and managing
-// resourceGraphDefinitions. It is responsible of transforming the resourceGraphDefinition CRD
+// Builder is an object that is responsible for constructing and managing
+// resourceGraphDefinitions. It is responsible for transforming the resourceGraphDefinition CRD
 // into a runtime representation that can be used to create the resources in
 // the cluster.
 //
@@ -78,7 +78,7 @@ func NewBuilder(
 //
 // If any of the above steps fail, the Builder will return an error.
 //
-// The resulting ResourceGraphDefinition object is a fulyl processed and validated
+// The resulting ResourceGraphDefinition object is a fully processed and validated
 // representation of a resource graph definition CR, it's underlying resources, and the
 // relationships between the resources. This object can be used to instantiate
 // a "runtime" data structure that can be used to create the resources in the
@@ -208,8 +208,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Before getting into the dependency graph, we need to validate the CEL expressions
-	// in the instance resource. In order to do that, we need to isolate each resource
-	// and evaluate the CEL expressions in the context of the resource graph definition. This is done
+	// in the instance resource.
+	// To do that, we need to isolate each resource
+	// and evaluate the CEL expressions in the context of the resource graph definition.
+	//This is done
 	// by dry-running the CEL expressions against the emulated resources.
 	err = validateResourceCELExpressions(resources, instance)
 	if err != nil {
@@ -220,7 +222,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// building the resource graph definition. Understanding the relationships between the
 	// resources in the resource graph definition a.k.a the dependency graph.
 	//
-	// The dependency graph is an directed acyclic graph that represents the
+	// The dependency graph is a directed acyclic graph that represents the
 	// relationships between the resources in the resource graph definition. The graph is
 	// used to determine the order in which the resources should be created in the
 	// cluster.
@@ -307,7 +309,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		}
 		for _, fieldDescriptor := range fieldDescriptors {
 			resourceVariables = append(resourceVariables, &variable.ResourceField{
-				// Assume variables are static, we'll validate them later
+				// Assume variables are static; we'll validate them later
 				Kind:            variable.ResourceVariableKindStatic,
 				FieldDescriptor: fieldDescriptor,
 			})
@@ -344,12 +346,16 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 }
 
 // buildDependencyGraph builds the dependency graph between the resources in the
-// resource graph definition. The dependency graph is an directed acyclic graph that represents
-// the relationships between the resources in the resource graph definition. The graph is used
+// resource graph definition.
+// The dependency graph is a directed acyclic graph that represents
+// the relationships between the resources in the resource graph definition.
+// The graph is used
 // to determine the order in which the resources should be created in the cluster.
 //
-// This function returns the DAG, and a map of runtime variables per resource. later
-// on we'll use this map to resolve the runtime variables.
+// This function returns the DAG, and a map of runtime variables per resource.
+// Later
+//
+//	on, we'll use this map to resolve the runtime variables.
 func (b *Builder) buildDependencyGraph(
 	resources map[string]*Resource,
 ) (
@@ -428,7 +434,7 @@ func (b *Builder) buildInstanceResource(
 	// to request the creation of the resources defined in the resource graph definition.
 	//
 	// The instance resource is a Kubernetes resource, differently from typical
-	// CRDs, it doesn't have an OpenAPI schema. Instead, it has a schema defined
+	// CRDs; it doesn't have an OpenAPI schema. Instead, it has a schema defined
 	// using the "SimpleSchema" format, a new standard we created to simplify
 	// CRD declarations.
 
@@ -486,7 +492,7 @@ func (b *Builder) buildInstanceResource(
 
 	instanceStatusVariables := []*variable.ResourceField{}
 	for _, statusVariable := range statusVariables {
-		// These variables needs to be injected into the status field of the instance.
+		// These variables need to be injected into the status field of the instance.
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
@@ -565,7 +571,7 @@ func buildStatusSchema(
 	// statusStructureParts := make([]schema.FieldDescriptor, 0, len(extracted))
 	statusDryRunResults := make(map[string][]ref.Val, len(fieldDescriptors))
 	for _, found := range fieldDescriptors {
-		// For each expression in the extracted ExpressionField we need to dry-run
+		// For each expression in the extracted `ExpressionField` we need to dry-run
 		// the expression to infer the type of the status field.
 		evals := []ref.Val{}
 		for _, expr := range found.Expressions {
@@ -615,8 +621,8 @@ func validateCELExpressionContext(env *cel.Env, expression string, resources []s
 }
 
 // dryRunExpression executes the given CEL expression in the context of a set
-// of emulated resources. We could've called this function evaluateExpression
-// but we chose to call it dryRunExpression to indicate that we are not actually
+// of emulated resources. We could've called this function evaluateExpression,
+// but we chose to call it dryRunExpression to indicate that we are not
 // used for anything other than validating the expression and inspecting it
 func dryRunExpression(env *cel.Env, expression string, resources map[string]*Resource) (ref.Val, error) {
 	ast, issues := env.Compile(expression)
@@ -645,7 +651,7 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 }
 
 // extractDependencies extracts the dependencies from the given CEL expression.
-// It returns a list of dependencies and a boolea indicating if the expression
+// It returns a list of dependencies and a boolean indicating if the expression
 // is static or not.
 func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, error) {
 	// We also want to allow users to refer to the instance spec in their expressions.
@@ -680,7 +686,7 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 //
 // In this process, we pin a resource and evaluate the CEL expressions in the
 // context of emulated resources. Meaning that given 3 resources A, B, and C,
-// we evalute A's CEL expressions against 2 emulated resources B and C. Then
+// we evaluate A's CEL expressions against 2 emulated resources B and C. Then
 // we evaluate B's CEL expressions against 2 emulated resources A and C, and so
 // on.
 func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
@@ -701,8 +707,8 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 
 	// create includeWhenContext
 	includeWhenContext := map[string]*Resource{}
-	// for now we will only support the instance context for includeWhen expressions.
-	// With this decision we will decide in creation time, and update time
+	// For now, we will only support the instance context for includeWhen expressions.
+	// With this decision, we will decide on creation time and update time
 	// If we'll be creating resources or not
 	includeWhenContext["schema"] = &Resource{
 		emulatedObject: &unstructured.Unstructured{

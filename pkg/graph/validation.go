@@ -104,7 +104,7 @@ func validateResourceGraphDefinitionNamingConventions(rgd *v1alpha1.ResourceGrap
 // The KRO naming convention is as follows:
 // - The id should start with a lowercase letter.
 // - The id should only contain alphanumeric characters.
-// - does not contain any special characters, underscores, or hyphens.
+// - Does not contain any special characters, underscores, or hyphens.
 func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 	seen := make(map[string]struct{})
 	for _, res := range rgd.Spec.Resources {

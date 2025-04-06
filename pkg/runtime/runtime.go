@@ -61,10 +61,10 @@ func NewResourceGraphDefinitionRuntime(
 		// Process the resource variables.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
-				// If cached use the same pointer.
+				// If cached, use the same pointer.
 				if ec, seen := r.expressionsCache[expr]; seen {
 					// NOTE(a-hilaly): This strikes me as an early optimization, but
-					// it's a good one, i believe... We can always remove it if it's
+					// it's a good one, I believe... We can always remove it if it's
 					// too magical.
 					r.runtimeVariables[id] = append(r.runtimeVariables[id], ec)
 					continue
@@ -163,7 +163,7 @@ type ResourceGraphDefinitionRuntime struct {
 	// synchronization.
 	topologicalOrder []string
 
-	// ignoredByConditionsResources holds the resources whos defined conditions returned false
+	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
 }
@@ -352,7 +352,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 		return err
 	}
 
-	// let's iterate over any resolved resource and try to resolve
+	// Let's iterate over any resolved resource and try to resolve
 	// the dynamic variables that depend on it.
 	// Since we have already cached the expressions, we don't need to
 	// loop over all the resources.
@@ -498,7 +498,7 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 	return true, "", nil
 }
 
-// IgnoreResource ignores resource that has a conditions expressison that evaluated
+// IgnoreResource ignores resource that has a condition expression that evaluated
 // to false or whose dependencies are ignored
 func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
 	rt.ignoredByConditionsResources[resourceID] = true
@@ -550,7 +550,7 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !value.(bool) {
-			return false, fmt.Errorf("Skipping resource creation due to condition %s", condition)
+			return false, fmt.Errorf("skipping resource creation due to condition %s", condition)
 		}
 	}
 	return true, nil
@@ -569,7 +569,7 @@ func evaluateExpression(env *cel.Env, context map[string]interface{}, expression
 	}
 	// We get an error here when the value field we're looking for is not yet defined
 	// For now leaving it as error, in the future when we see different scenarios
-	// of this error we can make some a reason, and others an error
+	// of this error, we can make some a reason, and others an error
 	val, _, err := program.Eval(context)
 	if err != nil {
 		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)

@@ -27,12 +27,12 @@ import (
 // Resource represents a resource in a resource graph definition, it hholds
 // information about the resource, its schema, and its variables.
 //
-// This object can only be created by the GraphBuilder and it should
-// not be created manually. Also this object isn't designed to be
+// This object can only be created by the GraphBuilder, and it should
+// not be created manually. Also, this object isn't designed to be
 // modified after creation.
 type Resource struct {
-	// id is the unique identifier of the resource. It's the name of the
-	// resource in the resource graph definition.
+	// `id` is the unique identifier of the resource.
+	// It's the name of the resource in the resource graph definition.
 	// An id is unique within a resource graph definition, and adheres to the naming
 	// conventions.
 	id string
@@ -113,7 +113,7 @@ func (r *Resource) GetOrder() int {
 	return r.order
 }
 
-// GetGroupVersionKind returns the GVK of the resource.
+// GetGroupVersionResource GetGroupVersionKind returns the GVK of the resource.
 func (r *Resource) GetGroupVersionResource() schema.GroupVersionResource {
 	return r.gvr
 }

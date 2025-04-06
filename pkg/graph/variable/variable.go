@@ -43,7 +43,7 @@ type FieldDescriptor struct {
 	StandaloneExpression bool
 }
 
-// ResourceVariable represents a variable in a resource. Variables are any
+// ResourceField ResourceVariable represents a variable in a resource. Variables are any
 // field in a resource (under resources[*].definition) that is not a constant
 // value a.k.a contains one or multiple expressions. For example
 //
@@ -55,10 +55,10 @@ type FieldDescriptor struct {
 // execution and their value is constant. Dynamic variables are resolved at
 // runtime and their value can change during the execution.
 //
-// ResourceVariables are an extension of CELField and they contain additional
+// ResourceVariables are an extension of CELField, and they contain additional
 // information about the variable kind.
 type ResourceField struct {
-	// CELField is the object that contains the expression, the path, and the
+	// CELField is the object that contains the expression, the path, and
 	// the expected type (OpenAPI schema).
 	FieldDescriptor
 	// ResourceVariableKind is the kind of the variable (static or dynamic).
@@ -81,13 +81,13 @@ func (rv *ResourceField) AddDependencies(dep ...string) {
 	}
 }
 
-// ResourceVariableKind represents the kind of a resource variable.
+// ResourceVariableKind represents the kind of resource variable.
 type ResourceVariableKind string
 
 const (
 	// ResourceVariableKindStatic represents a static variable. Static variables
 	// are resolved at the beginning of the execution and their value is constant.
-	// Static variables are easy to find, they always start with 'spec'. Refereing
+	// Static variables are easy to find, they always start with 'spec'. Referring
 	// to the instance spec.
 	//
 	// For example:

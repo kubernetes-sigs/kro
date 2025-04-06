@@ -95,8 +95,9 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 
 	value, err := r.getValueFromPath(field.Path)
 	if err != nil {
-		// Not sure if these kind of errors should be fatal, these paths are produced
-		// by the parser, so they should be valid. Maybe we should log them instead....
+		// Not sure if these kinds of errors should be fatal, these paths are produced
+		// by the parser, so they should be valid.
+		// Maybe we should log them instead…
 		result.Error = fmt.Errorf("error getting value: %v", err)
 		return result
 	}

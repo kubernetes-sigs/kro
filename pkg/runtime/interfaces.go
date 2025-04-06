@@ -80,13 +80,13 @@ type Interface interface {
 //  1. The runtime package depends on how resources are defined in the graph
 //     package.
 //
-//  2. the graph package needs to instantiate the a runtime instance to during
+//  2. The graph package needs to instantiate a runtime instance during
 //     the reconciliation process.
 //
-//  3. the graph package needs to classify the variables and dependencies of
+//  3. The graph package needs to classify the variables and dependencies of
 //     a resource to build the graph. The runtime package needs to know about
 //     these variables and dependencies to resolve the resources.
-//     This utility is moved to the types package. (Thinking about moving it
+//     This utility is moved to the `types` package. (Thinking about moving it
 //     to a new package called "internal/typesystem/variables")
 type ResourceDescriptor interface {
 	// GetGroupVersionResource returns the k8s GVR for this resource. Note that

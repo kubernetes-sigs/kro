@@ -33,7 +33,7 @@ func NewResourceGraphDefinitionSelector(resourceGraphDefinition metav1.Object) m
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
 			ResourceGraphDefinitionIDLabel: string(resourceGraphDefinition.GetUID()),
-			// ResourceGraphDefinitionNameLabel:      resourceGraphDefinition.GetName(),
+			// ResourceGraphDefinitionNameLabel: resourceGraphDefinition.GetName(),
 			// ResourceGraphDefinitionNamespaceLabel: resourceGraphDefinition.GetNamespace(),
 		},
 	}

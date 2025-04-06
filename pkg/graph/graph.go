@@ -20,8 +20,9 @@ import (
 	"github.com/kro-run/kro/pkg/runtime"
 )
 
-// Graph represents a processed resourcegraphdefinition. It contains the DAG representation
-// and everything needed to "manage" the resources defined in the resource graph definition.
+// The Graph represents a processed resourcegraphdefinition.
+// It contains the DAG representation and everything needed to "manage"
+// the resources defined in the resource graph definition.
 type Graph struct {
 	// DAG is the directed acyclic graph representation of the resource graph definition.
 	DAG *dag.DirectedAcyclicGraph[string]

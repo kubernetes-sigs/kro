@@ -103,9 +103,9 @@ func (e *RequeueNeeded) Unwrap() error {
 var _ error = &RequeueNeeded{}
 
 // RequeueNeededAfter instructs the ACK runtime to requeue the processing item
-// after specified duration without been logged as error.  This should be used
-// when a "error condition" occurrence is sort of expected and can be resolved
-// by retry.  e.g. a dependency haven't been fulfilled yet, and expected it to
+// after specified duration without been logged as error. This should be used
+// when an "error condition" occurrence is sort of expected and can be resolved
+// by retry.  E.g., a dependency hasn't been fulfilled yet, and expected it to
 // be fulfilled after duration.  Note: use this with care, a simple wait might
 // suit your use case better.
 type RequeueNeededAfter struct {

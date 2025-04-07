@@ -181,13 +181,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 		gvr: "TestList",
 	}, slices.Collect(maps.Values(objs))...)
 
-	config := Config{
-		Workers:         1,
-		ResyncPeriod:    1 * time.Second,
-		QueueMaxRetries: 5,
-		ShutdownTimeout: 5 * time.Second,
-	}
-	dc := NewDynamicController(logger, config, client)
+	dc := NewDynamicController(logger, Config{}, client)
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		fmt.Println("reconciling instance", req)
@@ -204,6 +198,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 		dc.queue.Done(item)
 		dc.queue.Forget(item)
 	}
+
 	// simulate updating the resource graph
 	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
 	assert.NoError(t, err)

@@ -174,9 +174,10 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	for _, annotation := range annotations {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
+		obj.SetNamespace("test-namespace")
 		obj.SetName(fmt.Sprintf("test-object-%d", index))
 		obj.SetAnnotations(annotation)
-		objs[obj.GetName()] = obj
+		objs[obj.GetNamespace()+"/"+obj.GetName()] = obj
 		index++
 	}
 	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
@@ -214,7 +215,8 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	assert.Equal(t, dc.queue.Len(), 3)
 	for dc.queue.Len() > 0 {
 		name, _ := dc.queue.Get()
-		item := objs[name.NamespacedKey]
+		item, ok := objs[name.NamespacedKey]
+		assert.True(t, ok)
 		annotation, _ := item.(*unstructured.Unstructured).GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
 		assert.NotEqual(t, annotation, v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate)
 	}

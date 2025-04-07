@@ -15,7 +15,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -154,7 +154,7 @@ type ResourceGraphDefinition struct {
 	Status ResourceGraphDefinitionStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
 type ResourceGraphDefinitionList struct {

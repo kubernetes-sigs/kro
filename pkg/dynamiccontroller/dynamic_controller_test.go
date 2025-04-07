@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -163,23 +162,21 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	scheme := runtime.NewScheme()
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"}
-	annotations := []map[string]string{
-		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyOnRGDUpdate},
-		{v1alpha1.InstanceUpdatePolicy: v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate},
-		{v1alpha1.InstanceUpdatePolicy: ""},
-		{},
-	}
-	objs := make(map[string]runtime.Object, len(annotations))
-	index := 0
-	for _, annotation := range annotations {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
-		obj.SetNamespace("test-namespace")
-		obj.SetName(fmt.Sprintf("test-object-%d", index))
-		obj.SetAnnotations(annotation)
-		objs[obj.GetNamespace()+"/"+obj.GetName()] = obj
-		index++
-	}
+
+	objs := make(map[string]runtime.Object)
+
+	obj1 := &unstructured.Unstructured{}
+	obj1.SetGroupVersionKind(gvk)
+	obj1.SetNamespace("default")
+	obj1.SetName("test-object-1")
+	objs[obj1.GetNamespace()+"/"+obj1.GetName()] = obj1
+
+	obj2 := &unstructured.Unstructured{}
+	obj2.SetGroupVersionKind(gvk)
+	obj2.SetNamespace("test-namespace")
+	obj2.SetName("test-object-2")
+	objs[obj2.GetNamespace()+"/"+obj2.GetName()] = obj2
+
 	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		gvr: "TestList",
 	}, slices.Collect(maps.Values(objs))...)
@@ -212,12 +209,10 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	assert.NoError(t, err)
 
 	// check if the expected objects are queued
-	assert.Equal(t, dc.queue.Len(), 3)
+	assert.Equal(t, dc.queue.Len(), 2)
 	for dc.queue.Len() > 0 {
 		name, _ := dc.queue.Get()
-		item, ok := objs[name.NamespacedKey]
+		_, ok := objs[name.NamespacedKey]
 		assert.True(t, ok)
-		annotation, _ := item.(*unstructured.Unstructured).GetAnnotations()[v1alpha1.InstanceUpdatePolicy]
-		assert.NotEqual(t, annotation, v1alpha1.InstanceUpdatePolicyIgnoreRGDUpdate)
 	}
 }

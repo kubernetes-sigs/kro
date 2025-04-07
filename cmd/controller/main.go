@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -227,4 +228,184 @@ func main() {
 
 	<-ctx.Done()
 
+}
+
+// getExpectedResources returns a list of resources that should exist based on templates and conditions
+func (r *ResourceGraphDefinitionReconciler) getExpectedResources(ctx context.Context, resourceGraphDef *xv1alpha1.ResourceGraphDefinition) ([]xv1alpha1.ManagedResource, error) {
+	var expectedResources []xv1alpha1.ManagedResource
+	
+	// Iterate through the resources in the ResourceGraphDefinition
+	for _, resource := range resourceGraphDef.Spec.Resources {
+		// Check if the resource should be included based on conditions
+		shouldInclude, err := r.evaluateIncludeWhen(ctx, resourceGraphDef, resource)
+		if err != nil {
+			return nil, err
+		}
+		
+		if !shouldInclude {
+			continue
+		}
+		
+		// Extract resource information from the template
+		managedResource, err := r.extractResourceInfo(ctx, resourceGraphDef, resource)
+		if err != nil {
+			return nil, err
+		}
+		
+		expectedResources = append(expectedResources, managedResource)
+	}
+	
+	return expectedResources, nil
+}
+
+// evaluateIncludeWhen evaluates the IncludeWhen conditions for a resource
+func (r *ResourceGraphDefinitionReconciler) evaluateIncludeWhen(ctx context.Context, resourceGraphDef *xv1alpha1.ResourceGraphDefinition, resource *xv1alpha1.Resource) (bool, error) {
+	if len(resource.IncludeWhen) == 0 {
+		return true, nil
+	}
+	
+	// Evaluate each condition
+	for _, condition := range resource.IncludeWhen {
+		// This is a simplified implementation. You'll need to implement the actual condition evaluation logic
+		// based on your specific requirements.
+		result, err := r.evaluateCondition(ctx, resourceGraphDef, condition)
+		if err != nil {
+			return false, err
+		}
+		
+		if !result {
+			return false, nil
+		}
+	}
+	
+	return true, nil
+}
+
+// extractResourceInfo extracts resource information from the template
+func (r *ResourceGraphDefinitionReconciler) extractResourceInfo(ctx context.Context, resourceGraphDef *xv1alpha1.ResourceGraphDefinition, resource *xv1alpha1.Resource) (xv1alpha1.ManagedResource, error) {
+	// This is a simplified implementation. You'll need to implement the actual logic to extract
+	// resource information from the template based on your specific requirements.
+	
+	// For example, you might need to parse the template and extract the kind, name, and namespace
+	var managedResource xv1alpha1.ManagedResource
+	
+	// Extract information from the template
+	// This is just a placeholder. You'll need to implement the actual logic.
+	managedResource.Kind = "Deployment" // Example
+	managedResource.Name = "example-deployment" // Example
+	managedResource.Namespace = "default" // Example
+	managedResource.ResourceID = resource.ID
+	
+	return managedResource, nil
+}
+
+// findOrphanedResources finds resources that are in currentManagedResources but not in expectedResources
+func (r *ResourceGraphDefinitionReconciler) findOrphanedResources(currentManagedResources, expectedResources []xv1alpha1.ManagedResource) []xv1alpha1.ManagedResource {
+	var orphanedResources []xv1alpha1.ManagedResource
+	
+	// Create a map of expected resources for quick lookup
+	expectedMap := make(map[string]xv1alpha1.ManagedResource)
+	for _, resource := range expectedResources {
+		key := r.resourceKey(resource)
+		expectedMap[key] = resource
+	}
+	
+	// Check each current managed resource
+	for _, resource := range currentManagedResources {
+		key := r.resourceKey(resource)
+		if _, exists := expectedMap[key]; !exists {
+			orphanedResources = append(orphanedResources, resource)
+		}
+	}
+	
+	return orphanedResources
+}
+
+// resourceKey generates a unique key for a resource
+func (r *ResourceGraphDefinitionReconciler) resourceKey(resource xv1alpha1.ManagedResource) string {
+	return fmt.Sprintf("%s/%s/%s", resource.Kind, resource.Namespace, resource.Name)
+}
+
+// deleteResource deletes a resource from the cluster
+func (r *ResourceGraphDefinitionReconciler) deleteResource(ctx context.Context, resource xv1alpha1.ManagedResource) error {
+	// This is a simplified implementation. You'll need to implement the actual logic to delete
+	// the resource from the cluster based on your specific requirements.
+	
+	// For example, you might need to use the dynamic client to delete the resource
+	// This is just a placeholder. You'll need to implement the actual logic.
+	
+	// Example:
+	// gvr, err := r.getGroupVersionResource(resource.Kind)
+	// if err != nil {
+	//     return err
+	// }
+	// 
+	// return r.DynamicClient.Resource(gvr).Namespace(resource.Namespace).Delete(ctx, resource.Name, metav1.DeleteOptions{})
+	
+	return nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&xv1alpha1.ResourceGraphDefinition{}).
+		Complete(r)
+}
+
+// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// move the current state of the cluster closer to the desired state.
+func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+	
+	// Fetch the ResourceGraphDefinition instance
+	resourceGraphDef := &xv1alpha1.ResourceGraphDefinition{}
+	if err := r.Get(ctx, req.NamespacedName, resourceGraphDef); err != nil {
+		if errors.IsNotFound(err) {
+			// Request object not found, could have been deleted after reconcile request.
+			// Return and don't requeue
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		return ctrl.Result{}, err
+	}
+	
+	// Get the current list of resources that should exist based on templates and conditions
+	expectedResources, err := r.getExpectedResources(ctx, resourceGraphDef)
+	if err != nil {
+		log.Error(err, "Failed to get expected resources")
+		return ctrl.Result{}, err
+	}
+	
+	// Get the current list of managed resources from the status
+	currentManagedResources := resourceGraphDef.Status.ManagedResources
+	
+	// Find orphaned resources (resources that are in currentManagedResources but not in expectedResources)
+	orphanedResources := r.findOrphanedResources(currentManagedResources, expectedResources)
+	
+	// Delete orphaned resources
+	for _, orphanedResource := range orphanedResources {
+		if err := r.deleteResource(ctx, orphanedResource); err != nil {
+			log.Error(err, "Failed to delete orphaned resource", 
+				"kind", orphanedResource.Kind, 
+				"name", orphanedResource.Name, 
+				"namespace", orphanedResource.Namespace)
+			// Continue with other resources even if one fails
+		} else {
+			log.Info("Deleted orphaned resource", 
+				"kind", orphanedResource.Kind, 
+				"name", orphanedResource.Name, 
+				"namespace", orphanedResource.Namespace)
+		}
+	}
+	
+	// Update the managedResources field in the status
+	resourceGraphDef.Status.ManagedResources = expectedResources
+	
+	// Update the status
+	if err := r.Status().Update(ctx, resourceGraphDef); err != nil {
+		log.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+	
+	return ctrl.Result{}, nil
 }

@@ -118,6 +118,8 @@ type ResourceGraphDefinitionStatus struct {
 	Conditions []Condition `json:"conditions,omitempty"`
 	// Resources represents the resources, and their information (dependencies for now)
 	Resources []ResourceInformation `json:"resources,omitempty"`
+	// ManagedResources tracks resources that are currently managed by this controller
+	ManagedResources []ManagedResource `json:"managedResources,omitempty"`
 }
 
 // ResourceInformation defines the information about a resource
@@ -134,6 +136,18 @@ type ResourceInformation struct {
 type Dependency struct {
 	// ID represents the id of the dependency resource
 	ID string `json:"id,omitempty"`
+}
+
+// ManagedResource represents a resource that is managed by the controller
+type ManagedResource struct {
+	// Kind represents the kind of the resource (e.g., Deployment, Service)
+	Kind string `json:"kind,omitempty"`
+	// Name represents the name of the resource
+	Name string `json:"name,omitempty"`
+	// Namespace represents the namespace of the resource
+	Namespace string `json:"namespace,omitempty"`
+	// ResourceID represents the ID of the resource in the ResourceGraphDefinition
+	ResourceID string `json:"resourceID,omitempty"`
 }
 
 // +kubebuilder:object:root=true

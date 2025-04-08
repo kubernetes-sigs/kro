@@ -435,14 +435,6 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
-	// We need to unmarshal the instance schema to a map[string]interface{} to
-	// make it easier to work with.
-	unstructuredInstance := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgDefinition.Spec.Raw, &unstructuredInstance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal instance schema: %w", err)
-	}
-
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
 	if err != nil {

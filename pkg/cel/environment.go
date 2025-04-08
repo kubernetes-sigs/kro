@@ -77,6 +77,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 					return types.NewDynamicList(types.DefaultTypeAdapter, result)
 				})),
 		),
+		cel.Variable("index", cel.ListType(cel.DynType)),
 	}
 
 	opts := &envOptions{}
@@ -87,7 +88,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	declarations = append(declarations, opts.customDeclarations...)
 
 	for _, name := range opts.resourceIDs {
-		declarations = append(declarations, cel.Variable(name, cel.AnyType))
+		declarations = append(declarations, cel.Variable(name, cel.DynType))
 	}
 
 	return cel.NewEnv(declarations...)

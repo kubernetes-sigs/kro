@@ -17,6 +17,7 @@ package runtime
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/google/cel-go/cel"
@@ -119,7 +120,7 @@ func NewResourceGraphDefinitionRuntime(
 	}
 	err = r.propagateResourceVariables()
 	if err != nil {
-		return nil, fmt.Errorf("failed to propagate resource variables: %w", err)
+		return nil, fmt.Errorf("failed to propagate resource variables xxx: %w", err)
 	}
 
 	return r, nil
@@ -212,6 +213,95 @@ func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstr
 	rt.resolvedResources[id] = resource
 }
 
+func (rt *ResourceGraphDefinitionRuntime) IsCollection(resourceID string) bool {
+	return rt.resources[resourceID].IsCollection()
+}
+
+func (rt *ResourceGraphDefinitionRuntime) SetCollectionResources(resourceID string, objs []*unstructured.Unstructured) {
+	rt.resolvedResources[resourceID] = nil
+
+	for i, obj := range objs {
+		cacheKey := fmt.Sprintf("%s/%d", resourceID, i)
+		rt.resolvedResources[cacheKey] = obj
+	}
+}
+
+func (rt *ResourceGraphDefinitionRuntime) GetCollectionResources(resourceID string) ([]*unstructured.Unstructured, ResourceState, error) {
+	// for collection we need to first execute the forEach expression
+	// to get the list of items in the collection.
+	collectionItems, err := rt.evalForEachExpression(resourceID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// I've been thinking about how we should store the collection in the resolved
+	// resources map. Should we store the collection itself or the items? i think we should do
+	// both, we need CEL access for the collection and also be able to retrieve the items one
+	// by one.
+
+	_, ok := rt.resolvedResources[resourceID]
+	if ok {
+		collectionObjects := []*unstructured.Unstructured{}
+		for _, item := range collectionItems {
+			cacheKey := fmt.Sprintf("%s/%s", resourceID, item["index"])
+			rsItem, ok := rt.resolvedResources[cacheKey]
+			if !ok {
+				// this is a big problem, it shouldn't really happen. Just silently continue
+				// and hope for the best. jk this is an edge case that we need to handle.
+				continue
+			}
+			collectionObjects = append(collectionObjects, rsItem)
+		}
+
+		return collectionObjects, ResourceStateResolved, nil
+	}
+
+	// If not, can we process the resource?
+	resolved := rt.canProcessResource(resourceID)
+	if resolved {
+		// While all the dependencies are resolved, we still need to evaluate
+		// the forEach expression to get the items in the collection. Which was
+		// already done above.
+		//
+		// Now we need to create the collection object and set the items in it.
+		collectionObjects := []*unstructured.Unstructured{}
+		for _, item := range collectionItems {
+			ooo := rt.resources[resourceID].Unstructured().DeepCopy().Object
+
+			resolvedResources := maps.Keys(rt.resolvedResources)
+			resolvedResources = append(resolvedResources, "schema")
+			resolvedResources = append(resolvedResources, "each")
+			env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
+			if err != nil {
+				return nil, ResourceStateWaitingOnDependencies, err
+			}
+			evalContext := map[string]interface{}{
+				"schema": rt.instance.Unstructured().Object,
+				"each":   item,
+			}
+
+			for _, vvv := range rt.resources[resourceID].GetVariables() {
+				for _, expr := range vvv.Expressions {
+					output, err := evaluateExpression(env, evalContext, expr)
+					if err != nil {
+						return nil, "", fmt.Errorf("failed evaluating expression %s: %w", expr, err)
+					}
+					rz := resolver.NewResolver(ooo, map[string]interface{}{expr: output})
+					summary := rz.Resolve([]variable.FieldDescriptor{vvv.FieldDescriptor})
+					if summary.Errors != nil {
+						return nil, "", fmt.Errorf("failed to resolve resource eee %s: %v", resourceID, summary.Errors)
+					}
+					collectionObjects = append(collectionObjects, &unstructured.Unstructured{Object: ooo})
+					rt.resolvedResources[fmt.Sprintf("%s/%s", resourceID, item["index"])] = &unstructured.Unstructured{Object: ooo}
+				}
+			}
+		}
+		return collectionObjects, ResourceStateResolved, nil
+	}
+
+	return nil, ResourceStateWaitingOnDependencies, nil
+}
+
 // GetInstance returns the main instance object managed by this runtime.
 func (rt *ResourceGraphDefinitionRuntime) GetInstance() *unstructured.Unstructured {
 	return rt.instance.Unstructured()
@@ -264,6 +354,9 @@ func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
 	for id := range rt.resources {
 		if rt.canProcessResource(id) {
+			if rt.IsCollection(id) {
+				continue
+			}
 			// evaluate the resource variables
 			err := rt.evaluateResourceExpressions(id)
 			if err != nil {
@@ -324,6 +417,13 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 			variable.Resolved = true
 			variable.ResolvedValue = value
 		}
+		if variable.Kind.IsForEach() {
+			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			if err == nil {
+				variable.Resolved = true
+				variable.ResolvedValue = value
+			}
+		}
 	}
 	return nil
 }
@@ -376,7 +476,29 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			evalContext := make(map[string]interface{})
 			for _, dep := range variable.Dependencies {
-				evalContext[dep] = rt.resolvedResources[dep].Object
+				// If the dependency is a collection, we need to
+				// get the collection items and set them as a list in the context
+				if rt.resources[dep].IsCollection() {
+					collectionItems, err := rt.evalForEachExpression(dep)
+					if err != nil {
+						return nil
+					}
+					topLevelContext := make([]map[string]interface{}, 0)
+					for _, item := range collectionItems {
+						cacheKey := fmt.Sprintf("%s/%s", dep, item["index"])
+						rsItem, ok := rt.resolvedResources[cacheKey]
+						if !ok {
+							// this is a big problem, it shouldn't really happen. Just silently continue
+							// and hope for the best. jk this is an edge case that we need to handle.
+							continue
+						}
+						topLevelContext = append(topLevelContext, rsItem.Object)
+					}
+					evalContext[dep] = topLevelContext
+
+				} else {
+					evalContext[dep] = rt.resolvedResources[dep].Object
+				}
 			}
 
 			evalContext["schema"] = rt.instance.Unstructured().Object
@@ -402,6 +524,78 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 	}
 
 	return nil
+}
+
+// eachify transforms an evaluated collection into a slice of CEL-friendly
+// maps. This is what the user will use to access the values of the
+// forEach expression.
+func eachify(value interface{}) []map[string]interface{} {
+	if value == nil {
+		return nil
+	}
+	result := make([]map[string]interface{}, 0)
+	switch input := value.(type) {
+	case []interface{}:
+		index := 0
+		for _, item := range input {
+			if item == nil {
+				continue
+			}
+			index++
+			result = append(result, map[string]interface{}{
+				"item":   item,
+				"length": len(input),
+				"index":  index,
+				"value":  item,
+				"key":    index,
+			})
+		}
+	case map[string]interface{}:
+		// get the sorting keys
+		keys := maps.Keys(input)
+		sort.Strings(keys)
+
+		index := 0
+		for _, key := range keys {
+			v := input[key]
+			if v == nil {
+				continue
+			}
+			index++
+			result = append(result, map[string]interface{}{
+				"item":   v,
+				"length": len(input),
+				"index":  index,
+				"value":  v,
+				"key":    key,
+			})
+		}
+	}
+
+	return result
+}
+
+func (rt *ResourceGraphDefinitionRuntime) evalForEachExpression(resourceID string) ([]map[string]interface{}, error) {
+	resolvedResources := maps.Keys(rt.resolvedResources)
+	resolvedResources = append(resolvedResources, "schema")
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
+	if err != nil {
+		return nil, err
+	}
+
+	evalContext := map[string]interface{}{
+		"schema": rt.instance.Unstructured().Object,
+	}
+
+	forEachExpr := rt.resources[resourceID].GetForEachExpression()
+	if forEachExpr == "" {
+		return nil, fmt.Errorf("no forEach expression found for resource %s", resourceID)
+	}
+	value, err := evaluateExpression(env, evalContext, forEachExpr)
+	if err != nil {
+		return nil, fmt.Errorf("failed evaluating forEach expression %s: %w", forEachExpr, err)
+	}
+	return eachify(value), nil
 }
 
 // evaluateInstanceStatuses updates the status of the main instance based on
@@ -436,6 +630,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource s
 	}
 	exprValues := make(map[string]interface{})
 	for _, v := range rt.expressionsCache {
+
 		if v.Resolved {
 			exprValues[v.Expression] = v.ResolvedValue
 		}
@@ -451,7 +646,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource s
 
 	summary := rs.Resolve(exprFields)
 	if summary.Errors != nil {
-		return fmt.Errorf("failed to resolve resource %s: %v", resource, summary.Errors)
+		return fmt.Errorf("failed to resolve resource zzz %s: %v", resource, summary.Errors)
 	}
 	return nil
 }

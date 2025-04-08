@@ -1,0 +1,26 @@
+# 095708837592.dkr.ecr.us-west-2.amazonaws.com/kro@sha256:b341e340b84b26669cee337bb5ddbd54d83cd23529c9b8f1edf32f07ec383ef1
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: range
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Range
+    spec:
+      name: string
+      image: string | default="nginx"
+      roles: "[]string"
+
+  resources:
+    # v0.3.0
+    - id: configMap
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: default
+    - id: pod
+      template:
+        spec:
+          replicas: ${int(configMap.data.myPodReplicas)}

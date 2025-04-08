@@ -373,6 +373,11 @@ func (b *Builder) buildRGResource(
 
 	_, isNamespaced := namespacedResources[gvk.GroupKind()]
 	// Note that at this point we don't inject the dependencies into the resource.
+	// debug all variables
+	fmt.Printf("Resource %s has dependencies: %v\n", rgResource.ID, resourceVariables)
+	for _, v := range resourceVariables {
+		fmt.Printf("Resource %s has variable: %v\n", rgResource.ID, v)
+	}
 	return &Resource{
 		id:                     rgResource.ID,
 		gvr:                    metadata.GVKtoGVR(gvk),
@@ -439,17 +444,21 @@ func (b *Builder) buildDependencyGraph(
 				}
 
 				// We need to extract the dependencies from the expression.
-				resourceDependencies, isStatic, err := extractDependencies(env, expression, resourceNames)
+				resourceDependencies, isStatic, isForEach, err := extractDependencies(env, expression, resourceNames)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 				}
 
-				// Static until proven dynamic.
-				//
-				// This reads as: If the expression is dynamic and the resource variable is
-				// static, then we need to mark the resource variable as dynamic.
-				if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
-					resourceVariable.Kind = variable.ResourceVariableKindDynamic
+				if isForEach {
+					resourceVariable.Kind = variable.ResourceVariableKindForEach
+				} else {
+					// Static until proven dynamic.
+					//
+					// This reads as: If the expression is dynamic and the resource variable is
+					// static, then we need to mark the resource variable as dynamic.
+					if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
+						resourceVariable.Kind = variable.ResourceVariableKindDynamic
+					}
 				}
 
 				resource.addDependencies(resourceDependencies...)
@@ -541,7 +550,7 @@ func (b *Builder) buildInstanceResource(
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
-		instanceDependencies, isStatic, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames)
+		instanceDependencies, isStatic, _, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 		}
@@ -739,7 +748,7 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]inte
 // extractDependencies extracts the dependencies from the given CEL expression.
 // It returns a list of dependencies and a boolean indicating if the expression
 // is static or not.
-func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, error) {
+func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, bool, error) {
 	// We also want to allow users to refer to the instance spec in their expressions.
 	inspector := ast.NewInspectorWithEnv(env, resourceNames)
 
@@ -747,24 +756,28 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	// resource graph definition.
 	inspectionResult, err := inspector.Inspect(expression)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to inspect expression: %w", err)
+		return nil, false, false, fmt.Errorf("failed to inspect expression: %w", err)
 	}
 
 	isStatic := true
 	dependencies := make([]string, 0)
 	for _, resource := range inspectionResult.ResourceDependencies {
+
 		if resource.ID != "schema" && resource.ID != "each" && !slices.Contains(dependencies, resource.ID) {
 			isStatic = false
 			dependencies = append(dependencies, resource.ID)
 		}
+		if resource.ID == "each" {
+			return nil, false, true, nil
+		}
 	}
 	if len(inspectionResult.UnknownResources) > 0 {
-		return nil, false, fmt.Errorf("found unknown resources in CEL expression: [%v]", inspectionResult.UnknownResources)
+		return nil, false, false, fmt.Errorf("found unknown resources in CEL expression: [%v]", inspectionResult.UnknownResources)
 	}
 	if len(inspectionResult.UnknownFunctions) > 0 {
-		return nil, false, fmt.Errorf("found unknown functions in CEL expression: [%v]", inspectionResult.UnknownFunctions)
+		return nil, false, false, fmt.Errorf("found unknown functions in CEL expression: [%v]", inspectionResult.UnknownFunctions)
 	}
-	return dependencies, isStatic, nil
+	return dependencies, isStatic, false, nil
 }
 
 type IterationType struct {
@@ -834,7 +847,76 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 		err := ensureResourceExpressions(env, expressionContext, resource)
 		if err != nil {
 			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
+		}
 
+		for _, resourceVariable := range resource.variables {
+			for _, expression := range resourceVariable.Expressions {
+				err := validateCELExpressionContext(env, expression, resourceIDs)
+				if err != nil {
+					return fmt.Errorf("failed to validate expression context: '%s' %w", expression, err)
+				}
+
+				interify := map[string]interface{}{}
+				for x, y := range expressionContext {
+					interify[x] = y
+				}
+
+				_, err = dryRunExpression(env, expression, interify)
+				if err != nil {
+					return fmt.Errorf("failed to dry-run expression xxx %s: %w", expression, err)
+				}
+			}
+
+		}
+		// validate readyWhen Expressions for resource
+		// Only accepting expressions accessing the status and spec for now
+		// and need to evaluate to a boolean type
+		//
+		// TODO(michaelhtm) It shares some of the logic with the loop from above..maybe
+		// we can refactor them or put it in one function.
+		// I would also suggest separating the dryRuns of readyWhenExpressions
+		// and the resourceExpressions.
+		for _, readyWhenExpression := range resource.readyWhenExpressions {
+			fieldEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
+			if err != nil {
+				return fmt.Errorf("failed to create CEL environment: %w", err)
+			}
+
+			err = validateCELExpressionContext(fieldEnv, readyWhenExpression, []string{resource.id})
+			if err != nil {
+				return fmt.Errorf("failed to validate expression context: '%s' %w", readyWhenExpression, err)
+			}
+			// create context
+			// add resource fields to the context
+			resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
+			if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
+				delete(resourceEmulatedCopy.Object, "apiVersion")
+				delete(resourceEmulatedCopy.Object, "kind")
+			}
+			context := map[string]interface{}{}
+			context[resource.id] = &Resource{
+				emulatedObject: resourceEmulatedCopy,
+			}
+			output, err := dryRunExpression(fieldEnv, readyWhenExpression, context)
+
+			if err != nil {
+				return fmt.Errorf("failed to dry-run expression %s: %w", readyWhenExpression, err)
+			}
+			if !krocel.IsBoolType(output) {
+				return fmt.Errorf("output of readyWhen expression %s can only be of type bool", readyWhenExpression)
+			}
+		}
+
+		for _, includeWhenExpression := range resource.includeWhenExpressions {
+			instanceEnv, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceIDs))
+			if err != nil {
+				return fmt.Errorf("failed to create CEL environment: %w", err)
+			}
+
+			err = validateCELExpressionContext(instanceEnv, includeWhenExpression, conditionFieldNames)
+			if err != nil {
+				return fmt.Errorf("failed to validate expression context: '%s' %w", includeWhenExpression, err)
+			}
 			// create context
 			context := map[string]interface{}{}
 			for resourceName, contextResource := range resources {

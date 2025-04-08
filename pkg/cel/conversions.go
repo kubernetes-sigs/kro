@@ -53,6 +53,7 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return GoNativeType(opt.GetValue())
 	case types.NullType:
 		return nil, nil
+
 	default:
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())

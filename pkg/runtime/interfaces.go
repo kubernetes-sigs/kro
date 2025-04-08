@@ -43,6 +43,10 @@ type Interface interface {
 	// The descriptor provides metadata about the resource.
 	ResourceDescriptor(resourceID string) ResourceDescriptor
 
+	IsCollection(resourceID string) bool
+	GetCollectionResources(resourceID string) ([]*unstructured.Unstructured, ResourceState, error)
+	SetCollectionResources(resourceID string, obj []*unstructured.Unstructured)
+
 	// GetResource retrieves a resource by its ID. It returns the resource object
 	// and its current state. If the resource is not found or not yet resolved,
 	// it returns nil and the appropriate ResourceState.

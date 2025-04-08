@@ -2376,7 +2376,7 @@ func Test_WantToCreateResource(t *testing.T) {
 				return
 			}
 			if tt.wantSkip {
-				if err == nil || !strings.Contains(err.Error(), "Skipping resource creation due to condition") {
+				if err == nil || !strings.Contains(err.Error(), "skipping resource creation due to condition") {
 					t.Errorf("WantToCreateResource() expected skip message, got %v", err)
 				}
 				return

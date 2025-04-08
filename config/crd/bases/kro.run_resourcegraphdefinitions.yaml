@@ -135,6 +135,13 @@ spec:
                       SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                  types:
+                    description: |-
+                      Types is a map of custom type definitions. These can be used in the spec
+                      of the resourcegraphdefinition. Each type definition is also adhering to
+                      the SimpleSchema spec.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   validation:
                     description: |-
                       Validation is a list of validation rules that are applied to the

@@ -514,8 +514,16 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
 
+	// Also the custom types must be unmarshalled to a map[string]interface{} to
+	// make handling easier.
+	customTypes := map[string]interface{}{}
+	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
+	}
+
 	// The instance resource has a schema defined using the "SimpleSchema" format.
-	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec)
+	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec, customTypes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}

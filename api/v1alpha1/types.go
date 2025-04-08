@@ -72,6 +72,12 @@ type Schema struct {
 	// the CRD that the resourcegraphdefinition is managing. This is adhering
 	// to the SimpleSchema spec
 	Spec runtime.RawExtension `json:"spec,omitempty"`
+
+	// Types is a map of custom type definitions. These can be used in the spec
+	// of the resourcegraphdefinition. Each type definition is also adhering to
+	// the SimpleSchema spec.
+	Types runtime.RawExtension `json:"types,omitempty"`
+
 	// The status of the resourcegraphdefinition. This is the status of the CRD
 	// that the resourcegraphdefinition is managing. This is adhering to the
 	// SimpleSchema spec.

@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kro-controller-manager
+  namespace: kro-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kro-controller-manager
+  namespace: kro-system
+  labels:
+    app: kro-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kro-controller
+  template:
+    metadata:
+      labels:
+        app: kro-controller
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: kro-controller-manager
+      containers:
+      - name: manager
+        image: kro-controller:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /manager
+        args:
+        - --leader-elect
+        ports:
+        - containerPort: 8080
+          name: metrics
+        - containerPort: 9443
+          name: webhook
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kro-metrics
+  namespace: kro-system
+spec:
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+  selector:
+    app: kro-controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro-manager-role
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kro-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kro-manager-role
+subjects:
+- kind: ServiceAccount
+  name: kro-controller-manager
+  namespace: kro-system

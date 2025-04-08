@@ -1,0 +1,15 @@
+apiVersion: kro.run/v1alpha1
+kind: Application
+metadata:
+  name: hello-world-collections
+spec:
+  name: hello
+  image: nginx
+  a:
+    enums:
+    - "a"
+    - "b"
+    - "c"
+    something:
+    - "x"
+    - "y"

@@ -344,6 +344,11 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 
 	_, isNamespaced := namespacedResources[gvk.GroupKind()]
 	// Note that at this point we don't inject the dependencies into the resource.
+	// debug all variables
+	fmt.Printf("Resource %s has dependencies: %v\n", rgResource.ID, resourceVariables)
+	for _, v := range resourceVariables {
+		fmt.Printf("Resource %s has variable: %v\n", rgResource.ID, v)
+	}
 	return &Resource{
 		id:                     rgResource.ID,
 		gvr:                    metadata.GVKtoGVR(gvk),
@@ -405,17 +410,21 @@ func (b *Builder) buildDependencyGraph(
 				}
 
 				// We need to extract the dependencies from the expression.
-				resourceDependencies, isStatic, err := extractDependencies(env, expression, resourceNames)
+				resourceDependencies, isStatic, isForEach, err := extractDependencies(env, expression, resourceNames)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 				}
 
-				// Static until proven dynamic.
-				//
-				// This reads as: If the expression is dynamic and the resource variable is
-				// static, then we need to mark the resource variable as dynamic.
-				if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
-					resourceVariable.Kind = variable.ResourceVariableKindDynamic
+				if isForEach {
+					resourceVariable.Kind = variable.ResourceVariableKindForEach
+				} else {
+					// Static until proven dynamic.
+					//
+					// This reads as: If the expression is dynamic and the resource variable is
+					// static, then we need to mark the resource variable as dynamic.
+					if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
+						resourceVariable.Kind = variable.ResourceVariableKindDynamic
+					}
 				}
 
 				resource.addDependencies(resourceDependencies...)
@@ -515,7 +524,7 @@ func (b *Builder) buildInstanceResource(
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
-		instanceDependencies, isStatic, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames)
+		instanceDependencies, isStatic, _, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 		}
@@ -695,7 +704,7 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]inte
 // extractDependencies extracts the dependencies from the given CEL expression.
 // It returns a list of dependencies and a boolea indicating if the expression
 // is static or not.
-func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, error) {
+func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, bool, error) {
 	// We also want to allow users to refer to the instance spec in their expressions.
 	inspector := ast.NewInspectorWithEnv(env, resourceNames, nil)
 
@@ -703,24 +712,28 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	// resource graph definition.
 	inspectionResult, err := inspector.Inspect(expression)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to inspect expression: %w", err)
+		return nil, false, false, fmt.Errorf("failed to inspect expression: %w", err)
 	}
 
 	isStatic := true
 	dependencies := make([]string, 0)
 	for _, resource := range inspectionResult.ResourceDependencies {
+
 		if resource.ID != "schema" && resource.ID != "each" && !slices.Contains(dependencies, resource.ID) {
 			isStatic = false
 			dependencies = append(dependencies, resource.ID)
 		}
+		if resource.ID == "each" {
+			return nil, false, true, nil
+		}
 	}
 	if len(inspectionResult.UnknownResources) > 0 {
-		return nil, false, fmt.Errorf("found unknown resources in CEL expression: [%v]", inspectionResult.UnknownResources)
+		return nil, false, false, fmt.Errorf("found unknown resources in CEL expression: [%v]", inspectionResult.UnknownResources)
 	}
 	if len(inspectionResult.UnknownFunctions) > 0 {
-		return nil, false, fmt.Errorf("found unknown functions in CEL expression: [%v]", inspectionResult.UnknownFunctions)
+		return nil, false, false, fmt.Errorf("found unknown functions in CEL expression: [%v]", inspectionResult.UnknownFunctions)
 	}
-	return dependencies, isStatic, nil
+	return dependencies, isStatic, false, nil
 }
 
 type IterationType struct {
@@ -816,8 +829,6 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 				}
 			}
 		}
-
-		fmt.Println("context", context)
 
 		for _, resourceVariable := range resource.variables {
 			for _, expression := range resourceVariable.Expressions {

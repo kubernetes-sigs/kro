@@ -129,7 +129,7 @@ schema:
       name: string
       age: integer
   spec:
-    people: '[]person | required=true`
+    people: '[]Person | required=true`
 ```
 
 ## Validation and Documentation

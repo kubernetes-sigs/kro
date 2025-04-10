@@ -20,6 +20,10 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
+func floatPtr(f float64) *float64 {
+	return &f
+}
+
 func TestBuildOpenAPISchema(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -425,6 +429,26 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want:    nil,
 			wantErr: true,
+		},
+		{
+			name: "Custom simple type (required)",
+			obj: map[string]interface{}{
+				"myValue": "myType",
+			},
+			types: map[string]interface{}{
+				"myType": "string | required=true description=\"my description\"",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"myValue": {
+						Type:        "string",
+						Description: "my description",
+					},
+				},
+				Required: []string{"myValue"},
+			},
+			wantErr: false,
 		},
 	}
 

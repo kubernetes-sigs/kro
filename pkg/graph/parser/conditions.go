@@ -18,14 +18,16 @@ import (
 	"strings"
 )
 
-// This function parses resource condition expressions.
-// These expressions need to be standalone expressions
-// so, this function also does some validation.
-// At the end we return the expressions with '${}' removed
+// ParseConditionExpressions This function parses resource condition expressions.
+// These expressions need to be standalone expressions, so
 //
-// To be honest I wouldn't necessarily call it parse, since
+//	this function also does some validation.
+//
+// In the end, we return the expressions with '${}' removed
+//
+// To be honest; I wouldn't necessarily call it parse, since
 // we are mostly just validating, without caring what's in
-// the expression. Maybe we can rename it in the future 🤔
+// the expression. Maybe we can rename it in the future. 🤔
 func ParseConditionExpressions(conditions []string) ([]string, error) {
 	expressions := make([]string, 0, len(conditions))
 

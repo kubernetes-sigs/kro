@@ -92,7 +92,7 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 	}
 
 	if len(schema.Type) == 0 {
-		// If type is not set, check if it's an object
+		// If the type is not set, check if it's an object
 		if len(schema.Properties) > 0 {
 			return e.generateObject(schema)
 		}

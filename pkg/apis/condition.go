@@ -38,7 +38,7 @@ const (
 	// For long-running resources.
 	ConditionReady = "Ready"
 	// ConditionSucceeded specifies that the resource has finished.
-	// For resource which run to completion.
+	// For resource that runs to completion.
 	ConditionSucceeded = "Succeeded"
 )
 

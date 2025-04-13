@@ -14,6 +14,7 @@
 package crd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,7 +78,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
 			assert.Equal(t, tt.kind, crd.Spec.Names.Kind)
-			assert.Equal(t, tt.kind+"List", crd.Spec.Names.ListKind)
+			assert.Equal(t, fmt.Sprintf("%sList", tt.kind), crd.Spec.Names.ListKind)
 
 			require.Len(t, crd.Spec.Versions, 1)
 			version := crd.Spec.Versions[0]
@@ -145,7 +146,7 @@ func TestNewCRD(t *testing.T) {
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)
 			assert.Equal(t, tt.expectedKind, crd.Spec.Names.Kind)
-			assert.Equal(t, tt.expectedKind+"List", crd.Spec.Names.ListKind)
+			assert.Equal(t, fmt.Sprintf("%sList", tt.expectedKind), crd.Spec.Names.ListKind)
 			assert.Equal(t, tt.expectedPlural, crd.Spec.Names.Plural)
 			assert.Equal(t, tt.expectedSingular, crd.Spec.Names.Singular)
 

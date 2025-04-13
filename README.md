@@ -20,14 +20,14 @@ kro is Kubernetes native and integrates seamlessly with existing tools to preser
 
 ## Documentation
 
-| Title                                  | Description                     |
-| -------------------------------------- | ------------------------------- |
-| [Introduction][kro-overview]           | An introduction to kro          |
-| [Installation][kro-installation]       | Install kro in your cluster     |
+| Title                                  | Description                               |
+|----------------------------------------|-------------------------------------------|
+| [Introduction][kro-overview]           | An introduction to kro                    |
+| [Installation][kro-installation]       | Install kro in your cluster               |
 | [Getting started][kro-getting-started] | Deploy your first ResourceGraphDefinition |
-| [Concepts][kro-concepts]               | Learn more about kro concepts   |
-| [Examples][kro-examples]               | Example resources               |
-| [Contributions](./CONTRIBUTING.md)       | How to get involved             |
+| [Concepts][kro-concepts]               | Learn more about kro concepts             |
+| [Examples][kro-examples]               | Example resources                         |
+| [Contributions](./CONTRIBUTING.md)     | How to get involved                       |
 
 [kro-overview]: https://kro.run/docs/overview
 [kro-installation]: https://kro.run/docs/getting-started/Installation
@@ -84,7 +84,7 @@ Please join our community meeting.
 * Every other Wednesday at 9AM PT (Pacific Time). [Convert to local timezone][tz-help] 
 * Agenda: [Public doc][agenda]
 * Join us: [Zoom meeting][zoom]
-* Community meeting recordings:  [YouTube channel][youtube]
+* Community meeting recordings: [YouTube channel][youtube]
 
 
 [tz-help]: http://www.thetimezoneconverter.com/?t=9%3A00&tz=PT%20%28Pacific%20Time%29

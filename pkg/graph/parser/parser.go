@@ -139,7 +139,7 @@ func collectTypesFromSubSchemas(subSchemas []spec.Schema) []string {
 	var types []string
 
 	for _, subSchema := range subSchemas {
-		// If there are structural constraints, inject object type
+		// If there are structural constraints, inject an object type
 		if len(subSchema.Required) > 0 || subSchema.Not != nil {
 			if !slices.Contains(types, "object") {
 				types = append(types, "object")

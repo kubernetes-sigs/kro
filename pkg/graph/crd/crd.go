@@ -45,7 +45,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps) *extv
 			Group: group,
 			Names: extv1.CustomResourceDefinitionNames{
 				Kind:     kind,
-				ListKind: kind + "List",
+				ListKind: fmt.Sprintf("%sList", kind),
 				Plural:   pluralKind,
 				Singular: strings.ToLower(kind),
 			},

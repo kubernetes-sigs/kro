@@ -21,13 +21,14 @@ import (
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful
-// when the schema is not available. e.g RGI statuses
+// when the schema is not available. e.g., RGI statuses
 func ParseSchemalessResource(resource map[string]interface{}) ([]variable.FieldDescriptor, error) {
 	return parseSchemalessResource(resource, "")
 }
 
 // parseSchemalessResource is a helper function that recursively
-// extracts expressions from a resource. It uses a depth first search to traverse
+// extracts expressions from a resource.
+// It uses a depth-first search to traverse
 // the resource and extract expressions from string fields
 func parseSchemalessResource(resource interface{}, path string) ([]variable.FieldDescriptor, error) {
 	var expressionsFields []variable.FieldDescriptor

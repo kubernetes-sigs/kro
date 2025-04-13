@@ -82,7 +82,7 @@ import (
 
 // Config holds the configuration for DynamicController
 type Config struct {
-	// Workers specifies the number of workers processing items from the queue
+	// Workers specify the number of workers processing items from the queue
 	Workers int
 	// ResyncPeriod defines the interval at which the controller will re list
 	// the resources, even if there haven't been any changes.
@@ -171,7 +171,7 @@ func (dc *DynamicController) AllInformerHaveSynced() bool {
 	var allSynced bool
 	var informerCount int
 
-	// Unfortunately we can't know the number of informers in advance, so we need to
+	// Unfortunately, we can't know the number of informers in advance, so we need to
 	// iterate over all of them to check if they have synced.
 
 	dc.informers.Range(func(key, value interface{}) bool {
@@ -196,7 +196,7 @@ func (dc *DynamicController) AllInformerHaveSynced() bool {
 	return allSynced
 }
 
-// WaitForInformerSync waits for all informers to sync or timeout
+// WaitForInformersSync waits for all informers to sync or timeout
 func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 	dc.log.V(1).Info("Waiting for all informers to sync")
 	start := time.Now()
@@ -421,7 +421,7 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	dc.queue.Add(objectIdentifiers)
 }
 
-// StartServingGVK registers a new GVK to the informers map safely.
+// StartServingGVK registers a new GVK to the informer map safely.
 func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
@@ -497,7 +497,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	return nil
 }
 
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
+// StopServiceGVK UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
 func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
@@ -529,7 +529,8 @@ func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.Grou
 
 	gvrCount.Dec()
 	// Clean up any pending items in the queue for this GVR
-	// NOTE(a-hilaly): This is a bit heavy.. maybe we can find a better way to do this.
+	// NOTE(a-hilaly): This is a bit heavy.
+	// Maybe we can find a better way to do this.
 	// Thinking that we might want to have a queue per GVR.
 	// dc.cleanupQueue(gvr)
 	// time.Sleep(1 * time.Second)

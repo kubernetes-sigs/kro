@@ -44,22 +44,22 @@ const (
 	// InstanceConditionTypeProgressing used for Creating Deleting Migrating
 	InstanceConditionTypeProgressing ConditionType = "Progressing"
 
-	// InstanceConditionTypeDegraded used in unexpected situation, behaviour, need human intervention
+	// InstanceConditionTypeDegraded used in an unexpected situation, behavior, need human intervention
 	InstanceConditionTypeDegraded ConditionType = "Degraded"
 
-	// InstanceConditionTypeError used in something is wrong but i'm going to try again
+	// InstanceConditionTypeError used in something is wrong, but I'm going to try again
 	InstanceConditionTypeError ConditionType = "Error"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service
-// controllers to indicate terminal states  of the CR and its backend AWS
+// controllers to indicate the terminal states of the CR and its backend AWS
 // service API resource
 type Condition struct {
 	// Type is the type of the Condition
 	Type ConditionType `json:"type"`
 	// Status of the condition, one of True, False, Unknown.
 	Status metav1.ConditionStatus `json:"status"`
-	// Last time the condition transitioned from one status to another.
+	// Last time, the condition transitioned from one status to another.
 	// +optional
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
 	// The reason for the condition's last transition.

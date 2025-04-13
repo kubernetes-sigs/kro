@@ -107,9 +107,10 @@ func areValidExpressionEvals(evaluationValues []ref.Val) bool {
 		return true // Single value is always valid
 	}
 	// The only way a multi-value expression is valid is if all the values
-	// are of type string. Imagine.. you can't really combine two arrays
-	// using two different CEL expression in a meaningful way.
-	// e.g: "${a}${b}"" where a and b are arrays.
+	// are of type string.
+	// Imagine you can't really combine two arrays
+	// using two different CEL expressions in a meaningful way.
+	// E.g.: "${a}${b}"" where a and b are arrays.
 	firstType := evaluationValues[0].Type()
 	if firstType != types.StringType {
 		return false

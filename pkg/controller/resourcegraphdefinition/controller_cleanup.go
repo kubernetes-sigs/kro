@@ -28,8 +28,8 @@ import (
 
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
 // microcontroller and cleaning up the CRD if enabled. It executes cleanup operations in order:
-// 1. Shuts down the microcontroller
-// 2. Deletes the associated CRD (if CRD deletion is enabled)
+// 1. Shut down the microcontroller
+// 2. Delete the associated CRD (if CRD deletion is enabled)
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 

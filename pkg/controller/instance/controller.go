@@ -66,12 +66,12 @@ type ReconcileConfig struct {
 //
 // It is important to state that when the controller is reconciling an instance, it
 // creates and uses a new instance of the ResourceGraphDefinitionRuntime to uniquely manage
-// the state of the instance and its sub-resources. This ensure that at each
+// the state of the instance and its sub-resources. This ensures that at each
 // reconciliation loop, the controller is working with a fresh state of the instance
 // and its sub-resources.
 type Controller struct {
 	log logr.Logger
-	// gvr represents the Group, Version, and Resource of the custom resource
+	// gvr represents the Group, Version, and Resource of the custom resources
 	// this controller is responsible for.
 	gvr schema.GroupVersionResource
 	// client holds the dynamic client to use for interacting with the Kubernetes API.
@@ -131,7 +131,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 	// two parts. The instantiator is responsible for creating a new runtime
 	// instance of the resource graph definition. The instance graph reconciler is responsible
 	// for reconciling the instance and its sub-resources, while keeping the same
-	// runtime object in it's fields.
+	// runtime object in its fields.
 	rgRuntime, err := c.rgd.NewGraphRuntime(instance)
 	if err != nil {
 		return fmt.Errorf("failed to create runtime resource graph definition: %w", err)
@@ -198,7 +198,7 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 	timer := prometheus.NewTimer(impersonationDuration.WithLabelValues(namespace, ""))
 	defer timer.ObserveDuration()
 
-	// Check for namespace specific service account
+	// Check for the namespace specific service account
 	if sa, ok := c.defaultServiceAccounts[namespace]; ok {
 		userName, err := getServiceAccountUserName(namespace, sa)
 		if err != nil {
@@ -216,7 +216,7 @@ func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, er
 		return pivotedClient.Dynamic(), nil
 	}
 
-	// Check for default service account (marked by "*")
+	// Check for a default service account (marked by "*")
 	if defaultSA, ok := c.defaultServiceAccounts[v1alpha1.DefaultServiceAccountKey]; ok {
 		userName, err := getServiceAccountUserName(namespace, defaultSA)
 		if err != nil {
@@ -260,8 +260,8 @@ func (c *Controller) handleImpersonateError(namespace, sa string, err error) {
 	)
 }
 
-// getServiceAccountUserName builds the impersonate service account user name.
-// The format of the user name is "system:serviceaccount:<namespace>:<serviceaccount>"
+// getServiceAccountUserName builds the impersonate service account username.
+// The format of the username is "system:serviceaccount:<namespace>:<serviceaccount>"
 func getServiceAccountUserName(namespace, serviceAccount string) (string, error) {
 	if namespace == "" || serviceAccount == "" {
 		return "", fmt.Errorf("namespace and service account must be provided")

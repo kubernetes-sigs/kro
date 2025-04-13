@@ -48,7 +48,7 @@ func (v Vertex[T]) String() string {
 
 // DirectedAcyclicGraph represents a directed acyclic graph
 type DirectedAcyclicGraph[T cmp.Ordered] struct {
-	// Vertices stores the nodes in the graph
+	// Vertices store the nodes in the graph
 	Vertices map[T]*Vertex[T]
 }
 
@@ -136,7 +136,7 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 }
 
 // TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
-// and preserving order of nodes within each "depth" of the topological ordering.
+// and preserving the order of nodes within each "depth" of the topological ordering.
 func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
 	visited := make(map[T]bool)
 	var order []T

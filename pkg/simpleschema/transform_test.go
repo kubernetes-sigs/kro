@@ -531,7 +531,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				"alias": "string",
 			},
 			want: map[string]predefinedType{
-				"alias": predefinedType{
+				"alias": {
 					Schema: extv1.JSONSchemaProps{
 						Type: "string",
 					},
@@ -546,7 +546,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				"alias": "string | required=true default=\"test\"",
 			},
 			want: map[string]predefinedType{
-				"alias": predefinedType{
+				"alias": {
 					Schema: extv1.JSONSchemaProps{
 						Type:    "string",
 						Default: &extv1.JSON{Raw: []byte("\"test\"")},

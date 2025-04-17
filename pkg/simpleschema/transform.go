@@ -206,11 +206,21 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 }
 
 func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
+	truthyValues := []string{"yes", "true", "1"}
+	falseyValues := []string{"no", "false"}
+
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
-			if parentSchema != nil {
+			switch {
+			case parentSchema == nil:
+				return fmt.Errorf("required marker can't be applied; parent schema is nil")
+			case slices.Contains(truthyValues, marker.Value):
 				parentSchema.Required = append(parentSchema.Required, key)
+			case slices.Contains(falseyValues, marker.Value):
+				// ignore
+			default:
+				return fmt.Errorf("unsupported required marker value: %s", marker.Value)
 			}
 		case MarkerTypeDefault:
 			var defaultValue []byte

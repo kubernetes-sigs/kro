@@ -447,6 +447,36 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "Invalid Required Marker value",
+			obj: map[string]interface{}{
+				"data": "string | required=invalid",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Required Marker handling",
+			obj: map[string]interface{}{
+				"req_1":     "string | required=true",
+				"req_2":     "string | required=yes",
+				"req_3":     "string | required=1",
+				"not_req_1": "string | required=false",
+				"not_req_2": "string | required=no",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"req_1":     {Type: "string"},
+					"req_2":     {Type: "string"},
+					"req_3":     {Type: "string"},
+					"not_req_1": {Type: "string"},
+					"not_req_2": {Type: "string"},
+				},
+				Required: []string{"req_1", "req_2", "req_3"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

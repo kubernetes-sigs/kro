@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package main
 
@@ -105,8 +106,8 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
-	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 10,
-		"interval at which the controller will re list resources even with no changes, in hours")
+	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
+		"interval at which the controller will re list resources even with no changes, in seconds")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	flag.IntVar(&shutdownTimeout, "dynamic-controller-default-shutdown-timeout", 60,
@@ -166,10 +167,9 @@ func main() {
 	}
 
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
-		Workers: dynamicControllerConcurrentReconciles,
-		// TODO(a-hilaly): expose these as flags
+		Workers:         dynamicControllerConcurrentReconciles,
 		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
-		ResyncPeriod:    time.Duration(resyncPeriod) * time.Hour,
+		ResyncPeriod:    time.Duration(resyncPeriod) * time.Second,
 		QueueMaxRetries: queueMaxRetries,
 		MinRetryDelay:   minRetryDelay,
 		MaxRetryDelay:   maxRetryDelay,

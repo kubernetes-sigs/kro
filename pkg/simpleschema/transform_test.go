@@ -459,10 +459,10 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			name: "Required Marker handling",
 			obj: map[string]interface{}{
 				"req_1":     "string | required=true",
-				"req_2":     "string | required=yes",
+				"req_2":     "string | required=True",
 				"req_3":     "string | required=1",
 				"not_req_1": "string | required=false",
-				"not_req_2": "string | required=no",
+				"not_req_2": "string | required=False",
 			},
 			want: &extv1.JSONSchemaProps{
 				Type: "object",

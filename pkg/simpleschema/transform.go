@@ -16,7 +16,6 @@ package simpleschema
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -206,21 +205,18 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 }
 
 func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
-	truthyValues := []string{"yes", "true", "1"}
-	falseyValues := []string{"no", "false"}
-
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
-			switch {
+			switch isRequired, err := strconv.ParseBool(marker.Value); {
+			case err != nil:
+				return fmt.Errorf("failed to parse required marker value: %w", err)
 			case parentSchema == nil:
 				return fmt.Errorf("required marker can't be applied; parent schema is nil")
-			case slices.Contains(truthyValues, marker.Value):
+			case isRequired:
 				parentSchema.Required = append(parentSchema.Required, key)
-			case slices.Contains(falseyValues, marker.Value):
-				// ignore
 			default:
-				return fmt.Errorf("unsupported required marker value: %s", marker.Value)
+				// ignore
 			}
 		case MarkerTypeDefault:
 			var defaultValue []byte

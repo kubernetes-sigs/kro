@@ -15,9 +15,12 @@
 package simpleschema
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
@@ -458,22 +461,14 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		{
 			name: "Required Marker handling",
 			obj: map[string]interface{}{
-				"req_1":     "string | required=true",
-				"req_2":     "string | required=True",
-				"req_3":     "string | required=1",
-				"not_req_1": "string | required=false",
-				"not_req_2": "string | required=False",
+				"req_1": "string | required=true",
 			},
 			want: &extv1.JSONSchemaProps{
 				Type: "object",
 				Properties: map[string]extv1.JSONSchemaProps{
-					"req_1":     {Type: "string"},
-					"req_2":     {Type: "string"},
-					"req_3":     {Type: "string"},
-					"not_req_1": {Type: "string"},
-					"not_req_2": {Type: "string"},
+					"req_1": {Type: "string"},
 				},
-				Required: []string{"req_1", "req_2", "req_3"},
+				Required: []string{"req_1"},
 			},
 			wantErr: false,
 		},
@@ -486,8 +481,43 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				t.Errorf("BuildOpenAPISchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+			assert.Equal(t, got, tt.want)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("BuildOpenAPISchema() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyMarkers_Required(t *testing.T) {
+	transformer := newTransformer()
+
+	tests := []struct {
+		value    string
+		required bool
+		err      error
+	}{
+		{"true", true, nil},
+		{"True", true, nil},
+		{"TRUE", true, nil},
+		{"1", true, nil},
+		{"false", false, nil},
+		{"False", false, nil},
+		{"FALSE", false, nil},
+		{"invalid", false, fmt.Errorf("failed to parse required marker value: strconv.ParseBool: parsing \"invalid\": invalid syntax")},
+		{"no", false, fmt.Errorf("failed to parse required marker value: strconv.ParseBool: parsing \"no\": invalid syntax")},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("Required Marker %s", tt.value), func(t *testing.T) {
+			parentSchema := &extv1.JSONSchemaProps{}
+			markers := []*Marker{{MarkerType: MarkerTypeRequired, Value: tt.value}}
+			err := transformer.applyMarkers(nil, markers, "myFieldName", parentSchema)
+			if err != nil && err.Error() != tt.err.Error() {
+				t.Errorf("ApplyMarkers() error = %q, expected error %q", err, tt.err)
+			}
+			// If there was no error, check if the required field was added to the parent schema.
+			if err == nil && tt.required != slices.Contains(parentSchema.Required, "myFieldName") {
+				t.Errorf("ApplyMarkers() = %v, want %v", parentSchema.Required, tt.required)
 			}
 		})
 	}

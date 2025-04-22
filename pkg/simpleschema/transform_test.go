@@ -20,10 +20,6 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
-func floatPtr(f float64) *float64 {
-	return &f
-}
-
 func TestBuildOpenAPISchema(t *testing.T) {
 	tests := []struct {
 		name    string

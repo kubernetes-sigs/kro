@@ -62,8 +62,11 @@ spec:
             properties:
               additionalPrinterColumns:
                 description: |-
-                  AdditionalPrinterColumns defines additional printer columns that will
-                  be passed down to the created CRD.
+                  AdditionalPrinterColumns defines additional printer columns
+                  that will be passed down to the created CRD. If set, no
+                  default printer columns will be added to the created CRD,
+                  and if default printer columns need to be retained, they
+                  need to be added explicitly.
                 items:
                   description: CustomResourceColumnDefinition specifies a column for
                     server side printing.

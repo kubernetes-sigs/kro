@@ -522,6 +522,7 @@ func isInternalIdentifier(name string) bool {
 
 func isInternalFunction(name string) bool {
 	internalFunctions := map[string]bool{
+		"_?._":    true,
 		"_+_":     true,
 		"_-_":     true,
 		"_*_":     true,

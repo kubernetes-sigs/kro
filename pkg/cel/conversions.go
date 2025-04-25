@@ -45,6 +45,8 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return v.ConvertToNative(reflect.TypeOf([]interface{}{}))
 	case types.MapType:
 		return v.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
+	case types.OptionalType:
+		return GoNativeType(v.(*types.Optional).GetValue())
 	case types.NullType:
 		return nil, nil
 	default:

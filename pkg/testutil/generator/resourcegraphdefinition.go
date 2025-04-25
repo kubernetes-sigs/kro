@@ -68,6 +68,24 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 	}
 }
 
+// WithExternalRef adds an external reference to the ResourceGraphDefinition with the given name and definition
+// readyWhen and includeWhen expressions are optional.
+func WithExternalRef(
+	id string,
+	externalRef *krov1alpha1.ExternalRef,
+	readyWhen []string,
+	includeWhen []string,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			ExternalRef: externalRef,
+		})
+	}
+}
+
 // WithResource adds a resource to the ResourceGraphDefinition with the given name and definition
 // readyWhen and includeWhen expressions are optional.
 func WithResource(

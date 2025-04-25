@@ -73,6 +73,8 @@ type Resource struct {
 	// order reflects the original order in which the resources were specified,
 	// and lets us keep the client-specified ordering where the dependencies allow.
 	order int
+	// isExternalRef indicates if the resource should only be read and not created/updated
+	isExternalRef bool
 }
 
 // GetDependencies returns the dependencies of the resource.
@@ -159,6 +161,11 @@ func (r *Resource) IsNamespaced() bool {
 	return r.namespaced
 }
 
+// IsExternalRef returns whether the resource is an external reference
+func (r *Resource) IsExternalRef() bool {
+	return r.isExternalRef
+}
+
 // DeepCopy returns a deep copy of the resource.
 func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
@@ -172,5 +179,6 @@ func (r *Resource) DeepCopy() *Resource {
 		readyWhenExpressions:   slices.Clone(r.readyWhenExpressions),
 		includeWhenExpressions: slices.Clone(r.includeWhenExpressions),
 		namespaced:             r.namespaced,
+		isExternalRef:          r.isExternalRef,
 	}
 }

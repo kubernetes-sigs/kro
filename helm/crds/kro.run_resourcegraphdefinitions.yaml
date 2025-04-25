@@ -73,6 +73,25 @@ spec:
                 description: The resources that are part of the resourcegraphdefinition.
                 items:
                   properties:
+                    externalRef:
+                      description: |-
+                        ExternalRef is a reference to an external resource.
+                        It allows the user to specify the Kind, Version, Name and Namespace of the resource
+                        to be read and used in the Graph.
+                      properties:
+                        apiVersion:
+                          type: string
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                      required:
+                      - apiVersion
+                      - kind
+                      - name
+                      type: object
                     id:
                       type: string
                     includeWhen:
@@ -88,8 +107,11 @@ spec:
                       x-kubernetes-preserve-unknown-fields: true
                   required:
                   - id
-                  - template
                   type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of template or externalRef must be provided
+                    rule: (has(self.template) && !has(self.externalRef)) || (!has(self.template)
+                      && has(self.externalRef))
                 type: array
               schema:
                 description: |-

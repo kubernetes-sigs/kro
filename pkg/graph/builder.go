@@ -250,21 +250,47 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	return resourceGraphDefinition, nil
 }
 
+// buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
+func (b *Builder) buildExternalRefResource(
+	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
+	resourceObject := map[string]interface{}{}
+	resourceObject["apiVersion"] = externalRef.APIVersion
+	resourceObject["kind"] = externalRef.Kind
+	metadata := map[string]interface{}{
+		"name": externalRef.Name,
+	}
+	if externalRef.Namespace != "" {
+		metadata["namespace"] = externalRef.Namespace
+	}
+	resourceObject["metadata"] = metadata
+	return resourceObject
+}
+
 // buildRGResource builds a resource from the given resource definition.
 // It provides a high-level understanding of the resource, by extracting the
 // OpenAPI schema, emulating the resource and extracting the cel expressions
 // from the schema.
-func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResources map[k8sschema.GroupKind]bool, order int) (*Resource, error) {
+func (b *Builder) buildRGResource(
+	rgResource *v1alpha1.Resource,
+	namespacedResources map[k8sschema.GroupKind]bool,
+	order int,
+) (*Resource, error) {
 	// 1. We need to unmarshal the resource into a map[string]interface{} to
 	//    make it easier to work with.
 	resourceObject := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+	if len(rgResource.Template.Raw) > 0 {
+		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+		}
+	} else if rgResource.ExternalRef != nil {
+		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
+	} else {
+		return nil, fmt.Errorf("exactly one of template or externalRef must be provided")
 	}
 
 	// 1. Check if it looks like a valid Kubernetes resource.
-	err = validateKubernetesObjectStructure(resourceObject)
+	err := validateKubernetesObjectStructure(resourceObject)
 	if err != nil {
 		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
 	}
@@ -343,6 +369,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		includeWhenExpressions: includeWhen,
 		namespaced:             isNamespaced,
 		order:                  order,
+		isExternalRef:          rgResource.ExternalRef != nil,
 	}, nil
 }
 

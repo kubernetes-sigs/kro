@@ -421,6 +421,31 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid instance definition with optional type",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"state": "${vpc.status.?state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

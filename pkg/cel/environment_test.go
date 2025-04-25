@@ -150,8 +150,6 @@ func Test_CELEnvHasFunction(t *testing.T) {
 		"size", "in", "matches",
 		// types
 		"int", "uint", "double", "bool", "string", "bytes", "timestamp", "duration", "type",
-		// Collection Functions
-		"filter", "map", "all", "exists", "exists_one",
 		// Custom functions
 		"random.seededString",
 	}

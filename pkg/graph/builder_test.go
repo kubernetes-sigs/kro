@@ -430,7 +430,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"name": "string",
 					},
 					map[string]interface{}{
-						"state": "${vpc.status.?state}",
+						"abc": "${vpc.status.?unstructured.state}",
+						"cde": "${vpc.status.unstructured.?state}",
 					},
 				),
 				generator.WithResource("vpc", map[string]interface{}{

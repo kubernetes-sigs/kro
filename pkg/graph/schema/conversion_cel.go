@@ -57,6 +57,8 @@ func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProp
 		return &extv1.JSONSchemaProps{
 			Type: "string",
 		}, nil
+	case interface{}:
+		return inferAnyTypeSchema(), nil
 	case []interface{}:
 		return inferArraySchema(goRuntimeVal)
 	case map[string]interface{}:
@@ -64,6 +66,19 @@ func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProp
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", goRuntimeVal)
 	}
+}
+
+func inferAnyTypeSchema() *extv1.JSONSchemaProps {
+	types := []string{"boolean", "integer", "number", "string", "array", "object", "null"}
+	schema := &extv1.JSONSchemaProps{
+		OneOf: make([]extv1.JSONSchemaProps, 0, len(types)),
+	}
+	for _, typ := range types {
+		schema.OneOf = append(schema.OneOf, extv1.JSONSchemaProps{
+			Type: typ,
+		})
+	}
+	return schema
 }
 
 func inferArraySchema(arr []interface{}) (*extv1.JSONSchemaProps, error) {

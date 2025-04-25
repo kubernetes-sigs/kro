@@ -129,6 +129,8 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		return e.generateArray(schema)
 	case "object":
 		return e.generateObject(schema)
+	case "null":
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", schema.Type)
 	}

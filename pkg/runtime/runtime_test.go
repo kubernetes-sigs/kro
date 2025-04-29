@@ -38,6 +38,9 @@ func Test_RuntimeWorkflow(t *testing.T) {
 					"dbName": "prod-db",
 					"port":   5432,
 				},
+				"secret": map[string]interface{}{
+					"include": false,
+				},
 			},
 		}),
 		withVariables([]*variable.ResourceField{
@@ -54,9 +57,12 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	)
 
 	secret := newTestResource(
+		withIncludeWhenExpressions([]string{"schema.spec.secret.include == true"}),
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				"name": "${schema.spec.appName}-secret",
+				// this shound not be evaluated since the
+				// resource should not be included
+				"name": "${schema.spec.secret.name}",
 			},
 			"stringData": map[string]interface{}{
 				"DB_URL": "${dburl_expr}",
@@ -66,7 +72,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"schema.spec.appName + '-secret'"},
+					Expressions:          []string{"schema.spec.secret.name"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -2294,21 +2300,21 @@ func Test_WantToCreateResource(t *testing.T) {
 		{
 			name: "no conditions",
 			resource: newTestResource(
-				withConditions(nil),
+				withIncludeWhenExpressions(nil),
 			),
 			want: true,
 		},
 		{
 			name: "simple true condition",
 			resource: newTestResource(
-				withConditions([]string{"true"}),
+				withIncludeWhenExpressions([]string{"true"}),
 			),
 			want: true,
 		},
 		{
 			name: "simple false condition",
 			resource: newTestResource(
-				withConditions([]string{"false"}),
+				withIncludeWhenExpressions([]string{"false"}),
 			),
 			want:     false,
 			wantSkip: true,
@@ -2316,7 +2322,7 @@ func Test_WantToCreateResource(t *testing.T) {
 		{
 			name: "spec based condition",
 			resource: newTestResource(
-				withConditions([]string{"schema.spec.enabled == true"}),
+				withIncludeWhenExpressions([]string{"schema.spec.enabled == true"}),
 			),
 			instanceSpec: map[string]interface{}{
 				"enabled": true,
@@ -2334,21 +2340,21 @@ func Test_WantToCreateResource(t *testing.T) {
 		{
 			name: "invalid expression",
 			resource: newTestResource(
-				withConditions([]string{"invalid )"}),
+				withIncludeWhenExpressions([]string{"invalid )"}),
 			),
 			wantErr: true,
 		},
 		{
 			name: "multiple conditions all true",
 			resource: newTestResource(
-				withConditions([]string{"true", "1 == 1"}),
+				withIncludeWhenExpressions([]string{"true", "1 == 1"}),
 			),
 			want: true,
 		},
 		{
 			name: "multiple conditions one false",
 			resource: newTestResource(
-				withConditions([]string{"true", "false"}),
+				withIncludeWhenExpressions([]string{"true", "false"}),
 			),
 			want:     false,
 			wantSkip: true,
@@ -2607,14 +2613,13 @@ func Test_containsAllElements(t *testing.T) {
 }
 
 type mockResource struct {
-	gvr              schema.GroupVersionResource
-	variables        []*variable.ResourceField
-	dependencies     []string
-	readyExpressions []string
-	conditions       []string
-	topLevelFields   []string
-	namespaced       bool
-	obj              *unstructured.Unstructured
+	gvr                    schema.GroupVersionResource
+	variables              []*variable.ResourceField
+	dependencies           []string
+	readyExpressions       []string
+	includeWhenExpressions []string
+	namespaced             bool
+	obj                    *unstructured.Unstructured
 }
 
 func newMockResource() *mockResource {
@@ -2642,7 +2647,7 @@ func (m *mockResource) GetReadyWhenExpressions() []string {
 }
 
 func (m *mockResource) GetIncludeWhenExpressions() []string {
-	return m.conditions
+	return m.includeWhenExpressions
 }
 
 func (m *mockResource) IsNamespaced() bool {
@@ -2683,15 +2688,9 @@ func withReadyExpressions(exprs []string) mockResourceOption {
 	}
 }
 
-func withConditions(conditions []string) mockResourceOption {
+func withIncludeWhenExpressions(exprs []string) mockResourceOption {
 	return func(m *mockResource) {
-		m.conditions = conditions
-	}
-}
-
-func withTopLevelFields(fields []string) mockResourceOption {
-	return func(m *mockResource) {
-		m.topLevelFields = fields
+		m.includeWhenExpressions = exprs
 	}
 }
 

@@ -262,3 +262,10 @@ deploy-kind: ko
 .PHONY: ko-apply
 ko-apply: ko
 	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+
+## CLI
+.PHONY: cli
+cli: 
+	go build -o bin/kro cmd/cli/main.go
+	sudo mv bin/kro /usr/local/bin
+	@echo "CLI built successfully"

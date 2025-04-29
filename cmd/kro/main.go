@@ -15,22 +15,52 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/kro-run/kro/cmd/kro/commands"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/util/homedir"
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "kro",
-	Short: "kro is a CLI for https://kro.run",
-}
-
 func main() {
+	rootCmd := NewRootCommand()
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func init() {
-	// Add subcommands and configure global flags here
+type CommandOptions struct {
+	KubeConfigPath string
+	Context        string
+	Verbose        bool
+}
+
+var cmd = &cobra.Command{
+	Use:   "kro",
+	Short: "kro- Kube Resource Orchestrator CLI",
+	Long: `kro CLI helps developers and administrators manage 
+ResourceGraphDefinitions (RGDs) and their instances in Kubernetes cluster.`,
+	SilenceErrors: true,
+	SilenceUsage:  true,
+}
+
+var opts = &CommandOptions{}
+
+func NewRootCommand() *cobra.Command {
+
+	if home := homedir.HomeDir(); home != "" {
+		opts.KubeConfigPath = filepath.Join(home, ".kube", "config")
+	}
+
+	// Global flags
+	cmd.PersistentFlags().StringVar(&opts.KubeConfigPath, "kubeconfig", opts.KubeConfigPath, "Path to kubeconfig file")
+	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
+	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
+
+	// TODO: Command groups
+	commands.AddValidateCommands(cmd)
+	return cmd
 }

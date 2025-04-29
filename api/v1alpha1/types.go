@@ -78,8 +78,7 @@ type Schema struct {
 	Status runtime.RawExtension `json:"status,omitempty"`
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.
-	// Not implemented yet.
-	Validation []string `json:"validation,omitempty"`
+	Validation []Validation `json:"validation,omitempty"`
 }
 
 type Validation struct {

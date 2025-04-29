@@ -534,6 +534,16 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}
+
+	// Add the validating admission policies defined in the instance spec.
+	instanceSchema.XValidations = make(extv1.ValidationRules, len(rgSchema.Validation))
+	for idx, validation := range rgSchema.Validation {
+		instanceSchema.XValidations[idx] = extv1.ValidationRule{
+			Message: validation.Message,
+			Rule:    validation.Expression,
+		}
+	}
+
 	return instanceSchema, nil
 }
 
@@ -604,7 +614,7 @@ func buildStatusSchema(
 // validateCELExpressionContext validates the given CEL expression in the context
 // of the resources defined in the resource graph definition.
 func validateCELExpressionContext(env *cel.Env, expression string, resources []string) error {
-	inspector := ast.NewInspectorWithEnv(env, resources, nil)
+	inspector := ast.NewInspectorWithEnv(env, resources)
 
 	// The CEL expression is valid if it refers to the resources defined in the
 	// resource graph definition.
@@ -656,7 +666,7 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 // is static or not.
 func extractDependencies(env *cel.Env, expression string, resourceNames []string) ([]string, bool, error) {
 	// We also want to allow users to refer to the instance spec in their expressions.
-	inspector := ast.NewInspectorWithEnv(env, resourceNames, nil)
+	inspector := ast.NewInspectorWithEnv(env, resourceNames)
 
 	// The CEL expression is valid if it refers to the resources defined in the
 	// resource graph definition.

@@ -517,7 +517,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 }
 
 func Test_InvalidExpression(t *testing.T) {
-	_ = NewInspectorWithEnv(nil, []string{}, []string{})
+	_ = NewInspectorWithEnv(nil, []string{})
 
 	inspector, err := DefaultInspector([]string{}, []string{})
 	if err != nil {

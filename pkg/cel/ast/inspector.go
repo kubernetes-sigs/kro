@@ -100,6 +100,11 @@ type Inspector struct {
 	loopVars map[string]struct{}
 }
 
+// knownFunctions contains the list of all CEL functions that are supported
+var knownFunctions = []string{
+	"random.seededString",
+}
+
 // DefaultInspector creates a new Inspector instance with the given resources and functions.
 //
 // TODO(a-hilaly): unify CEL environment creation with the rest of the codebase.
@@ -132,16 +137,15 @@ func DefaultInspector(resources []string, functions []string) (*Inspector, error
 	}, nil
 }
 
-// NewInspectorWithEnv creates a new Inspector instance with the given resources and functions
-// using the provided CEL environment.
-func NewInspectorWithEnv(env *cel.Env, resources []string, functions []string) *Inspector {
+// NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.
+func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	resourceMap := make(map[string]struct{})
 	for _, resource := range resources {
 		resourceMap[resource] = struct{}{}
 	}
 
 	functionMap := make(map[string]struct{})
-	for _, function := range functions {
+	for _, function := range knownFunctions {
 		functionMap[function] = struct{}{}
 	}
 
@@ -208,6 +212,25 @@ func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) Expr
 		inspection.FunctionCalls = append(inspection.FunctionCalls, argInspection.FunctionCalls...)
 		inspection.UnknownResources = append(inspection.UnknownResources, argInspection.UnknownResources...)
 		inspection.UnknownFunctions = append(inspection.UnknownFunctions, argInspection.UnknownFunctions...)
+	}
+
+	// Handle namespaced function calls (e.g., random.seededString)
+	if target := call.Target; target != nil {
+		if ident, ok := target.ExprKind.(*exprpb.Expr_IdentExpr); ok {
+			fullName := ident.IdentExpr.Name + "." + call.Function
+			if _, ok := a.functions[fullName]; ok {
+				// This is a known namespaced function, record the call
+				args := make([]string, 0, len(call.Args))
+				for _, arg := range call.Args {
+					args = append(args, a.exprToString(arg))
+				}
+				inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
+					Name:      fullName,
+					Arguments: args,
+				})
+				return inspection
+			}
+		}
 	}
 
 	// Handle the current function - only if it's not part of a chain
@@ -534,6 +557,9 @@ func isInternalFunction(name string) bool {
 		"all":        true,
 		"exists":     true,
 		"exists_one": true,
+
+		// Custom Functions
+		"random.seededString": true,
 	}
 	return internalFunctions[name]
 }

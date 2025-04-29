@@ -57,8 +57,12 @@ var _ = Describe("Conditions", func() {
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
 				map[string]interface{}{
-					"name":                   "string",
-					"deploymentAenabled":     "boolean",
+					"name": "string",
+
+					"deploymentA": map[string]interface{}{
+						"name":    "string",
+						"enabled": "boolean",
+					},
 					"deploymentBenabled":     "boolean",
 					"serviceAccountAenabled": "boolean",
 					"serviceAccountBenabled": "boolean",
@@ -71,7 +75,7 @@ var _ = Describe("Conditions", func() {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${schema.spec.name}-a",
+					"name": "${schema.spec.deploymentA.name}",
 				},
 				"spec": map[string]interface{}{
 					"replicas": 1,
@@ -101,7 +105,7 @@ var _ = Describe("Conditions", func() {
 						},
 					},
 				},
-			}, nil, []string{"${schema.spec.deploymentAenabled}"}),
+			}, nil, []string{"${schema.spec.deploymentA.enabled}"}),
 			// Depends on serviceAccountA
 			generator.WithResource("deploymentB", map[string]interface{}{
 				"apiVersion": "apps/v1",
@@ -251,8 +255,10 @@ var _ = Describe("Conditions", func() {
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
-					"name":                   name,
-					"deploymentAenabled":     false,
+					"name": name,
+					"deploymentA": map[string]interface{}{
+						"enabled": false,
+					},
 					"deploymentBenabled":     true,
 					"serviceAccountAenabled": true,
 					"serviceBenabled":        true,

@@ -73,6 +73,7 @@ func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind,
 	cr.SetName(fmt.Sprintf("%s-sample", strings.ToLower(gvk.Kind)))
 	cr.SetNamespace("default")
 	cr.SetResourceVersion(fmt.Sprintf("%d", e.rand.Intn(1000)))
+	cr.SetUID("dummy-uid")
 	return cr, nil
 }
 

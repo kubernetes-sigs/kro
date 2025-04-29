@@ -236,7 +236,7 @@ func (in *Schema) DeepCopyInto(out *Schema) {
 	in.Status.DeepCopyInto(&out.Status)
 	if in.Validation != nil {
 		in, out := &in.Validation, &out.Validation
-		*out = make([]string, len(*in))
+		*out = make([]Validation, len(*in))
 		copy(*out, *in)
 	}
 }

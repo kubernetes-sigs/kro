@@ -59,6 +59,9 @@ func NewResourceGraphDefinitionRuntime(
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
 	for id, resource := range resources {
+		if yes, _ := r.WantToCreateResource(id); !yes {
+			continue
+		}
 		// Process the resource variables.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
@@ -427,6 +430,10 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
 // evaluateResourceExpressions processes all expressions associated with a
 // specific resource.
 func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
+	yes, _ := rt.WantToCreateResource(resource)
+	if !yes {
+		return nil
+	}
 	exprValues := make(map[string]interface{})
 	for _, v := range rt.expressionsCache {
 		if v.Resolved {
@@ -527,8 +534,8 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		return false, nil
 	}
 
-	conditions := rt.resources[resourceID].GetIncludeWhenExpressions()
-	if len(conditions) == 0 {
+	includeWhenExpressions := rt.resources[resourceID].GetIncludeWhenExpressions()
+	if len(includeWhenExpressions) == 0 {
 		return true, nil
 	}
 
@@ -543,15 +550,15 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		"schema": rt.instance.Unstructured().Object,
 	}
 
-	for _, condition := range conditions {
+	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := evaluateExpression(env, context, condition)
+		value, err := evaluateExpression(env, context, includeWhenExpression)
 		if err != nil {
 			return false, err
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !value.(bool) {
-			return false, fmt.Errorf("skipping resource creation due to condition %s", condition)
+			return false, fmt.Errorf("skipping resource creation due to condition %s", includeWhenExpression)
 		}
 	}
 	return true, nil

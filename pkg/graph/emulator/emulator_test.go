@@ -426,6 +426,36 @@ func TestGenerateDummyCR(t *testing.T) {
 				assert.LessOrEqual(t, len(items), 20)
 			},
 		},
+		{
+			name: "schema with any possible values",
+			gvk: schema.GroupVersionKind{
+				Group:   "kro.run",
+				Version: "v1alpha1",
+				Kind:    "EnumTest",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Properties: map[string]spec.Schema{
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								Properties: map[string]spec.Schema{
+									"random": {
+										// this could be anything because its schema is undefined
+										SchemaProps: spec.SchemaProps{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			validateOutput: func(t *testing.T, obj map[string]interface{}) {
+				spec, ok := obj["spec"].(map[string]interface{})
+				require.True(t, ok, "spec should be an object")
+				_, ok = spec["random"]
+				require.True(t, ok, "random should exist")
+			},
+		},
 	}
 
 	for _, tt := range tests {

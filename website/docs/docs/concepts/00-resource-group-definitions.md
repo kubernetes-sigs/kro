@@ -94,6 +94,11 @@ schema:
     # Types are inferred from these CEL expressions
     availableReplicas: ${deployment.status.availableReplicas}
     conditions: ${deployment.status.conditions}
+
+  validation:
+    # Validating admission policies added to the new API type's CRD
+    - expression: "${ self.image == 'nginx' || !self.ingress.enabled }"
+      message: "Only nginx based applications can have ingress enabled"
 ```
 
 **kro** follows a different approach for defining your API schema and shapes. It

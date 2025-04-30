@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package core_test
 
@@ -56,8 +57,12 @@ var _ = Describe("Conditions", func() {
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
 				map[string]interface{}{
-					"name":                   "string",
-					"deploymentAenabled":     "boolean",
+					"name": "string",
+
+					"deploymentA": map[string]interface{}{
+						"name":    "string",
+						"enabled": "boolean",
+					},
 					"deploymentBenabled":     "boolean",
 					"serviceAccountAenabled": "boolean",
 					"serviceAccountBenabled": "boolean",
@@ -70,7 +75,7 @@ var _ = Describe("Conditions", func() {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${schema.spec.name}-a",
+					"name": "${schema.spec.deploymentA.name}",
 				},
 				"spec": map[string]interface{}{
 					"replicas": 1,
@@ -100,7 +105,7 @@ var _ = Describe("Conditions", func() {
 						},
 					},
 				},
-			}, nil, []string{"${schema.spec.deploymentAenabled}"}),
+			}, nil, []string{"${schema.spec.deploymentA.enabled}"}),
 			// Depends on serviceAccountA
 			generator.WithResource("deploymentB", map[string]interface{}{
 				"apiVersion": "apps/v1",
@@ -250,8 +255,10 @@ var _ = Describe("Conditions", func() {
 					"namespace": namespace,
 				},
 				"spec": map[string]interface{}{
-					"name":                   name,
-					"deploymentAenabled":     false,
+					"name": name,
+					"deploymentA": map[string]interface{}{
+						"enabled": false,
+					},
 					"deploymentBenabled":     true,
 					"serviceAccountAenabled": true,
 					"serviceBenabled":        true,

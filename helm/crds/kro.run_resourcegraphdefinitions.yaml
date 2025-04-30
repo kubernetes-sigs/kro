@@ -139,9 +139,13 @@ spec:
                     description: |-
                       Validation is a list of validation rules that are applied to the
                       resourcegraphdefinition.
-                      Not implemented yet.
                     items:
-                      type: string
+                      properties:
+                        expression:
+                          type: string
+                        message:
+                          type: string
+                      type: object
                     type: array
                 required:
                 - apiVersion

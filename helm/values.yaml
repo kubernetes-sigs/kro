@@ -110,8 +110,8 @@ config:
   resourceGraphDefinitionConcurrentReconciles: 1
   # The number of dynamic controller reconciles to run in parallel
   dynamicControllerConcurrentReconciles: 1
-  # The interval at which the controller will re list resources even with no changes, in hours
-  dynamicControllerDefaultResyncPeriod: 10
+  # The interval at which the controller will re list resources even with no changes, in seconds
+  dynamicControllerDefaultResyncPeriod: 36000
   # The maximum number of retries for an item in the queue will be retried before being dropped
   dynamicControllerDefaultQueueMaxRetries: 20
   # The maximum duration to wait for the controller to gracefully shutdown, in seconds

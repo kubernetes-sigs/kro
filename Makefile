@@ -80,10 +80,10 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN) object paths="./..."
 
 tt:
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./pkg/controller/resourcegraphdefinition"
+	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -262,3 +262,10 @@ deploy-kind: ko
 .PHONY: ko-apply
 ko-apply: ko
 	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+
+## CLI
+.PHONY: cli
+cli: 
+	go build -o bin/kro cmd/cli/main.go
+	sudo mv bin/kro /usr/local/bin
+	@echo "CLI built successfully"

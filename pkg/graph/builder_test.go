@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package graph
 
@@ -973,6 +974,29 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 					"cluster3",
 					"monitor",
 				}, g.TopologicalOrder)
+			},
+		},
+		{
+			name: "check validation expression",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithValidation("rule", "message"),
+			},
+			validateDeps: func(t *testing.T, g *Graph) {
+				require.Len(t, g.Instance.crd.Spec.Versions, 1)
+				schema := g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+				require.Contains(t, schema.Properties, "spec")
+				spec := schema.Properties["spec"]
+
+				require.Len(t, spec.XValidations, 1)
+				assert.Equal(t, "rule", spec.XValidations[0].Rule)
+				assert.Equal(t, "message", spec.XValidations[0].Message)
 			},
 		},
 	}

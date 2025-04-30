@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package runtime
 
@@ -58,6 +59,9 @@ func NewResourceGraphDefinitionRuntime(
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
 	for id, resource := range resources {
+		if yes, _ := r.WantToCreateResource(id); !yes {
+			continue
+		}
 		// Process the resource variables.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
@@ -426,6 +430,10 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
 // evaluateResourceExpressions processes all expressions associated with a
 // specific resource.
 func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
+	yes, _ := rt.WantToCreateResource(resource)
+	if !yes {
+		return nil
+	}
 	exprValues := make(map[string]interface{})
 	for _, v := range rt.expressionsCache {
 		if v.Resolved {
@@ -526,8 +534,8 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		return false, nil
 	}
 
-	conditions := rt.resources[resourceID].GetIncludeWhenExpressions()
-	if len(conditions) == 0 {
+	includeWhenExpressions := rt.resources[resourceID].GetIncludeWhenExpressions()
+	if len(includeWhenExpressions) == 0 {
 		return true, nil
 	}
 
@@ -542,15 +550,15 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		"schema": rt.instance.Unstructured().Object,
 	}
 
-	for _, condition := range conditions {
+	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := evaluateExpression(env, context, condition)
+		value, err := evaluateExpression(env, context, includeWhenExpression)
 		if err != nil {
 			return false, err
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !value.(bool) {
-			return false, fmt.Errorf("skipping resource creation due to condition %s", condition)
+			return false, fmt.Errorf("skipping resource creation due to condition %s", includeWhenExpression)
 		}
 	}
 	return true, nil

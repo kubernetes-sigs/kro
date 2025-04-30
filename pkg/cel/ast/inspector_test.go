@@ -1,15 +1,17 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package ast
 
 import (
@@ -160,8 +162,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 			name:      "complex expressions",
 			resources: []string{"fargateProfile", "eksCluster"},
 			functions: []string{"contains", "count"},
-			expression: `contains(fargateProfile.spec.subnets, "subnet-123") && 
-                count(fargateProfile.spec.selectors) <= 5 && 
+			expression: `contains(fargateProfile.spec.subnets, "subnet-123") &&
+                count(fargateProfile.spec.selectors) <= 5 &&
                 eksCluster.status.state == "ACTIVE"`,
 			wantResources: []ResourceDependency{
 				{ID: "fargateProfile", Path: "fargateProfile.spec.subnets"},
@@ -177,9 +179,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			name:      "complex security group validation",
 			resources: []string{"securityGroup", "vpc"},
 			functions: []string{"concat", "contains", "map"},
-			expression: `securityGroup.spec.vpcID == vpc.status.vpcID && 
-                securityGroup.spec.rules.all(r, 
-                    contains(map(r.ipRanges, range, concat(range.cidr, "/", range.description)), 
+			expression: `securityGroup.spec.vpcID == vpc.status.vpcID &&
+                securityGroup.spec.rules.all(r,
+                    contains(map(r.ipRanges, range, concat(range.cidr, "/", range.description)),
                         "0.0.0.0/0"))`,
 			wantResources: []ResourceDependency{
 				{ID: "securityGroup", Path: "securityGroup.spec.vpcID"},
@@ -197,12 +199,12 @@ func TestInspector_InspectionResults(t *testing.T) {
 			name:      "eks cluster validation",
 			resources: []string{"eksCluster", "nodeGroups", "iamRole", "vpc"},
 			functions: []string{"filter", "contains", "timeAgo"}, // duration and size are a built-in function
-			expression: `eksCluster.status.state == "ACTIVE" && 
-				duration(timeAgo(eksCluster.status.createdAt)) > duration("24h") && 
+			expression: `eksCluster.status.state == "ACTIVE" &&
+				duration(timeAgo(eksCluster.status.createdAt)) > duration("24h") &&
 				size(nodeGroups.filter(ng,
 					ng.status.state == "ACTIVE" &&
-					contains(ng.labels, "environment"))) >= 1 && 
-				contains(map(iamRole.policies, p, p.actions), "eks:*") && 
+					contains(ng.labels, "environment"))) >= 1 &&
+				contains(map(iamRole.policies, p, p.actions), "eks:*") &&
 				size(vpc.subnets.filter(s, s.isPrivate)) >= 2`,
 			wantResources: []ResourceDependency{
 				{ID: "eksCluster", Path: "eksCluster.status.state"},
@@ -224,9 +226,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			name:      "validate order and inventory",
 			resources: []string{"order", "product", "customer", "inventory"},
 			functions: []string{"validateAddress", "calculateTax"},
-			expression: `order.total > 0 && 
+			expression: `order.total > 0 &&
 				order.items.all(item,
-					product.id == item.productId && 
+					product.id == item.productId &&
 					inventory.stock[item.productId] >= item.quantity
 				) &&
 				validateAddress(customer.shippingAddress) &&
@@ -394,7 +396,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			// note that `i` is not declared as a resource, but it's not an unknown resource
 			// either, it's a loop variable.
 			expression: `instances.filter(i,
-                i.state == 'running' && 
+                i.state == 'running' &&
                 i.type == 't2.micro'
             )`,
 			wantResources: []ResourceDependency{
@@ -407,7 +409,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 		{
 			name:      "ambiguous i usage - both resource and loop var",
 			resources: []string{"instances", "i"}, // 'i' is a declared resource
-			expression: `i.status == "ready" && 
+			expression: `i.status == "ready" &&
 				instances.filter(i,   // reusing 'i' in filter
 					i.state == 'running'
 				)`,
@@ -515,7 +517,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 }
 
 func Test_InvalidExpression(t *testing.T) {
-	_ = NewInspectorWithEnv(nil, []string{}, []string{})
+	_ = NewInspectorWithEnv(nil, []string{})
 
 	inspector, err := DefaultInspector([]string{}, []string{})
 	if err != nil {

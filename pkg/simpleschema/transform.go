@@ -73,7 +73,7 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 }
 func (tf *transformer) transformField(
 	key string, value interface{},
-	// parentSchema is used to add the key to the required list
+// parentSchema is used to add the key to the required list
 	parentSchema *extv1.JSONSchemaProps,
 ) (*extv1.JSONSchemaProps, error) {
 	switch v := value.(type) {
@@ -92,7 +92,7 @@ func (tf *transformer) transformField(
 func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
 	fieldType, markers, err := parseFieldSchema(fieldValue)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse field schema for %s: %v", key, err)
+		return nil, fmt.Errorf("failed to parse field schema for %s: ", key, err)
 	}
 
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{}

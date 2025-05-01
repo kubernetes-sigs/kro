@@ -57,12 +57,11 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	)
 
 	secret := newTestResource(
-		withIncludeWhenExpressions([]string{"schema.spec.secret.include == true"}),
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
 				// this shound not be evaluated since the
 				// resource should not be included
-				"name": "${schema.spec.secret.name}",
+				"name": "${schema.spec.appName}",
 			},
 			"stringData": map[string]interface{}{
 				"DB_URL": "${dburl_expr}",
@@ -72,7 +71,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 			{
 				FieldDescriptor: variable.FieldDescriptor{
 					Path:                 "metadata.name",
-					Expressions:          []string{"schema.spec.secret.name"},
+					Expressions:          []string{"schema.spec.appName"},
 					StandaloneExpression: true,
 				},
 				Kind: variable.ResourceVariableKindStatic,
@@ -621,6 +620,7 @@ func Test_GetResource(t *testing.T) {
 				resources:         tt.resources,
 				resolvedResources: tt.resolvedResources,
 				runtimeVariables:  tt.runtimeVariables,
+				includedResources: tt.resources,
 			}
 
 			gotObj, gotState := rt.GetResource(tt.resourceName)
@@ -782,6 +782,7 @@ func Test_Synchronize(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
 				instance:          tt.instance,
 				resources:         tt.resources,
+				includedResources: tt.resources,
 				resolvedResources: tt.resolvedResources,
 				expressionsCache:  tt.expressionsCache,
 				runtimeVariables:  tt.runtimeVariables,
@@ -1010,9 +1011,10 @@ func Test_propagateResourceVariables(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
-				resources:        tt.resources,
-				runtimeVariables: tt.runtimeVariables,
-				expressionsCache: tt.expressionsCache,
+				resources:         tt.resources,
+				includedResources: tt.resources,
+				runtimeVariables:  tt.runtimeVariables,
+				expressionsCache:  tt.expressionsCache,
 			}
 
 			err := rt.propagateResourceVariables()
@@ -1214,8 +1216,9 @@ func Test_canProcessResource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
-				resources:        tt.resources,
-				runtimeVariables: tt.runtimeVariables,
+				resources:         tt.resources,
+				runtimeVariables:  tt.runtimeVariables,
+				includedResources: tt.resources,
 			}
 
 			got := rt.canProcessResource(tt.resource)
@@ -2461,6 +2464,7 @@ func Test_areDependenciesIgnored(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := &ResourceGraphDefinitionRuntime{
 				resources:                    map[string]Resource{"test": tt.resource},
+				includedResources:            map[string]Resource{"test": tt.resource},
 				ignoredByConditionsResources: tt.ignoredDeps,
 			}
 

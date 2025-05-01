@@ -40,8 +40,8 @@ func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runt
 	// we need to copy the resources to the runtime resources, mainly focusing
 	// on the variables and dependencies.
 	resources := make(map[string]runtime.Resource)
-	for name, resource := range rgd.Resources {
-		resources[name] = resource.DeepCopy()
+	for id, resource := range rgd.Resources {
+		resources[id] = resource.DeepCopy()
 	}
 
 	instance := rgd.Instance.DeepCopy()

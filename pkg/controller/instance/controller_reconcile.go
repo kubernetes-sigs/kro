@@ -153,17 +153,8 @@ func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance 
 
 // reconcileResource handles the reconciliation of a single resource within the instance
 func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resourceID string) error {
-	log := igr.log.WithValues("resourceID", resourceID)
 	resourceState := &ResourceState{State: ResourceStateInProgress}
 	igr.state.ResourceStates[resourceID] = resourceState
-
-	// Check if resource should be created
-	if want, err := igr.runtime.WantToCreateResource(resourceID); err != nil || !want {
-		log.V(1).Info("Skipping resource creation", "reason", err)
-		resourceState.State = ResourceStateSkipped
-		igr.runtime.IgnoreResource(resourceID)
-		return nil
-	}
 
 	// Get and validate resource state
 	resource, state := igr.runtime.GetResource(resourceID)

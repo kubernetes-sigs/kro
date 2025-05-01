@@ -56,12 +56,21 @@ func NewResourceGraphDefinitionRuntime(
 		expressionsCache:             make(map[string]*expressionEvaluationState),
 		ignoredByConditionsResources: make(map[string]bool),
 	}
-	// make sure to copy the variables and the dependencies, to avoid
-	// modifying the original resource.
-	for id, resource := range resources {
+
+	includedResourcesOrder := []string{}
+	r.includedResources = map[string]Resource{}
+	for _, id := range topologicalOrder {
 		if yes, _ := r.WantToCreateResource(id); !yes {
+			r.IgnoreResource(id)
 			continue
 		}
+		r.includedResources[id] = resources[id]
+		includedResourcesOrder = append(includedResourcesOrder, id)
+	}
+	r.topologicalOrder = includedResourcesOrder
+	// make sure to copy the variables and the dependencies, to avoid
+	// modifying the original resource.
+	for id, resource := range r.includedResources {
 		// Process the resource variables.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
@@ -139,6 +148,11 @@ type ResourceGraphDefinitionRuntime struct {
 	// unique identifier. These resources represent the nodes in the
 	// dependency graph.
 	resources map[string]Resource
+
+	// includedResources is a map of the resources that are included
+	// in the instance (includeWhen evaluates to true) or have
+	// no includeWhen expression at all.
+	includedResources map[string]Resource
 
 	// resolvedResources stores the latest state of resolved resources.
 	// When a resource is successfully created or updated in the cluster,
@@ -234,7 +248,7 @@ func (rt *ResourceGraphDefinitionRuntime) SetInstance(obj *unstructured.Unstruct
 func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 	// if everything is resolved, we're done.
 	// TODO(a-hilaly): Add readiness check here.
-	if rt.allExpressionsAreResolved() && len(rt.resolvedResources) == len(rt.resources) {
+	if rt.allExpressionsAreResolved() && len(rt.resolvedResources) == len(rt.includedResources) {
 		return false, nil
 	}
 
@@ -262,7 +276,7 @@ func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 // propagateResourceVariables iterates over all resources and evaluates their
 // variables if all dependencies are resolved.
 func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
-	for id := range rt.resources {
+	for id := range rt.includedResources {
 		if rt.canProcessResource(id) {
 			// evaluate the resource variables
 			err := rt.evaluateResourceExpressions(id)
@@ -279,7 +293,7 @@ func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
 func (rt *ResourceGraphDefinitionRuntime) canProcessResource(resource string) bool {
 	// Check if all dependencies are resolved. a.k.a all variables have been
 	// evaluated.
-	for _, dep := range rt.resources[resource].GetDependencies() {
+	for _, dep := range rt.includedResources[resource].GetDependencies() {
 		if !rt.resourceVariablesResolved(dep) {
 			return false
 		}
@@ -430,10 +444,6 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
 // evaluateResourceExpressions processes all expressions associated with a
 // specific resource.
 func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
-	yes, _ := rt.WantToCreateResource(resource)
-	if !yes {
-		return nil
-	}
 	exprValues := make(map[string]interface{})
 	for _, v := range rt.expressionsCache {
 		if v.Resolved {
@@ -556,7 +566,6 @@ func (rt *ResourceGraphDefinitionRuntime) WantToCreateResource(resourceID string
 		if err != nil {
 			return false, err
 		}
-		// returning a reason here to point out which expression is not ready yet
 		if !value.(bool) {
 			return false, fmt.Errorf("skipping resource creation due to condition %s", includeWhenExpression)
 		}

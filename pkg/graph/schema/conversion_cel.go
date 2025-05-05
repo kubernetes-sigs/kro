@@ -18,8 +18,9 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/common/types/ref"
-	krocel "github.com/kro-run/kro/pkg/cel"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	krocel "github.com/kro-run/kro/pkg/cel"
 )
 
 // inferSchemaFromCELValue infers a JSONSchemaProps from a CEL value.
@@ -56,17 +57,28 @@ func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProp
 		return &extv1.JSONSchemaProps{
 			Type: "string",
 		}, nil
+	case interface{}:
+		return inferAnyTypeSchema(), nil
 	case []interface{}:
 		return inferArraySchema(goRuntimeVal)
 	case map[string]interface{}:
 		return inferObjectSchema(goRuntimeVal)
-	case interface{}:
-		// this effectively means we don't have a clear type
-		// but we can still return a schema that matches any type
-		return &extv1.JSONSchemaProps{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", goRuntimeVal)
 	}
+}
+
+func inferAnyTypeSchema() *extv1.JSONSchemaProps {
+	types := []string{"boolean", "integer", "number", "string", "array", "object", "null"}
+	schema := &extv1.JSONSchemaProps{
+		OneOf: make([]extv1.JSONSchemaProps, 0, len(types)),
+	}
+	for _, typ := range types {
+		schema.OneOf = append(schema.OneOf, extv1.JSONSchemaProps{
+			Type: typ,
+		})
+	}
+	return schema
 }
 
 func inferArraySchema(arr []interface{}) (*extv1.JSONSchemaProps, error) {

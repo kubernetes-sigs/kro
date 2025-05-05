@@ -108,10 +108,7 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 			return e.generateValue(&schema.AnyOf[e.rand.Intn(len(schema.AnyOf))])
 		}
 
-		// schema type is empty and has no properties, in this case anything could be generated!
-		// so return a random schema type. This emulation is best effort and does not cover
-		// cases such as an object in another object
-		return e.generateRandom()
+		return nil, fmt.Errorf("schema type is empty and has no properties")
 	}
 
 	if len(schema.Type) != 1 {
@@ -136,52 +133,6 @@ func (e *Emulator) generateValue(schema *spec.Schema) (interface{}, error) {
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %s", schema.Type)
-	}
-}
-
-// generateRandom generates a random value without a schema..
-func (e *Emulator) generateRandom() (interface{}, error) {
-	possible := []string{"string", "integer", "number", "boolean", "null", "object", "array"}
-	selected := possible[e.rand.Intn(len(possible))]
-	switch selected {
-	case "object":
-		// Generate a random object with a few random properties
-		randomObject := &spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Properties: make(map[string]spec.Schema),
-			},
-		}
-		// Generate 1-3 properties, arbitrary selection
-		for i := 0; i < e.rand.Intn(3)+1; i++ {
-			randomObject.Properties[fmt.Sprintf("key%d", i+1)] = spec.Schema{SchemaProps: spec.SchemaProps{
-				// Exclude "object" and "array" to avoid deep recursion, technically possible but not needed
-				// for a simple emulation
-				Type: spec.StringOrArray{possible[e.rand.Intn(len(possible)-1)]},
-			}, VendorExtensible: spec.VendorExtensible{
-				Extensions: map[string]interface{}{"x-kubernetes-int-or-string": true},
-			}}
-		}
-		return e.generateObject(randomObject)
-	case "array":
-		return e.generateArray(&spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: spec.StringOrArray{"array"},
-				Items: &spec.SchemaOrArray{
-					Schema: &spec.Schema{SchemaProps: spec.SchemaProps{
-						// Exclude "object" and "array" to avoid deep recursion, technically possible but not needed
-						// for a simple emulation
-						Type: spec.StringOrArray{possible[e.rand.Intn(len(possible)-1)]}},
-					},
-				},
-			},
-		})
-	default:
-		return e.generateValue(&spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type:     spec.StringOrArray{selected},
-				Nullable: true,
-			},
-		})
 	}
 }
 

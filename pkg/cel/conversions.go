@@ -46,14 +46,7 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.MapType:
 		return v.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
 	case types.OptionalType:
-		opt := v.(*types.Optional)
-		if opt.HasValue() {
-			return GoNativeType(opt.GetValue())
-		}
-		// this looks weird, but it is the easiest way to get any generic value
-		// that conforms to interface
-		var i interface{}
-		return &i, nil
+		return v.Value(), nil
 	case types.NullType:
 		return nil, nil
 	default:

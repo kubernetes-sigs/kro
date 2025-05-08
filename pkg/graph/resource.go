@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package graph
 
@@ -27,12 +28,12 @@ import (
 // Resource represents a resource in a resource graph definition, it hholds
 // information about the resource, its schema, and its variables.
 //
-// This object can only be created by the GraphBuilder and it should
-// not be created manually. Also this object isn't designed to be
+// This object can only be created by the GraphBuilder, and it should
+// not be created manually. Also, this object isn't designed to be
 // modified after creation.
 type Resource struct {
-	// id is the unique identifier of the resource. It's the name of the
-	// resource in the resource graph definition.
+	// `id` is the unique identifier of the resource.
+	// It's the name of the resource in the resource graph definition.
 	// An id is unique within a resource graph definition, and adheres to the naming
 	// conventions.
 	id string
@@ -72,6 +73,8 @@ type Resource struct {
 	// order reflects the original order in which the resources were specified,
 	// and lets us keep the client-specified ordering where the dependencies allow.
 	order int
+	// isExternalRef indicates if the resource should only be read and not created/updated
+	isExternalRef bool
 }
 
 // GetDependencies returns the dependencies of the resource.
@@ -113,7 +116,7 @@ func (r *Resource) GetOrder() int {
 	return r.order
 }
 
-// GetGroupVersionKind returns the GVK of the resource.
+// GetGroupVersionResource GetGroupVersionKind returns the GVK of the resource.
 func (r *Resource) GetGroupVersionResource() schema.GroupVersionResource {
 	return r.gvr
 }
@@ -158,6 +161,11 @@ func (r *Resource) IsNamespaced() bool {
 	return r.namespaced
 }
 
+// IsExternalRef returns whether the resource is an external reference
+func (r *Resource) IsExternalRef() bool {
+	return r.isExternalRef
+}
+
 // DeepCopy returns a deep copy of the resource.
 func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
@@ -171,5 +179,6 @@ func (r *Resource) DeepCopy() *Resource {
 		readyWhenExpressions:   slices.Clone(r.readyWhenExpressions),
 		includeWhenExpressions: slices.Clone(r.includeWhenExpressions),
 		namespaced:             r.namespaced,
+		isExternalRef:          r.isExternalRef,
 	}
 }

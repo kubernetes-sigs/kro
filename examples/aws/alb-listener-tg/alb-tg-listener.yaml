@@ -1,0 +1,95 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: elbv2.kro.run
+spec:
+  # CRD Schema
+  schema:
+    apiVersion: v1alpha1
+    kind: ELBStack
+    spec:
+      name: string
+      vpcID: string | required=true
+      subnetIDs: "[]string"
+      securityGroupIDs: "[]string"
+      weight1: integer | default=50 minimum=0 maximum=999
+      weight2: integer | default=50 minimum=0 maximum=999
+    status:
+      networkingInfo:
+        loadBalancerARN: ${loadBalancer.status.ackResourceMetadata.arn}
+        targetGroup1ARN: ${targetGroup1.status.ackResourceMetadata.arn}
+        targetGroup2ARN: ${targetGroup2.status.ackResourceMetadata.arn}
+        listenerARN: ${listener.status.ackResourceMetadata.arn}
+  # resources
+  resources:
+    - id: loadBalancer
+      template:
+        apiVersion: elbv2.services.k8s.aws/v1alpha1
+        kind: LoadBalancer
+        metadata:
+          name: ${schema.spec.name}-lb
+          namespace: kro-ack
+        spec:
+          name: ${schema.spec.name}-lb
+          ipAddressType: ipv4
+          scheme: internal
+          type: application
+          subnets: ${schema.spec.subnetIDs}
+          securityGroups: ${schema.spec.securityGroupIDs}
+    - id: targetGroup1
+      template:
+        apiVersion: elbv2.services.k8s.aws/v1alpha1
+        kind: TargetGroup
+        metadata:
+          name: ${schema.spec.name}-tg1
+          namespace: kro-ack
+        spec:
+          name: ${schema.spec.name}-tg1
+          healthCheckEnabled: true
+          healthCheckPath: /health
+          healthCheckPort: "traffic-port"
+          healthCheckProtocol: HTTP
+          healthCheckTimeoutSeconds: 5
+          healthyThresholdCount: 2
+          port: 80
+          protocol: HTTP
+          targetType: ip
+          vpcID: ${schema.spec.vpcID}
+    - id: targetGroup2
+      template:
+        apiVersion: elbv2.services.k8s.aws/v1alpha1
+        kind: TargetGroup
+        metadata:
+          name: ${schema.spec.name}-tg2
+          namespace: kro-ack
+        spec:
+          name: ${schema.spec.name}-tg2
+          healthCheckEnabled: true
+          healthCheckPath: /health
+          healthCheckPort: "traffic-port"
+          healthCheckProtocol: HTTP
+          healthCheckTimeoutSeconds: 5
+          healthyThresholdCount: 2
+          port: 80
+          protocol: HTTP
+          targetType: ip
+          vpcID: ${schema.spec.vpcID}
+    - id: listener
+      template:
+        apiVersion: elbv2.services.k8s.aws/v1alpha1
+        kind: Listener
+        metadata:
+          name: ${schema.spec.name}-listener
+          namespace: kro-ack
+        spec:
+          loadBalancerARN: ${loadBalancer.status.ackResourceMetadata.arn}
+          port: 80
+          protocol: HTTP
+          defaultActions:
+            - type: forward
+              forwardConfig:
+                targetGroups:
+                  - targetGroupARN: ${targetGroup1.status.ackResourceMetadata.arn}
+                    weight: ${schema.spec.weight1}
+                  - targetGroupARN: ${targetGroup2.status.ackResourceMetadata.arn}
+                    weight: ${schema.spec.weight2}

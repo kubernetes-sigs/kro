@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package resourcegraphdefinition
 
@@ -20,10 +21,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
-
 	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/metadata"
 )
@@ -143,8 +144,7 @@ func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
 // setManaged sets the resourcegraphdefinition as managed, by adding the
 // default finalizer if it doesn't exist.
 func (r *ResourceGraphDefinitionReconciler) setManaged(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	log, _ := logr.FromContext(ctx)
-	log.V(1).Info("setting resourcegraphdefinition as managed")
+	ctrl.LoggerFrom(ctx).V(1).Info("setting resourcegraphdefinition as managed")
 
 	// Skip if finalizer already exists
 	if metadata.HasResourceGraphDefinitionFinalizer(rgd) {
@@ -159,8 +159,7 @@ func (r *ResourceGraphDefinitionReconciler) setManaged(ctx context.Context, rgd 
 // setUnmanaged sets the resourcegraphdefinition as unmanaged, by removing the
 // default finalizer if it exists.
 func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	log, _ := logr.FromContext(ctx)
-	log.V(1).Info("setting resourcegraphdefinition as unmanaged")
+	ctrl.LoggerFrom(ctx).V(1).Info("setting resourcegraphdefinition as unmanaged")
 
 	// Skip if finalizer already removed
 	if !metadata.HasResourceGraphDefinitionFinalizer(rgd) {

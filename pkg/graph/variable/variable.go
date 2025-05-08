@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package variable
 
@@ -43,7 +44,7 @@ type FieldDescriptor struct {
 	StandaloneExpression bool
 }
 
-// ResourceVariable represents a variable in a resource. Variables are any
+// ResourceField ResourceVariable represents a variable in a resource. Variables are any
 // field in a resource (under resources[*].definition) that is not a constant
 // value a.k.a contains one or multiple expressions. For example
 //
@@ -55,10 +56,10 @@ type FieldDescriptor struct {
 // execution and their value is constant. Dynamic variables are resolved at
 // runtime and their value can change during the execution.
 //
-// ResourceVariables are an extension of CELField and they contain additional
+// ResourceVariables are an extension of CELField, and they contain additional
 // information about the variable kind.
 type ResourceField struct {
-	// CELField is the object that contains the expression, the path, and the
+	// CELField is the object that contains the expression, the path, and
 	// the expected type (OpenAPI schema).
 	FieldDescriptor
 	// ResourceVariableKind is the kind of the variable (static or dynamic).
@@ -81,13 +82,13 @@ func (rv *ResourceField) AddDependencies(dep ...string) {
 	}
 }
 
-// ResourceVariableKind represents the kind of a resource variable.
+// ResourceVariableKind represents the kind of resource variable.
 type ResourceVariableKind string
 
 const (
 	// ResourceVariableKindStatic represents a static variable. Static variables
 	// are resolved at the beginning of the execution and their value is constant.
-	// Static variables are easy to find, they always start with 'spec'. Refereing
+	// Static variables are easy to find, they always start with 'spec'. Referring
 	// to the instance spec.
 	//
 	// For example:

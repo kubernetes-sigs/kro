@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ELBStack
+metadata:
+  name: kro-ack-instance
+  namespace: kro-ack
+spec:
+  name: kro-ack-instance
+  vpcID: vpc-1234567890abcdef0    # Replace with your VPC ID
+  subnetIDs: ["subnet-1234567890abcdef0", "subnet-1234567890abcdef1"] # Replace with your Subnet IDs
+  securityGroupIDs: ["sg-1234567890abcdef0"]   # Replace with your Security Group IDs
+  weight1: 70    # Weight for Target Group 1
+  weight2: 30   # Weight for Target Group 2

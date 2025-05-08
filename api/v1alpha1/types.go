@@ -87,8 +87,7 @@ type Schema struct {
 	Status runtime.RawExtension `json:"status,omitempty"`
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.
-	// Not implemented yet.
-	Validation []string `json:"validation,omitempty"`
+	Validation []Validation `json:"validation,omitempty"`
 }
 
 type Validation struct {
@@ -96,11 +95,28 @@ type Validation struct {
 	Message    string `json:"message,omitempty"`
 }
 
+// ExternalRef is a reference to an external resource.
+// It allows the user to specify the Kind, Version, Name and Namespace of the resource
+// to be read and used in the Graph.
+type ExternalRef struct {
+	// +kubebuilder:validation:Required
+	APIVersion string `json:"apiVersion"`
+	// +kubebuilder:validation:Required
+	Kind string `json:"kind"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"
 type Resource struct {
 	// +kubebuilder:validation:Required
 	ID string `json:"id,omitempty"`
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
 	Template runtime.RawExtension `json:"template,omitempty"`
+	// +kubebuilder:validation:Optional
+	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
 	// +kubebuilder:validation:Optional
 	ReadyWhen []string `json:"readyWhen,omitempty"`
 	// +kubebuilder:validation:Optional

@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package runtime
 
@@ -61,9 +62,9 @@ type Interface interface {
 	// IsResourceReady returns true if the resource is ready, and false otherwise.
 	IsResourceReady(resourceID string) (bool, string, error)
 
-	// WantToCreateResource returns true if all the condition expressions return true
+	// ReadyToProcessResource returns true if all the condition expressions return true
 	// if not it will add itself to the ignored resources
-	WantToCreateResource(resourceID string) (bool, error)
+	ReadyToProcessResource(resourceID string) (bool, error)
 
 	// IgnoreResource ignores resource that has a condition expressison that evaluated
 	// to false
@@ -80,13 +81,13 @@ type Interface interface {
 //  1. The runtime package depends on how resources are defined in the graph
 //     package.
 //
-//  2. the graph package needs to instantiate the a runtime instance to during
+//  2. The graph package needs to instantiate a runtime instance during
 //     the reconciliation process.
 //
-//  3. the graph package needs to classify the variables and dependencies of
+//  3. The graph package needs to classify the variables and dependencies of
 //     a resource to build the graph. The runtime package needs to know about
 //     these variables and dependencies to resolve the resources.
-//     This utility is moved to the types package. (Thinking about moving it
+//     This utility is moved to the `types` package. (Thinking about moving it
 //     to a new package called "internal/typesystem/variables")
 type ResourceDescriptor interface {
 	// GetGroupVersionResource returns the k8s GVR for this resource. Note that
@@ -112,6 +113,10 @@ type ResourceDescriptor interface {
 	// IsNamespaced returns true if the resource is namespaced, and false if it's
 	// cluster-scoped.
 	IsNamespaced() bool
+
+	// IsExternalRef returns true if the resource is marked as an external reference
+	// This is used for external references
+	IsExternalRef() bool
 }
 
 // Resource extends `ResourceDescriptor` to include the actual resource data.

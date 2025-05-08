@@ -53,6 +53,13 @@
   margin-left: 10px;
 }
 
+@media (max-width: 768px) {
+  .button {
+    margin-top: 4px;
+    margin-bottom: 4px;
+  }
+}
+
 .button.button--primary {
   border: 2px solid var(--main-color);
 }

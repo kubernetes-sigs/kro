@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package runtime
 
@@ -36,15 +37,15 @@ const (
 
 	// ResourceStateWaitingOnReadiness indicates that the resource is waiting
 	// for its readiness conditions to be met. This typically occurs after the
-	// resource has been created or updated, but is not yet in a stable state
-	// according to its defined readiness criteria. e.g waiting for a Pod to
+	// resource has been created or updated, but is not yet in a stable state,
+	// according to its defined readiness criteria. E.g., waiting for a Pod to
 	// be running and ready, a PVC to be bound ...
 	ResourceStateWaitingOnReadiness ResourceState = "WaitingOnReadiness"
 
 	// ResourceStateIgnoredByConditions indicates that the resource is ignored
 	// by a condition that evaluated to false. This typically occurs before
 	// a resource is created or updated, and is decided by a variable defined
-	// in the instance spec. Eg. Deciding whether to create a Deployment or
+	// in the instance spec. E.g., Deciding whether to create a Deployment or
 	// just a simple pod based on the defined replica.
 	ResourceStateIgnoredByConditions ResourceState = "IgnoredByConditions"
 )
@@ -71,8 +72,8 @@ type expressionEvaluationState struct {
 	// dynamic. This affects when and how the expression is evaluated.
 	Kind variable.ResourceVariableKind
 
-	// Resolved indicates whether the expression has been successfully
-	// evaluated. Its set to true once the expression is evaluated without
+	// Resolved indicates whether the expression has been successfully evaluated.
+	// It's set to true once the expression is evaluated without
 	// errors and a value is obtained.
 	Resolved bool
 

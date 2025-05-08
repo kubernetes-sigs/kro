@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package metadata
 
@@ -26,7 +27,7 @@ var (
 	KRORGOwnerReferenceAPIVersion = v1alpha1.GroupVersion.String()
 )
 
-// stamped on the CRD and RGIs
+// NewResourceGraphDefinitionOwnerReference stamped on the CRD and RGIs
 func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,
@@ -37,7 +38,7 @@ func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1
 	}
 }
 
-// stamped on the RGI child resources
+// NewInstanceOwnerReference stamped on the RGI child resources
 func NewInstanceOwnerReference(gvk schema.GroupVersionKind, name string, uid types.UID) metav1.OwnerReference {
 	return metav1.OwnerReference{
 		Name:       name,

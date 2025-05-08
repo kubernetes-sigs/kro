@@ -1,6 +1,6 @@
 # Contributing Guidelines
 
-Thank you for your interest in contributing the project. Whether it's a bug report, new feature, correction, or additional documentation, we greatly value feedback and contributions from our community.
+Thank you for your interest in contributing to the project. Whether it's a bug report, new feature, correction, or additional documentation, we greatly value feedback and contributions from our community.
 
 Please read through this document before submitting any issues or pull requests to ensure we have all the necessary information to effectively respond to your bug report or contribution.
 
@@ -19,7 +19,7 @@ Please try to include detailed descriptions in issues. Details like these are in
 
 Note to keep things tidy and moving along, the maintainers may close issues that appear to be duplicates, are incomplete, or have no discussion for a period of time.
 
-If an issue is closed and you feel like it needs to be open, we are always open to discussion.
+If an issue is closed, and you feel like it needs to be open, we are always open to discussion.
 
 
 ## Contributing via Pull Requests
@@ -47,12 +47,12 @@ GitHub provides nice documentation on [forking a repository](https://help.github
 
 As with issues above, to keep things tidy and moving along, the maintainers may close PRs that appear to be duplicates, are incomplete and have no discussion for a period of time, or that don't follow the process in spirit.
 
-If a PR is closed and you feel like it needs to be open, we are always open to discussion.
+If a PR is closed, and you feel like it needs to be open, we are always open to discussion.
 
 
 ## Development setup
 
-Setup the [local enviroment](docs/developer-getting-started.md) to build and test the code locally.
+Setup the [local environment](docs/developer-getting-started.md) to build and test the code locally.
 
 ## Finding contributions to work on
 Looking at the existing issues is a great way to find something to work on. As the project uses the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
@@ -65,7 +65,7 @@ This project has adopted the [CNCF Code of Conduct](https://github.com/cncf/foun
 
 ## Security
 
-If you discover a potential security issue in this project we ask that you notify project maintainers via email at security@kro.run.  _Please do not create a public GitHub issue._
+If you discover a potential security issue in this project, we ask that you notify project maintainers via email at security@kro.run.  _Please do not create a public GitHub issue._
 
 ## Licensing
 

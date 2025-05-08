@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // Package dynamiccontroller provides a flexible and efficient solution for
 // managing multiple GroupVersionResources (GVRs) in a Kubernetes environment.
@@ -64,6 +65,7 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -427,8 +429,16 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	_, exists := dc.informers.Load(gvr)
 	if exists {
 		// Even thought the informer is already registered, we should still
-		// still update the handler, as it might have changed.
+		// update the handler, as it might have changed.
 		dc.handlers.Store(gvr, handler)
+		// trigger reconciliation of the corresponding gvr's
+		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
+		}
+		for _, obj := range objs.Items {
+			dc.enqueueObject(&obj, "update")
+		}
 		return nil
 	}
 
@@ -441,7 +451,6 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 		"",
 		nil,
 	)
-
 	informer := gvkInformer.ForResource(gvr).Informer()
 
 	// Set up event handlers

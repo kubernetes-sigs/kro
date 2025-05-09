@@ -70,3 +70,19 @@ func (c *Condition) GetStatus() metav1.ConditionStatus {
 	}
 	return c.Status
 }
+
+// DeepCopyInto copies the receiver, writing into out. Out must not be nil.
+func (c *Condition) DeepCopyInto(out *Condition) {
+	*out = *c
+	c.LastTransitionTime.DeepCopyInto(&out.LastTransitionTime)
+}
+
+// DeepCopy copies the receiver, creating a new Condition.
+func (c *Condition) DeepCopy() *Condition {
+	if c == nil {
+		return nil
+	}
+	out := new(Condition)
+	c.DeepCopyInto(out)
+	return out
+}

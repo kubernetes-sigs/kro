@@ -172,13 +172,13 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 }
 
 func newReconcilerReadyCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady, status, reason, "micro controller is ready")
+	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady, 0, status, reason, "micro controller is ready")
 }
 
 func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified, status, reason, "Directed Acyclic Graph is synced")
+	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified, 0, status, reason, "Directed Acyclic Graph is synced")
 }
 
 func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, status, reason, "Custom Resource Definition is synced")
+	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, 0, status, reason, "Custom Resource Definition is synced")
 }

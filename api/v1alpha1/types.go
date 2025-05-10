@@ -44,14 +44,6 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
-	// AdditionalPrinterColumns defines additional printer columns
-	// that will be passed down to the created CRD. If set, no
-	// default printer columns will be added to the created CRD,
-	// and if default printer columns need to be retained, they
-	// need to be added explicitly.
-	//
-	// +kubebuilder:validation:Optional
-	AdditionalPrinterColumns []v1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of
@@ -88,6 +80,14 @@ type Schema struct {
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.
 	Validation []Validation `json:"validation,omitempty"`
+	// AdditionalPrinterColumns defines additional printer columns
+	// that will be passed down to the created CRD. If set, no
+	// default printer columns will be added to the created CRD,
+	// and if default printer columns need to be retained, they
+	// need to be added explicitly.
+	//
+	// +kubebuilder:validation:Optional
+	AdditionalPrinterColumns []v1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
 type Validation struct {

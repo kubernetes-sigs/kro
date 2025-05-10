@@ -14,7 +14,7 @@
 package v1alpha1
 
 import (
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -87,7 +87,7 @@ type Schema struct {
 	// need to be added explicitly.
 	//
 	// +kubebuilder:validation:Optional
-	AdditionalPrinterColumns []v1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
 type Validation struct {

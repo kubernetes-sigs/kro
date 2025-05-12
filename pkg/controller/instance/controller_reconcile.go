@@ -248,9 +248,12 @@ func (igr *instanceGraphReconciler) handleResourceCreation(
 ) error {
 	igr.log.V(1).Info("Creating new resource", "resourceID", resourceID)
 
-	// Apply labels and create resource
+	// Apply labels and create resource using server-side apply
 	igr.instanceSubResourcesLabeler.ApplyLabels(resource)
-	if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {
+	if _, err := rc.Apply(ctx, resource.GetName(), resource, metav1.ApplyOptions{
+		FieldManager: "kro-controller",
+		Force:        true,
+	}); err != nil {
 		resourceState.State = ResourceStateError
 		resourceState.Err = fmt.Errorf("failed to create resource: %w", err)
 		return resourceState.Err
@@ -286,21 +289,19 @@ func (igr *instanceGraphReconciler) updateResource(
 		return nil
 	}
 
-	// Proceed with the update, note that we don't need to handle each difference
-	// individually. We can apply all changes at once.
-	//
-	// NOTE(a-hilaly): are there any cases where we need to handle each difference individually?
+	// Proceed with the update using server-side apply
 	igr.log.V(1).Info("Found deltas for resource",
 		"resourceID", resourceID,
 		"delta", differences,
 	)
 	igr.instanceSubResourcesLabeler.ApplyLabels(desired)
 
-	// Apply changes to the resource
-	// TODO: Handle annotations
-	desired.SetResourceVersion(observed.GetResourceVersion())
-	desired.SetFinalizers(observed.GetFinalizers())
-	_, err = rc.Update(ctx, desired, metav1.UpdateOptions{})
+	// Apply changes to the resource using server-side apply
+	// Note: We don't need to set ResourceVersion or Finalizers as server-side apply handles this
+	_, err = rc.Apply(ctx, desired.GetName(), desired, metav1.ApplyOptions{
+		FieldManager: "kro-controller",
+		Force:        true,
+	})
 	if err != nil {
 		resourceState.State = ResourceStateError
 		resourceState.Err = fmt.Errorf("failed to update resource: %w", err)

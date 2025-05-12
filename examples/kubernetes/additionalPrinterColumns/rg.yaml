@@ -1,0 +1,61 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: application
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Application
+    spec:
+      name: string
+      image: string | default="nginx"
+      ingress:
+        enabled: boolean | default=false
+    status:
+      deploymentConditions: ${deployment.status.conditions}
+      availableReplicas: ${deployment.status.availableReplicas}
+    additionalPrinterColumns:
+      - jsonPath: .status.availableReplicas
+        name: Available replicas
+        type: integer
+      - jsonPath: .spec.image
+        name: Image
+        type: string
+      - jsonPath: .spec.ingress.enabled
+        name: Enabled Ingress
+        type: boolean
+
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 3
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}
+            spec:
+              containers:
+                - name: ${schema.spec.name}
+                  image: ${schema.spec.image}
+                  ports:
+                    - containerPort: 80
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}-service
+        spec:
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - protocol: TCP
+              port: 80
+              targetPort: 80

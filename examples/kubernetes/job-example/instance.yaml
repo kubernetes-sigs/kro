@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: JobDeployment
+metadata:
+  name: example-job-deployment
+spec:
+  replicas: 2
+  delayInSeconds: 20

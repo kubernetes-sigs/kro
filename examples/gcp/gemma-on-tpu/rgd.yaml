@@ -1,0 +1,204 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: gemmaontpuserver.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: GemmaOnTPUServer
+    spec:
+      replicas: integer | default=1
+      kaggleSecret: string | default=kaggle-credentials
+    #status:
+    #  service: ${service.status.service}
+  resources:
+  - id: project ## << EXTERNAL REFERENCE setup by admin at the namespace level
+    externalRef:
+      name: acquire-namespace-project
+      namespace: ${schema.metadata.namespace}
+      kind: Project
+      apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+  - id: serviceaccount
+    template:
+      apiVersion: iam.cnrm.cloud.google.com/v1beta1
+      kind: IAMServiceAccount
+      metadata:
+        name: ${schema.metadata.name}-wi-jetstream
+        namespace: ${schema.metadata.namespace}
+      spec:
+        displayName: ${schema.metadata.name}-jetstream
+  - id: objectuserbinding
+    template:
+      apiVersion: iam.cnrm.cloud.google.com/v1beta1
+      kind: IAMPolicyMember
+      metadata:
+        name: ${schema.metadata.name}-storage-object-user
+        namespace: ${schema.metadata.namespace}
+      spec:
+        member: serviceAccount:${serviceaccount.status.email}
+        role: roles/storage.objectUser
+        resourceRef:
+          apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+          kind: Project
+          name: acquire-namespace-project
+  - id: objectinsightsbinding
+    template:
+      apiVersion: iam.cnrm.cloud.google.com/v1beta1
+      kind: IAMPolicyMember
+      metadata:
+        name: ${schema.metadata.name}-storage-insights
+        namespace: ${schema.metadata.namespace}
+      spec:
+        member: serviceAccount:${serviceaccount.status.email}
+        role: roles/storage.insightsCollectorService
+        resourceRef:
+          apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+          kind: Project
+          name: acquire-namespace-project
+  - id: workloadidentitybinding
+  #gcloud iam service-accounts add-iam-policy-binding wi-jetstream@${PROJECT_ID}.iam.gserviceaccount.com \
+  #  --role roles/iam.workloadIdentityUser \
+  #  --member "serviceAccount:${PROJECT_ID}.svc.id.goog[default/default]"
+    template:
+      apiVersion: iam.cnrm.cloud.google.com/v1beta1
+      kind: IAMPartialPolicy
+      metadata:
+        name: ${schema.metadata.name}-workload-identity
+        namespace: ${schema.metadata.namespace}
+      spec:
+        resourceRef:
+          name: ${schema.metadata.name}-wi-jetstream
+          kind: IAMServiceAccount
+          apiVersion: iam.cnrm.cloud.google.com/v1beta1
+        bindings:
+          - role: roles/iam.workloadIdentityUser
+            members:
+              - member: serviceAccount:${project.spec.resourceID}.svc.id.goog[${schema.metadata.namespace}/default]
+  - id: annotateDefaultServiceAccount
+    # TODO KRO/BUG: Missing support for dont-delete lifecycle
+    #  https://github.com/kro-run/kro/issues/542
+    template:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: default
+        namespace: ${schema.metadata.namespace}
+        annotations:
+          iam.gke.io/gcp-service-account: ${serviceaccount.status.email}
+  - id: bucket
+    readyWhen:
+      - ${bucket.status.conditions[0].status == "True"}
+    template:
+      apiVersion: storage.cnrm.cloud.google.com/v1beta1
+      kind: StorageBucket
+      metadata:
+        #name: gemma7b-${schema.metadata.uid} # TODO KRO/BUG: kro 0.3 would have it
+        #name: gemma7b-${schema.metadata.resourceVersion} # TODO KRO/BUG: resourceVersion keeps changing for Instance resulting in different bucket names resulting in several buckets being created in a loop
+        name: gemma7b-${project.status.number} ## Use project number to make bucket name unique
+        annotations:
+          cnrm.cloud.google.com/force-destroy: "false"
+      spec:
+        storageClass: STANDARD
+  # TODO Create GSA , KSA and bindings
+  - id: downloadCheckpoint
+    readyWhen:
+      - ${downloadCheckpoint.status.completionTime != null}
+    template:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ${schema.metadata.name}-loader
+      spec:
+        # TODO KRO/BUG: will not work if we delete the job after it finishes. It will try to recreate the job.
+        #ttlSecondsAfterFinished: 30
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: inference-checkpoint
+              image: us-docker.pkg.dev/cloud-tpu-images/inference/inference-checkpoint:v0.2.4
+              args:
+              - -b=${bucket.metadata.name}
+              - -m=google/gemma/maxtext/7b-it/2
+              volumeMounts:
+              - mountPath: "/kaggle/"
+                name: kaggle-credentials
+                readOnly: true
+              resources:
+                requests:
+                  google.com/tpu: "8"
+                limits:
+                  google.com/tpu: "8"
+            nodeSelector:
+              cloud.google.com/gke-tpu-topology: 2x4
+              cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+            volumes:
+            - name: kaggle-credentials
+              secret:
+                defaultMode: 0400
+                secretName: ${schema.spec.kaggleSecret}
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.metadata.name}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ${schema.metadata.name}
+        template:
+          metadata:
+            labels:
+              app: ${schema.metadata.name}
+          spec:
+            nodeSelector:
+              cloud.google.com/gke-tpu-topology: 2x4
+              cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+            containers:
+            - name: maxengine-server
+              image: us-docker.pkg.dev/cloud-tpu-images/inference/maxengine-server:v0.2.2
+              args:
+              - model_name=gemma-7b
+              - tokenizer_path=assets/tokenizer.gemma
+              - per_device_batch_size=4
+              - max_prefill_predict_length=1024
+              - max_target_length=2048
+              - async_checkpointing=false
+              - ici_fsdp_parallelism=1
+              - ici_autoregressive_parallelism=-1
+              - ici_tensor_parallelism=1
+              - scan_layers=false
+              - weight_dtype=bfloat16
+              - load_parameters_path=gs://${bucket.metadata.name}/final/unscanned/gemma_7b-it/0/checkpoints/0/items
+              - prometheus_port=9090
+              ports:
+              - containerPort: 9000
+              resources:
+                requests:
+                  google.com/tpu: "8"
+                limits:
+                  google.com/tpu: "8"
+            - name: jetstream-http
+              image: us-docker.pkg.dev/cloud-tpu-images/inference/jetstream-http:v0.2.2
+              ports:
+              - containerPort: 8000
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.metadata.name}
+      spec:
+        selector:
+          app: ${schema.metadata.name}
+        ports:
+        - protocol: TCP
+          name: jetstream-http
+          port: 8000
+          targetPort: 8000
+        - protocol: TCP
+          name: jetstream-grpc
+          port: 9000
+          targetPort: 9000

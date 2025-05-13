@@ -469,14 +469,6 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
-	// We need to unmarshal the instance schema to a map[string]interface{} to
-	// make it easier to work with.
-	unstructuredInstance := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgDefinition.Spec.Raw, &unstructuredInstance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal instance schema: %w", err)
-	}
-
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
 	if err != nil {
@@ -490,7 +482,7 @@ func (b *Builder) buildInstanceResource(
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields)
+	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
 
 	// Emulate the CRD
 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
@@ -556,8 +548,16 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
 
+	// Also the custom types must be unmarshalled to a map[string]interface{} to
+	// make handling easier.
+	customTypes := map[string]interface{}{}
+	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
+	}
+
 	// The instance resource has a schema defined using the "SimpleSchema" format.
-	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec)
+	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec, customTypes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}

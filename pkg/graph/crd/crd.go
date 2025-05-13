@@ -27,15 +27,15 @@ import (
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas~
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool) *extv1.CustomResourceDefinition {
+func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	crdGroup := group
 	if crdGroup == "" {
 		crdGroup = v1alpha1.KRODomainName
 	}
-	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride))
+	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps) *extv1.CustomResourceDefinition {
+func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
@@ -62,7 +62,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps) *extv
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
-					AdditionalPrinterColumns: defaultAdditionalPrinterColumns,
+					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
 				},
 			},
 		},
@@ -101,4 +101,12 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 			"status": status,
 		},
 	}
+}
+
+func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResourceColumnDefinition) []extv1.CustomResourceColumnDefinition {
+	if len(additionalPrinterColumns) == 0 {
+		return defaultAdditionalPrinterColumns
+	}
+
+	return additionalPrinterColumns
 }

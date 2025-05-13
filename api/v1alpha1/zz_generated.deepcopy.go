@@ -5,6 +5,7 @@
 package v1alpha1
 
 import (
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -253,10 +254,16 @@ func (in *ResourceInformation) DeepCopy() *ResourceInformation {
 func (in *Schema) DeepCopyInto(out *Schema) {
 	*out = *in
 	in.Spec.DeepCopyInto(&out.Spec)
+	in.Types.DeepCopyInto(&out.Types)
 	in.Status.DeepCopyInto(&out.Status)
 	if in.Validation != nil {
 		in, out := &in.Validation, &out.Validation
 		*out = make([]Validation, len(*in))
+		copy(*out, *in)
+	}
+	if in.AdditionalPrinterColumns != nil {
+		in, out := &in.AdditionalPrinterColumns, &out.AdditionalPrinterColumns
+		*out = make([]v1.CustomResourceColumnDefinition, len(*in))
 		copy(*out, *in)
 	}
 }

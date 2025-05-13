@@ -14,6 +14,7 @@
 package v1alpha1
 
 import (
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -72,6 +73,12 @@ type Schema struct {
 	// the CRD that the resourcegraphdefinition is managing. This is adhering
 	// to the SimpleSchema spec
 	Spec runtime.RawExtension `json:"spec,omitempty"`
+
+	// Types is a map of custom type definitions. These can be used in the spec
+	// of the resourcegraphdefinition. Each type definition is also adhering to
+	// the SimpleSchema spec.
+	Types runtime.RawExtension `json:"types,omitempty"`
+
 	// The status of the resourcegraphdefinition. This is the status of the CRD
 	// that the resourcegraphdefinition is managing. This is adhering to the
 	// SimpleSchema spec.
@@ -79,6 +86,14 @@ type Schema struct {
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.
 	Validation []Validation `json:"validation,omitempty"`
+	// AdditionalPrinterColumns defines additional printer columns
+	// that will be passed down to the created CRD. If set, no
+	// default printer columns will be added to the created CRD,
+	// and if default printer columns need to be retained, they
+	// need to be added explicitly.
+	//
+	// +kubebuilder:validation:Optional
+	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
 type Validation struct {

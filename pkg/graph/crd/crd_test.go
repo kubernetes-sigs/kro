@@ -73,7 +73,7 @@ func TestSynthesizeCRD(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride)
+			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, nil)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
@@ -91,57 +91,110 @@ func TestSynthesizeCRD(t *testing.T) {
 
 			require.NotNil(t, version.Subresources)
 			require.NotNil(t, version.Subresources.Status)
+
+			assert.Equal(t, defaultAdditionalPrinterColumns, version.AdditionalPrinterColumns)
 		})
 	}
 }
 
 func TestNewCRD(t *testing.T) {
 	tests := []struct {
-		name             string
-		group            string
-		apiVersion       string
-		kind             string
-		expectedName     string
-		expectedKind     string
-		expectedPlural   string
-		expectedSingular string
+		name                   string
+		group                  string
+		apiVersion             string
+		kind                   string
+		printerColumns         []extv1.CustomResourceColumnDefinition
+		expectedName           string
+		expectedKind           string
+		expectedPlural         string
+		expectedSingular       string
+		expectedPrinterColumns []extv1.CustomResourceColumnDefinition
 	}{
 		{
-			name:             "basic example",
-			group:            "kro.com",
-			apiVersion:       "v1",
-			kind:             "Test",
-			expectedName:     "tests.kro.com",
-			expectedKind:     "Test",
-			expectedPlural:   "tests",
-			expectedSingular: "test",
+			name:                   "basic example",
+			group:                  "kro.com",
+			apiVersion:             "v1",
+			kind:                   "Test",
+			expectedName:           "tests.kro.com",
+			expectedKind:           "Test",
+			expectedPlural:         "tests",
+			expectedSingular:       "test",
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
-			name:             "uppercase kind",
-			group:            "kro.com",
-			apiVersion:       "v2beta1",
-			kind:             "CONFIG",
-			expectedName:     "configs.kro.com",
-			expectedKind:     "CONFIG",
-			expectedPlural:   "configs",
-			expectedSingular: "config",
+			name:                   "uppercase kind",
+			group:                  "kro.com",
+			apiVersion:             "v2beta1",
+			kind:                   "CONFIG",
+			expectedName:           "configs.kro.com",
+			expectedKind:           "CONFIG",
+			expectedPlural:         "configs",
+			expectedSingular:       "config",
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
-			name:             "mixed case kind",
-			group:            "kro.com",
-			apiVersion:       "v2beta1",
-			kind:             "WebHook",
+			name:                   "mixed case kind",
+			group:                  "kro.com",
+			apiVersion:             "v2beta1",
+			kind:                   "WebHook",
+			expectedName:           "webhooks.kro.com",
+			expectedKind:           "WebHook",
+			expectedPlural:         "webhooks",
+			expectedSingular:       "webhook",
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+		},
+		{
+			name:                   "non nil empty printer columns",
+			group:                  "kro.com",
+			apiVersion:             "v2beta1",
+			kind:                   "WebHook",
+			printerColumns:         []extv1.CustomResourceColumnDefinition{},
+			expectedName:           "webhooks.kro.com",
+			expectedKind:           "WebHook",
+			expectedPlural:         "webhooks",
+			expectedSingular:       "webhook",
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+		},
+		{
+			name:       "custom printer columns",
+			group:      "kro.com",
+			apiVersion: "v2beta1",
+			kind:       "WebHook",
+			printerColumns: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "Available replicas",
+					Type:     "integer",
+					JSONPath: ".status.availableReplicas",
+				},
+				{
+					Name:     "Image",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+			},
 			expectedName:     "webhooks.kro.com",
 			expectedKind:     "WebHook",
 			expectedPlural:   "webhooks",
 			expectedSingular: "webhook",
+			expectedPrinterColumns: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "Available replicas",
+					Type:     "integer",
+					JSONPath: ".status.availableReplicas",
+				},
+				{
+					Name:     "Image",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)
@@ -155,6 +208,7 @@ func TestNewCRD(t *testing.T) {
 			require.Len(t, crd.Spec.Versions, 1)
 			assert.Equal(t, tt.apiVersion, crd.Spec.Versions[0].Name)
 			assert.Equal(t, schema, crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+			assert.Equal(t, tt.expectedPrinterColumns, crd.Spec.Versions[0].AdditionalPrinterColumns)
 
 			assert.Nil(t, crd.OwnerReferences)
 		})

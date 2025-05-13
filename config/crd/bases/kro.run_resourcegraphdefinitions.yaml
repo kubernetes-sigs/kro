@@ -83,14 +83,20 @@ spec:
                           type: string
                         kind:
                           type: string
-                        name:
-                          type: string
-                        namespace:
-                          type: string
+                        metadata:
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          required:
+                          - name
+                          - namespace
+                          type: object
                       required:
                       - apiVersion
                       - kind
-                      - name
+                      - metadata
                       type: object
                     id:
                       type: string

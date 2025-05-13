@@ -14,10 +14,11 @@ spec:
   resources:
   - id: project ## << EXTERNAL REFERENCE setup by admin at the namespace level
     externalRef:
+      apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+      kind: Project
+      metadata:
       name: acquire-namespace-project
       namespace: ${schema.metadata.namespace}
-      kind: Project
-      apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
   - id: serviceaccount
     template:
       apiVersion: iam.cnrm.cloud.google.com/v1beta1

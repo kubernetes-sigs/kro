@@ -82,10 +82,11 @@ Every instance includes:
 
 1. **State**: High-level status
 
-   - `Running`: All resources are ready
-   - `Progressing`: Working towards desired state
-   - `Failed`: Error occurred
-   - `Terminating`: Being deleted
+   - `ACTIVE`: Indicates that the instance is successfully running and active.
+   - `IN_PROGRESS`: Indicates that the instance is currently being processed or reconciled.
+   - `FAILED`: Indicates that the instance has failed to be properly reconciled.
+   - `DELETING`: Indicates that the instance is in the process of being deleted.
+   - `ERROR`: Indicates that an error occurred during instance processing.
 
 2. **Conditions**: Detailed status information
 

@@ -49,7 +49,7 @@ var _ = Describe("Update", func() {
 		// Create ResourceGraphDefinition for a simple deployment service
 		rgd := generator.NewResourceGraphDefinition("test-update",
 			generator.WithSchema(
-				"TestUpdate", "v1alpha1",
+				"TestInstanceUpdate", "v1alpha1",
 				map[string]interface{}{
 					"replicas": "integer | default=1",
 					"image":    "string | default=nginx:latest",
@@ -110,7 +110,7 @@ var _ = Describe("Update", func() {
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
-				"kind":       "TestUpdate",
+				"kind":       "TestInstanceUpdate",
 				"metadata": map[string]interface{}{
 					"name":      "test-instance-for-updates",
 					"namespace": namespace,

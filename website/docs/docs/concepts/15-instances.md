@@ -63,7 +63,9 @@ my-app   ACTIVE    true     30s
 ```
 
 For detailed status, check the instance's YAML:
-
+```bash
+kubectl edit webapplication my-app
+```
 ```yaml
 status:
   state: ACTIVE # High-level instance state
@@ -82,10 +84,11 @@ Every instance includes:
 
 1. **State**: High-level status
 
-   - `Running`: All resources are ready
-   - `Progressing`: Working towards desired state
-   - `Failed`: Error occurred
-   - `Terminating`: Being deleted
+   - `ACTIVE`: All resources are ready
+   - `IN_PROGRESS`: Instance Progressing towards desired state
+   - `FAILED`: Instance failed during creation
+   - `DELETING`: Being deleted
+   - `ERROR`: Error occurred
 
 2. **Conditions**: Detailed status information
 
@@ -94,7 +97,7 @@ Every instance includes:
    - `Degraded`: Operating but not optimal
    - `Error`: Problems detected
 
-3. **Resource Status**: Status from your resources
+3. **Resource Status**: Status from your RGD's spec/schema subresource
    - Values you defined in your ResourceGraphDefinition's status section
    - Automatically updated as resources change
 

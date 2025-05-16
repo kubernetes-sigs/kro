@@ -39,6 +39,7 @@ License version 2.0, we include the full text of the package's License below.
 * `k8s.io/apiserver`
 * `k8s.io/client-go`
 * `k8s.io/kube-openapi`
+* `k8s.io/utils`
 * `sigs.k8s.io/controller-runtime`
 * `sigs.k8s.io/release-utils`
 
@@ -3421,6 +3422,8 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+
+
 ### sigs.k8s.io/controller-runtime
 
 License Identifier: Apache-2.0
@@ -3799,7 +3802,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+#### k8s.io/utils
 
+License Identifier: Apache-2.0
 
 #### github.com/Azure/go-ansiterm
 

@@ -109,7 +109,7 @@ var _ = Describe("Status", func() {
 			// Check specific failure condition
 			var crdCondition *krov1alpha1.Condition
 			for _, cond := range rgd.Status.Conditions {
-				if cond.Type == string(krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified) {
+				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
 					crdCondition = &cond
 					break
 				}
@@ -117,7 +117,7 @@ var _ = Describe("Status", func() {
 
 			g.Expect(crdCondition).ToNot(BeNil())
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(crdCondition.Reason).To(ContainSubstring("failed to build resourcegraphdefinition"))
+			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegraphdefinition"))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

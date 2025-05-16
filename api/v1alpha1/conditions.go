@@ -14,7 +14,8 @@
 package v1alpha1
 
 import (
-	"github.com/kro-run/kro/pkg/apis"
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,17 +51,55 @@ const (
 	InstanceConditionTypeError ConditionType = "Error"
 )
 
-// Condition aliases the apis.Condition type.
-type Condition apis.Condition
+// Condition is the common struct used by all CRDs managed by ACK service
+// controllers to indicate terminal states  of the CR and its backend AWS
+// service API resource
+type Condition struct {
+	// Type is the type of the Condition
+	Type ConditionType `json:"type"`
+	// Status of the condition, one of True, False, Unknown.
+	Status metav1.ConditionStatus `json:"status"`
+	// Last time the condition transitioned from one status to another.
+	// +optional
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+	// The reason for the condition's last transition.
+	// +optional
+	Reason *string `json:"reason,omitempty"`
+	// A human-readable message indicating details about the transition.
+	// +optional
+	Message *string `json:"message,omitempty"`
+	// observedGeneration represents the .metadata.generation that the condition was set based upon.
+	// For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+	// with respect to the current state of the instance.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
 
 // NewCondition returns a new Condition instance.
 func NewCondition(t ConditionType, og int64, status metav1.ConditionStatus, reason, message string) Condition {
 	return Condition{
-		Type:               string(t),
-		ObservedGeneration: og,
+		Type:               t,
 		Status:             status,
-		LastTransitionTime: metav1.Time{Time: metav1.Now().Time},
-		Reason:             reason,
-		Message:            message,
+		LastTransitionTime: &metav1.Time{Time: metav1.Now().Time},
+		Reason:             &reason,
+		Message:            &message,
+		ObservedGeneration: og,
 	}
+}
+
+func SetCondition(conditions []Condition, condition Condition) []Condition {
+	for i, c := range conditions {
+		if c.Type == condition.Type {
+			conditions[i] = condition
+			return conditions
+		}
+	}
+	return append(conditions, condition)
+}
+
+func HasCondition(conditions []Condition, t ConditionType) bool {
+	return slices.ContainsFunc(conditions, func(c Condition) bool {
+		return c.Type == t
+	})
 }

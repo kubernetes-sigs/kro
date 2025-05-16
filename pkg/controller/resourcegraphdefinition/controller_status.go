@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/kro-run/kro/pkg/apis"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
@@ -181,4 +182,29 @@ func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1a
 
 func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
 	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, 0, status, reason, "Custom Resource Definition is synced")
+}
+
+/*
+
+Ready
+ ├─ SchemaAccepted
+ ├─ ResourcesAccepted
+ ├─ KindReady
+ ├─ ControllerReady
+ ├─
+
+
+*/
+
+const (
+	SchemaAccepted    = "SchemaAccepted"
+	ResourcesAccepted = "ResourcesAccepted"
+	KindReady         = "KindReady"
+	ControllerReady   = "ControllerReady"
+)
+
+var rgdConditionTypes = apis.NewReadyConditions(SchemaAccepted, ResourcesAccepted, KindReady, ControllerReady)
+
+func NewResourceGraphDefinitionConditionSetFor(o apis.Object) apis.ConditionSet {
+	return rgdConditionTypes.For(o)
 }

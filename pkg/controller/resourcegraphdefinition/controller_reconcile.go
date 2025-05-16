@@ -36,6 +36,7 @@ import (
 // 3. Setting up and starting the microcontroller
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
+	cs := NewResourceGraphDefinitionConditionSetFor(rgd)
 
 	// Process resource graph definition graph first to validate structure
 	log.V(1).Info("reconciling resource graph definition graph")

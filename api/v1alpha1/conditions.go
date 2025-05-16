@@ -22,6 +22,8 @@ import (
 // ConditionType is a type of condition for a resource.
 type ConditionType string
 
+func (c ConditionType) String() string { return string(c) }
+
 const (
 	// ResourceGraphDefinitionConditionTypeGraphVerified indicates the state of the directed
 	// acyclic graph (DAG) that kro uses to manage the resources in a
@@ -88,7 +90,39 @@ func NewCondition(t ConditionType, og int64, status metav1.ConditionStatus, reas
 	}
 }
 
-func SetCondition(conditions []Condition, condition Condition) []Condition {
+func (c *Condition) IsTrue() bool {
+	if c == nil {
+		return false
+	}
+	return c.Status == metav1.ConditionTrue
+}
+
+func (c *Condition) IsFalse() bool {
+	if c == nil {
+		return false
+	}
+	return c.Status == metav1.ConditionFalse
+}
+
+func (c *Condition) IsUnknown() bool {
+	if c == nil {
+		return true
+	}
+	return c.Status == metav1.ConditionUnknown
+}
+
+func (c *Condition) GetStatus() metav1.ConditionStatus {
+	if c == nil {
+		return metav1.ConditionUnknown
+	}
+	return c.Status
+}
+
+// Conditions is a list of conditions.
+type Conditions []Condition
+
+// Set sets the provided condition into the conditions list, if it exists already the condition is replaced.
+func (conditions Conditions) Set(condition Condition) []Condition {
 	for i, c := range conditions {
 		if c.Type == condition.Type {
 			conditions[i] = condition
@@ -98,7 +132,8 @@ func SetCondition(conditions []Condition, condition Condition) []Condition {
 	return append(conditions, condition)
 }
 
-func HasCondition(conditions []Condition, t ConditionType) bool {
+// Has returns true if the conditions list contains the given condition type.
+func (conditions Conditions) Has(t ConditionType) bool {
 	return slices.ContainsFunc(conditions, func(c Condition) bool {
 		return c.Type == t
 	})

@@ -43,6 +43,18 @@ func (c ConditionSet) Root() *v1alpha1.Condition {
 	return c.Get(c.root)
 }
 
+// IsRootReady returns the readiness of the root Condition.
+func (c ConditionSet) IsRootReady() bool {
+	if c.object == nil {
+		return false
+	}
+	root := c.Get(c.root)
+	if root.IsTrue() && root.ObservedGeneration == c.object.GetGeneration() {
+		return true
+	}
+	return false
+}
+
 func (c ConditionSet) List() []v1alpha1.Condition {
 	if c.object == nil {
 		return nil
@@ -130,7 +142,7 @@ func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 		if conditions[i].Type.String() == c.root || conditions[j].Type.String() == c.root {
 			return conditions[j].Type.String() == c.root
 		}
-		
+
 		// Handle nil LastTransitionTime
 		if conditions[i].LastTransitionTime == nil && conditions[j].LastTransitionTime == nil {
 			return false // Equal, order doesn't matter
@@ -141,7 +153,7 @@ func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 		if conditions[j].LastTransitionTime == nil {
 			return false // non-nil comes after nil
 		}
-		
+
 		return conditions[i].LastTransitionTime.Time.Before(conditions[j].LastTransitionTime.Time)
 	})
 	c.object.SetConditions(conditions)
@@ -256,7 +268,7 @@ func findMostUnhealthy(deps []v1alpha1.Condition) (v1alpha1.Condition, bool) {
 		if deps[j].LastTransitionTime == nil {
 			return true // non-nil comes before nil (opposite of Before)
 		}
-		
+
 		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
 	})
 
@@ -303,7 +315,7 @@ func (c ConditionSet) findUnhealthyDependents() []v1alpha1.Condition {
 		if deps[j].LastTransitionTime == nil {
 			return true // non-nil comes before nil (opposite of Before)
 		}
-		
+
 		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
 	})
 	return deps

@@ -43,6 +43,7 @@ The `spec` section of a ResourceGraphDefinition contains two main components:
   - Dependencies between resources
   - Conditions for inclusion
   - Readiness criteria
+  - [External References](#resourcegraphdefinition-more-about-resources)
 
 This structure translates to YAML as follows:
 
@@ -170,3 +171,31 @@ spec:
   image: nginx:latest
   replicas: 3
 ```
+
+## ResourceGraphDefinition More about Resources
+
+Users can specify more controls in resources in `.spec.resources[]` 
+
+```yaml
+spec:
+  resources:
+    - id:
+      template || externalRef:
+      readyWhen:
+      includeWhen:
+```
+
+Using `externalRef` An user can specify if the object is something that is created out-of-band and needs to be referenced in the RGD.
+An external reference could be specified like this:
+```
+resources:
+   id: projectConfig
+   externalRef:
+     apiVersion: corp.platform.com/v1
+     kind: Project
+     metadata:
+       name: default-project
+       namespace: # optional, if empty uses instance namespace
+```
+
+As part of the processing the Resource Graph, the instance reconciler waits for the `externalRef` object to be present and reads the object from the cluster as a node in the graph. Subsequent resources can use data from this node.

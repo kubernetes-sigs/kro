@@ -101,6 +101,13 @@ type Validation struct {
 	Message    string `json:"message,omitempty"`
 }
 
+type ExternalRefMetadata struct {
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace,omitempty"`
+}
+
 // ExternalRef is a reference to an external resource.
 // It allows the user to specify the Kind, Version, Name and Namespace of the resource
 // to be read and used in the Graph.
@@ -110,9 +117,7 @@ type ExternalRef struct {
 	// +kubebuilder:validation:Required
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-	// +kubebuilder:validation:Optional
-	Namespace string `json:"namespace,omitempty"`
+	Metadata ExternalRefMetadata `json:"metadata"`
 }
 
 // +kubebuilder:validation:XValidation:rule="(has(self.template) && !has(self.externalRef)) || (!has(self.template) && has(self.externalRef))",message="exactly one of template or externalRef must be provided"

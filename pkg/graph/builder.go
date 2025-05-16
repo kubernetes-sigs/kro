@@ -257,10 +257,10 @@ func (b *Builder) buildExternalRefResource(
 	resourceObject["apiVersion"] = externalRef.APIVersion
 	resourceObject["kind"] = externalRef.Kind
 	metadata := map[string]interface{}{
-		"name": externalRef.Name,
+		"name": externalRef.Metadata.Name,
 	}
-	if externalRef.Namespace != "" {
-		metadata["namespace"] = externalRef.Namespace
+	if externalRef.Metadata.Namespace != "" {
+		metadata["namespace"] = externalRef.Metadata.Namespace
 	}
 	resourceObject["metadata"] = metadata
 	return resourceObject

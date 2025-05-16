@@ -85,8 +85,10 @@ var _ = Describe("ExternalRef", func() {
 			generator.WithExternalRef("deployment1", &krov1alpha1.ExternalRef{
 				APIVersion: "apps/v1",
 				Kind:       "Deployment",
-				Name:       "test-deployment",
-				Namespace:  namespace,
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Name:      "test-deployment",
+					Namespace: namespace,
+				},
 			}, nil, nil),
 			generator.WithResource("deployment", map[string]interface{}{
 				"apiVersion": "apps/v1",
@@ -135,8 +137,8 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(2))
 			g.Expect(createdRGD.Spec.Resources[0].ExternalRef).ToNot(BeNil())
 			g.Expect(createdRGD.Spec.Resources[0].ExternalRef.Kind).To(Equal("Deployment"))
-			g.Expect(createdRGD.Spec.Resources[0].ExternalRef.Name).To(Equal("test-deployment"))
-			g.Expect(createdRGD.Spec.Resources[0].ExternalRef.Namespace).To(Equal(namespace))
+			g.Expect(createdRGD.Spec.Resources[0].ExternalRef.Metadata.Name).To(Equal("test-deployment"))
+			g.Expect(createdRGD.Spec.Resources[0].ExternalRef.Metadata.Namespace).To(Equal(namespace))
 
 			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))

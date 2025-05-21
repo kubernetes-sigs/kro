@@ -22,10 +22,17 @@ import (
 
 // ToOpenAPISpec converts a SimpleSchema object to an OpenAPI schema.
 //
-// The input object is a map[string]interface{} where the key is the field name
-// and the value is the field type.
-func ToOpenAPISpec(obj map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+// The first input obj is a map[string]interface{} where the key is the field
+// name and the value is the field type.
+//
+// The second input customTypes is a map[string]interface{} where the key is
+// the type name and the value its specification. These custom types will be
+// available as predefined types in the transformer.
+func ToOpenAPISpec(obj map[string]interface{}, customTypes map[string]interface{}) (*extv1.JSONSchemaProps, error) {
 	tf := newTransformer()
+	if err := tf.loadPreDefinedTypes(customTypes); err != nil {
+		return nil, err
+	}
 	return tf.buildOpenAPISchema(obj)
 }
 

@@ -16,21 +16,31 @@ package simpleschema
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
+// A predefined type is a type that is predefined in the schema.
+// It is used to resolve references in the schema, while capturing the fact
+// whether the type has the required marker set (this information would
+// otherwise be lost in the parsing process).
+type predefinedType struct {
+	Schema   extv1.JSONSchemaProps
+	Required bool
+}
+
 // transformer is a transformer for OpenAPI schemas
 type transformer struct {
-	preDefinedTypes map[string]extv1.JSONSchemaProps
+	preDefinedTypes map[string]predefinedType
 }
 
 // newTransformer creates a new transformer
 func newTransformer() *transformer {
 	return &transformer{
-		preDefinedTypes: make(map[string]extv1.JSONSchemaProps),
+		preDefinedTypes: make(map[string]predefinedType),
 	}
 }
 
@@ -40,7 +50,7 @@ func newTransformer() *transformer {
 // As of today, kro doesn't support custom types in the schema - do
 // not use this function.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
-	t.preDefinedTypes = make(map[string]extv1.JSONSchemaProps)
+	t.preDefinedTypes = make(map[string]predefinedType)
 
 	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
 	if err != nil {
@@ -48,7 +58,11 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	}
 
 	for k, properties := range jsonSchemaProps.Properties {
-		t.preDefinedTypes[k] = properties
+		required := false
+		if slices.Contains(jsonSchemaProps.Required, k) {
+			required = true
+		}
+		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
 	}
 	return nil
 }
@@ -115,7 +129,10 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 		if !ok {
 			return nil, fmt.Errorf("unknown type: %s", fieldType)
 		}
-		fieldJSONSchemaProps = &preDefinedType
+		fieldJSONSchemaProps = &preDefinedType.Schema
+		if preDefinedType.Required {
+			parentSchema.Required = append(parentSchema.Required, key)
+		}
 	}
 
 	if err := tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema); err != nil {
@@ -148,7 +165,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		}
 		fieldJSONSchemaProps.AdditionalProperties.Schema = valueSchema
 	} else if preDefinedType, ok := tf.preDefinedTypes[valueType]; ok {
-		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType
+		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType.Schema
 	} else if isAtomicType(valueType) {
 		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
 	} else {
@@ -180,7 +197,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	} else if isAtomicType(elementType) {
 		fieldJSONSchemaProps.Items.Schema.Type = elementType
 	} else if preDefinedType, ok := tf.preDefinedTypes[elementType]; ok {
-		fieldJSONSchemaProps.Items.Schema = &preDefinedType
+		fieldJSONSchemaProps.Items.Schema = &preDefinedType.Schema
 	} else {
 		return nil, fmt.Errorf("unknown type: %s", elementType)
 	}

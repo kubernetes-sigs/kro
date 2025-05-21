@@ -22,27 +22,10 @@ import (
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
-	transformer := newTransformer()
-
-	// Load pre-defined types
-	err := transformer.loadPreDefinedTypes(map[string]interface{}{
-		"Address": map[string]interface{}{
-			"street":  "string",
-			"city":    "string",
-			"country": "string",
-		},
-		"Person": map[string]interface{}{
-			"name": "string",
-			"age":  "integer",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Failed to load pre-defined types: %v", err)
-	}
-
 	tests := []struct {
 		name    string
 		obj     map[string]interface{}
+		types   map[string]interface{}
 		want    *extv1.JSONSchemaProps
 		wantErr bool
 	}{
@@ -61,6 +44,17 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				"scores":     "[]integer",
 				"attributes": "map[string]boolean",
 				"friends":    "[]Person",
+			},
+			types: map[string]interface{}{
+				"Address": map[string]interface{}{
+					"street":  "string",
+					"city":    "string",
+					"country": "string",
+				},
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+				},
 			},
 			want: &extv1.JSONSchemaProps{
 				Type:     "object",
@@ -216,6 +210,12 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			obj: map[string]interface{}{
 				"matrix": "[][][]Person",
 			},
+			types: map[string]interface{}{
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+				},
+			},
 			want: &extv1.JSONSchemaProps{
 				Type: "object",
 				Properties: map[string]extv1.JSONSchemaProps{
@@ -250,6 +250,12 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			name: "Nested maps",
 			obj: map[string]interface{}{
 				"matrix": "map[string]map[string]map[string]Person",
+			},
+			types: map[string]interface{}{
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+				},
 			},
 			want: &extv1.JSONSchemaProps{
 				Type: "object",
@@ -421,11 +427,31 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "Custom simple type (required)",
+			obj: map[string]interface{}{
+				"myValue": "myType",
+			},
+			types: map[string]interface{}{
+				"myType": "string | required=true description=\"my description\"",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"myValue": {
+						Type:        "string",
+						Description: "my description",
+					},
+				},
+				Required: []string{"myValue"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := transformer.buildOpenAPISchema(tt.obj)
+			got, err := ToOpenAPISpec(tt.obj, tt.types)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("BuildOpenAPISchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -443,7 +469,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 	tests := []struct {
 		name    string
 		obj     map[string]interface{}
-		want    map[string]extv1.JSONSchemaProps
+		want    map[string]predefinedType
 		wantErr bool
 	}{
 		{
@@ -462,34 +488,71 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 					"employees": "[]string",
 				},
 			},
-			want: map[string]extv1.JSONSchemaProps{
+			want: map[string]predefinedType{
 				"Person": {
-					Type: "object",
-					Properties: map[string]extv1.JSONSchemaProps{
-						"name": {Type: "string"},
-						"age":  {Type: "integer"},
-						"address": {
-							Type: "object",
-							Properties: map[string]extv1.JSONSchemaProps{
-								"street": {Type: "string"},
-								"city":   {Type: "string"},
-							},
-						},
-					},
-				},
-				"Company": {
-					Type: "object",
-					Properties: map[string]extv1.JSONSchemaProps{
-						"name": {Type: "string"},
-						"employees": {
-							Type: "array",
-							Items: &extv1.JSONSchemaPropsOrArray{
-								Schema: &extv1.JSONSchemaProps{
-									Type: "string",
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"name": {Type: "string"},
+							"age":  {Type: "integer"},
+							"address": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"street": {Type: "string"},
+									"city":   {Type: "string"},
 								},
 							},
 						},
 					},
+					Required: false,
+				},
+				"Company": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"name": {Type: "string"},
+							"employees": {
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "string",
+									},
+								},
+							},
+						},
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Simple type alias",
+			obj: map[string]interface{}{
+				"alias": "string",
+			},
+			want: map[string]predefinedType{
+				"alias": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "string",
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Simple type alias with markers",
+			obj: map[string]interface{}{
+				"alias": "string | required=true default=\"test\"",
+			},
+			want: map[string]predefinedType{
+				"alias": {
+					Schema: extv1.JSONSchemaProps{
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte("\"test\"")},
+					},
+					Required: true,
 				},
 			},
 			wantErr: false,
@@ -499,7 +562,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 			obj: map[string]interface{}{
 				"invalid": 123,
 			},
-			want:    map[string]extv1.JSONSchemaProps{},
+			want:    map[string]predefinedType{},
 			wantErr: true,
 		},
 	}

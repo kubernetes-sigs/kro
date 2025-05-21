@@ -1,0 +1,54 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: job-deployment.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: JobDeployment
+    spec:
+      replicas: integer | default=1
+      delayInSeconds: integer | default=30
+  resources:
+  - id: job
+    readyWhen:
+      - ${job.status.completionTime != null}
+    template:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ${schema.metadata.name}-job
+      spec:
+        # NOTE: will not work if we delete the job after it finishes. It will try to recreate the job.
+        #ttlSecondsAfterFinished: 30
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: sleeper
+              image: busybox
+              command: ["sleep", "${string(schema.spec.delayInSeconds)}"]
+              resources:
+                limits:
+                  cpu: "1"
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.metadata.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app: ${schema.metadata.name}
+        template:
+          metadata:
+            labels:
+              app: ${schema.metadata.name}
+          spec:
+            containers:
+            - name: web
+              image: nginx
+              ports:
+              - containerPort: 80

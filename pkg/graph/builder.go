@@ -250,21 +250,47 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	return resourceGraphDefinition, nil
 }
 
+// buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
+func (b *Builder) buildExternalRefResource(
+	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
+	resourceObject := map[string]interface{}{}
+	resourceObject["apiVersion"] = externalRef.APIVersion
+	resourceObject["kind"] = externalRef.Kind
+	metadata := map[string]interface{}{
+		"name": externalRef.Metadata.Name,
+	}
+	if externalRef.Metadata.Namespace != "" {
+		metadata["namespace"] = externalRef.Metadata.Namespace
+	}
+	resourceObject["metadata"] = metadata
+	return resourceObject
+}
+
 // buildRGResource builds a resource from the given resource definition.
 // It provides a high-level understanding of the resource, by extracting the
 // OpenAPI schema, emulating the resource and extracting the cel expressions
 // from the schema.
-func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResources map[k8sschema.GroupKind]bool, order int) (*Resource, error) {
+func (b *Builder) buildRGResource(
+	rgResource *v1alpha1.Resource,
+	namespacedResources map[k8sschema.GroupKind]bool,
+	order int,
+) (*Resource, error) {
 	// 1. We need to unmarshal the resource into a map[string]interface{} to
 	//    make it easier to work with.
 	resourceObject := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+	if len(rgResource.Template.Raw) > 0 {
+		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+		}
+	} else if rgResource.ExternalRef != nil {
+		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
+	} else {
+		return nil, fmt.Errorf("exactly one of template or externalRef must be provided")
 	}
 
 	// 1. Check if it looks like a valid Kubernetes resource.
-	err = validateKubernetesObjectStructure(resourceObject)
+	err := validateKubernetesObjectStructure(resourceObject)
 	if err != nil {
 		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
 	}
@@ -343,6 +369,7 @@ func (b *Builder) buildRGResource(rgResource *v1alpha1.Resource, namespacedResou
 		includeWhenExpressions: includeWhen,
 		namespaced:             isNamespaced,
 		order:                  order,
+		isExternalRef:          rgResource.ExternalRef != nil,
 	}, nil
 }
 
@@ -442,14 +469,6 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
-	// We need to unmarshal the instance schema to a map[string]interface{} to
-	// make it easier to work with.
-	unstructuredInstance := map[string]interface{}{}
-	err := yaml.UnmarshalStrict(rgDefinition.Spec.Raw, &unstructuredInstance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal instance schema: %w", err)
-	}
-
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
 	if err != nil {
@@ -463,7 +482,7 @@ func (b *Builder) buildInstanceResource(
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields)
+	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
 
 	// Emulate the CRD
 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
@@ -529,8 +548,16 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
 
+	// Also the custom types must be unmarshalled to a map[string]interface{} to
+	// make handling easier.
+	customTypes := map[string]interface{}{}
+	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
+	}
+
 	// The instance resource has a schema defined using the "SimpleSchema" format.
-	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec)
+	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec, customTypes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}

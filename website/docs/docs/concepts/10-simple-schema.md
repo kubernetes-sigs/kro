@@ -33,7 +33,13 @@ spec:
       ports: "[]integer"
 
       # Map type
-      env: "map[string]string"
+      env: "map[string]mytype"
+
+    # Custom Types
+    types:
+      myType:
+        value1: string | required=true
+        value2: integer | default=42
 
     status:
       # Status fields with auto-inferred types
@@ -107,6 +113,23 @@ Examples:
 ```yaml
 labels: "map[string]string"
 metrics: "map[string]float"
+```
+
+### Custom Types
+
+Custom types are specified in the separate `types` section.
+They provide a map of names to type specifications, that follow the simple schema.
+
+Example:
+
+```yaml
+schema:
+  types:
+    Person:
+      name: string
+      age: integer
+  spec:
+    people: '[]Person | required=true`
 ```
 
 ## Validation and Documentation

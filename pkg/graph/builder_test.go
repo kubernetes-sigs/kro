@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 
+	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/graph/emulator"
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/testutil/generator"
@@ -1319,6 +1320,158 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)
+			}
+		})
+	}
+}
+
+func TestGraphBuilder_CELFunctions(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	builder := &Builder{
+		schemaResolver:   fakeResolver,
+		discoveryClient:  fakeDiscovery,
+		resourceEmulator: emulator.NewEmulator(),
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		validateFunc                func(t *testing.T, g *Graph)
+	}{
+		{
+			name: "functions in expressions and fields",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestCELFuncs", "v1alpha1",
+					map[string]interface{}{
+						"inputStr1": "string | default='hello'",
+						"inputStr2": "string | default='world'",
+						"inputNum1": "integer | default=3",
+						"inputNum2": "integer | default=7",
+					},
+					map[string]interface{}{
+						"statusString": "${add(subnet1.spec.cidrBlock, add(' in ', subnet1.spec.vpcID))}",
+					},
+				),
+				generator.WithCELFunction(
+					"add",
+					"s1 + s2",
+					[]v1alpha1.FunctionInput{
+						{Name: "s1", Type: "string"},
+						{Name: "s2", Type: "string"},
+					},
+					"string",
+				),
+				generator.WithCELFunction(
+					"add", // overloaded function name based on input and output types
+					"n1 + n2",
+					[]v1alpha1.FunctionInput{
+						{Name: "n1", Type: "int"},
+						{Name: "n2", Type: "int"},
+					},
+					"int",
+				),
+				generator.WithCELFunction(
+					"cidr",
+					"string(_0) + '.' + string(_1) + '.' + string(_2) + '.' + string(_3) + '/' + string(_4)",
+					[]v1alpha1.FunctionInput{
+						{Type: "int"},
+						{Type: "int"},
+						{Type: "int"},
+						{Type: "int"},
+						{Type: "int"},
+					},
+					"string",
+				),
+				generator.WithResource("subnet1", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "test-subnet",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr(10, 0, 1, 0, add(schema.spec.inputNum1, schema.spec.inputNum2))}",
+						"vpcID":     "${add(schema.spec.inputStr1, schema.spec.inputStr2)}",
+					},
+				},
+					[]string{"${add(3, 5) > 7}"},                                        // readyWhen
+					[]string{"${add(schema.spec.inputStr1, 'world') == 'helloworld'}"}), // includeWhen
+			},
+			wantErr: false,
+			validateFunc: func(t *testing.T, g *Graph) {
+				require.NotNil(t, g, "Graph should not be nil")
+				require.Len(t, g.Functions, 2)
+				require.Equal(t, "add", g.Functions[0].Name())
+				require.Len(t, g.Functions[0].OverloadDecls(), 2)
+				require.Equal(t, "add(string, string) -> string", g.Functions[0].OverloadDecls()[0].ID())
+				require.Equal(t, "add(int, int) -> int", g.Functions[0].OverloadDecls()[1].ID())
+				require.Equal(t, "cidr", g.Functions[1].Name())
+				require.Len(t, g.Functions[1].OverloadDecls(), 1)
+				require.Equal(t, "cidr(int, int, int, int, int) -> string", g.Functions[1].OverloadDecls()[0].ID())
+			},
+		},
+		{
+			name: "custom functions can call other custom functions",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("TestFuncReference", "v1alpha1", nil, nil),
+				generator.WithCELFunction(
+					"funcA",
+					"_0 + 1",
+					[]v1alpha1.FunctionInput{{Type: "int"}},
+					"int",
+				),
+				generator.WithCELFunction(
+					"funcB",
+					"funcA(_0) + _1",
+					[]v1alpha1.FunctionInput{
+						{Type: "int"},
+						{Type: "int"},
+					},
+					"int",
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "functions with identical signatures are disallowed",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema("TestAmbiguousFuncs", "v1alpha1", nil, nil),
+				generator.WithCELFunction(
+					"my_func",
+					"arg1 + ' first'",
+					[]v1alpha1.FunctionInput{{Name: "arg1", Type: "string"}},
+					"string",
+				),
+				generator.WithCELFunction(
+					"my_func",        // Same name
+					"_0 + ' second'", // Different expression
+					[]v1alpha1.FunctionInput{{Type: "string"}}, // Same input type signature
+					"string", // Same return type
+				),
+			},
+			wantErr: true,
+			errMsg:  "duplicate function definition \"my_func(string) -> string\"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-cel-funcs-rgd-"+tt.name, tt.resourceGraphDefinitionOpts...)
+			g, err := builder.NewResourceGraphDefinition(rgd)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.validateFunc != nil {
+				tt.validateFunc(t, g)
 			}
 		})
 	}

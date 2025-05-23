@@ -16,6 +16,7 @@ package graph
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 
 	"github.com/google/cel-go/cel"
@@ -41,6 +42,8 @@ import (
 	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/pkg/simpleschema"
 )
+
+var validIdentifierRegex = regexp.MustCompile("^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(
@@ -116,6 +119,22 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	err := validateResourceGraphDefinitionNamingConventions(rgd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
+	}
+
+	// 2. Prepare the CEL environment by building the custom functions defined
+	//   in the resource graph definition, if any, and adding them to the CEL environment.
+	//   This needs to be done before building the resources, because CEL expressions
+	//   in the resources might refer to the custom functions.
+	functions, err := buildFunctions(rgd.Spec.Functions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build custom functions: %w", err)
+	}
+
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithCustomDeclarations(cel.FunctionDecls(functions...)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
 	// Now that we did a basic validation of the resource graph definition, we can start understanding
@@ -203,6 +222,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		// We need to pass the resources to the instance resource, so we can validate
 		// the CEL expressions in the context of the resources.
 		resources,
+		env,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
@@ -214,7 +234,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// and evaluate the CEL expressions in the context of the resource graph definition.
 	//This is done
 	// by dry-running the CEL expressions against the emulated resources.
-	err = validateResourceCELExpressions(resources, instance)
+	err = validateResourceCELExpressions(resources, instance, env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
@@ -231,7 +251,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// The dependency graph is built by inspecting the CEL expressions in the
 	// resources and the instance resource, using a CEL AST (Abstract Syntax Tree)
 	// inspector.
-	dag, err := b.buildDependencyGraph(resources)
+	dag, err := b.buildDependencyGraph(resources, env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
@@ -246,6 +266,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Instance:         instance,
 		Resources:        resources,
 		TopologicalOrder: topologicalOrder,
+		Functions:        functions,
 	}
 	return resourceGraphDefinition, nil
 }
@@ -386,6 +407,7 @@ func (b *Builder) buildRGResource(
 //	on, we'll use this map to resolve the runtime variables.
 func (b *Builder) buildDependencyGraph(
 	resources map[string]*Resource,
+	env *cel.Env,
 ) (
 	// directed acyclic graph
 	*dag.DirectedAcyclicGraph[string],
@@ -397,9 +419,9 @@ func (b *Builder) buildDependencyGraph(
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "schema")
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err := krocel.Extend(env, krocel.WithResourceIDs(resourceNames))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		return nil, fmt.Errorf("failed to extend CEL environment: %w", err)
 	}
 
 	directedAcyclicGraph := dag.NewDirectedAcyclicGraph[string]()
@@ -457,6 +479,7 @@ func (b *Builder) buildInstanceResource(
 	group, apiVersion, kind string,
 	rgDefinition *v1alpha1.Schema,
 	resources map[string]*Resource,
+	env *cel.Env,
 ) (*Resource, error) {
 	// The instance resource is the resource users will create in their cluster,
 	// to request the creation of the resources defined in the resource graph definition.
@@ -465,6 +488,10 @@ func (b *Builder) buildInstanceResource(
 	// CRDs; it doesn't have an OpenAPI schema. Instead, it has a schema defined
 	// using the "SimpleSchema" format, a new standard we created to simplify
 	// CRD declarations.
+	env, err := krocel.Extend(env, krocel.WithResourceIDs(maps.Keys(resources)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to extend CEL environment: %w", err)
+	}
 
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
@@ -475,7 +502,7 @@ func (b *Builder) buildInstanceResource(
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %w", err)
 	}
 
-	instanceStatusSchema, statusVariables, err := buildStatusSchema(rgDefinition, resources)
+	instanceStatusSchema, statusVariables, err := buildStatusSchema(rgDefinition, resources, env)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance status: %w", err)
 	}
@@ -495,12 +522,6 @@ func (b *Builder) buildInstanceResource(
 		return nil, fmt.Errorf("failed to generate dummy CR for instance: %w", err)
 	}
 
-	resourceNames := maps.Keys(resources)
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
-	}
-
 	// The instance resource has a set of variables that need to be resolved.
 	instance := &Resource{
 		id:             "instance",
@@ -510,6 +531,7 @@ func (b *Builder) buildInstanceResource(
 		emulatedObject: emulatedInstance,
 	}
 
+	resourceNames := maps.Keys(resources)
 	instanceStatusVariables := []*variable.ResourceField{}
 	for _, statusVariable := range statusVariables {
 		// These variables need to be injected into the status field of the instance.
@@ -579,6 +601,7 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 func buildStatusSchema(
 	rgSchema *v1alpha1.Schema,
 	resources map[string]*Resource,
+	env *cel.Env,
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
@@ -600,13 +623,11 @@ func buildStatusSchema(
 
 	// Inspection of the CEL expressions to infer the types of the status fields.
 	resourceNames := maps.Keys(resources)
-
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err = krocel.Extend(env, krocel.WithResourceIDs(resourceNames))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		return nil, nil, fmt.Errorf("failed to extend CEL environment: %w", err)
 	}
 
-	// statusStructureParts := make([]schema.FieldDescriptor, 0, len(extracted))
 	statusDryRunResults := make(map[string][]ref.Val, len(fieldDescriptors))
 	for _, found := range fieldDescriptors {
 		// For each expression in the extracted `ExpressionField` we need to dry-run
@@ -727,15 +748,16 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 // we evaluate A's CEL expressions against 2 emulated resources B and C. Then
 // we evaluate B's CEL expressions against 2 emulated resources A and C, and so
 // on.
-func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
+func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource, env *cel.Env) error {
 	resourceIDs := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceIDs = append(resourceIDs, "schema")
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceIDs))
+	env, err := krocel.Extend(env, krocel.WithResourceIDs(resourceIDs))
 	if err != nil {
-		return fmt.Errorf("failed to create CEL environment: %w", err)
+		return fmt.Errorf("failed to extend CEL environment: %w", err)
 	}
+
 	instanceEmulatedCopy := instance.emulatedObject.DeepCopy()
 	if instanceEmulatedCopy != nil && instanceEmulatedCopy.Object != nil {
 		delete(instanceEmulatedCopy.Object, "apiVersion")
@@ -778,7 +800,13 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
 		}
 
-		err = ensureReadyWhenExpressions(resource)
+		// The readyWhen environment only has access to the resource itself; not schema and not the other resources.
+		readyWhenEnv, err := krocel.Extend(env, krocel.WithResourceIDs([]string{resource.id}))
+		if err != nil {
+			return fmt.Errorf("failed to create CEL environment for readyWhen expressions: %w", err)
+		}
+
+		err = ensureReadyWhenExpressions(readyWhenEnv, resource)
 		if err != nil {
 			return fmt.Errorf("failed to ensure resource %s readyWhen expressions: %w", resource.id, err)
 		}
@@ -812,13 +840,8 @@ func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resou
 
 // ensureReadyWhenExpressions validates the readyWhen expressions in the resource
 // against the resources defined in the resource graph definition.
-func ensureReadyWhenExpressions(resource *Resource) error {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
+func ensureReadyWhenExpressions(env *cel.Env, resource *Resource) error {
 	for _, expression := range resource.readyWhenExpressions {
-		if err != nil {
-			return fmt.Errorf("failed to create CEL environment: %w", err)
-		}
-
 		resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
 		if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
 			// ignore apiVersion and kind from readyWhenExpression context
@@ -869,5 +892,4 @@ func ensureExpression(env *cel.Env, expression string, resources []string, conte
 	}
 
 	return output, nil
-
 }

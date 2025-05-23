@@ -14,6 +14,9 @@
 package v1alpha1
 
 import (
+	"fmt"
+	"strings"
+
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -24,6 +27,66 @@ const (
 	// in the serviceAccounts map.
 	DefaultServiceAccountKey = "*"
 )
+
+// FunctionInput defines an input parameter for a custom function.
+type FunctionInput struct {
+	// Name is the name of the input parameter. This name can be used in the function's implementation
+	// (e.g., as a variable in a CEL expression).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z_][a-zA-Z0-9_]*$`
+	Name string `json:"name"`
+
+	// Type is the expected CEL type of the input parameter.
+	// Examples: "string", "int", "bool".
+	// This helps with type checking and marshaling data to the function.
+	// +kubebuilder:validation:Required
+	Type string `json:"type"`
+}
+
+// FunctionDefinition defines a callable function that can be used within the ResourceGraphDefinition.
+// It can be an inline CEL expression or a reference to an external function implementation.
+//
+// A function definition is uniquely identified by its signature, which is a combination of its name,
+// input types, and return type.
+//
+// Exactly one of 'celExpression' or 'externalRef' must be specified.
+// +kubebuilder:validation:XValidation:rule="has(self.celExpression) != has(self.externalRef)",message="exactly one of 'celExpression' or 'externalRef' must be provided"
+type FunctionDefinition struct {
+	// Name is used to call the function in CEL expressions.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z_][a-zA-Z0-9_]*$`
+	Name string `json:"name"`
+
+	// Inputs defines the list of input parameters for the function.
+	// +kubebuilder:validation:Optional
+	Inputs []FunctionInput `json:"inputs,omitempty"`
+
+	// ReturnType specifies the expected CEL type of the function's output.
+	// This is optional for some functions like CEL expressions,
+	// but recommended for clarity and potential type checking.
+	// +kubebuilder:validation:Optional
+	ReturnType string `json:"returnType,omitempty"`
+
+	// Description is a human-readable description of the function.
+	// +kubebuilder:validation:Optional
+	Description string `json:"description,omitempty"`
+
+	// CELExpression provides the definition for an inline CEL-based function.
+	// +kubebuilder:validation:Optional
+	CELExpression string `json:"celExpression,omitempty"`
+
+	// ExternalRef provides a reference to an external function.
+	// +kubebuilder:validation:Optional
+	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
+}
+
+func (fd FunctionDefinition) Signature() string {
+	types := make([]string, len(fd.Inputs))
+	for i, input := range fd.Inputs {
+		types[i] = input.Type
+	}
+	return fmt.Sprintf("%s(%s) -> %s", fd.Name, strings.Join(types, ", "), fd.ReturnType)
+}
 
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
 type ResourceGraphDefinitionSpec struct {
@@ -44,6 +107,11 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
+
+	// Functions is a list of custom functions that can be used within this ResourceGraphDefinition.
+	// These functions are added to the CEL environment when evaluating expressions.
+	// +kubebuilder:validation:Optional
+	Functions []FunctionDefinition `json:"functions,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of

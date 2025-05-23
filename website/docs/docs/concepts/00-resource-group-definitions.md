@@ -32,7 +32,7 @@ A ResourceGraphDefinition, like any Kubernetes resource, consists of three main 
 2. **Spec**: Defines the structure and properties of the ResourceGraphDefinition
 3. **Status**: Reflects the current state of the ResourceGraphDefinition
 
-The `spec` section of a ResourceGraphDefinition contains two main components:
+The `spec` section of a ResourceGraphDefinition contains three main components:
 
 - **Schema**: Defines what an instance of your API looks like:
   - What users can configure during creation and update
@@ -44,6 +44,7 @@ The `spec` section of a ResourceGraphDefinition contains two main components:
   - Conditions for inclusion
   - Readiness criteria
   - [External References](#resourcegraphdefinition-more-about-resources)
+- **Functions**: Custom functions that can be used in CEL expressions in **Resources**.
 
 This structure translates to YAML as follows:
 
@@ -64,6 +65,14 @@ spec:
     - id: resource1
       # declare your resources along with default values and variables
       template: {}
+
+  # Define your own functions to be used in CEL expressions
+  functions:
+    - name: greeting
+      inputs:
+      - type: string
+      celExpression: "'hello ' + _0 + '!'"
+
 ```
 
 Let's look at each component in detail...
@@ -199,3 +208,24 @@ resources:
 ```
 
 As part of the processing the Resource Graph, the instance reconciler waits for the `externalRef` object to be present and reads the object from the cluster as a node in the graph. Subsequent resources can use data from this node.
+
+## Functions
+
+Users can specify their own functions in the `spec.functions` block. A function declares zero or more inputs and optionally a return type. The return type can be inferred when using CEL expression functions. Inputs have a type and optionally a name. If name isn't set, the index of the input in the list will determine its name, starting with `_0`, then `_1`, etc.
+
+Function names are not unique, instead a function is uniquely identified by its signature (name, inputs and output). A function name can be overloaded as long as the signatures are different, allowing users to create e.g. two `add` functions, one that takes two strings and returns a string and the other that takes two integers and returns an integer.
+
+A function can refer to another function, no matter its order in the list; function ordering doesn't matter. Cyclical or recursive definitions are not supported.
+
+You can see the supported fields below, with name and celExpression (or externalRef) being required.
+
+```yaml
+spec:
+  functions:
+    - name:
+      inputs:
+      - name:
+        type:
+      returnType:
+      celExpression || externalRef:
+```

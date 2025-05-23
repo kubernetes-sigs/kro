@@ -219,7 +219,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	}
 
 	// 2. Create runtime
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"}, nil)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
@@ -446,7 +446,7 @@ func Test_NewResourceGraphDefinitionRuntime(t *testing.T) {
 		"service":    service,
 	}
 
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"}, nil)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}

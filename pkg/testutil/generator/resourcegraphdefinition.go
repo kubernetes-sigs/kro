@@ -119,3 +119,16 @@ func WithValidation(expression, message string) ResourceGraphDefinitionOption {
 		})
 	}
 }
+
+// WithCELFunction adds a CEL function definition to the ResourceGraphDefinition.
+func WithCELFunction(name, celExpression string, inputs []krov1alpha1.FunctionInput, returnType string) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		function := krov1alpha1.FunctionDefinition{
+			Name:          name,
+			CELExpression: celExpression,
+			Inputs:        inputs,
+			ReturnType:    returnType,
+		}
+		rgd.Spec.Functions = append(rgd.Spec.Functions, function)
+	}
+}

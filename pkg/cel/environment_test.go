@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWithResourceIDs(t *testing.T) {
@@ -48,7 +49,19 @@ func TestWithResourceIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := &envOptions{}
 			WithResourceIDs(tt.ids)(opts)
-			assert.Equal(t, tt.want, opts.resourceIDs)
+			assert.Len(t, opts.customDeclarations, len(tt.want))
+
+			env, err := cel.NewEnv(opts.customDeclarations...)
+			require.NoError(t, err)
+
+			variables := make(map[string]*cel.Type)
+			for _, v := range env.Variables() {
+				variables[v.Name()] = v.Type()
+			}
+
+			for _, id := range tt.want {
+				assert.Equal(t, cel.AnyType, variables[id])
+			}
 		})
 	}
 }
@@ -82,7 +95,7 @@ func TestWithCustomDeclarations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := &envOptions{}
-			WithCustomDeclarations(tt.declarations)(opts)
+			WithCustomDeclarations(tt.declarations...)(opts)
 			assert.Len(t, opts.customDeclarations, tt.wantLen)
 		})
 	}
@@ -109,9 +122,7 @@ func TestDefaultEnvironment(t *testing.T) {
 		{
 			name: "with custom declarations",
 			options: []EnvOption{
-				WithCustomDeclarations([]cel.EnvOption{
-					cel.Variable("custom", cel.StringType),
-				}),
+				WithCustomDeclarations(cel.Variable("custom", cel.StringType)),
 			},
 			wantErr: false,
 		},
@@ -119,9 +130,7 @@ func TestDefaultEnvironment(t *testing.T) {
 			name: "with both resource IDs and custom declarations",
 			options: []EnvOption{
 				WithResourceIDs([]string{"resource1"}),
-				WithCustomDeclarations([]cel.EnvOption{
-					cel.Variable("custom", cel.StringType),
-				}),
+				WithCustomDeclarations(cel.Variable("custom", cel.StringType)),
 			},
 			wantErr: false,
 		},

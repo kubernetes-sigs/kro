@@ -26,11 +26,6 @@ type EnvOption func(*envOptions)
 
 // envOptions holds all the configuration for the CEL environment.
 type envOptions struct {
-	// resourceIDs will be converted to CEL variable declarations
-	// of type 'any'.
-	//
-	// TODO(a-hilaly): Add support for custom types.
-	resourceIDs []string
 	// customDeclarations will be added to the CEL environment.
 	customDeclarations []cel.EnvOption
 }
@@ -38,12 +33,18 @@ type envOptions struct {
 // WithResourceIDs adds resource ids that will be declared as CEL variables.
 func WithResourceIDs(ids []string) EnvOption {
 	return func(opts *envOptions) {
-		opts.resourceIDs = append(opts.resourceIDs, ids...)
+		// resourceIDs will be converted to CEL variable declarations
+		// of type 'any'.
+		//
+		// TODO(a-hilaly): Add support for custom types.
+		for _, id := range ids {
+			opts.customDeclarations = append(opts.customDeclarations, cel.Variable(id, cel.AnyType))
+		}
 	}
 }
 
 // WithCustomDeclarations adds custom declarations to the CEL environment.
-func WithCustomDeclarations(declarations []cel.EnvOption) EnvOption {
+func WithCustomDeclarations(declarations ...cel.EnvOption) EnvOption {
 	return func(opts *envOptions) {
 		opts.customDeclarations = append(opts.customDeclarations, declarations...)
 	}
@@ -64,9 +65,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 
 	declarations = append(declarations, opts.customDeclarations...)
 
-	for _, name := range opts.resourceIDs {
-		declarations = append(declarations, cel.Variable(name, cel.AnyType))
+	return cel.NewEnv(declarations...)
+}
+
+func Extend(env *cel.Env, options ...EnvOption) (*cel.Env, error) {
+	opts := &envOptions{}
+	for _, opt := range options {
+		opt(opts)
 	}
 
-	return cel.NewEnv(declarations...)
+	return env.Extend(opts.customDeclarations...)
 }

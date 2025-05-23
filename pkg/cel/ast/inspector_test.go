@@ -17,7 +17,11 @@ package ast
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/google/cel-go/cel"
+	krocel "github.com/kro-run/kro/pkg/cel"
 )
 
 func TestInspector_InspectionResults(t *testing.T) {
@@ -216,10 +220,13 @@ func TestInspector_InspectionResults(t *testing.T) {
 			wantFunctions: []FunctionCall{
 				{Name: "contains"},
 				{Name: "contains"},
+				{Name: "duration"},
+				{Name: "duration"},
 				{Name: "map"},
 				{Name: "map"},
+				{Name: "size"},
+				{Name: "size"},
 				{Name: "timeAgo"},
-				// built-in functions don't appear in the function list
 			},
 		},
 		{
@@ -304,10 +311,20 @@ func TestInspector_InspectionResults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inspector, err := DefaultInspector(tt.resources, tt.functions)
-			if err != nil {
-				t.Fatalf("Failed to create inspector: %v", err)
+			declarations := make([]cel.EnvOption, 0, len(tt.resources)+len(tt.functions))
+			for _, resource := range tt.resources {
+				declarations = append(declarations, cel.Variable(resource, cel.AnyType))
 			}
+			for _, function := range tt.functions {
+				declarations = append(declarations, cel.Function(function, cel.Overload(function+"_any", []*cel.Type{cel.AnyType}, cel.AnyType)))
+			}
+
+			env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(declarations...))
+			if err != nil {
+				t.Fatalf("Failed to create environment: %v", err)
+			}
+
+			inspector := NewInspectorWithEnv(env, tt.resources)
 
 			got, err := inspector.Inspect(tt.expression)
 			if err != nil {
@@ -337,13 +354,15 @@ func TestInspector_InspectionResults(t *testing.T) {
 			}
 
 			// Only check function names, not arguments
-			gotFuncNames := make([]string, len(got.FunctionCalls))
-			wantFuncNames := make([]string, len(tt.wantFunctions))
-			for i, f := range got.FunctionCalls {
-				gotFuncNames[i] = f.Name
+			var gotFuncNames, wantFuncNames []string
+			for _, f := range got.FunctionCalls {
+				// Ignore operators and internals
+				if !strings.HasPrefix(f.Name, "_") && !strings.HasSuffix(f.Name, "_") && !strings.HasPrefix(f.Name, "@") {
+					gotFuncNames = append(gotFuncNames, f.Name)
+				}
 			}
-			for i, f := range tt.wantFunctions {
-				wantFuncNames[i] = f.Name
+			for _, f := range tt.wantFunctions {
+				wantFuncNames = append(wantFuncNames, f.Name)
 			}
 			sort.Strings(gotFuncNames)
 			sort.Strings(wantFuncNames)
@@ -453,10 +472,20 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inspector, err := DefaultInspector(tt.resources, tt.functions)
-			if err != nil {
-				t.Fatalf("Failed to create inspector: %v", err)
+			declarations := make([]cel.EnvOption, 0, len(tt.resources)+len(tt.functions))
+			for _, resource := range tt.resources {
+				declarations = append(declarations, cel.Variable(resource, cel.AnyType))
 			}
+			for _, function := range tt.functions {
+				declarations = append(declarations, cel.Function(function, cel.Overload(function+"_any", []*cel.Type{cel.AnyType}, cel.AnyType)))
+			}
+
+			env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(declarations...))
+			if err != nil {
+				t.Fatalf("Failed to create environment: %v", err)
+			}
+
+			inspector := NewInspectorWithEnv(env, tt.resources)
 
 			got, err := inspector.Inspect(tt.expression)
 			if err != nil {
@@ -494,13 +523,15 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			}
 
 			// Only check function names, not arguments
-			gotFuncNames := make([]string, len(got.FunctionCalls))
-			wantFuncNames := make([]string, len(tt.wantFunctions))
-			for i, f := range got.FunctionCalls {
-				gotFuncNames[i] = f.Name
+			var gotFuncNames, wantFuncNames []string
+			for _, f := range got.FunctionCalls {
+				// Ignore operators and internals
+				if !strings.HasPrefix(f.Name, "_") && !strings.HasSuffix(f.Name, "_") && !strings.HasPrefix(f.Name, "@") {
+					gotFuncNames = append(gotFuncNames, f.Name)
+				}
 			}
-			for i, f := range tt.wantFunctions {
-				wantFuncNames[i] = f.Name
+			for _, f := range tt.wantFunctions {
+				wantFuncNames = append(wantFuncNames, f.Name)
 			}
 			sort.Strings(gotFuncNames)
 			sort.Strings(wantFuncNames)
@@ -517,12 +548,12 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 }
 
 func Test_InvalidExpression(t *testing.T) {
-	_ = NewInspectorWithEnv(nil, []string{})
-
-	inspector, err := DefaultInspector([]string{}, []string{})
+	env, err := cel.NewEnv()
 	if err != nil {
-		t.Fatalf("Failed to create inspector: %v", err)
+		t.Fatalf("Failed to create environment: %v", err)
 	}
+
+	inspector := NewInspectorWithEnv(env, []string{})
 	_, err = inspector.Inspect("invalid expression ######")
 	if err == nil {
 		t.Errorf("Expected error")

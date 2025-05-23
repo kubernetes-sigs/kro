@@ -20,8 +20,6 @@ import (
 
 	"github.com/google/cel-go/cel"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
-
-	krocel "github.com/kro-run/kro/pkg/cel"
 )
 
 // ResourceDependency represents a resource and its accessed path within a CEL expression.
@@ -93,48 +91,8 @@ type Inspector struct {
 	// resources is a set of known resource ids that can be referenced in expressions
 	resources map[string]struct{}
 
-	// functions is a set of known function names that can be called in expressions
-	functions map[string]struct{}
-
 	// Track active loop variables
 	loopVars map[string]struct{}
-}
-
-// knownFunctions contains the list of all CEL functions that are supported
-var knownFunctions = []string{
-	"random.seededString",
-}
-
-// DefaultInspector creates a new Inspector instance with the given resources and functions.
-//
-// TODO(a-hilaly): unify CEL environment creation with the rest of the codebase.
-func DefaultInspector(resources []string, functions []string) (*Inspector, error) {
-	declarations := make([]cel.EnvOption, 0, len(resources)+len(functions))
-
-	resourceMap := make(map[string]struct{})
-	for _, resource := range resources {
-		declarations = append(declarations, cel.Variable(resource, cel.AnyType))
-		resourceMap[resource] = struct{}{}
-	}
-
-	functionMap := make(map[string]struct{})
-	for _, function := range functions {
-		fn := cel.Function(function, cel.Overload(function+"_any", []*cel.Type{cel.AnyType}, cel.AnyType))
-		declarations = append(declarations, fn)
-		functionMap[function] = struct{}{}
-	}
-
-	env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(declarations))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %v", err)
-	}
-
-	return &Inspector{
-		env:       env,
-		resources: resourceMap,
-		functions: functionMap,
-		loopVars:  make(map[string]struct{}),
-	}, nil
 }
 
 // NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.
@@ -144,15 +102,9 @@ func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 		resourceMap[resource] = struct{}{}
 	}
 
-	functionMap := make(map[string]struct{})
-	for _, function := range knownFunctions {
-		functionMap[function] = struct{}{}
-	}
-
 	return &Inspector{
 		env:       env,
 		resources: resourceMap,
-		functions: functionMap,
 		loopVars:  make(map[string]struct{}),
 	}
 }
@@ -218,7 +170,7 @@ func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) Expr
 	if target := call.Target; target != nil {
 		if ident, ok := target.ExprKind.(*exprpb.Expr_IdentExpr); ok {
 			fullName := ident.IdentExpr.Name + "." + call.Function
-			if _, ok := a.functions[fullName]; ok {
+			if a.env.HasFunction(fullName) {
 				// This is a known namespaced function, record the call
 				args := make([]string, 0, len(call.Args))
 				for _, arg := range call.Args {
@@ -233,18 +185,7 @@ func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) Expr
 		}
 	}
 
-	// Handle the current function - only if it's not part of a chain
-	if _, isFunction := a.functions[call.Function]; isFunction && call.Target == nil {
-		functionCall := FunctionCall{
-			Name: call.Function,
-		}
-		for _, arg := range call.Args {
-			functionCall.Arguments = append(functionCall.Arguments, a.exprToString(arg))
-		}
-		inspection.FunctionCalls = append(inspection.FunctionCalls, functionCall)
-	}
-
-	// Then handle the target if it exists
+	// Handle the target if it exists
 	if call.Target != nil {
 		targetInspection := a.inspectAst(call.Target, currentPath)
 		inspection.ResourceDependencies = append(inspection.ResourceDependencies, targetInspection.ResourceDependencies...)
@@ -256,9 +197,16 @@ func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) Expr
 		inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
 			Name: fmt.Sprintf("%s.%s", a.exprToString(call.Target), call.Function),
 		})
-	} else if !isInternalFunction(call.Function) {
-		// This is an unknown function, but not an internal one
+	} else if !a.env.HasFunction(call.Function) {
 		inspection.UnknownFunctions = append(inspection.UnknownFunctions, UnknownFunction{Name: call.Function})
+	} else { // Handle known functions with no target
+		functionCall := FunctionCall{
+			Name: call.Function,
+		}
+		for _, arg := range call.Args {
+			functionCall.Arguments = append(functionCall.Arguments, a.exprToString(arg))
+		}
+		inspection.FunctionCalls = append(inspection.FunctionCalls, functionCall)
 	}
 
 	return inspection
@@ -449,18 +397,10 @@ func (a *Inspector) callExpressionToString(call *exprpb.Expr_Call) string {
 	// Handle special operators
 	if strings.HasPrefix(call.Function, "_") && strings.HasSuffix(call.Function, "_") {
 		switch call.Function {
-		case "_+_", "_-_", "_*_", "_/_", "_%_", "_<_", "_<=_", "_>_", "_>=_", "_==_", "_!=_":
+		case "_+_", "_-_", "_*_", "_/_", "_%_", "_<_", "_<=_", "_>_", "_>=_", "_==_", "_!=_", "_&&_", "_||_":
 			if len(args) == 2 {
 				op := strings.Trim(call.Function, "_")
 				return fmt.Sprintf("(%s %s %s)", args[0], op, args[1])
-			}
-		case "_&&_":
-			if len(args) == 2 {
-				return fmt.Sprintf("(%s && %s)", args[0], args[1])
-			}
-		case "_||_":
-			if len(args) == 2 {
-				return fmt.Sprintf("(%s || %s)", args[0], args[1])
 			}
 		case "_?_:_":
 			if len(args) == 3 {
@@ -518,48 +458,4 @@ func (a *Inspector) structExpressionToString(s *exprpb.Expr_CreateStruct) string
 
 func isInternalIdentifier(name string) bool {
 	return name == "@result" || strings.HasPrefix(name, "$$")
-}
-
-func isInternalFunction(name string) bool {
-	internalFunctions := map[string]bool{
-		"_+_":     true,
-		"_-_":     true,
-		"_*_":     true,
-		"_/_":     true,
-		"_%_":     true,
-		"_<_":     true,
-		"_<=_":    true,
-		"_>_":     true,
-		"_>=_":    true,
-		"_==_":    true,
-		"_!=_":    true,
-		"_&&_":    true,
-		"_||_":    true,
-		"_?_:_":   true,
-		"_[_]":    true,
-		"size":    true,
-		"in":      true,
-		"matches": true,
-		// types
-		"int":       true,
-		"uint":      true,
-		"double":    true,
-		"bool":      true,
-		"string":    true,
-		"bytes":     true,
-		"timestamp": true,
-		"duration":  true,
-		"type":      true,
-
-		// Collection Functions
-		"filter":     true,
-		"map":        true,
-		"all":        true,
-		"exists":     true,
-		"exists_one": true,
-
-		// Custom Functions
-		"random.seededString": true,
-	}
-	return internalFunctions[name]
 }

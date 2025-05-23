@@ -19,10 +19,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/decls"
 	krocel "github.com/kro-run/kro/pkg/cel"
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/runtime/resolver"
@@ -46,11 +47,13 @@ func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
 	topologicalOrder []string,
+	functions []*decls.FunctionDecl,
 ) (*ResourceGraphDefinitionRuntime, error) {
 	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
 		topologicalOrder:             topologicalOrder,
+		functions:                    functions,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
@@ -170,6 +173,9 @@ type ResourceGraphDefinitionRuntime struct {
 	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
+
+	// functions holds the CEL function declarations
+	functions []*decls.FunctionDecl
 }
 
 // TopologicalOrder returns the topological order of resources.
@@ -306,7 +312,10 @@ func (rt *ResourceGraphDefinitionRuntime) resourceVariablesResolved(resource str
 // depending only on the initial configuration. This function is usually
 // called once during runtime initialization to set up the baseline state
 func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs([]string{"schema"}),
+		krocel.WithCustomDeclarations(cel.FunctionDecls(rt.functions...)),
+	)
 	if err != nil {
 		return err
 	}
@@ -351,7 +360,10 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 	resolvedResources := maps.Keys(rt.resolvedResources)
 	resolvedResources = append(resolvedResources, "schema")
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs(resolvedResources),
+		krocel.WithCustomDeclarations(cel.FunctionDecls(rt.functions...)),
+	)
 	if err != nil {
 		return err
 	}
@@ -485,7 +497,10 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resourceID}))
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs([]string{resourceID}),
+		krocel.WithCustomDeclarations(cel.FunctionDecls(rt.functions...)),
+	)
 	if err != nil {
 		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
 	}
@@ -541,7 +556,10 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs([]string{"schema"}),
+		krocel.WithCustomDeclarations(cel.FunctionDecls(rt.functions...)),
+	)
 	if err != nil {
 		return false, nil
 	}

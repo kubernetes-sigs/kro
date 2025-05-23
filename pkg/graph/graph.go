@@ -17,6 +17,7 @@ package graph
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/google/cel-go/common/decls"
 	"github.com/kro-run/kro/pkg/graph/dag"
 	"github.com/kro-run/kro/pkg/runtime"
 )
@@ -33,6 +34,8 @@ type Graph struct {
 	Resources map[string]*Resource
 	// TopologicalOrder is the topological order of the resources in the resource graph definition.
 	TopologicalOrder []string
+	// Functions are the CEL function declarations for the resource graph definition.
+	Functions []*decls.FunctionDecl
 }
 
 // NewGraphRuntime creates a new runtime resource graph definition from the resource graph definition instance.
@@ -46,7 +49,7 @@ func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runt
 
 	instance := rgd.Instance.DeepCopy()
 	instance.originalObject = newInstance
-	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder)
+	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder, rgd.Functions)
 	if err != nil {
 		return nil, err
 	}

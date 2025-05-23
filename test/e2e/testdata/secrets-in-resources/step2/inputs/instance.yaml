@@ -1,0 +1,9 @@
+apiVersion: kro.run/v1alpha1
+kind: DeploymentWithSecret
+metadata:
+  name: test-instance
+spec:
+  replicas: 2
+  image: nginx:1.25 
+  tokenID: newtokenid
+  tokenSecret: newtokensecret

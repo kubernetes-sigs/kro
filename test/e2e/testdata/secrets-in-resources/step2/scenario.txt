@@ -1,0 +1,1 @@
+Update instance DeploymentWithSecret with tokenID=newtokenid and tokenSecret=newtokensecret

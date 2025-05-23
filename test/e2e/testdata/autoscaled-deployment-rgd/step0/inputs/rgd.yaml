@@ -1,0 +1,87 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: autoscaled-deployment-rgd
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: AutoscaledDeployment
+    spec:
+      name: string | "some-app"
+      image: string | "nginx:latest"
+      minReplicas: integer | 1
+      maxReplicas: integer | 10
+      targetCPUUtilization: integer | 80
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-config
+        data:
+          index.html: |
+            <h1>Hello, World!</h1>
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}-service
+        spec:
+          selector:
+            app: ${schema.spec.name}-deployment
+          ports:
+            - port: 8080
+              targetPort: http
+              protocol: TCP
+              name: http
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}-deployment
+        spec:
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}-deployment
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}-deployment
+            spec:
+              containers:
+                - name: main
+                  image: ${schema.spec.image}
+                  ports:
+                    - name: http
+                      containerPort: 8080
+                  volumeMounts:
+                    - name: config
+                      mountPath: /usr/share/nginx/html
+                      readOnly: true
+              volumes:
+                - name: config
+                  configMap:
+                    name: ${schema.spec.name}-config
+    - id: autoscaler
+      template:
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: ${schema.spec.name}-hpa
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: ${schema.spec.name}-deployment
+          minReplicas: ${schema.spec.minReplicas}
+          maxReplicas: ${schema.spec.maxReplicas}
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: ${schema.spec.targetCPUUtilization} 

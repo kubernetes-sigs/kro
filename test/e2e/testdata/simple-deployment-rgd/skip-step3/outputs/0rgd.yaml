@@ -1,0 +1,24 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: simple-deployment-rgd
+  finalizers:
+    - kro.run/finalizer
+  generation: 2
+status:
+  conditions:
+  - message: micro controller is ready
+    reason: ""
+    status: "True"
+    type: ReconcilerReady
+  - message: Directed Acyclic Graph is synced
+    reason: ""
+    status: "True"
+    type: GraphVerified
+  - message: Custom Resource Definition is synced
+    reason: ""
+    status: "True"
+    type: CustomResourceDefinitionSynced
+  state: Active
+  topologicalOrder:
+  - deployment

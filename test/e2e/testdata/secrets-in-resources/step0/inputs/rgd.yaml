@@ -1,0 +1,56 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: deployment-with-secret-rgd
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: DeploymentWithSecret
+    spec:
+      replicas: integer | 1
+      image: string | "nginx:latest"
+      tokenID: string
+      tokenSecret: string
+  resources:
+    - id: secret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.metadata.name}-secret
+        type: Opaque
+        stringData:
+          bootstrap: "true"
+          token-id: ${schema.spec.tokenID}
+          token-secret: ${schema.spec.tokenSecret}
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+                secret-version: ${secret.metadata.resourceVersion}
+            spec:
+              containers:
+                - name: main
+                  image: ${schema.spec.image}
+                  env:
+                    - name: TOKEN_ID
+                      valueFrom:
+                        secretKeyRef:
+                          name: ${schema.metadata.name}-secret
+                          key: token-id
+                    - name: TOKEN_SECRET  
+                      valueFrom:
+                        secretKeyRef:
+                          name: ${schema.metadata.name}-secret
+                          key: token-secret

@@ -269,3 +269,12 @@ cli:
 	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
+
+# Run e2e tests
+.PHONY: test-e2e
+test-e2e: ## Run e2e tests
+	go test -v ./test/e2e/suites/basic/...
+
+.PHONY: test-e2e-kind
+test-e2e-kind: deploy-kind
+	make test-e2e

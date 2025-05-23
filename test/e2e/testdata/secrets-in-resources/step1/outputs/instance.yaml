@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: DeploymentWithSecret
+metadata:
+  finalizers:
+  - kro.run/finalizer
+  generation: 1
+  labels:
+    kro.run/owned: "true"
+  name: test-instance
+spec:
+  image: nginx:1.25
+  replicas: 2
+  tokenID: sometokenid
+  tokenSecret: kq4gihvszzgn1p0r
+status:
+  conditions:
+  - message: Instance reconciled successfully
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: InstanceSynced
+  state: ACTIVE

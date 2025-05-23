@@ -95,16 +95,47 @@ type Builder struct {
 	// validate the CEL expressions. To revisit.
 	resourceEmulator *emulator.Emulator
 	discoveryClient  discovery.DiscoveryInterface
+	warnings         Warnings
+}
+
+type Warnings []Warning
+
+type Warning struct {
+	Resource string
+	Message  string
+}
+
+// AddWarning appends warning to the warnings list.
+// The resource is the name of the resource that the warning is related to.
+// The message is the warning message.
+func (w *Warnings) AddWarning(resource string, message string) {
+	*w = append(*w, Warning{
+		Resource: resource,
+		Message:  message,
+	})
 }
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition) (*Graph, error) {
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition) (*Graph, Warnings, error) {
+	b.warnings = Warnings{}
+
 	// Before anything else, let's copy the resource graph definition to avoid modifying the
 	// original object.
 	rgd := originalCR.DeepCopy()
+
+	// Basic Schema validation warnings
+	if rgd.Spec.Schema.APIVersion == "" {
+		b.warnings.AddWarning("schema", "schema.apiVersion is not specified")
+	}
+	if rgd.Spec.Schema.Kind == "" {
+		b.warnings.AddWarning("schema", "schema.kind is not specified")
+	}
+	if len(rgd.Spec.Resources) == 0 {
+		b.warnings.AddWarning("schema", "no resources defined in the ResourceGraphDefinition")
+	}
 
 	// There are a few steps to build a resource graph definition:
 	// 1. Validate the naming convention of the resource graph definition and its resources.
@@ -115,7 +146,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    because in CEL - is a subtraction operator.
 	err := validateResourceGraphDefinitionNamingConventions(rgd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
+		return nil, b.warnings, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
 	// Now that we did a basic validation of the resource graph definition, we can start understanding
@@ -132,7 +163,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	namespacedResources := map[k8sschema.GroupKind]bool{}
 	apiResourceList, err := b.discoveryClient.ServerPreferredNamespacedResources()
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve Kubernetes namespaced resources: %w", err)
+		return nil, b.warnings, fmt.Errorf("failed to retrieve Kubernetes namespaced resources: %w", err)
 	}
 	for _, resourceList := range apiResourceList {
 		for _, r := range resourceList.APIResources {
@@ -146,12 +177,19 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
 		order := i
+
+		if rgResource.Template.Raw == nil && rgResource.ExternalRef == nil {
+			b.warnings.AddWarning(id, "resource has neither template nor externalRef defined")
+		}
+		if len(rgResource.ReadyWhen) == 0 {
+			b.warnings.AddWarning(id, "resource has no readyWhen conditions defined")
+		}
 		r, err := b.buildRGResource(rgResource, namespacedResources, order)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
+			return nil, b.warnings, fmt.Errorf("failed to build resource %q: %w", id, err)
 		}
 		if resources[id] != nil {
-			return nil, fmt.Errorf("found resources with duplicate id %q", id)
+			return nil, b.warnings, fmt.Errorf("found resources with duplicate id %q", id)
 		}
 		resources[id] = r
 	}
@@ -205,7 +243,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		resources,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
+		return nil, b.warnings, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
 	}
 
 	// Before getting into the dependency graph, we need to validate the CEL expressions
@@ -216,7 +254,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// by dry-running the CEL expressions against the emulated resources.
 	err = validateResourceCELExpressions(resources, instance)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
+		return nil, b.warnings, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
 
 	// Now that we have the instance resource, we can move into the next stage of
@@ -233,12 +271,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// inspector.
 	dag, err := b.buildDependencyGraph(resources)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
+		return nil, b.warnings, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
 
 	topologicalOrder, err := dag.TopologicalSort()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get topological order: %w", err)
+		return nil, b.warnings, fmt.Errorf("failed to get topological order: %w", err)
 	}
 
 	resourceGraphDefinition := &Graph{
@@ -247,7 +285,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Resources:        resources,
 		TopologicalOrder: topologicalOrder,
 	}
-	return resourceGraphDefinition, nil
+	return resourceGraphDefinition, b.warnings, nil
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.

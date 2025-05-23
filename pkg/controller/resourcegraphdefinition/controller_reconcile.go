@@ -111,7 +111,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
 // and extract resource information
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
-	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd)
+	processedRGD, _, err := r.rgBuilder.NewResourceGraphDefinition(rgd)
 	if err != nil {
 		return nil, nil, newGraphError(err)
 	}

@@ -41,7 +41,75 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
 		wantErr                     bool
 		errMsg                      string
+		expectedWarnings            []Warning
 	}{
+		{
+			name: "warnings for missing APIVersion",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks":         []interface{}{"10.0.0.0/16"},
+						"enableDNSSupport":   true,
+						"enableDNSHostnames": true,
+					},
+				}, []string{"${vpc.status.state == 'available'}"}, nil),
+			},
+			wantErr: false,
+			expectedWarnings: []Warning{
+				{Resource: "schema", Message: "schema.apiVersion is not specified"},
+			},
+		},
+		{
+			name: "warning for empty resources",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+			},
+			wantErr: false,
+			expectedWarnings: []Warning{
+				{Resource: "schema", Message: "no resources defined in the ResourceGraphDefinition"},
+			},
+		},
+		{
+			name: "warnings for resource without readyWhen or template",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+			expectedWarnings: []Warning{
+				{Resource: "vpc", Message: "resource has no readyWhen conditions defined"},
+			},
+		},
 		{
 			name: "invalid resource type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
@@ -417,23 +485,40 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					"spec": map[string]interface{}{
 						"cidrBlocks": []interface{}{"10.0.0.0/16"},
 					},
-				}, nil, nil),
+				}, []string{"${vpc.status.state == 'available'}"}, nil),
 			},
-			wantErr: false,
+			wantErr:          false,
+			expectedWarnings: []Warning{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-group", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, warnings, err := builder.NewResourceGraphDefinition(rgd)
 
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
 				return
 			}
+
 			require.NoError(t, err)
+
+			// Validate warnings
+			if len(tt.expectedWarnings) > 0 {
+				assert.Equal(t, len(tt.expectedWarnings), len(warnings),
+					"expected %d warnings but got %d", len(tt.expectedWarnings), len(warnings))
+
+				for i, expectedWarning := range tt.expectedWarnings {
+					assert.Equal(t, expectedWarning.Resource, warnings[i].Resource,
+						"warning resource mismatch at index %d", i)
+					assert.Equal(t, expectedWarning.Message, warnings[i].Message,
+						"warning message mismatch at index %d", i)
+				}
+			} else {
+				assert.Empty(t, warnings, "expected no warnings but got some")
+			}
 		})
 	}
 }
@@ -982,7 +1067,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, _, err := builder.NewResourceGraphDefinition(rgd)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1315,7 +1400,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, _, err := builder.NewResourceGraphDefinition(rgd)
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)
@@ -1393,7 +1478,7 @@ func Test_ValidateOpenAPISchema(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, _, err := builder.NewResourceGraphDefinition(rgd)
 			require.NoError(t, err)
 			require.Len(t, g.Instance.crd.Spec.Versions, 1)
 			require.NotNil(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)

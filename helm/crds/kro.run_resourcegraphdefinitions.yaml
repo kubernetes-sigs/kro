@@ -178,9 +178,6 @@ spec:
                       and create the CRD for the resourcegraphdefinition.
                     pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                     type: string
-                    x-kubernetes-validations:
-                    - message: apiVersion is immutable
-                      rule: self == oldSelf
                   group:
                     default: kro.run
                     description: |-

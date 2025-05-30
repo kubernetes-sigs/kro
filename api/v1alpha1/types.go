@@ -61,7 +61,6 @@ type Schema struct {
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
 	// The group of the resourcegraphdefinition. This is used to set the API group
 	// of the generated CRD. If omitted, it defaults to "kro.run".

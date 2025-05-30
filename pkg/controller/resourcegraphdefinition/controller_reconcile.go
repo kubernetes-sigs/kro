@@ -28,13 +28,17 @@ import (
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/watchset"
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
 // 1. Processing the resource graph
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	// Process resource graph definition graph first to validate structure
@@ -61,7 +65,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler, r.watchset)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
@@ -75,7 +79,9 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 }
 
 // setupLabeler creates and merges the required labelers for the resource graph definition
-func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceGraphDefinition) (metadata.Labeler, error) {
+func (r *ResourceGraphDefinitionReconciler) setupLabeler(
+	rgd *v1alpha1.ResourceGraphDefinition,
+) (metadata.Labeler, error) {
 	rgLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
 	return r.metadataLabeler.Merge(rgLabeler)
 }
@@ -86,6 +92,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
 	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
+	watchset *watchset.WatchSet,
 ) *instancectrl.Controller {
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
 		"controller", gvr.Resource,
@@ -105,12 +112,17 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.clientSet,
 		defaultSVCs,
 		labeler,
+		watchset,
+		r.dynamicController,
 	)
 }
 
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
 // and extract resource information
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(
+	_ context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd)
 	if err != nil {
 		return nil, nil, newGraphError(err)
@@ -148,7 +160,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 }
 
 // reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler) error {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(
+	ctx context.Context,
+	gvr *schema.GroupVersionResource,
+	handler dynamiccontroller.Handler,
+) error {
 	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler)
 	if err != nil {
 		return newMicroControllerError(err)

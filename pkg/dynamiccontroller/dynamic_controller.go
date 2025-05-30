@@ -388,11 +388,11 @@ func (dc *DynamicController) updateFunc(old, new interface{}) {
 		return
 	}
 
-	dc.enqueueObject(new, "update")
+	dc.EnqueueObject(new, "update")
 }
 
 // enqueueObject adds an object to the workqueue
-func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
+func (dc *DynamicController) EnqueueObject(obj interface{}, eventType string) {
 	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
 		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
@@ -437,7 +437,7 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
 		}
 		for _, obj := range objs.Items {
-			dc.enqueueObject(&obj, "update")
+			dc.EnqueueObject(&obj, "update")
 		}
 		return nil
 	}
@@ -455,9 +455,9 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 
 	// Set up event handlers
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { dc.enqueueObject(obj, "add") },
+		AddFunc:    func(obj interface{}) { dc.EnqueueObject(obj, "add") },
 		UpdateFunc: dc.updateFunc,
-		DeleteFunc: func(obj interface{}) { dc.enqueueObject(obj, "delete") },
+		DeleteFunc: func(obj interface{}) { dc.EnqueueObject(obj, "delete") },
 	})
 	if err != nil {
 		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)

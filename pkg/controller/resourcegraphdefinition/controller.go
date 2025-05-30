@@ -19,6 +19,9 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -34,6 +37,7 @@ import (
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/watchset"
 )
 
 //+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
@@ -47,6 +51,8 @@ type ResourceGraphDefinitionReconciler struct {
 	// Client and instanceLogger are set with SetupWithManager
 
 	client.Client
+
+	restMapper     meta.RESTMapper
 	instanceLogger logr.Logger
 
 	clientSet  *kroclient.Set
@@ -56,6 +62,8 @@ type ResourceGraphDefinitionReconciler struct {
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
+
+	watchset *watchset.WatchSet
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -81,7 +89,17 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	r.restMapper = mgr.GetRESTMapper()
 	r.instanceLogger = mgr.GetLogger()
+
+	// Global watch selector kro.run/owned: "true"
+	labelSelector := metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			metadata.OwnedLabel: "true",
+		},
+	}
+	labelSelectorString := labels.Set(labelSelector.MatchLabels).String()
+	r.watchset = watchset.NewWatchSet(context.Background(), r.clientSet.Dynamic(), r.restMapper, labelSelectorString)
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(
@@ -151,7 +169,10 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 	}
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
+func (r *ResourceGraphDefinitionReconciler) Reconcile(
+	ctx context.Context,
+	o *v1alpha1.ResourceGraphDefinition,
+) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err

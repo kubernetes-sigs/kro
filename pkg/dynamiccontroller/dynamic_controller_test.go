@@ -153,7 +153,7 @@ func TestEnqueueObject(t *testing.T) {
 	obj.SetNamespace("default")
 	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
 
-	dc.enqueueObject(obj, "add")
+	dc.EnqueueObject(obj, "add")
 
 	assert.Equal(t, 1, dc.queue.Len())
 }

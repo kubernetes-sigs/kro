@@ -1,0 +1,8 @@
+apiVersion: kro.run/v1alpha1
+kind: SimpleDeployment
+metadata:
+  name: test-app
+spec:
+  name: test-app
+  port: 80 # nginx default port is 80
+  service: {} # this is needed

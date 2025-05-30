@@ -25,13 +25,16 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 	kroclient "github.com/kro-run/kro/pkg/client"
+	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/watchset"
 )
 
 // ReconcileConfig holds configuration parameters for the reconciliation process.
@@ -89,6 +92,11 @@ type Controller struct {
 	reconcileConfig ReconcileConfig
 	// defaultServiceAccounts is a map of service accounts to use for controller impersonation.
 	defaultServiceAccounts map[string]string
+
+	// watchset is a watchset that is used to watch the instance and its sub-resources.
+	watchset *watchset.WatchSet
+
+	dynamicController *dynamiccontroller.DynamicController
 }
 
 // NewController creates a new Controller instance.
@@ -100,6 +108,8 @@ func NewController(
 	clientSet *kroclient.Set,
 	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
+	watchset *watchset.WatchSet,
+	dynamicController *dynamiccontroller.DynamicController,
 ) *Controller {
 	return &Controller{
 		log:                    log,
@@ -109,6 +119,8 @@ func NewController(
 		instanceLabeler:        instanceLabeler,
 		reconcileConfig:        reconcileConfig,
 		defaultServiceAccounts: defaultServiceAccounts,
+		watchset:               watchset,
+		dynamicController:      dynamicController,
 	}
 }
 
@@ -150,10 +162,22 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		return fmt.Errorf("failed to create execution client: %w", err)
 	}
 
+	// setup trigger callback
+	triggerFn := func(event watch.Event) {
+		c.log.V(1).Info("Watch triggered. Enqueuing object to dynamic controller", "event", event)
+		c.dynamicController.EnqueueObject(instance, string(event.Type))
+	}
+	trigger := watchset.Trigger{
+		TriggerFn: triggerFn,
+	}
+	watchsetMgr := watchset.NewWatchManagerUsingObject(c.watchset, instance, trigger)
+	rsrcClient := watchset.NewDynamicInterface(executionClient, watchsetMgr)
+
 	instanceGraphReconciler := &instanceGraphReconciler{
 		log:                         log,
 		gvr:                         c.gvr,
 		client:                      executionClient,
+		resourceClient:              rsrcClient,
 		runtime:                     rgRuntime,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,

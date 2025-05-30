@@ -141,6 +141,42 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 
 // reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
+	// We want to check if the version declared in the RGD has changed
+	// So we look for the latest version in the existing CRD if any
+	//   The latest version is by convention the one where both served and storage are true
+	existingCrd, _ := r.crdManager.Get(ctx, crd.Name)
+	if len(existingCrd.Spec.Versions) > 0 {
+		var latestVersionIdx int
+		var latestVersion v1.CustomResourceDefinitionVersion
+		for i, v := range existingCrd.Spec.Versions {
+			if v.Storage && v.Served {
+				latestVersion = v
+				latestVersionIdx = i
+			}
+		}
+
+		versionInRgd := crd.Spec.Versions[0].Name
+		if latestVersion.Name != versionInRgd {
+			// The version declared in the RGD has changed
+			// so here we need to validate that it is a new version
+			// If it is valid we update the existing crd
+			// 1. we make sure the new version is both the served and stored version
+			// 2. we append the new version to the existing instance
+			// 3. we reconcile the existing instnace
+			existingCrd.Spec.Versions[latestVersionIdx].Storage = false
+			existingCrd.Spec.Versions[latestVersionIdx].Served = false
+			crd.Spec.Versions[0].Storage = true
+			crd.Spec.Versions[0].Served = true
+
+			existingCrd.Spec.Versions = append(existingCrd.Spec.Versions, crd.Spec.Versions...)
+			if err := r.crdManager.Ensure(ctx, *existingCrd); err != nil {
+				return newCRDError(err)
+			}
+			return nil
+		}
+
+	}
+
 	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
 		return newCRDError(err)
 	}

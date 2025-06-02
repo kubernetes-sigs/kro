@@ -16,6 +16,7 @@ package simpleschema
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 

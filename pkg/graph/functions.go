@@ -69,11 +69,13 @@ func topologicallySortFunctions(functions []v1alpha1.FunctionDefinition) ([]v1al
 
 		// The name of the function is not unique, hence why it's necessary
 		// to create vertices by using the signature as that uniquely identifies the function.
-		g.AddVertex(sig, i)
+		if err := g.AddVertex(sig, i); err != nil {
+			return nil, fmt.Errorf("function %q: %w", f.Name, err)
+		}
 
 		inspectionResult, err := inspector.Inspect(f.CELExpression)
 		if err != nil {
-			return nil, fmt.Errorf("failed to inspect expression %s: %w", f.CELExpression, err)
+			return nil, fmt.Errorf("function %q: failed to inspect expression %s: %w", f.Name, f.CELExpression, err)
 		}
 
 		for _, fn := range inspectionResult.FunctionCalls {
@@ -83,14 +85,19 @@ func topologicallySortFunctions(functions []v1alpha1.FunctionDefinition) ([]v1al
 			// be caught in a later stage.
 			if fns, ok := nameToDefinitions[fn.Name]; ok {
 				for _, fn := range fns {
-					g.AddDependencies(sig, []string{fn.Signature()})
+					if err := g.AddDependencies(sig, []string{fn.Signature()}); err != nil {
+						return nil, fmt.Errorf("function %q: %w", f.Name, err)
+					}
+
 				}
 			}
 		}
 		for _, fn := range inspectionResult.UnknownFunctions {
 			if fns, ok := nameToDefinitions[fn.Name]; ok {
 				for _, fn := range fns {
-					g.AddDependencies(sig, []string{fn.Signature()})
+					if err := g.AddDependencies(sig, []string{fn.Signature()}); err != nil {
+						return nil, fmt.Errorf("function %q: %w", f.Name, err)
+					}
 				}
 			}
 		}

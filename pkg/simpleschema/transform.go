@@ -24,7 +24,10 @@ import (
 )
 
 const (
-	keyTypeString = "string" // Type used for map keys in OpenAPI schema
+	keyTypeString  = string(AtomicTypeString)
+	keyTypeInteger = string(AtomicTypeInteger)
+	keyTypeBoolean = string(AtomicTypeBool)
+	keyTypeNumber  = "number"
 )
 
 // A predefinedType is a type that is predefined in the schema.
@@ -221,7 +224,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			switch schema.Type {
 			case keyTypeString:
 				defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-			case "integer", "number", "boolean":
+			case keyTypeInteger, keyTypeNumber, keyTypeBoolean:
 				defaultValue = []byte(marker.Value)
 			default:
 				defaultValue = []byte(marker.Value)
@@ -266,7 +269,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				switch schema.Type {
 				case keyTypeString:
 					rawValue = []byte(fmt.Sprintf("%q", val))
-				case "integer":
+				case keyTypeInteger:
 					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
 						return fmt.Errorf("failed to parse integer enum value: %w", err)
 					}

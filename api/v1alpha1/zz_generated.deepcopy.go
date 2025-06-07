@@ -298,8 +298,8 @@ func (in *Schema) DeepCopyInto(out *Schema) {
 		*out = make([]v1.CustomResourceColumnDefinition, len(*in))
 		copy(*out, *in)
 	}
-	if in.Iterator != nil {
-		in, out := &in.Iterator, &out.Iterator
+	if in.Iterators != nil {
+		in, out := &in.Iterators, &out.Iterators
 		*out = make([]Iterator, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])

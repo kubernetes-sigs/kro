@@ -2564,8 +2564,8 @@ func Test_evaluateIterators(t *testing.T) {
 		t.Fatalf("failed creating runtime: %v", err)
 	}
 
-	// iterator values should be evaluated during initialization
-	state := rt.expressionsCache["iterator.vals"]
+	// iterators values should be evaluated during initialization
+	state := rt.expressionsCache["iterators.vals"]
 	vals, ok := state.ResolvedValue.([]interface{})
 	if !ok || len(vals) != 2 {
 		t.Fatalf("unexpected iterator result: %#v", state.ResolvedValue)

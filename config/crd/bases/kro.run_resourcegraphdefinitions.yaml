@@ -187,7 +187,11 @@ spec:
                       The group of the resourcegraphdefinition. This is used to set the API group
                       of the generated CRD. If omitted, it defaults to "kro.run".
                     type: string
-                  iterator:
+                  iterators:
+                    description: |-
+                      Iterators define templating loops that can be referenced in resource templates.
+                      Each iterator is resolved using instance data and rendered into a list of values
+                      that can be injected using the `${iterator.<name>}` expression.
                     items:
                       description: |-
                         Iterator describes a looping construct that generates values to be injected

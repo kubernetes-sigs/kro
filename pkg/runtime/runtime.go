@@ -114,8 +114,9 @@ func NewResourceGraphDefinitionRuntime(
 		}
 	}
 
+	// register iterators placeholders in the expressions cache
 	for _, it := range iterators {
-		key := "iterator." + it.Name
+		key := "iterators." + it.Name
 		r.expressionsCache[key] = &expressionEvaluationState{
 			Expression: key,
 			Kind:       variable.ResourceVariableKindIterator,
@@ -177,6 +178,8 @@ type ResourceGraphDefinitionRuntime struct {
 	// vice versa.
 	expressionsCache map[string]*expressionEvaluationState
 
+	// iterators holds the iterator definitions used to produce values for
+	// `${iterators.<name>}` expressions.
 	iterators []Iterator
 
 	// topologicalOrder holds the dependency order of resources. This order
@@ -346,6 +349,8 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	return nil
 }
 
+// evaluateIterators resolves all iterators definitions using the current instance
+// data and stores the resulting values in the expressions cache.
 func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 	if len(rt.iterators) == 0 {
 		return nil
@@ -362,7 +367,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 		}
 		list, ok := v.([]interface{})
 		if !ok {
-			return fmt.Errorf("iterator %s input must evaluate to list", it.Name)
+			return fmt.Errorf("iterators %s input must evaluate to list", it.Name)
 		}
 
 		results := make([]interface{}, 0, len(list))
@@ -410,7 +415,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 				results = append(results, wrapper["root"])
 			}
 		}
-		key := "iterator." + it.Name
+		key := "iterators." + it.Name
 		state := rt.expressionsCache[key]
 		state.Resolved = true
 		state.ResolvedValue = results

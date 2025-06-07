@@ -128,6 +128,13 @@ type Resource interface {
 	Unstructured() *unstructured.Unstructured
 }
 
+// Iterator defines a loop configuration used during runtime to generate values
+// for expressions of the form `${iterators.<name>}`.
+// Render holds the template object to be rendered for each item of the Input
+// expression. Variables describes the CEL expressions extracted from Render.
+//
+// This struct is built by the graph builder from the ResourceGraphDefinition
+// iterator specification.
 type Iterator struct {
 	Name      string
 	IterVar   string

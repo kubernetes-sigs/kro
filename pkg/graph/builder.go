@@ -210,6 +210,8 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
 	}
 
+	// Parse iterator definitions before validating expressions so that
+	// placeholder values can be provided during the dry-run phase.
 	iterators, err := b.buildIterators(rgd.Spec.Schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build iterators: %w", err)
@@ -456,25 +458,25 @@ func (b *Builder) buildDependencyGraph(
 }
 
 func (b *Builder) buildIterators(sch *v1alpha1.Schema) ([]runtime.Iterator, error) {
-	its := make([]runtime.Iterator, 0, len(sch.Iterator))
-	for _, it := range sch.Iterator {
+	its := make([]runtime.Iterator, 0, len(sch.Iterators))
+	for _, it := range sch.Iterators {
 		var renderObj interface{}
 		if err := yaml.Unmarshal(it.Render.Raw, &renderObj); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal iterator %s render: %w", it.Name, err)
+			return nil, fmt.Errorf("failed to unmarshal iterators %s render: %w", it.Name, err)
 		}
 
 		var vars []variable.FieldDescriptor
 		if objMap, ok := renderObj.(map[string]interface{}); ok {
 			fv, err := parser.ParseSchemalessResource(objMap)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse iterator %s render: %w", it.Name, err)
+				return nil, fmt.Errorf("failed to parse iterators %s render: %w", it.Name, err)
 			}
 			vars = fv
 		} else {
 			wrapper := map[string]interface{}{"root": renderObj}
 			fv, err := parser.ParseSchemalessResource(wrapper)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse iterator %s render: %w", it.Name, err)
+				return nil, fmt.Errorf("failed to parse iterators %s render: %w", it.Name, err)
 			}
 			for i := range fv {
 				switch {
@@ -522,8 +524,8 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
-	iteratorNames := make([]string, len(rgDefinition.Iterator))
-	for i, it := range rgDefinition.Iterator {
+	iteratorNames := make([]string, len(rgDefinition.Iterators))
+	for i, it := range rgDefinition.Iterators {
 		iteratorNames[i] = it.Name
 	}
 
@@ -744,7 +746,7 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 		for _, name := range iteratorNames {
 			iters[name] = []interface{}{}
 		}
-		context["iterator"] = iters
+		context["iterators"] = iters
 	}
 
 	output, _, err := program.Eval(context)

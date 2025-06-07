@@ -95,16 +95,35 @@ type Schema struct {
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 
-	Iterator []Iterator `json:"iterator,omitempty"`
+	// Iterators define templating loops that can be referenced in resource templates
+	// Each iterator is resolved using instance data and rendered into a list of values
+	// that can be injected using the `${iterator.<name>}` expression.
+	//
+	// +kubebuilder:validation:Optional
+	Iterators []Iterator `json:"iterators,omitempty"`
 }
 
+// Iterator describes a looping construct that generates values to be injected in resource templates
+// The `Input` expression should evaluate to a list
+// Each element of that list will be bound to the variable named by `Iterator`
+// The `Render` template will be evaluated to produce the final output item.
 type Iterator struct {
+	// Name is the identifier of the iterator. It will be referenced using `${iterator.<name>}` inside resource templates
+	//
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
+	// Iterator is the name of the loop variable available inside the render template.
+	//
 	// +kubebuilder:validation:Required
 	Iterator string `json:"iterator,omitempty"`
+	// Input is a CEL expression that must evaluate to a list. Each element of the list will be processed using the render template.
+	//
 	// +kubebuilder:validation:Required
 	Input string `json:"input,omitempty"`
+	// Render is a YAML fragment rendered for every item in the input list
+	// The fragment is specified as raw YAML and may contain CEL expressions
+	// which will be evaluated for each element in the input list
+	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields

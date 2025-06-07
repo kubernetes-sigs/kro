@@ -34,6 +34,7 @@ type Graph struct {
 	// TopologicalOrder is the topological order of the resources in the resource graph definition.
 	TopologicalOrder []string
 
+	// Iterators contains all iterator definitions extracted from the schema.
 	Iterators []runtime.Iterator
 }
 

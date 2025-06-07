@@ -189,15 +189,39 @@ spec:
                     type: string
                   iterator:
                     items:
+                      description: |-
+                        Iterator describes a looping construct that generates values to be injected
+                        in resource templates. The `Input` expression should evaluate to a list. Each
+                        element of that list will be bound to the variable named by `Iterator` and
+                        the `Render` template will be evaluated to produce the final output item.
                       properties:
                         input:
+                          description: |-
+                            Input is a CEL expression that must evaluate to a list. Each element
+                            of the list will be processed using the render template.
                           type: string
                         iterator:
+                          description: |-
+                            Iterator is the name of the loop variable available inside the render
+                            template.
                           type: string
                         name:
+                          description: |-
+                            Name is the identifier of the iterator. It will be referenced using
+                            `${iterator.<name>}` inside resource templates.
                           type: string
                         render:
-                          type: string
+                          description: |-
+                            Render is a YAML fragment rendered for every item in the input list.
+                            The fragment is specified as raw YAML/JSON and may contain CEL
+                            expressions which will be evaluated for each element in the input
+                            list.
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - input
+                      - iterator
+                      - name
+                      - render
                       type: object
                     type: array
                   kind:

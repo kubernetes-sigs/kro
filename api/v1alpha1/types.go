@@ -99,10 +99,16 @@ type Schema struct {
 }
 
 type Iterator struct {
-	Name     string `json:"name,omitempty"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:validation:Required
 	Iterator string `json:"iterator,omitempty"`
-	Input    string `json:"input,omitempty"`
-	Render   string `json:"render,omitempty"`
+	// +kubebuilder:validation:Required
+	Input string `json:"input,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Render runtime.RawExtension `json:"render,omitempty"`
 }
 
 type Validation struct {

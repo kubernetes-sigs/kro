@@ -459,7 +459,7 @@ func (b *Builder) buildIterators(sch *v1alpha1.Schema) ([]runtime.Iterator, erro
 	its := make([]runtime.Iterator, 0, len(sch.Iterator))
 	for _, it := range sch.Iterator {
 		var renderObj interface{}
-		if err := yaml.Unmarshal([]byte(it.Render), &renderObj); err != nil {
+		if err := yaml.Unmarshal(it.Render.Raw, &renderObj); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal iterator %s render: %w", it.Name, err)
 		}
 

@@ -35,7 +35,7 @@ standardized and streamlined manner.
 <div align="center">
 
 ![End user interface - Custom API](../../../images/architecture-diagrams/KRO-Dev-Interface.png)
-_Fugure 1: End user interface - Custom API_
+_Figure 1: End user interface - Custom API_
 
 </div>
 
@@ -50,14 +50,14 @@ In the depicted example, the **Platform Team** has created a **RG** with
 arbitrary name "Application Stack" that encapsulates the necessary resources,
 along with any additional logic, abstractions, and security best practices. When
 the RGD is applied to the cluster, a new API of kind ApplicationStack is created
-and available for Developer to interact with. The Developers no longer need to
+and available for the Developer to interact with. The Developers no longer need to
 directly manage the underlying infrastructure complexities, as the custom API
 handles the deployment and configuration of the required resources.
 
 <div align="center">
 
 ![Platform Team Interface](../../../images/architecture-diagrams/KRO-Platform-Team.png)
-_Fugure 2: ResourceGraphDefinition (RG) - Platform Team Interface_
+_Figure 2: ResourceGraphDefinition (RG) - Platform Team Interface_
 
 </div>
 
@@ -75,7 +75,7 @@ requirements.
 <div align="center">
 
 ![ResourceGraphDefinition Instance](../../../images/architecture-diagrams/KRO-Instance.png)
-_Fugure 3: ResourceGraphDefinition Instance (RGI)_
+_Figure 3: ResourceGraphDefinition Instance (RGI)_
 
 </div>
 

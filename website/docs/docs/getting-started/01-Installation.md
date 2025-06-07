@@ -99,7 +99,7 @@ helm upgrade kro oci://ghcr.io/kro-run/kro/kro \
 :::info[**CRD Updates**]
 
 Helm does not support updating CRDs, so you may need to manually update or
-remove and re-apply kro related CRDs. For more information, refer to the Helm
+remove and reapply kro related CRDs. For more information, refer to the Helm
 documentation.
 
 :::

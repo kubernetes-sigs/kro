@@ -454,6 +454,6 @@ multi-acct:
   path: charts/multi-acct
   selector:
     matchExpressions:
-      - key: enable_mutli_acct
+      - key: enable_multi_acct
         operator: In
         values: ['true']

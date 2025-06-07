@@ -439,7 +439,7 @@ func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error 
 }
 
 // setManaged ensures the instance has the necessary finalizer and labels.
-func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstructured.Unstructured, uid types.UID) (*unstructured.Unstructured, error) {
+func (igr *instanceGraphReconciler) setManaged(ctx context.Context, obj *unstructured.Unstructured, _ types.UID) (*unstructured.Unstructured, error) {
 	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj); exist {
 		return obj, nil
 	}

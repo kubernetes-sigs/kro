@@ -136,7 +136,7 @@ spec:
    kubectl apply -f resourcegraphdefinition.yaml
    ```
 
-3. **Inpsect the `ResourceGraphDefinition`**: Check the status of the resources created by
+3. **Inspect the `ResourceGraphDefinition`**: Check the status of the resources created by
    the ResourceGraphDefinition using the `kubectl` command:
 
    ```bash
@@ -154,7 +154,7 @@ spec:
 ### Create your Application Instance
 
 Now that your `ResourceGraphDefinition` is created, kro has generated a new API
-(Application) that orchestrates creation of the a `Deployment`, a `Service`, and
+(Application) that orchestrates the creation of a `Deployment`, a `Service`, and
 an `Ingress`. Let's use it!
 
 1. **Create an Application instance**: Create a new file named `instance.yaml`

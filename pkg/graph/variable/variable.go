@@ -125,6 +125,8 @@ const (
 	//   includeWhen:
 	//   - ${schema.spec.replicas > 1}
 	ResourceVariableKindIncludeWhen ResourceVariableKind = "includeWhen"
+
+	ResourceVariableKindIterator ResourceVariableKind = "iterator"
 )
 
 // String returns the string representation of a ResourceVariableKind.
@@ -140,6 +142,10 @@ func (r ResourceVariableKind) IsStatic() bool {
 // IsDynamic returns true if the ResourceVariableKind is dynamic
 func (r ResourceVariableKind) IsDynamic() bool {
 	return r == ResourceVariableKindDynamic
+}
+
+func (r ResourceVariableKind) IsIterator() bool {
+	return r == ResourceVariableKindIterator
 }
 
 // IsIncludeWhen returns true if the ResourceVariableKind is includeWhen

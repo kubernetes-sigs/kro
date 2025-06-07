@@ -219,7 +219,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 	}
 
 	// 2. Create runtime
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"}, nil)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
@@ -446,7 +446,7 @@ func Test_NewResourceGraphDefinitionRuntime(t *testing.T) {
 		"service":    service,
 	}
 
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"})
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"}, nil)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
@@ -634,6 +634,7 @@ func Test_GetResource(t *testing.T) {
 		})
 	}
 }
+
 func Test_Synchronize(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -1030,7 +1031,6 @@ func Test_propagateResourceVariables(t *testing.T) {
 					}
 				}
 			}
-
 		})
 	}
 }
@@ -2291,6 +2291,7 @@ func Test_IsResourceReady(t *testing.T) {
 		})
 	}
 }
+
 func Test_ReadyToProcessResource(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -2534,6 +2535,46 @@ func Test_evaluateExpression(t *testing.T) {
 				t.Errorf("evaluateExpression() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_evaluateIterators(t *testing.T) {
+	instance := newTestResource(
+		withObject(map[string]interface{}{
+			"spec": map[string]interface{}{
+				"values": []interface{}{int64(1), int64(2)},
+			},
+		}),
+	)
+
+	iter := Iterator{
+		Name:    "vals",
+		IterVar: "item",
+		Input:   "schema.spec.values",
+		Render: []interface{}{
+			map[string]interface{}{"val": "${item}"},
+		},
+		Variables: []variable.FieldDescriptor{
+			{Path: "[0].val", Expressions: []string{"item"}, StandaloneExpression: true},
+		},
+	}
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, map[string]Resource{}, nil, []Iterator{iter})
+	if err != nil {
+		t.Fatalf("failed creating runtime: %v", err)
+	}
+
+	// iterator values should be evaluated during initialization
+	state := rt.expressionsCache["iterator.vals"]
+	vals, ok := state.ResolvedValue.([]interface{})
+	if !ok || len(vals) != 2 {
+		t.Fatalf("unexpected iterator result: %#v", state.ResolvedValue)
+	}
+	if vals[0].(map[string]interface{})["val"] != int64(1) {
+		t.Errorf("first value not rendered correctly")
+	}
+	if vals[1].(map[string]interface{})["val"] != int64(2) {
+		t.Errorf("second value not rendered correctly")
 	}
 }
 

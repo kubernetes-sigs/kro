@@ -17,6 +17,7 @@ package graph
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
@@ -39,6 +40,7 @@ import (
 	"github.com/kro-run/kro/pkg/graph/schema"
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/pkg/runtime"
 	"github.com/kro-run/kro/pkg/simpleschema"
 )
 
@@ -208,13 +210,18 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
 	}
 
+	iterators, err := b.buildIterators(rgd.Spec.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build iterators: %w", err)
+	}
+
 	// Before getting into the dependency graph, we need to validate the CEL expressions
 	// in the instance resource.
 	// To do that, we need to isolate each resource
 	// and evaluate the CEL expressions in the context of the resource graph definition.
-	//This is done
+	// This is done
 	// by dry-running the CEL expressions against the emulated resources.
-	err = validateResourceCELExpressions(resources, instance)
+	err = validateResourceCELExpressions(resources, instance, iterators)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
@@ -246,13 +253,15 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Instance:         instance,
 		Resources:        resources,
 		TopologicalOrder: topologicalOrder,
+		Iterators:        iterators,
 	}
 	return resourceGraphDefinition, nil
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
 func (b *Builder) buildExternalRefResource(
-	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
+	externalRef *v1alpha1.ExternalRef,
+) map[string]interface{} {
 	resourceObject := map[string]interface{}{}
 	resourceObject["apiVersion"] = externalRef.APIVersion
 	resourceObject["kind"] = externalRef.Kind
@@ -392,7 +401,6 @@ func (b *Builder) buildDependencyGraph(
 	// map of runtime variables per resource
 	error,
 ) {
-
 	resourceNames := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceNames = append(resourceNames, "schema")
@@ -447,6 +455,51 @@ func (b *Builder) buildDependencyGraph(
 	return directedAcyclicGraph, nil
 }
 
+func (b *Builder) buildIterators(sch *v1alpha1.Schema) ([]runtime.Iterator, error) {
+	its := make([]runtime.Iterator, 0, len(sch.Iterator))
+	for _, it := range sch.Iterator {
+		var renderObj interface{}
+		if err := yaml.Unmarshal([]byte(it.Render), &renderObj); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal iterator %s render: %w", it.Name, err)
+		}
+
+		var vars []variable.FieldDescriptor
+		if objMap, ok := renderObj.(map[string]interface{}); ok {
+			fv, err := parser.ParseSchemalessResource(objMap)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse iterator %s render: %w", it.Name, err)
+			}
+			vars = fv
+		} else {
+			wrapper := map[string]interface{}{"root": renderObj}
+			fv, err := parser.ParseSchemalessResource(wrapper)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse iterator %s render: %w", it.Name, err)
+			}
+			for i := range fv {
+				switch {
+				case fv[i].Path == "root":
+					fv[i].Path = ""
+				case strings.HasPrefix(fv[i].Path, "root."):
+					fv[i].Path = strings.TrimPrefix(fv[i].Path, "root.")
+				case strings.HasPrefix(fv[i].Path, "root["):
+					fv[i].Path = strings.TrimPrefix(fv[i].Path, "root")
+				}
+			}
+			vars = fv
+		}
+
+		its = append(its, runtime.Iterator{
+			Name:      it.Name,
+			IterVar:   it.Iterator,
+			Input:     it.Input,
+			Render:    renderObj,
+			Variables: vars,
+		})
+	}
+	return its, nil
+}
+
 // buildInstanceResource builds the instance resource. The instance resource is
 // the representation of the CR that users will create in their cluster to request
 // the creation of the resources defined in the resource graph definition.
@@ -469,13 +522,18 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
 	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
 
+	iteratorNames := make([]string, len(rgDefinition.Iterator))
+	for i, it := range rgDefinition.Iterator {
+		iteratorNames[i] = it.Name
+	}
+
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %w", err)
 	}
 
-	instanceStatusSchema, statusVariables, err := buildStatusSchema(rgDefinition, resources)
+	instanceStatusSchema, statusVariables, err := buildStatusSchema(rgDefinition, resources, iteratorNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance status: %w", err)
 	}
@@ -579,6 +637,7 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 func buildStatusSchema(
 	rgSchema *v1alpha1.Schema,
 	resources map[string]*Resource,
+	iteratorNames []string,
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
@@ -621,7 +680,7 @@ func buildStatusSchema(
 			}
 
 			// resources is the context here.
-			value, err := dryRunExpression(env, expr, resources)
+			value, err := dryRunExpression(env, expr, resources, iteratorNames)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to dry-run expression: %w", err)
 			}
@@ -662,7 +721,7 @@ func validateCELExpressionContext(env *cel.Env, expression string, resources []s
 // of emulated resources. We could've called this function evaluateExpression,
 // but we chose to call it dryRunExpression to indicate that we are not
 // used for anything other than validating the expression and inspecting it
-func dryRunExpression(env *cel.Env, expression string, resources map[string]*Resource) (ref.Val, error) {
+func dryRunExpression(env *cel.Env, expression string, resources map[string]*Resource, iteratorNames []string) (ref.Val, error) {
 	ast, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("failed to compile expression: %w", issues.Err())
@@ -679,6 +738,13 @@ func dryRunExpression(env *cel.Env, expression string, resources map[string]*Res
 		if resource.emulatedObject != nil {
 			context[resourceName] = resource.emulatedObject.Object
 		}
+	}
+	if len(iteratorNames) > 0 {
+		iters := map[string]interface{}{}
+		for _, name := range iteratorNames {
+			iters[name] = []interface{}{}
+		}
+		context["iterator"] = iters
 	}
 
 	output, _, err := program.Eval(context)
@@ -727,7 +793,7 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 // we evaluate A's CEL expressions against 2 emulated resources B and C. Then
 // we evaluate B's CEL expressions against 2 emulated resources A and C, and so
 // on.
-func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
+func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource, iterators []runtime.Iterator) error {
 	resourceIDs := maps.Keys(resources)
 	// We also want to allow users to refer to the instance spec in their expressions.
 	resourceIDs = append(resourceIDs, "schema")
@@ -736,6 +802,12 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 	if err != nil {
 		return fmt.Errorf("failed to create CEL environment: %w", err)
 	}
+
+	iteratorNames := make([]string, len(iterators))
+	for i, it := range iterators {
+		iteratorNames[i] = it.Name
+	}
+
 	instanceEmulatedCopy := instance.emulatedObject.DeepCopy()
 	if instanceEmulatedCopy != nil && instanceEmulatedCopy.Object != nil {
 		delete(instanceEmulatedCopy.Object, "apiVersion")
@@ -773,17 +845,17 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 		// exclude resource from the context
 		delete(expressionContext, resource.id)
 
-		err := ensureResourceExpressions(env, expressionContext, resource)
+		err := ensureResourceExpressions(env, expressionContext, resource, iteratorNames)
 		if err != nil {
 			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
 		}
 
-		err = ensureReadyWhenExpressions(resource)
+		err = ensureReadyWhenExpressions(resource, iteratorNames)
 		if err != nil {
 			return fmt.Errorf("failed to ensure resource %s readyWhen expressions: %w", resource.id, err)
 		}
 
-		err = ensureIncludeWhenExpressions(env, includeWhenContext, resource)
+		err = ensureIncludeWhenExpressions(env, includeWhenContext, resource, iteratorNames)
 		if err != nil {
 			return fmt.Errorf("failed to ensure resource %s includeWhen expressions: %w", resource.id, err)
 		}
@@ -797,11 +869,11 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 
 // ensureResourceExpressions validates the CEL expressions in the resource
 // against the resources defined in the resource graph definition.
-func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
+func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resource *Resource, iteratorNames []string) error {
 	// We need to validate the CEL expressions in the resource.
 	for _, resourceVariable := range resource.variables {
 		for _, expression := range resourceVariable.Expressions {
-			_, err := ensureExpression(env, expression, []string{resource.id}, context)
+			_, err := ensureExpression(env, expression, []string{resource.id}, context, iteratorNames)
 			if err != nil {
 				return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
 			}
@@ -812,7 +884,7 @@ func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resou
 
 // ensureReadyWhenExpressions validates the readyWhen expressions in the resource
 // against the resources defined in the resource graph definition.
-func ensureReadyWhenExpressions(resource *Resource) error {
+func ensureReadyWhenExpressions(resource *Resource, iteratorNames []string) error {
 	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
 	for _, expression := range resource.readyWhenExpressions {
 		if err != nil {
@@ -830,7 +902,7 @@ func ensureReadyWhenExpressions(resource *Resource) error {
 			emulatedObject: resourceEmulatedCopy,
 		}
 
-		output, err := ensureExpression(env, expression, []string{resource.id}, context)
+		output, err := ensureExpression(env, expression, []string{resource.id}, context, iteratorNames)
 		if err != nil {
 			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
 		}
@@ -842,10 +914,10 @@ func ensureReadyWhenExpressions(resource *Resource) error {
 }
 
 // ensureIncludeWhenExpressions validates the includeWhen expressions in the resource
-func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
+func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, resource *Resource, iteratorNames []string) error {
 	// We need to validate the CEL expressions in the resource.
 	for _, expression := range resource.includeWhenExpressions {
-		output, err := ensureExpression(env, expression, []string{resource.id}, context)
+		output, err := ensureExpression(env, expression, []string{resource.id}, context, iteratorNames)
 		if err != nil {
 			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
 		}
@@ -857,17 +929,16 @@ func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, re
 }
 
 // ensureExpression validates the CEL expression in the context of the resources
-func ensureExpression(env *cel.Env, expression string, resources []string, context map[string]*Resource) (ref.Val, error) {
+func ensureExpression(env *cel.Env, expression string, resources []string, context map[string]*Resource, iteratorNames []string) (ref.Val, error) {
 	err := validateCELExpressionContext(env, expression, resources)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate expression %s: %w", expression, err)
 	}
 
-	output, err := dryRunExpression(env, expression, context)
+	output, err := dryRunExpression(env, expression, context, iteratorNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
 	}
 
 	return output, nil
-
 }

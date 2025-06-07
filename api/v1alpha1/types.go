@@ -94,6 +94,15 @@ type Schema struct {
 	//
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+
+	Iterator []Iterator `json:"iterator,omitempty"`
+}
+
+type Iterator struct {
+	Name     string `json:"name,omitempty"`
+	Iterator string `json:"iterator,omitempty"`
+	Input    string `json:"input,omitempty"`
+	Render   string `json:"render,omitempty"`
 }
 
 type Validation struct {

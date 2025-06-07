@@ -187,6 +187,19 @@ spec:
                       The group of the resourcegraphdefinition. This is used to set the API group
                       of the generated CRD. If omitted, it defaults to "kro.run".
                     type: string
+                  iterator:
+                    items:
+                      properties:
+                        input:
+                          type: string
+                        iterator:
+                          type: string
+                        name:
+                          type: string
+                        render:
+                          type: string
+                      type: object
+                    type: array
                   kind:
                     description: |-
                       The kind of the resourcegraphdefinition. This is used to generate

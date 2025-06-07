@@ -127,3 +127,11 @@ type Resource interface {
 	// object.
 	Unstructured() *unstructured.Unstructured
 }
+
+type Iterator struct {
+	Name      string
+	IterVar   string
+	Input     string
+	Render    interface{}
+	Variables []variable.FieldDescriptor
+}

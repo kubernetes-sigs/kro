@@ -457,22 +457,30 @@ func (b *Builder) buildDependencyGraph(
 	return directedAcyclicGraph, nil
 }
 
+// buildIterators converts iterator definitions from the schema into runtime structures
+// Each iterator's render fragment is unmarshaled to a generic object and then parsed for embedded CEL expressions
+// Those expressions are captured in `Variables` so they can be evaluated later during runtime
 func (b *Builder) buildIterators(sch *v1alpha1.Schema) ([]runtime.Iterator, error) {
 	its := make([]runtime.Iterator, 0, len(sch.Iterators))
 	for _, it := range sch.Iterators {
 		var renderObj interface{}
+		// Render is stored as raw YAML in the CRD;
+		// unmarshal it so we can inspect it and later render into a concrete object
 		if err := yaml.Unmarshal(it.Render.Raw, &renderObj); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal iterators %s render: %w", it.Name, err)
 		}
 
 		var vars []variable.FieldDescriptor
 		if objMap, ok := renderObj.(map[string]interface{}); ok {
+			// Rendered object is a map; parse CEL expressions directly.
 			fv, err := parser.ParseSchemalessResource(objMap)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse iterators %s render: %w", it.Name, err)
 			}
 			vars = fv
 		} else {
+			// Non-map fragments (e.g., list or scalar) need to be wrapped so the parser can walk them
+			// and return field descriptors with absolute paths
 			wrapper := map[string]interface{}{"root": renderObj}
 			fv, err := parser.ParseSchemalessResource(wrapper)
 			if err != nil {
@@ -491,6 +499,7 @@ func (b *Builder) buildIterators(sch *v1alpha1.Schema) ([]runtime.Iterator, erro
 			vars = fv
 		}
 
+		// Store the parsed iterator definition for use during runtime initialization
 		its = append(its, runtime.Iterator{
 			Name:      it.Name,
 			IterVar:   it.Iterator,

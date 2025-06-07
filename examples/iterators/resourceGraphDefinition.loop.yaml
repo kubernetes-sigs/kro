@@ -1,0 +1,52 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: loop
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Loop
+    spec:
+      name: "string | required=true"
+      hostIP: "string | required=true"
+      # Use custom port type 
+      ports: "[]port | required=true"
+    # Define port type
+    types:
+      port:
+        name: string | required
+        protocol: string | default="TCP"
+        port: integer | required
+    iterators:
+      - name: deploymentContainerPorts
+        iterator: item
+        input: schema.spec.ports
+        render:
+          - containerPort: ${item.port}
+            name: ${item.name}
+            protocol: ${item.protocol}
+            hostIP: ${schema.spec.hostIP}
+
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              type: ${schema.spec.name}-feature
+          template:
+            metadata:
+              labels:
+                type: ${schema.spec.name}-feature
+            spec:
+              containers:
+                - name: dev
+                  image: nginx
+                  ports:
+                    ${iterators.deploymentContainerPorts}
+---

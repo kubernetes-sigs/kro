@@ -113,8 +113,10 @@ type Iterator struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
 	// Iterator is the name of the loop variable available inside the render template.
+	// If omitted, it defaults to "item" so that every iterator can be defined without explicitly specifying the iteration variable
 	//
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=item
 	Iterator string `json:"iterator,omitempty"`
 	// Input is a CEL expression that must evaluate to a list. Each element of the list will be processed using the render template.
 	//

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-loop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      type: dev-loop-feature
+  template:
+    metadata:
+      labels:
+        type: dev-loop-feature
+    spec:
+      containers:
+        - name: dev
+          image: nginx
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+              hostIP: "10.13.37.1"
+            - containerPort: 443
+              name: https
+              protocol: TCP
+              hostIP: "10.13.37.1"
+

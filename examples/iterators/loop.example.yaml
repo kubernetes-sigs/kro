@@ -1,0 +1,14 @@
+apiVersion: kro.run/v1alpha1
+kind: Loop
+metadata:
+  name: loop-example
+spec:
+  name: dev-loop
+  hostIP: "10.13.37.1"
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+    - name: https
+      protocol: TCP
+      port: 443

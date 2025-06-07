@@ -349,13 +349,25 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	return nil
 }
 
-// evaluateIterators resolves all iterators definitions using the current instance
-// data and stores the resulting values in the expressions cache.
+// evaluateIterators resolves all iterator definitions and stores the results in the expressions cache.
+//
+// Iterators are defined at graph build time and provide a loop mechanism that
+// produces values used later during expression evaluation. Each iterator has:
+//   - an input CEL expression that must resolve to a list using only instance data,
+//   - a loop variable name bound to each element of that list
+//   - a render object that may contain CEL expressions referencing the loop
+//     variable.
+//
+// This function executes the CEL expression for each iterator, loops over the
+// resulting items and renders the template for every element. The expanded list
+// is then cached as `${iterators.<name>}` so other expressions can reference it
 func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 	if len(rt.iterators) == 0 {
 		return nil
 	}
 	for _, it := range rt.iterators {
+		// Evaluate the iterator's input expression using only the schema (instance) data
+		// The resulting value must be a list that will drive the loop
 		envIn, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 		if err != nil {
 			return err
@@ -370,13 +382,17 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 			return fmt.Errorf("iterators %s input must evaluate to list", it.Name)
 		}
 
+		// Render the template for each element of the input list
 		results := make([]interface{}, 0, len(list))
 		for _, item := range list {
+			// Each iteration evaluates expressions with two variables available:
+			// the current item bound to the iterator variable, and the instance schema
 			envItem, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{it.IterVar, "schema"}))
 			if err != nil {
 				return err
 			}
 			ctx := map[string]interface{}{it.IterVar: item, "schema": rt.instance.Unstructured().Object}
+			// Create a deep copy of the render object because it will be mutated by the resolver for every item
 			renderCopy := deepCopyInterface(it.Render)
 
 			exprValues := map[string]interface{}{}
@@ -404,6 +420,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 				fields[i] = fd
 				fields[i].Path = p
 			}
+			// Add the evaluated values into the render template
 			rs := resolver.NewResolver(wrapper, exprValues)
 			sum := rs.Resolve(fields)
 			if len(sum.Errors) > 0 {
@@ -415,6 +432,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 				results = append(results, wrapper["root"])
 			}
 		}
+		// Cache the fully rendered list for later use by expressions referencing `${iterators.<name>}`
 		key := "iterators." + it.Name
 		state := rt.expressionsCache[key]
 		state.Resolved = true
@@ -423,6 +441,8 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateIterators() error {
 	return nil
 }
 
+// deepCopyInterface performs a deep copy on an arbitrary object
+// It is used when rendering iterator templates to ensure the original Render object is not mutated during resolution
 func deepCopyInterface(in interface{}) interface{} {
 	b, _ := json.Marshal(in)
 	var out interface{}

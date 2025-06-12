@@ -31,6 +31,8 @@ Contributions via pull requests are much appreciated. Before sending us a pull r
 
 Unless the work is very obvious (e.g. a few lines to fix a bug), please make sure your PR has a related Issue. If there are no existing issues, please create one to describe the need.
 
+If you are planning a new feature or otherwise significant changes or refactors, consider creating a [design proposal](./docs/design/proposals/FORMAT.md). We can help make a call with you, and may suggest you create one depending on the scope of your PR.
+
 To send create a Pull Request, please:
 
 1. Fork the repository.

@@ -12,11 +12,12 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-var (
+type GenerateConfig struct {
 	resourceGroupDefinitionFile string
-	outputFile                  string
 	outputFormat                string
-)
+}
+
+var config = &GenerateConfig{}
 
 var generateCmd = &cobra.Command{
 	Use:   "generate",
@@ -26,10 +27,9 @@ var generateCmd = &cobra.Command{
 }
 
 func init() {
-	generateCRDCmd.PersistentFlags().StringVarP(&resourceGroupDefinitionFile, "file", "f", "",
+	generateCRDCmd.PersistentFlags().StringVarP(&config.resourceGroupDefinitionFile, "file", "f", "",
 		"Path to the ResourceGroupDefinition file")
-	generateCRDCmd.PersistentFlags().StringVarP(&outputFile, "output", "o", "", "Path to the output file")
-	generateCRDCmd.PersistentFlags().StringVarP(&outputFormat, "format", "F", "yaml", "Output format (yaml|json)")
+	generateCRDCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "F", "yaml", "Output format (yaml|json)")
 }
 
 var generateCRDCmd = &cobra.Command{
@@ -40,11 +40,11 @@ var generateCRDCmd = &cobra.Command{
 		"ResourceGroupDefinition and outputs the corresponding CRD " +
 		"in the specified format.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if resourceGroupDefinitionFile == "" {
+		if config.resourceGroupDefinitionFile == "" {
 			return fmt.Errorf("ResourceGroupDefinition file is required")
 		}
 
-		data, err := os.ReadFile(resourceGroupDefinitionFile)
+		data, err := os.ReadFile(config.resourceGroupDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGroupDefinition file: %w", err)
 		}

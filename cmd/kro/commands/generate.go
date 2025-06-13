@@ -83,27 +83,12 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	crd := rgdGraph.Instance.GetCRD()
 	crd.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
-	b, err := marshalObject(crd, outputFormat)
+	b, err := marshalObject(crd, config.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}
 
-	if outputFile != "" {
-		if err := writeFile(outputFile, b); err != nil {
-			return fmt.Errorf("failed to write output file: %w", err)
-		}
-	} else {
-		fmt.Println(string(b))
-	}
-
-	return nil
-}
-
-func writeFile(outputFile string, b []byte) error {
-	if err := os.WriteFile(outputFile, b, 0644); err != nil {
-		return err
-	}
-	fmt.Println("CRD written to", outputFile)
+	fmt.Println(string(b))
 
 	return nil
 }

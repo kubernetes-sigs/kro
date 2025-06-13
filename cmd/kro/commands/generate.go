@@ -29,7 +29,7 @@ var generateCmd = &cobra.Command{
 func init() {
 	generateCRDCmd.PersistentFlags().StringVarP(&config.resourceGroupDefinitionFile, "file", "f", "",
 		"Path to the ResourceGroupDefinition file")
-	generateCRDCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "F", "yaml", "Output format (yaml|json)")
+	generateCRDCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
 }
 
 var generateCRDCmd = &cobra.Command{

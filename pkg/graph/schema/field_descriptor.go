@@ -66,7 +66,7 @@ type fieldDescriptor struct {
 	// The path is typically found by calling `parser.ParseSchemalessResource` see the
 	// `typesystem/parser` package for more information.
 	Path string
-	// Schema is the schema for the field. This is typically inferred by dry runing
+	// Schema is the schema for the field. This is typically inferred by dry running
 	// the CEL expression that generates the field value, then converting the result
 	// into an OpenAPI schema.
 	Schema *extv1.JSONSchemaProps

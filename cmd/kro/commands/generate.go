@@ -19,17 +19,17 @@ type GenerateConfig struct {
 
 var config = &GenerateConfig{}
 
+func init() {
+	generateCmd.PersistentFlags().StringVarP(&config.resourceGroupDefinitionFile, "file", "f", "",
+		"Path to the ResourceGroupDefinition file")
+	generateCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
+}
+
 var generateCmd = &cobra.Command{
 	Use:   "generate",
 	Short: "Generate the CRD from a given ResourceGroupDefinition",
 	Long: "Generate the CRD from a given ResourceGroupDefinition." +
 		"This command generates a CustomResourceDefinition (CRD) based on the provided ResourceGroupDefinition file.",
-}
-
-func init() {
-	generateCRDCmd.PersistentFlags().StringVarP(&config.resourceGroupDefinitionFile, "file", "f", "",
-		"Path to the ResourceGroupDefinition file")
-	generateCRDCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
 }
 
 var generateCRDCmd = &cobra.Command{

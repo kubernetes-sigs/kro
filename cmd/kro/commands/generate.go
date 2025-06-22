@@ -63,16 +63,9 @@ var generateCRDCmd = &cobra.Command{
 }
 
 func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
-	set, err := kroclient.NewSet(kroclient.Config{})
+	builder, err := createGraphBuilder()
 	if err != nil {
-		return fmt.Errorf("failed to create client set: %w", err)
-	}
-
-	restConfig := set.RESTConfig()
-
-	builder, err := graph.NewBuilder(restConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create graph builder: %w", err)
+		return fmt.Errorf("failed to setup graph builder: %w", err)
 	}
 
 	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
@@ -91,6 +84,22 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	fmt.Println(string(b))
 
 	return nil
+}
+
+func createGraphBuilder() (*graph.Builder, error) {
+	set, err := kroclient.NewSet(kroclient.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client set: %w", err)
+	}
+
+	restConfig := set.RESTConfig()
+
+	builder, err := graph.NewBuilder(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create graph builder: %w", err)
+	}
+
+	return builder, nil
 }
 
 func marshalObject(obj interface{}, outputFormat string) ([]byte, error) {

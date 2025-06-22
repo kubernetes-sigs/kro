@@ -63,14 +63,9 @@ var generateCRDCmd = &cobra.Command{
 }
 
 func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
-	builder, err := createGraphBuilder()
+	rgdGraph, err := createGraphBuilder(rgd)
 	if err != nil {
-		return fmt.Errorf("failed to setup graph builder: %w", err)
-	}
-
-	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
-	if err != nil {
-		return fmt.Errorf("failed to create resource graph definition: %w", err)
+		return fmt.Errorf("failed to setup rgd graph: %w", err)
 	}
 
 	crd := rgdGraph.Instance.GetCRD()
@@ -86,7 +81,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	return nil
 }
 
-func createGraphBuilder() (*graph.Builder, error) {
+func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
 	set, err := kroclient.NewSet(kroclient.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client set: %w", err)
@@ -99,7 +94,12 @@ func createGraphBuilder() (*graph.Builder, error) {
 		return nil, fmt.Errorf("failed to create graph builder: %w", err)
 	}
 
-	return builder, nil
+	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource graph definition: %w", err)
+	}
+
+	return rgdGraph, nil
 }
 
 func marshalObject(obj interface{}, outputFormat string) ([]byte, error) {

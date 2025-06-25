@@ -100,6 +100,15 @@ schema:
     # Validating admission policies added to the new API type's CRD
     - expression: "${ self.image == 'nginx' || !self.ingress.enabled }"
       message: "Only nginx based applications can have ingress enabled"
+
+  additionalPrinterColumns:
+    # Printer columns shown for the created custom resource
+    - jsonPath: .status.availableReplicas
+      name: Available replicas
+      type: integer
+    - jsonPath: .spec.image
+      name: Image
+      type: string
 ```
 
 **kro** follows a different approach for defining your API schema and shapes. It

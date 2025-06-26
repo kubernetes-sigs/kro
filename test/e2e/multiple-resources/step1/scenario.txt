@@ -1,0 +1,1 @@
+Create an instance of AutoscaledDeployment with initial settings (version 1.24, 1 replica, 20% CPU utilization) 

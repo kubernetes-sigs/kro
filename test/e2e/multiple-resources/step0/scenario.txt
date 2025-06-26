@@ -1,0 +1,1 @@
+Install the RGD AutoscaledDeployment that creates a ConfigMap, Service, Deployment, and HPA 

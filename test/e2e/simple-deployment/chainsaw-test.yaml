@@ -1,0 +1,76 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  creationTimestamp: null
+  name: simple-deployment
+spec:
+  description: | 
+    SimpleDeployment tests a ResourceGraphDefinition that creates a single Deployment
+    The test verifies
+    1. Creating RGD installs the Instance SimpleDeployment CRD
+    2. Creating SimpleDeployment instance creates a Deployment
+    3. Changing the replicas in the SimpleDeployment instance changes the Deployment
+    4. Deleting the SimpleDeployment instance deletes the Deployment
+  steps:
+  - name: step0-install-rgd
+    try:
+    #description: Install the RGD SimpleDeployment that creates a Deployment
+    - apply:
+        file: step0/inputs/rgd.yaml
+      description: Apply SimpleDeployment RGD
+    - assert:
+        file: step0/outputs/0rgd.yaml
+      description: Verify RGD state
+    - assert:
+        file: step0/outputs/1instancecrd.yaml
+      description: Verify Instance CRD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: step1-create-instance
+    try:
+    #description: Create instance SimpleDeployment with replicas=2
+    - apply:
+        file: step1/inputs/instance.yaml
+      description: Create SimpleDeployment Instance
+    - assert:
+        file: step1/outputs/deployment.yaml
+      description: Verify Deployment state
+    - assert:
+        file: step1/outputs/instance.yaml
+      description: Verify Instance state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: step2-update-instance
+    try:
+    #description: Update instance SimpleDeployment with replicas=3
+    - apply:
+        file: step2/inputs/instance.yaml
+      description: Update SimpleDeployment Instance
+    - assert:
+        file: step2/outputs/deployment.yaml
+      description: Verify Deployment state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+
+
+
+
+

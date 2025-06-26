@@ -1,0 +1,1 @@
+Update the instance to increase replicas to 3 and adjust HPA settings (min: 2, max: 5) 

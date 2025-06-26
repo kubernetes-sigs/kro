@@ -1,0 +1,1 @@
+Update RGD to set the deployment spec to have an empty env array

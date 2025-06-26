@@ -1,0 +1,110 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  creationTimestamp: null
+  name: multiple-resources
+spec:
+  description: | 
+    TestAutoscaledDeploymentRGD tests a ResourceGraphDefinition that creates multiple dependent resources:
+    - A ConfigMap containing application configuration
+    - A Service for exposing the application
+    - A Deployment that uses the ConfigMap and is exposed by the Service
+    - A HorizontalPodAutoscaler for scaling the Deployment
+    The test verifies
+    1. Initial creation of all resources with correct dependencies
+    2. Updates to the ConfigMap trigger Deployment updates
+    3. Updates to replicas are respected by HPA
+    4. Deletion of resources in correct order
+  steps:
+  - name: step0-install-rgd
+    try:
+    #description: Install the RGD AutoscaledDeployment that creates a ConfigMap, Service, Deployment, and HPA 
+    - apply:
+        file: step0/inputs/rgd.yaml
+      description: Apply AutoscaledDeployment RGD
+    - assert:
+        file: step0/outputs/0rgd.yaml
+      description: Verify RGD state
+    - assert:
+        file: step0/outputs/1instancecrd.yaml
+      description: Verify Instance CRD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: step1-create-instance
+    try:
+    #description: Create an instance of AutoscaledDeployment with initial settings (version 1.24, 1 replica, 20% CPU utilization) 
+    - apply:
+        file: step1/inputs/instance.yaml
+      description: Create AutoscaledDeployment Instance
+    - assert:
+        file: step1/outputs/configmap.yaml
+      description: Verify ConfigMap state
+    - assert:
+        file: step1/outputs/service.yaml
+      description: Verify Service state
+    - assert:
+        file: step1/outputs/deployment.yaml
+      description: Verify Deployment state
+    - assert:
+        file: step1/outputs/hpa.yaml
+      description: Verify HPA state
+    - assert:
+        file: step1/outputs/instance.yaml
+      description: Verify Instance state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: step2-update-instance
+    try:
+    #description: Update the instance to use a newer version (1.25) which should trigger a rolling update of the Deployment 
+    - apply:
+        file: step2/inputs/instance.yaml
+      description: Update AutoscaledDeployment Instance
+    - assert:
+        file: step2/outputs/deployment.yaml
+      description: Verify Deployment state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: step3-scale-instance
+    try:
+    #description: Update the instance to increase replicas to 3 and adjust HPA settings (min: 2, max: 5) 
+    - apply:
+        file: step3/inputs/instance.yaml
+      description: Update AutoscaledDeployment Instance
+    - assert:
+        file: step3/outputs/deployment.yaml
+      description: Verify Deployment state
+    - assert:
+        file: step3/outputs/hpa.yaml
+      description: Verify HPA state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+
+
+
+
+
+

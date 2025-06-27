@@ -266,6 +266,6 @@ ko-apply: ko
 ## CLI
 .PHONY: cli
 cli: 
-	go build -o bin/kro cmd/cli/main.go
+	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"

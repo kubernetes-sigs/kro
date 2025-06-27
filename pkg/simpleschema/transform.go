@@ -23,7 +23,14 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
-// A predefined type is a type that is predefined in the schema.
+const (
+	keyTypeString  = string(AtomicTypeString)
+	keyTypeInteger = string(AtomicTypeInteger)
+	keyTypeBoolean = string(AtomicTypeBool)
+	keyTypeNumber  = "number"
+)
+
+// A predefinedType is a type that is predefined in the schema.
 // It is used to resolve references in the schema, while capturing the fact
 // whether the type has the required marker set (this information would
 // otherwise be lost in the parsing process).
@@ -112,7 +119,7 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{}
 
 	if isAtomicType(fieldType) {
-		fieldJSONSchemaProps.Type = string(fieldType)
+		fieldJSONSchemaProps.Type = fieldType
 	} else if isCollectionType(fieldType) {
 		if isMapType(fieldType) {
 			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)
@@ -147,7 +154,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
 	}
-	if keyType != "string" {
+	if keyType != keyTypeString {
 		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
 	}
 
@@ -215,9 +222,9 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeDefault:
 			var defaultValue []byte
 			switch schema.Type {
-			case "string":
+			case keyTypeString:
 				defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-			case "integer", "number", "boolean":
+			case keyTypeInteger, keyTypeNumber, keyTypeBoolean:
 				defaultValue = []byte(marker.Value)
 			default:
 				defaultValue = []byte(marker.Value)
@@ -260,9 +267,9 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 
 				var rawValue []byte
 				switch schema.Type {
-				case "string":
+				case keyTypeString:
 					rawValue = []byte(fmt.Sprintf("%q", val))
-				case "integer":
+				case keyTypeInteger:
 					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
 						return fmt.Errorf("failed to parse integer enum value: %w", err)
 					}

@@ -68,7 +68,7 @@ The controllers are using the IAM controller to create the necessary roles for t
    ```
 6. Install the combined instance:
 
-   All contollers are enable by default. 
+   All controllers are enable by default. 
    
    ```
    kubectl apply -f instance.yaml

@@ -31,17 +31,23 @@ Contributions via pull requests are much appreciated. Before sending us a pull r
 
 Unless the work is very obvious (e.g. a few lines to fix a bug), please make sure your PR has a related Issue. If there are no existing issues, please create one to describe the need.
 
+If you are planning a new feature or otherwise significant changes or refactors, consider creating a [design proposal](./docs/design/proposals/FORMAT.md). We can help make a call with you, and may suggest you create one depending on the scope of your PR.
+
 To send create a Pull Request, please:
 
 1. Fork the repository.
 2. Make commits in your fork.
-   * Please focus on the specific change you are contributing.
-   * If your work must include changes in various functional areas, consider using multiple commits so they can be reviewed and managed atomically.
-   * If your change includes large scale reformats, please separate these changes into their own commits. It is difficult to review reformats and implementation changes together.
+   * Please focus on the specific change you are contributing. While many PRs require multiple commits, if commits start addressing other issues, please migrate these changes to another PR. 
+   * Please use single-intent commits, squashing intermediate updates and fixes. This helps PR review and makes rebases and merges smoother.
+   * If changes include large scale reformats, please separate these changes into their own commits. This makes it easier to review reformats and implementation changes together in the same PR.
+   * Please use clear commit messages, describing your committed changes.
 3. Please ensure local tests pass.
-4. Commit to your fork using clear commit messages.
-5. Create a PR from your fork, answering any default questions in the pull request interface.
-6. Monitor for automated CI failures reported in the pull request, and stay involved in the conversation (followups, rebases, etc are all part of the process).
+   * We can't start meaningful review and discussion if tests are failing.
+   * Feel free to update any tests that require it; often failing tests are simply related to changes in the PR.
+   * If you are adding new functionality, please include tests along with your changes.
+   * This step is especially required when using agentic AI to help with the coding.
+4. Create a PR from your fork, answering any default questions in the pull request interface.
+5. Monitor for automated CI failures reported in the pull request, and stay involved in the conversation (followups, rebases, etc are all part of the process).
 
 GitHub provides nice documentation on [forking a repository](https://help.github.com/articles/fork-a-repo/) and [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 

@@ -78,7 +78,7 @@ spec:
     enabled: true
     access: write
   ingress:
-    enabled: true # this will expose unathenticated alb
+    enabled: true # this will expose unauthenticated alb
   service: {}`</pre>
 
 Apply the `webstack/instance.yaml`
@@ -125,7 +125,7 @@ Expected result:
 
 ### Troubleshoot
 
-If you get the folling error:
+If you get the following error:
 
 ```
 Error connecting to S3:...

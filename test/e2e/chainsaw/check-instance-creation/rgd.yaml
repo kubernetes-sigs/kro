@@ -1,0 +1,32 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-instance-creation
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: CheckInstanceCreationSimpleDeployment
+    spec:
+      replicas: integer | default=1
+      image: string | default="nginx:latest"
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.metadata.name}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
+          template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
+            spec:
+              containers:
+                - name: main
+                  image: ${schema.spec.image} 
+

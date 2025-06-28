@@ -1,0 +1,46 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-instance-creation
+spec:
+  description: | 
+    Tests if a creating an instance creates a deployment
+  steps:
+  - name: install-rgd
+    try:
+    #description: Install the RGD that creates an Instance CRD
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-assert.yaml
+      description: Verify Instance CRD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: create-instance
+    try:
+    #description: Create instance
+    - apply:
+        file: instance.yaml
+      description: Create SimpleDeployment Instance
+    - assert:
+        file: instance-create-assert.yaml
+      description: Verify Instance state
+    - assert:
+        file: deployment-assert.yaml
+      description: Verify Deployment state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

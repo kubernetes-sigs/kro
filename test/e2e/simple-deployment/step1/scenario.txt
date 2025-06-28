@@ -1,1 +1,0 @@
-Create instance SimpleDeployment with replicas=2

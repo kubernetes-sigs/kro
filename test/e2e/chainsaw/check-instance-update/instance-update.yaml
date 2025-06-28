@@ -1,0 +1,8 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckInstanceUpdateSimpleDeployment
+metadata:
+  name: test-instance
+spec:
+  replicas: 3
+  image: nginx:1.25 
+

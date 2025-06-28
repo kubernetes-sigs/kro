@@ -1,0 +1,77 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-multi-resource-rgd
+spec:
+  description: | 
+    Tests if a ResourceGraphDefinition creates multiple resources and updates them when the instance is updated
+  steps:
+  - name: install-rgd
+    try:
+    #description: Install the RGD that creates multiple resources
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-assert.yaml
+      description: Verify Instance CRD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: create-instance
+    try:
+    #description: Create instance
+    - apply:
+        file: instance.yaml
+      description: Create SimpleDeployment Instance
+    - assert:
+        file: instance-create-assert.yaml
+      description: Verify Instance state
+    - assert:
+        file: deployment-assert.yaml
+      description: Verify Deployment state
+    - assert:
+        file: configmap-assert.yaml
+      description: Verify ConfigMap state
+    - assert:
+        file: service-assert.yaml
+      description: Verify Service state
+    - assert:
+        file: hpa-assert.yaml
+      description: Verify HPA state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: update-instance
+    try:
+    #description: Update instance SimpleDeployment with replicas=3
+    - apply:
+        file: instance-update.yaml
+      description: Update Instance
+    - assert:
+        file: deployment-update-assert.yaml
+      description: Verify Deployment state
+    - assert:
+        file: hpa-update-assert.yaml
+      description: Verify HPA state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+

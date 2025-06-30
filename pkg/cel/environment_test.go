@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWithResourceIDs(t *testing.T) {
@@ -136,6 +137,25 @@ func TestDefaultEnvironment(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.NotNil(t, env)
+		})
+	}
+}
+func Test_CELEnvHasFunction(t *testing.T) {
+	env, err := DefaultEnvironment()
+	require.NoError(t, err, "failed to create CEL env")
+	expectedFns := []string{
+		"_+_", "_-_", "_*_", "_/_", "_%_",
+		"_<_", "_<=_", "_>_", "_>=_", "_==_", "_!=_",
+		"_&&_", "_||_", "_?_:_", "_[_]",
+		"size", "in", "matches",
+		// types
+		"int", "uint", "double", "bool", "string", "bytes", "timestamp", "duration", "type",
+		// Custom functions
+		"random.seededString",
+	}
+	for _, fn := range expectedFns {
+		t.Run(fn, func(t *testing.T) {
+			assert.True(t, env.HasFunction(fn), "function %q not available in env", fn)
 		})
 	}
 }

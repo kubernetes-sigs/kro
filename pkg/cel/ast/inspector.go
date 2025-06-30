@@ -256,7 +256,7 @@ func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) Expr
 		inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
 			Name: fmt.Sprintf("%s.%s", a.exprToString(call.Target), call.Function),
 		})
-	} else if !isInternalFunction(call.Function) {
+	} else if !a.env.HasFunction(call.Function) {
 		// This is an unknown function, but not an internal one
 		inspection.UnknownFunctions = append(inspection.UnknownFunctions, UnknownFunction{Name: call.Function})
 	}
@@ -520,47 +520,3 @@ func isInternalIdentifier(name string) bool {
 	return name == "@result" || strings.HasPrefix(name, "$$")
 }
 
-func isInternalFunction(name string) bool {
-	internalFunctions := map[string]bool{
-		"_?._":    true,
-		"_+_":     true,
-		"_-_":     true,
-		"_*_":     true,
-		"_/_":     true,
-		"_%_":     true,
-		"_<_":     true,
-		"_<=_":    true,
-		"_>_":     true,
-		"_>=_":    true,
-		"_==_":    true,
-		"_!=_":    true,
-		"_&&_":    true,
-		"_||_":    true,
-		"_?_:_":   true,
-		"_[_]":    true,
-		"size":    true,
-		"in":      true,
-		"matches": true,
-		// types
-		"int":       true,
-		"uint":      true,
-		"double":    true,
-		"bool":      true,
-		"string":    true,
-		"bytes":     true,
-		"timestamp": true,
-		"duration":  true,
-		"type":      true,
-
-		// Collection Functions
-		"filter":     true,
-		"map":        true,
-		"all":        true,
-		"exists":     true,
-		"exists_one": true,
-
-		// Custom Functions
-		"random.seededString": true,
-	}
-	return internalFunctions[name]
-}

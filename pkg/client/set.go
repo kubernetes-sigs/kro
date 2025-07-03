@@ -80,10 +80,6 @@ func NewSet(cfg Config) (*Set, error) {
 func (c *Set) init() error {
 	var err error
 
-	if c.config.UserAgent == "" {
-		c.config.UserAgent = rest.DefaultKubernetesUserAgent()
-	}
-
 	// share http client between all k8s clients
 	sharedHttpClient, err := rest.HTTPClientFor(c.config)
 	if err != nil {

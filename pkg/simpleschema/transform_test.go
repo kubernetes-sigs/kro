@@ -66,7 +66,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Default: &extv1.JSON{Raw: []byte("18")},
 					},
 					"contacts": {
-						Type: "object",
+						Type:    "object",
+						Default: &extv1.JSON{Raw: []byte("{}")},
 						Properties: map[string]extv1.JSONSchemaProps{
 							"email": {Type: "string"},
 							"phone": {
@@ -296,7 +297,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				},
 			},
 			want: &extv1.JSONSchemaProps{
-				Type: "object",
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
 				Properties: map[string]extv1.JSONSchemaProps{
 					"logLevel": {
 						Type:    "string",
@@ -309,7 +311,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						},
 					},
 					"features": {
-						Type: "object",
+						Type:    "object",
+						Default: &extv1.JSON{Raw: []byte("{}")},
 						Properties: map[string]extv1.JSONSchemaProps{
 							"logFormat": {
 								Type:    "string",

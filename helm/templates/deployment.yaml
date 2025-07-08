@@ -70,8 +70,9 @@ spec:
             - name: KRO_LEADER_ELECTION
               value: {{ .Values.config.enableLeaderElection | quote }}
           args:
+            {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
-            - "$(KRO_ALLOW_CRD_DELETION)"
+            {{- end }}
             - --metrics-bind-address
             - "$(KRO_METRICS_BIND_ADDRESS)"
             - --health-probe-bind-address
@@ -92,8 +93,9 @@ spec:
             - "$(KRO_CLIENT_QPS)"
             - --client-burst
             - "$(KRO_CLIENT_BURST)"
+            {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
-            - "$(KRO_LEADER_ELECTION)"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

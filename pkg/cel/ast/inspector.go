@@ -103,6 +103,8 @@ type Inspector struct {
 // knownFunctions contains the list of all CEL functions that are supported
 var knownFunctions = []string{
 	"random.seededString",
+	"base64.decode",
+	"base64.encode",
 }
 
 // DefaultInspector creates a new Inspector instance with the given resources and functions.

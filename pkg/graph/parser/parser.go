@@ -228,7 +228,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 			return expressions, nil
 		}
 	}
-	
+
 	if !slices.Contains(expectedTypes, "array") {
 		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
 	}

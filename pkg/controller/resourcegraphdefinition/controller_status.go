@@ -40,10 +40,8 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource graph definition status and conditions")
 
-	cs := rgdConditionTypes.For(o)
-
 	// Set status.state.
-	if cs.IsRootReady() {
+	if rgdConditionTypes.For(o).IsRootReady() {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
@@ -136,7 +134,7 @@ type ConditionsMarker struct {
 
 // ResourceGraphValid signals the rgd.spec.schema and rgd.spec.resources fields have been accepted.
 func (m *ConditionsMarker) ResourceGraphValid() {
-	m.cs.SetTrueWithReason(ResourceGraphAccepted, "Valid", "resource graph and schema is valid")
+	m.cs.SetTrueWithReason(ResourceGraphAccepted, "Valid", "resource graph and schema are valid")
 }
 
 // ResourceGraphInvalid signals there is something wrong with the rgd.spec.schema or rgd.spec.resources fields.

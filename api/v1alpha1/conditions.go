@@ -40,19 +40,6 @@ const (
 	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
 )
 
-const (
-	InstanceConditionTypeReady ConditionType = "Ready"
-
-	// InstanceConditionTypeProgressing used for Creating Deleting Migrating
-	InstanceConditionTypeProgressing ConditionType = "Progressing"
-
-	// InstanceConditionTypeDegraded used in unexpected situation, behaviour, need human intervention
-	InstanceConditionTypeDegraded ConditionType = "Degraded"
-
-	// InstanceConditionTypeError used in something is wrong but i'm going to try again
-	InstanceConditionTypeError ConditionType = "Error"
-)
-
 // Condition is the common struct used by all CRDs managed by ACK service
 // controllers to indicate terminal states  of the CR and its backend AWS
 // service API resource
@@ -76,18 +63,6 @@ type Condition struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-}
-
-// NewCondition returns a new Condition instance.
-func NewCondition(t ConditionType, og int64, status metav1.ConditionStatus, reason, message string) Condition {
-	return Condition{
-		Type:               t,
-		Status:             status,
-		LastTransitionTime: &metav1.Time{Time: metav1.Now().Time},
-		Reason:             &reason,
-		Message:            &message,
-		ObservedGeneration: og,
-	}
 }
 
 func (c *Condition) IsTrue() bool {

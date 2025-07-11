@@ -83,10 +83,7 @@ var conditionComparer = cmp.Comparer(func(x, y v1alpha1.Condition) bool {
 	}
 
 	// Compare Reason pointers
-	if (x.Reason == nil) != (y.Reason == nil) {
-		return false
-	}
-	if x.Reason != nil && y.Reason != nil && *x.Reason != *y.Reason {
+	if !ptr.Equal(x.Reason, y.Reason) {
 		return false
 	}
 

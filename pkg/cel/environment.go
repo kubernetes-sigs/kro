@@ -55,6 +55,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		ext.Lists(),
 		ext.Strings(),
 		cel.OptionalTypes(),
+		ext.Encoders(),
 		library.Random(),
 	}
 

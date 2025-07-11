@@ -80,17 +80,23 @@ func NewSet(cfg Config) (*Set, error) {
 func (c *Set) init() error {
 	var err error
 
-	c.kubernetes, err = kubernetes.NewForConfig(c.config)
+	// share http client between all k8s clients
+	sharedHttpClient, err := rest.HTTPClientFor(c.config)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+
+	c.kubernetes, err = kubernetes.NewForConfigAndClient(c.config, sharedHttpClient)
 	if err != nil {
 		return err
 	}
 
-	c.dynamic, err = dynamic.NewForConfig(c.config)
+	c.dynamic, err = dynamic.NewForConfigAndClient(c.config, sharedHttpClient)
 	if err != nil {
 		return err
 	}
 
-	c.apiExtensionsV1, err = apiextensionsv1.NewForConfig(c.config)
+	c.apiExtensionsV1, err = apiextensionsv1.NewForConfigAndClient(c.config, sharedHttpClient)
 	if err != nil {
 		return err
 	}

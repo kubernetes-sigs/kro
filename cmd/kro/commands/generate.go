@@ -137,7 +137,7 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 	// Graph layout
 	graph.SetGlobalOptions(
 		charts.WithInitializationOpts(opts.Initialization{
-			Width:  "100vw",
+			Width:  "70%",
 			Height: "90vh",
 		}),
 		charts.WithTitleOpts(opts.Title{

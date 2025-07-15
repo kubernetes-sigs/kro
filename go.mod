@@ -3,6 +3,7 @@ module github.com/kro-run/kro
 go 1.24.0
 
 require (
+	github.com/go-echarts/go-echarts/v2 v2.6.1
 	github.com/go-logr/logr v1.4.2
 	github.com/gobuffalo/flect v1.0.2
 	github.com/google/cel-go v0.24.1

@@ -62,6 +62,35 @@ var generateCRDCmd = &cobra.Command{
 	},
 }
 
+var generateInstanceCmd = &cobra.Command{
+	Use:   "instance",
+	Short: "Generate a CustomResourceDefinition (CRD) instance",
+	Long: "Generate a CustomResourceDefinition (CRD) instance from a " +
+		"ResourceGroupDefinition file. This command reads the " +
+		"ResourceGroupDefinition and outputs the corresponding CRD instance",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if config.resourceGroupDefinitionFile == "" {
+			return fmt.Errorf("ResourceGroupDefinition file is required")
+		}
+
+		data, err := os.ReadFile(config.resourceGroupDefinitionFile)
+		if err != nil {
+			return fmt.Errorf("failed to read ResourceGroupDefinition file: %w", err)
+		}
+
+		var rgd v1alpha1.ResourceGraphDefinition
+		if err = yaml.Unmarshal(data, &rgd); err != nil {
+			return fmt.Errorf("failed to unmarshal ResourceGroupDefinition: %w", err)
+		}
+
+		if err = generateInstance(&rgd); err != nil {
+			return fmt.Errorf("failed to generate CRD instance: %w", err)
+		}
+
+		return nil
+	},
+}
+
 func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	rgdGraph, err := createGraphBuilder(rgd)
 	if err != nil {
@@ -72,6 +101,28 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	crd.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
 	b, err := marshalObject(crd, config.outputFormat)
+	if err != nil {
+		return fmt.Errorf("failed to marshal CRD: %w", err)
+	}
+
+	fmt.Println(string(b))
+
+	return nil
+}
+
+func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
+	rgdGraph, err := createGraphBuilder(rgd)
+	if err != nil {
+		return fmt.Errorf("failed to create resource graph definition: %w", err)
+	}
+
+	emulatedObj := rgdGraph.Instance.GetEmulatedObject()
+	emulatedObj.SetAnnotations(map[string]string{"kro.run/version": "dev"})
+
+	emulatedObj.Object["status"] = nil
+	delete(emulatedObj.Object, "status")
+
+	b, err := marshalObject(emulatedObj, config.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}
@@ -130,5 +181,6 @@ func marshalObject(obj interface{}, outputFormat string) ([]byte, error) {
 
 func AddGenerateCommands(rootCmd *cobra.Command) {
 	generateCmd.AddCommand(generateCRDCmd)
+	generateCmd.AddCommand(generateInstanceCmd)
 	rootCmd.AddCommand(generateCmd)
 }

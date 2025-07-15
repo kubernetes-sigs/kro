@@ -18,8 +18,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
+	"github.com/go-echarts/go-echarts/v2/charts"
+	"github.com/go-echarts/go-echarts/v2/opts"
 	"github.com/kro-run/kro/api/v1alpha1"
 	kroclient "github.com/kro-run/kro/pkg/client"
 	"github.com/kro-run/kro/pkg/graph"
@@ -131,41 +132,75 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to setup rgd graph: %w", err)
 	}
 
-	fmt.Println("graph LR")
-	fmt.Println("    %% Set viewport and styling")
-	fmt.Println("    %% This helps with zoom and spacing")
+	graph := charts.NewGraph()
 
-	allNodes := make(map[string]string)
-	hasEdges := false
+	// Graph layout
+	graph.SetGlobalOptions(
+		charts.WithInitializationOpts(opts.Initialization{
+			Width:  "100vw",
+			Height: "90vh",
+		}),
+		charts.WithTitleOpts(opts.Title{
+			Title:    fmt.Sprintf("Resource Graph: %s", rgd.Name),
+			Subtitle: fmt.Sprintf("Topological Order: %v", rgdGraph.TopologicalOrder),
+			TitleStyle: &opts.TextStyle{
+				FontSize:   18,
+				FontWeight: "bold",
+			},
+			SubtitleStyle: &opts.TextStyle{
+				FontSize: 14,
+			},
+		}),
+		charts.WithLegendOpts(opts.Legend{
+			Show: opts.Bool(false),
+		}),
+	)
 
-	for resourceName, vertex := range rgdGraph.DAG.Vertices {
-		cleanName := strings.ReplaceAll(resourceName, "-", "_")
-		cleanName = strings.ReplaceAll(cleanName, ".", "_")
-		allNodes[cleanName] = resourceName
+	// Graph nodes
+	nodes := make([]opts.GraphNode, 0, len(rgdGraph.Resources))
+	for resourceName := range rgdGraph.Resources {
+		node := opts.GraphNode{
+			Name:       resourceName,
+			SymbolSize: 30.0,
+			ItemStyle: &opts.ItemStyle{
+				Color:       "#269103",
+				BorderColor: "#333",
+				BorderWidth: 1,
+			},
+		}
+		nodes = append(nodes, node)
+	}
 
-		for dep := range vertex.DependsOn {
-			cleanDep := strings.ReplaceAll(dep, "-", "_")
-			cleanDep = strings.ReplaceAll(cleanDep, ".", "_")
-			allNodes[cleanDep] = dep
-
-			fmt.Printf("    %s --> %s\n", cleanDep, cleanName)
-			hasEdges = true
+	// Graph links
+	links := make([]opts.GraphLink, 0)
+	for resourceName, resource := range rgdGraph.Resources {
+		for _, dependency := range resource.GetDependencies() {
+			link := opts.GraphLink{
+				Source: dependency,
+				Target: resourceName,
+				LineStyle: &opts.LineStyle{
+					Color: "#000",
+				},
+			}
+			links = append(links, link)
 		}
 	}
 
-	if !hasEdges && len(allNodes) > 0 {
-		for cleanName, originalName := range allNodes {
-			fmt.Printf("    %s[\"%s\"]\n", cleanName, originalName)
-		}
-	}
+	graph.AddSeries("resource", nodes, links).SetSeriesOptions(
+		charts.WithGraphChartOpts(
+			opts.GraphChart{
+				Force: &opts.GraphForce{
+					Repulsion: 5000,
+				},
+				Roam:           opts.Bool(true),
+				EdgeSymbol:     "arrow",
+				EdgeSymbolSize: []int{0, 7},
+			},
+		),
+	)
 
-	if len(allNodes) == 0 {
-		fmt.Println("    EmptyGraph[\"No resources found\"]")
-	}
+	return graph.Render(os.Stdout)
 
-	fmt.Println("    classDef default fill:#e1f5fe,stroke:#0277bd,stroke-width:2px")
-
-	return nil
 }
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {

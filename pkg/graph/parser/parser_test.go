@@ -531,7 +531,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      42,
-			expectedError: "unexpected type for path : int",
+			expectedError: "unexpected type for path : int, expectedTypes: [string]",
 		},
 		{
 			name: "Type mismatch: object/array",

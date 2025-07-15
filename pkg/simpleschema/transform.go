@@ -81,6 +81,7 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 		Type:       "object",
 		Properties: map[string]extv1.JSONSchemaProps{},
 	}
+	childHasDefault := false
 
 	for key, value := range obj {
 		fieldSchema, err := tf.transformField(key, value, schema)
@@ -88,6 +89,13 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 			return nil, err
 		}
 		schema.Properties[key] = *fieldSchema
+		if fieldSchema.Default != nil {
+			childHasDefault = true
+		}
+	}
+
+	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
+		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 
 	return schema, nil

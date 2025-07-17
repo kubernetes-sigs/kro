@@ -100,8 +100,9 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},
 							Properties: mergeSchemas(ackStatusSchema(), map[string]spec.Schema{
-								"vpcID": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
-								"state": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								"vpcID":        {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								"state":        {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+								"unstructured": {SchemaProps: spec.SchemaProps{Type: []string{"object"}}},
 							}),
 						},
 					},

@@ -224,8 +224,15 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
-			if parentSchema != nil {
+			switch isRequired, err := strconv.ParseBool(marker.Value); {
+			case err != nil:
+				return fmt.Errorf("failed to parse required marker value: %w", err)
+			case parentSchema == nil:
+				return fmt.Errorf("required marker can't be applied; parent schema is nil")
+			case isRequired:
 				parentSchema.Required = append(parentSchema.Required, key)
+			default:
+				// ignore
 			}
 		case MarkerTypeDefault:
 			var defaultValue []byte

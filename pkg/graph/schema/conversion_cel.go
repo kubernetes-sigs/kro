@@ -19,8 +19,7 @@ import (
 
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-
-	krocel "github.com/kro-run/kro/pkg/cel"
+	"k8s.io/utils/ptr"
 )
 
 // inferSchemaFromCELValue infers a JSONSchemaProps from a CEL value.
@@ -28,11 +27,8 @@ func inferSchemaFromCELValue(val ref.Val) (*extv1.JSONSchemaProps, error) {
 	if val == nil {
 		return nil, fmt.Errorf("value is nil")
 	}
-	goRuntimeVal, err := krocel.GoNativeType(val)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert CEL value to Go: %w", err)
-	}
-	return inferSchemaTypeFromGoValue(goRuntimeVal)
+
+	return inferSchemaTypeFromGoValue(val.Value())
 }
 
 func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProps, error) {
@@ -61,6 +57,11 @@ func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProp
 		return inferArraySchema(goRuntimeVal)
 	case map[string]interface{}:
 		return inferObjectSchema(goRuntimeVal)
+	case nil:
+		return &extv1.JSONSchemaProps{
+			Description:            "the original schema type was optional or nil so any type is allowed",
+			XPreserveUnknownFields: ptr.To(true),
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", goRuntimeVal)
 	}

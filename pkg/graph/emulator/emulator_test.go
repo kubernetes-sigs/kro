@@ -426,6 +426,50 @@ func TestGenerateDummyCR(t *testing.T) {
 				assert.LessOrEqual(t, len(items), 20)
 			},
 		},
+		{
+			name: "schema with an untyped optional field",
+			gvk: schema.GroupVersionKind{
+				Group:   "kro.run",
+				Version: "v1alpha1",
+				Kind:    "OptionalFieldTest",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Properties: map[string]spec.Schema{
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								Properties: map[string]spec.Schema{
+									"requiredField": {
+										SchemaProps: spec.SchemaProps{
+											Type: spec.StringOrArray{"string"},
+										},
+									},
+									"optionalField": {
+										// No type definition, making it optional
+										SchemaProps: spec.SchemaProps{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			validateOutput: func(t *testing.T, obj map[string]interface{}) {
+				spec, ok := obj["spec"].(map[string]interface{})
+				require.True(t, ok, "spec should be an object")
+
+				// Required field should be present and be a string
+				requiredField, ok := spec["requiredField"].(string)
+				require.True(t, ok, "requiredField should be present and be a string")
+				assert.NotEmpty(t, requiredField, "requiredField should not be empty")
+
+				// Optional field should be present but can be any type
+				v, ok := spec["optionalField"]
+				require.True(t, ok, "optionalField should be present")
+				require.Nil(t, v, "optionalField should be nil")
+				// We don't assert the type since it's optional and can be any type
+			},
+		},
 	}
 
 	for _, tt := range tests {

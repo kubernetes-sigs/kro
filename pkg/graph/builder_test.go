@@ -421,6 +421,32 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid instance definition with optional type",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"abc": "${vpc.status.?unstructured.state}",
+						"cde": "${vpc.status.unstructured.?state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -975,6 +1001,29 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 					"cluster3",
 					"monitor",
 				}, g.TopologicalOrder)
+			},
+		},
+		{
+			name: "check validation expression",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithValidation("rule", "message"),
+			},
+			validateDeps: func(t *testing.T, g *Graph) {
+				require.Len(t, g.Instance.crd.Spec.Versions, 1)
+				schema := g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+				require.Contains(t, schema.Properties, "spec")
+				spec := schema.Properties["spec"]
+
+				require.Len(t, spec.XValidations, 1)
+				assert.Equal(t, "rule", spec.XValidations[0].Rule)
+				assert.Equal(t, "message", spec.XValidations[0].Message)
 			},
 		},
 	}

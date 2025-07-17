@@ -47,7 +47,6 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 			Title:            props.Title,
 			Description:      props.Description,
 			Default:          props.Default,
-			Type:             spec.StringOrArray([]string{props.Type}),
 			Format:           props.Format,
 			Maximum:          props.Maximum,
 			ExclusiveMaximum: props.ExclusiveMaximum,
@@ -71,6 +70,10 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 		VendorExtensible: spec.VendorExtensible{
 			Extensions: nil,
 		},
+	}
+
+	if len(props.Type) > 0 {
+		schema.SchemaProps.Type = []string{props.Type}
 	}
 
 	if props.Items != nil {

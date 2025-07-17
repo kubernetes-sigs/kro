@@ -119,7 +119,6 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 	emulatedObj := rgdGraph.Instance.GetEmulatedObject()
 	emulatedObj.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
-	emulatedObj.Object["status"] = nil
 	delete(emulatedObj.Object, "status")
 
 	b, err := marshalObject(emulatedObj, config.outputFormat)

@@ -1,0 +1,11 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckMultiResourceAutoscaledDeployment
+metadata:
+  name: test-app-instance
+spec:
+  name: test-app
+  image: nginx:1.24
+  minReplicas: 1
+  maxReplicas: 5 
+  targetCPUUtilization: 20
+

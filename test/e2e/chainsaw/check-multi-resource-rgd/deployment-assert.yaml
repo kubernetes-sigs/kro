@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  generation: 1
+  labels:
+    kro.run/instance-name: test-app-instance
+    kro.run/owned: "true"
+  name: test-app-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app-deployment
+  template:
+    metadata:
+      labels:
+        app: test-app-deployment
+    spec:
+      containers:
+      - image: nginx:1.24
+        name: main
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - mountPath: /usr/share/nginx/html
+          name: config
+          readOnly: true
+      volumes:
+      - configMap:
+          name: test-app-config
+        name: config
+

@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-instance
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: test-instance
+  template:
+    metadata:
+      labels:
+        app: test-instance
+    spec:
+      containers:
+      - image: nginx:1.25
+        name: main
+

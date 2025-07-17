@@ -88,8 +88,7 @@ func GVRtoGVK(gvr schema.GroupVersionResource) schema.GroupVersionKind {
 }
 
 func GVKtoGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
-	plural := flect.Pluralize(gvk.Kind)
-	resource := strings.ToLower(plural)
+	resource := flect.Pluralize(strings.ToLower(gvk.Kind))
 	return schema.GroupVersionResource{
 		Group:    gvk.Group,
 		Version:  gvk.Version,

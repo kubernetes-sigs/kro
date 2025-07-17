@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    kro.run/instance-name: test-app-instance
+    kro.run/owned: "true"
+  name: test-app-service
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: http
+  selector:
+    app: test-app-deployment
+

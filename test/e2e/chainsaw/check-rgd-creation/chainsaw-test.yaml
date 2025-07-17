@@ -1,0 +1,25 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-rgd-creation
+spec:
+  description: | 
+    Tests if a ResourceGraphDefinition creates an Instance CRD
+  steps:
+  - name: install-rgd
+    try:
+    #description: Install the RGD that creates an Instance CRD
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-assert.yaml
+      description: Verify Instance CRD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

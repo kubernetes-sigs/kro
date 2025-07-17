@@ -1,0 +1,30 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e-kind:
+    name: E2E Tests (Using KiND)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Install kind
+      run: go install sigs.k8s.io/kind@latest
+
+    - name: Build and deploy to kind cluster
+      run: make deploy-kind
+
+    - name: Run e2e tests
+      run: make test-e2e 

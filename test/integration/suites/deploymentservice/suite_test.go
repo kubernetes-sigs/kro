@@ -185,6 +185,17 @@ var _ = Describe("DeploymentService", func() {
 			availableReplicas, found, _ := unstructured.NestedInt64(instance.Object, "status", "availableReplicas")
 			g.Expect(found).To(BeTrue())
 			g.Expect(availableReplicas).To(Equal(int64(1)))
+
+			// now lets check for the optional field that should be available
+			status, found, _ := unstructured.NestedString(instance.Object, "status", "available")
+			g.Expect(found).To(BeTrue())
+			g.Expect(status).ToNot(BeEmpty())
+			g.Expect(status).To(Equal(string(metav1.ConditionTrue)))
+
+			// and also check for the unavailable field that should never be available
+			condition, found, _ := unstructured.NestedFieldNoCopy(instance.Object, "status", "unavailable")
+			g.Expect(found).To(BeFalse())
+			g.Expect(condition).To(BeNil())
 		}, 20*time.Second, time.Second).Should(Succeed())
 
 		// Delete instance

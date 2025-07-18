@@ -188,13 +188,15 @@ Users can specify more controls in resources in `.spec.resources[]`
 ```yaml
 spec:
   resources:
-    - id:
-      template || externalRef:
-      readyWhen:
-      includeWhen:
+    - id: {}
+      template || externalRef: {}
+      readyWhen: {}
+      includeWhen: {}
 ```
 
-Using `externalRef` An user can specify if the object is something that is created out-of-band and needs to be referenced in the RGD.
+### Using `externalRef` to reference Objects outside the ResourceGraphDefinition.
+
+Users can specify if the object is something that is created out-of-band and needs to be referenced in the RGD.
 An external reference could be specified like this:
 ```
 resources:
@@ -208,3 +210,47 @@ resources:
 ```
 
 As part of processing the Resource Graph, the instance reconciler waits for the `externalRef` object to be present and reads the object from the cluster as a node in the graph. Subsequent resources can use data from this node.
+
+### Using Conditional CEL Expressions (`?`)
+
+KRO can make use of CEL Expressions (see [this proposal for details](https://github.com/google/cel-spec/wiki/proposal-246)) to define optional runtime conditions for resources based on the conditional operator `?`. 
+
+This allows you to optionally define values that have no predefined schema or are not hard dependencies in the Graph.
+
+#### Using `?` for referencing schema-less objects like `ConfigMap` or `Secret`
+
+You can use the `optional` operator to reference objects that do not have a predefined schema in the ResourceGraphDefinition. This is useful for referencing objects that may or may not exist at runtime.
+
+> :warning: `?` removes the ability of KRO to introspect the schema of the referenced object. Thus, it cannot wait for fields after the `?` to be present. It is recommended to use conditional expressions only for objects that are not critical to the ResourceGraphDefinition's operation or when the schema cannot be known at design time.
+
+A config map can be referenced like this:
+
+```yaml title="config-map.yaml"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo
+data:
+  VALUE: "foobar"
+```
+
+```yaml title="external reference in ResourceGraphDefinition"
+- id: external
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: demo
+      namespace: default
+```
+
+With this reference, you can access the data in your schema:
+
+```text title="CEL Expression"
+${external.data.?VALUE}
+```
+
+> :warning: KRO will only wait for the external reference to be present in the cluster, but it will not validate the schema of the referenced config. If the config map does not have the `VALUE` field, the expression will evaluate to `null` and might result in unexpected behavior in your application if not handled properly.
+
+
+_For a more detailed example, see the [Optional Values & External References](../../examples/basic/optionals.md) documentation._

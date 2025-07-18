@@ -5,7 +5,7 @@ sidebar_position: 104
 # Optional Values & External References
 
 
-```yaml title="config.yaml"
+```yaml title="config-map.yaml"
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -56,5 +56,5 @@ spec:
                   command: ["sh", "-c", "echo $MY_VALUE && sleep 3600"]
                   env:
                     - name: MY_VALUE
-                      value: ${input.data?.ECHO_VALUE}
+                      value: ${input.data.?ECHO_VALUE}
 ```

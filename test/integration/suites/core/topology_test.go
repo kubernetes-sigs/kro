@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
@@ -215,14 +216,14 @@ var _ = Describe("Topology", func() {
 
 			var graphCondition *krov1alpha1.Condition
 			for _, cond := range rgd.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
+				if cond.Type == resourcegraphdefinition.Ready {
 					graphCondition = &cond
 					break
 				}
 			}
 			g.Expect(graphCondition).ToNot(BeNil())
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(*graphCondition.Reason).To(ContainSubstring("graph contains a cycle"))
+			g.Expect(*graphCondition.Message).To(ContainSubstring("graph contains a cycle"))
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})

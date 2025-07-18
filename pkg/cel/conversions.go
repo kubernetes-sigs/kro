@@ -17,6 +17,7 @@ package cel
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -29,11 +30,32 @@ var (
 
 // GoNativeType transforms CEL output into corresponding Go types
 func GoNativeType(v ref.Val) (interface{}, error) {
-	switch value := v.Value().(type) {
-	case bool, int64, uint64, float64, string, []interface{}, map[string]interface{}, nil:
-		return value, nil
+	switch v.Type() {
+	case types.BoolType:
+		return v.Value().(bool), nil
+	case types.IntType:
+		return v.Value().(int64), nil
+	case types.UintType:
+		return v.Value().(uint64), nil
+	case types.DoubleType:
+		return v.Value().(float64), nil
+	case types.StringType:
+		return v.Value().(string), nil
+	case types.ListType:
+		return v.ConvertToNative(reflect.TypeOf([]interface{}{}))
+	case types.MapType:
+		return v.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
+	case types.OptionalType:
+		opt := v.(*types.Optional)
+		if !opt.HasValue() {
+			return nil, nil
+		}
+		return GoNativeType(opt.GetValue())
+	case types.NullType:
+		return nil, nil
 	default:
-		return value, fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
+		// For types we can't convert, return as is with an error
+		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}
 }
 

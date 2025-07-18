@@ -213,7 +213,7 @@ As part of processing the Resource Graph, the instance reconciler waits for the 
 
 ### Using Conditional CEL Expressions (`?`)
 
-KRO can make use of CEL Expressions (see [this proposal for details](https://github.com/google/cel-spec/wiki/proposal-246)) to define optional runtime conditions for resources based on the conditional operator `?`. 
+KRO can make use of CEL Expressions (see [this proposal for details](https://github.com/google/cel-spec/wiki/proposal-246) or look at the [CEL Implementation Reference](https://pkg.go.dev/github.com/google/cel-go/cel#hdr-Syntax_Changes-OptionalTypes)) to define optional runtime conditions for resources based on the conditional operator `?`. 
 
 This allows you to optionally define values that have no predefined schema or are not hard dependencies in the Graph.
 

@@ -33,7 +33,7 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case bool, int64, uint64, float64, string, []interface{}, map[string]interface{}, nil:
 		return value, nil
 	default:
-		return value, fmt.Errorf("unsupported type: %v", v.Type())
+		return value, fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}
 }
 

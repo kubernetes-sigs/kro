@@ -2521,6 +2521,30 @@ func Test_evaluateExpression(t *testing.T) {
 			expression: "undefined.value",
 			wantErr:    true,
 		},
+		{
+			name: "unsupported type in expression",
+			context: map[string]interface{}{
+				"data": map[string]interface{}{
+					"value": map[int]interface{}{
+						1: "one",
+					},
+				},
+			},
+			expression: "data.value",
+			wantErr:    true,
+		},
+		{
+			name: "unsupported type in optional expression",
+			context: map[string]interface{}{
+				"data": map[string]interface{}{
+					"value": map[int]interface{}{
+						1: "one",
+					},
+				},
+			},
+			expression: "data.?value",
+			wantErr:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2530,7 +2554,7 @@ func Test_evaluateExpression(t *testing.T) {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if err == nil && got != tt.want {
+			if err == nil && !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("evaluateExpression() = %v, want %v", got, tt.want)
 			}
 		})

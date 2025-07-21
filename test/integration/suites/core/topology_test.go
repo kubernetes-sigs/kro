@@ -149,15 +149,15 @@ var _ = Describe("Topology", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Verify graph is verified
-			var graphCondition *krov1alpha1.Condition
+			var readyCondition *krov1alpha1.Condition
 			for _, cond := range rgd.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
-					graphCondition = &cond
+				if cond.Type == resourcegraphdefinition.Ready {
+					readyCondition = &cond
 					break
 				}
 			}
-			g.Expect(graphCondition).ToNot(BeNil())
-			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(readyCondition).ToNot(BeNil())
+			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
 
 			// Verify topological order
 			g.Expect(rgd.Status.TopologicalOrder).To(HaveLen(5))

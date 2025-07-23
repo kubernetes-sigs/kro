@@ -156,12 +156,19 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 		}),
 	)
 
+	resourceOrder := make(map[string]int)
+	for i, resourceName := range rgdGraph.TopologicalOrder {
+		resourceOrder[resourceName] = i + 1
+	}
+
 	// Graph nodes
 	nodes := make([]opts.GraphNode, 0, len(rgdGraph.Resources))
 	for resourceName := range rgdGraph.Resources {
+		order := resourceOrder[resourceName]
+
 		node := opts.GraphNode{
-			Name:       resourceName,
-			SymbolSize: 30.0,
+			Name:       fmt.Sprintf("%s\n(%d)", resourceName, order),
+			SymbolSize: 40.0,
 			ItemStyle: &opts.ItemStyle{
 				Color:       "#269103",
 				BorderColor: "#333",
@@ -174,10 +181,14 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 	// Graph links
 	links := make([]opts.GraphLink, 0)
 	for resourceName, resource := range rgdGraph.Resources {
+		targetOrder := resourceOrder[resourceName]
+
 		for _, dependency := range resource.GetDependencies() {
+			sourceOrder := resourceOrder[dependency]
+
 			link := opts.GraphLink{
-				Source: dependency,
-				Target: resourceName,
+				Source: fmt.Sprintf("%s\n(%d)", dependency, sourceOrder),
+				Target: fmt.Sprintf("%s\n(%d)", resourceName, targetOrder),
 				LineStyle: &opts.LineStyle{
 					Color: "#000",
 				},
@@ -200,7 +211,6 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 	)
 
 	return graph.Render(os.Stdout)
-
 }
 
 func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {

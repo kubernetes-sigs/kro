@@ -45,8 +45,6 @@ spec:
           resources:
             {{- toYaml .Values.deployment.resources | nindent 12 }}
           env:
-            - name: KRO_ALLOW_CRD_DELETION
-              value: {{ .Values.config.allowCRDDeletion | quote }}
             - name: KRO_METRICS_BIND_ADDRESS
               value: {{ .Values.config.metricsBindAddress | quote }}
             - name: KRO_HEALTH_PROBE_BIND_ADDRESS
@@ -67,11 +65,10 @@ spec:
               value: {{ .Values.config.clientQps | quote }}
             - name: KRO_CLIENT_BURST
               value: {{ .Values.config.clientBurst | quote }}
-            - name: KRO_LEADER_ELECTION
-              value: {{ .Values.config.enableLeaderElection | quote }}
           args:
+            {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
-            - "$(KRO_ALLOW_CRD_DELETION)"
+            {{- end }}
             - --metrics-bind-address
             - "$(KRO_METRICS_BIND_ADDRESS)"
             - --health-probe-bind-address
@@ -92,8 +89,9 @@ spec:
             - "$(KRO_CLIENT_QPS)"
             - --client-burst
             - "$(KRO_CLIENT_BURST)"
+            {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
-            - "$(KRO_LEADER_ELECTION)"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

@@ -21,16 +21,16 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
@@ -159,20 +159,18 @@ var _ = Describe("Readiness", func() {
 
 			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
-			// Verify conditions
-			g.Expect(createdRGD.Status.Conditions).To(HaveLen(3))
-			g.Expect(createdRGD.Status.Conditions[0].Type).To(Equal(
-				krov1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady,
-			))
-			g.Expect(createdRGD.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRGD.Status.Conditions[1].Type).To(Equal(
-				krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified,
-			))
-			g.Expect(createdRGD.Status.Conditions[1].Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(createdRGD.Status.Conditions[2].Type).To(
-				Equal(krov1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced),
-			)
-			g.Expect(createdRGD.Status.Conditions[2].Status).To(Equal(metav1.ConditionTrue))
+			// Verify ready condition.
+			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
+			var readyCondition krov1alpha1.Condition
+			for _, cond := range createdRGD.Status.Conditions {
+				if cond.Type == resourcegraphdefinition.Ready {
+					readyCondition = cond
+				}
+			}
+			g.Expect(readyCondition).ToNot(BeNil())
+			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
+
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
 		}, 10*time.Second, time.Second).Should(Succeed())

@@ -45,11 +45,17 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return v.ConvertToNative(reflect.TypeOf([]interface{}{}))
 	case types.MapType:
 		return v.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
+	case types.OptionalType:
+		opt := v.(*types.Optional)
+		if !opt.HasValue() {
+			return nil, nil
+		}
+		return GoNativeType(opt.GetValue())
 	case types.NullType:
 		return nil, nil
 	default:
 		// For types we can't convert, return as is with an error
-		return v.Value(), fmt.Errorf("unsupported type: %v", v.Type())
+		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}
 }
 

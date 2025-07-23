@@ -16,6 +16,7 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"errors"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -172,6 +173,9 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
-	return ctrl.Result{},
-		r.setResourceGraphDefinitionStatus(ctx, o, topologicalOrder, resourcesInformation, reconcileErr)
+	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
+		reconcileErr = errors.Join(reconcileErr, err)
+	}
+
+	return ctrl.Result{}, reconcileErr
 }

@@ -300,6 +300,15 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{Name: "validate"},
 			},
 		},
+		{
+			name:       "simple optional check",
+			resources:  []string{"bucket"},
+			expression: `bucket.?spec.name == "my-bucket"`,
+			wantResources: []ResourceDependency{
+				// for optionals, we can only depend on the known object, not on the path thereafter (as its optional)
+				{ID: "bucket", Path: "bucket"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

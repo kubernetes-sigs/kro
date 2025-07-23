@@ -22,7 +22,7 @@
 //  1. Multi GVR management: It handles multiple resource types concurrently,
 //     creating and managing separate workflows for each.
 //
-//  2. Dynamic informer management: Creates and deletes factories on the fly
+//  2. Dynamic informer management: Creates and deletes informers on the fly
 //     for new resource types, allowing real time adaptation to changes in the
 //     cluster.
 //
@@ -394,7 +394,7 @@ func (dc *DynamicController) updateFunc(old, new interface{}) {
 	dc.EnqueueObject(new, "update")
 }
 
-// enqueueObject adds an object to the workqueue
+// EnqueueObject adds an object to the workqueue
 func (dc *DynamicController) EnqueueObject(obj interface{}, eventType string) {
 	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {

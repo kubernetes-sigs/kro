@@ -1,0 +1,18 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-instance-update
+  finalizers:
+    - kro.run/finalizer
+  generation: 1
+status:
+  # filter conditions array to keep elements where `type == 'Ready'`
+  # and assert there's a single element matching the filter
+  # and that this element status is `True`
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+      observedGeneration: 1
+  state: Active
+  topologicalOrder:
+    - deployment
+

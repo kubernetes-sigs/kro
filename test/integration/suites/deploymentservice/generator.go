@@ -40,6 +40,12 @@ func deploymentService(
 			map[string]interface{}{
 				"deploymentConditions": "${deployment.status.conditions}",
 				"availableReplicas":    "${deployment.status.availableReplicas}",
+
+				// These fields are not strictly needed for our deployment but are used for optionals
+				// TODO(jakobmoellerdev): Decide if we want a completely separate integration test for this.
+				"available": "${deployment.status.?conditions[0].status}",
+				// unavailable is a placeholder for a condition that is never present
+				"unavailable": "${deployment.status.?conditions[10]}",
 			},
 		),
 		generator.WithResource("deployment", deploymentDef(), nil, nil),

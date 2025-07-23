@@ -213,6 +213,22 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 }
 
 func parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+	// Look for vendor schema extensions first
+	if len(schema.VendorExtensible.Extensions) > 0 {
+		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
+		// this field using the schemaless parser. This allows us to extract CEL expressions from
+		// fields that don't have a strict schema definition, while still preserving any unknown
+		// fields. This is particularly important for handling custom resources and fields that
+		// may contain arbitrary nested structures with potential CEL expressions.
+		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
+			expressions, err := parseSchemalessResource(field, path)
+			if err != nil {
+				return nil, err
+			}
+			return expressions, nil
+		}
+	}
+
 	if !slices.Contains(expectedTypes, "array") {
 		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
 	}
@@ -271,6 +287,8 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// perform type checks for scalar types
 	switch {
+	case slices.Contains(expectedTypes, "any"):
+		// Skip checks for expected == provided type
 	case slices.Contains(expectedTypes, "number"):
 		if !isNumber(field) {
 			return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
@@ -284,7 +302,7 @@ func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTy
 			return nil, fmt.Errorf("expected boolean type for path %s, got %T", path, field)
 		}
 	default:
-		return nil, fmt.Errorf("unexpected type for path %s: %T", path, field)
+		return nil, fmt.Errorf("unexpected type for path %s: %T, expectedTypes: [%s]", path, field, strings.Join(expectedTypes, ","))
 	}
 	return nil, nil
 }

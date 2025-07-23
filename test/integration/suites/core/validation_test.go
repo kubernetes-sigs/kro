@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
@@ -111,14 +112,14 @@ var _ = Describe("Validation", func() {
 					// Verify validation condition
 					var condition *krov1alpha1.Condition
 					for _, cond := range rgd.Status.Conditions {
-						if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
+						if cond.Type == resourcegraphdefinition.Ready {
 							condition = &cond
 							break
 						}
 					}
 					g.Expect(condition).ToNot(BeNil())
 					g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-					g.Expect(*condition.Reason).To(ContainSubstring("naming convention violation"))
+					g.Expect(*condition.Message).To(ContainSubstring("naming convention violation"))
 				}, 10*time.Second, time.Second).Should(Succeed())
 			}
 		})
@@ -148,14 +149,14 @@ var _ = Describe("Validation", func() {
 				// Verify validation condition
 				var condition *krov1alpha1.Condition
 				for _, cond := range rgd.Status.Conditions {
-					if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
+					if cond.Type == resourcegraphdefinition.Ready {
 						condition = &cond
 						break
 					}
 				}
 				g.Expect(condition).ToNot(BeNil())
 				g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(*condition.Reason).To(ContainSubstring("found duplicate resource IDs"))
+				g.Expect(*condition.Message).To(ContainSubstring("found duplicate resource IDs"))
 			}, 10*time.Second, time.Second).Should(Succeed())
 		})
 	})

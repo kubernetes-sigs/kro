@@ -1,0 +1,21 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckInstanceUpdateSimpleDeployment
+metadata:
+  finalizers:
+  - kro.run/finalizer
+  generation: 1
+  labels:
+    kro.run/owned: "true"
+  name: test-instance
+spec:
+  image: nginx:1.25
+  replicas: 2
+status:
+  conditions:
+  - message: Instance reconciled successfully
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: InstanceSynced
+  state: ACTIVE
+

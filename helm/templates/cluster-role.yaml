@@ -9,7 +9,7 @@ metadata:
       This ClusterRole grants access for the kro controller.
 
       The kro installation comes with enough for the controller to run, and start watching the relevant resources
-      (e.g. ResourceGraphDefinitions), but in order to allow kro to create and manage other types of resoruces you
+      (e.g. ResourceGraphDefinitions), but in order to allow kro to create and manage other types of resources you
       must manually grant access to those separately.
 
       The easiest way to accomplish this is to create a new ClusterRole with the label `rbac.kro.run/aggregate-to-controller: "true"`
@@ -74,10 +74,42 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
+  - create
   - get
   - list
   - watch
   - patch
   - update
   - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 {{- end }}

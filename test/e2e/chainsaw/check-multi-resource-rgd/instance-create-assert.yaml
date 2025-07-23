@@ -1,0 +1,25 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckMultiResourceAutoscaledDeployment
+metadata:
+  finalizers:
+  - kro.run/finalizer
+  generation: 1
+  labels:
+    kro.run/owned: "true"
+    kro.run/resource-graph-definition-name: check-multi-resource-rgd
+  name: test-app-instance
+spec:
+  image: nginx:1.24
+  maxReplicas: 5
+  minReplicas: 1
+  name: test-app
+  targetCPUUtilization: 20
+status:
+  conditions:
+  - message: Instance reconciled successfully
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: InstanceSynced
+  state: ACTIVE
+

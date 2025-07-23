@@ -37,22 +37,23 @@ import (
 // 1. Processing the resource graph
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
-	ctx context.Context,
-	rgd *v1alpha1.ResourceGraphDefinition,
-) ([]string, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
+	mark := NewConditionsMarkerFor(rgd)
 
 	// Process resource graph definition graph first to validate structure
 	log.V(1).Info("reconciling resource graph definition graph")
 	processedRGD, resourcesInfo, err := r.reconcileResourceGraphDefinitionGraph(ctx, rgd)
 	if err != nil {
+		mark.ResourceGraphInvalid(err.Error())
 		return nil, nil, err
 	}
+	mark.ResourceGraphValid()
 
 	// Setup metadata labeling
 	graphExecLabeler, err := r.setupLabeler(rgd)
 	if err != nil {
+		mark.FailedLabelerSetup(err.Error())
 		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
@@ -62,7 +63,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
 	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
+	}
+	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
+		mark.KindUnready(err.Error())
+	} else {
+		mark.KindReady(crd.Status.AcceptedNames.Kind)
 	}
 
 	// Retrieve resource handlers for the resources in the graph
@@ -71,10 +78,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	resourceHandlers := r.getResourceGraphResourceHandlers(processedRGD)
 
 	// Setup and start microcontroller
-	controller, err := r.setupMicroController(processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
-	if err != nil {
-		return processedRGD.TopologicalOrder, resourcesInfo, fmt.Errorf("failed to setup microcontroller: %w", err)
-	}
+	controller := r.setupMicroController(processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	gvr := processedRGD.Instance.GetGroupVersionResource()
@@ -82,8 +86,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
 	// rather than have it ignore this context and use the background context.
 	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile, resourceHandlers); err != nil {
+		mark.ControllerFailedToStart(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
+	mark.ControllerRunning()
 
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
@@ -155,7 +161,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
 	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
-) (*instancectrl.Controller, error) {
+) *instancectrl.Controller {
 	gvr := processedRGD.Instance.GetGroupVersionResource()
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
 		"controller", gvr.Resource,
@@ -175,15 +181,12 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.clientSet,
 		defaultSVCs,
 		labeler,
-	), nil
+	)
 }
 
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
 // and extract resource information
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(
-	_ context.Context,
-	rgd *v1alpha1.ResourceGraphDefinition,
-) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd)
 	if err != nil {
 		return nil, nil, newGraphError(err)

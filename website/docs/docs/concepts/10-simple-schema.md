@@ -118,7 +118,7 @@ metrics: "map[string]float"
 ### Custom Types
 
 Custom types are specified in the separate `types` section.
-They provide a map of names to type specifications, that follow the simple schema.
+They provide a map of names to type specifications that follow the simple schema.
 
 Example:
 
@@ -218,3 +218,22 @@ status:
 override them with its own values.
 
 :::
+
+## Additional Printer Columns
+
+You can define `additionalPrinterColumns` for the created CRD through the ResourceGraphDefinition by setting them on `spec.schema.additionalPrinterColumns`.
+
+```yaml
+schema:
+  spec:
+    image: string | default="nginx"
+  status:
+      availableReplicas: ${deployment.status.availableReplicas}
+  additionalPrinterColumns:
+    - jsonPath: .status.availableReplicas
+      name: Available replicas
+      type: integer
+    - jsonPath: .spec.image
+      name: Image
+      type: string
+```

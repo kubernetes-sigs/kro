@@ -23,7 +23,14 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
-// A predefined type is a type that is predefined in the schema.
+const (
+	keyTypeString  = string(AtomicTypeString)
+	keyTypeInteger = string(AtomicTypeInteger)
+	keyTypeBoolean = string(AtomicTypeBool)
+	keyTypeNumber  = "number"
+)
+
+// A predefinedType is a type that is predefined in the schema.
 // It is used to resolve references in the schema, while capturing the fact
 // whether the type has the required marker set (this information would
 // otherwise be lost in the parsing process).
@@ -74,6 +81,7 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 		Type:       "object",
 		Properties: map[string]extv1.JSONSchemaProps{},
 	}
+	childHasDefault := false
 
 	for key, value := range obj {
 		fieldSchema, err := tf.transformField(key, value, schema)
@@ -81,6 +89,13 @@ func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JS
 			return nil, err
 		}
 		schema.Properties[key] = *fieldSchema
+		if fieldSchema.Default != nil {
+			childHasDefault = true
+		}
+	}
+
+	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
+		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 
 	return schema, nil
@@ -112,7 +127,7 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{}
 
 	if isAtomicType(fieldType) {
-		fieldJSONSchemaProps.Type = string(fieldType)
+		fieldJSONSchemaProps.Type = fieldType
 	} else if isCollectionType(fieldType) {
 		if isMapType(fieldType) {
 			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)
@@ -147,7 +162,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
 	}
-	if keyType != "string" {
+	if keyType != keyTypeString {
 		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
 	}
 
@@ -209,15 +224,22 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
-			if parentSchema != nil {
+			switch isRequired, err := strconv.ParseBool(marker.Value); {
+			case err != nil:
+				return fmt.Errorf("failed to parse required marker value: %w", err)
+			case parentSchema == nil:
+				return fmt.Errorf("required marker can't be applied; parent schema is nil")
+			case isRequired:
 				parentSchema.Required = append(parentSchema.Required, key)
+			default:
+				// ignore
 			}
 		case MarkerTypeDefault:
 			var defaultValue []byte
 			switch schema.Type {
-			case "string":
+			case keyTypeString:
 				defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-			case "integer", "number", "boolean":
+			case keyTypeInteger, keyTypeNumber, keyTypeBoolean:
 				defaultValue = []byte(marker.Value)
 			default:
 				defaultValue = []byte(marker.Value)
@@ -260,9 +282,9 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 
 				var rawValue []byte
 				switch schema.Type {
-				case "string":
+				case keyTypeString:
 					rawValue = []byte(fmt.Sprintf("%q", val))
-				case "integer":
+				case keyTypeInteger:
 					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
 						return fmt.Errorf("failed to parse integer enum value: %w", err)
 					}

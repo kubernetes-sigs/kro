@@ -83,7 +83,7 @@ locals {
     enable_ack_efs                               = try(var.addons.enable_ack_efs, false)
     enable_kro                                   = try(var.addons.enable_kro, false)
     enable_kro_eks_rgs                           = try(var.addons.enable_kro_eks_rgs, false)
-    enable_mutli_acct                            = try(var.addons.enable_mutli_acct, false)
+    enable_multi_acct                            = try(var.addons.enable_multi_acct, false)
 
   }
   oss_addons = {

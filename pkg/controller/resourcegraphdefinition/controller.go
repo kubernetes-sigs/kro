@@ -19,9 +19,6 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -37,12 +34,11 @@ import (
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/watchset"
 )
 
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
@@ -52,7 +48,6 @@ type ResourceGraphDefinitionReconciler struct {
 
 	client.Client
 
-	restMapper     meta.RESTMapper
 	instanceLogger logr.Logger
 
 	clientSet  *kroclient.Set
@@ -62,8 +57,6 @@ type ResourceGraphDefinitionReconciler struct {
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
-
-	watchset *watchset.WatchSet
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -89,17 +82,7 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
-	r.restMapper = mgr.GetRESTMapper()
 	r.instanceLogger = mgr.GetLogger()
-
-	// Global watch selector kro.run/owned: "true"
-	labelSelector := metav1.LabelSelector{
-		MatchLabels: map[string]string{
-			metadata.OwnedLabel: "true",
-		},
-	}
-	labelSelectorString := labels.Set(labelSelector.MatchLabels).String()
-	r.watchset = watchset.NewWatchSet(context.Background(), r.clientSet.Dynamic(), r.restMapper, labelSelectorString)
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(

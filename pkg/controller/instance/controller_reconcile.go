@@ -56,9 +56,6 @@ type instanceGraphReconciler struct {
 	gvr schema.GroupVersionResource
 	// client is a dynamic client for interacting with the Kubernetes API server
 	client dynamic.Interface
-	// resourceClient is a dynamic client for interacting with the Kubernetes API server
-	// for resources.
-	resourceClient dynamic.Interface
 	// runtime is the runtime representation of the ResourceGraphDefinition. It holds the
 	// information about the instance and its sub-resources, the CEL expressions
 	// their dependencies, and the resolved values... etc
@@ -236,9 +233,9 @@ func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic
 	namespace := igr.getResourceNamespace(resourceID)
 
 	if descriptor.IsNamespaced() {
-		return igr.resourceClient.Resource(gvr).Namespace(namespace)
+		return igr.client.Resource(gvr).Namespace(namespace)
 	}
-	return igr.resourceClient.Resource(gvr)
+	return igr.client.Resource(gvr)
 }
 
 // handleResourceCreation manages the creation of a new resource

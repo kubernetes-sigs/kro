@@ -22,7 +22,7 @@
 //  1. Multi GVR management: It handles multiple resource types concurrently,
 //     creating and managing separate workflows for each.
 //
-//  2. Dynamic informer management: Creates and deletes informers on the fly
+//  2. Dynamic informer management: Creates and deletes factories on the fly
 //     for new resource types, allowing real time adaptation to changes in the
 //     cluster.
 //
@@ -59,6 +59,8 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -122,11 +124,11 @@ type Config struct {
 type DynamicController struct {
 	config Config
 
-	// kubeClient is the dynamic client used to create the informers
+	// kubeClient is the dynamic client used to create the factories
 	kubeClient dynamic.Interface
-	// informers is a safe map of GVR to informers. Each informer is responsible
+	// factories is a safe map of GVR to factories. Each factory is responsible
 	// for watching a specific GVR.
-	informers sync.Map
+	factories sync.Map
 
 	// handlers is a safe map of GVR to workflow operators. Each
 	// handler is responsible for managing a specific GVR.
@@ -140,9 +142,10 @@ type DynamicController struct {
 
 type Handler func(ctx context.Context, req ctrl.Request) error
 
-type informerWrapper struct {
-	informer dynamicinformer.DynamicSharedInformerFactory
-	shutdown func()
+type factoryWrapper struct {
+	factory       dynamicinformer.DynamicSharedInformerFactory
+	shutdown      func()
+	registrations map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
 }
 
 // NewDynamicController creates a new DynamicController instance.
@@ -166,21 +169,21 @@ func NewDynamicController(
 	return dc
 }
 
-// AllInformerHaveSynced checks if all registered informers have synced, returns
+// AllInformerHaveSynced checks if all registered factories have synced, returns
 // true if they have.
 func (dc *DynamicController) AllInformerHaveSynced() bool {
 	var allSynced bool
 	var informerCount int
 
-	// Unfortunately we can't know the number of informers in advance, so we need to
+	// Unfortunately we can't know the number of factories in advance, so we need to
 	// iterate over all of them to check if they have synced.
 
-	dc.informers.Range(func(key, value interface{}) bool {
+	dc.factories.Range(func(key, value interface{}) bool {
 		informerCount++
 		// possibly panic if the value is not a SharedIndexInformer
 		informer, ok := value.(cache.SharedIndexInformer)
 		if !ok {
-			dc.log.Error(nil, "Failed to cast informer", "key", key)
+			dc.log.Error(nil, "Failed to cast factory", "key", key)
 			allSynced = false
 			return false
 		}
@@ -197,12 +200,12 @@ func (dc *DynamicController) AllInformerHaveSynced() bool {
 	return allSynced
 }
 
-// WaitForInformerSync waits for all informers to sync or timeout
+// WaitForInformerSync waits for all factories to sync or timeout
 func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
-	dc.log.V(1).Info("Waiting for all informers to sync")
+	dc.log.V(1).Info("Waiting for all factories to sync")
 	start := time.Now()
 	defer func() {
-		dc.log.V(1).Info("Finished waiting for informers to sync", "duration", time.Since(start))
+		dc.log.V(1).Info("Finished waiting for factories to sync", "duration", time.Since(start))
 	}()
 
 	return cache.WaitForCacheSync(stopCh, dc.AllInformerHaveSynced)
@@ -216,9 +219,9 @@ func (dc *DynamicController) Run(ctx context.Context) error {
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
 
-	// Wait for all informers to sync
+	// Wait for all factories to sync
 	if !dc.WaitForInformersSync(ctx.Done()) {
-		return fmt.Errorf("failed to sync informers")
+		return fmt.Errorf("failed to sync factories")
 	}
 
 	// Spin up workers.
@@ -329,16 +332,16 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	dc.informers.Range(func(key, value interface{}) bool {
+	dc.factories.Range(func(key, value interface{}) bool {
 		wg.Add(1)
-		go func(informer *informerWrapper) {
+		go func(informer *factoryWrapper) {
 			defer wg.Done()
-			informer.informer.Shutdown()
-		}(value.(*informerWrapper))
+			informer.factory.Shutdown()
+		}(value.(*factoryWrapper))
 		return true
 	})
 
-	// Wait for all informers to shut down or timeout
+	// Wait for all factories to shut down or timeout
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -347,9 +350,9 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 
 	select {
 	case <-done:
-		dc.log.Info("All informers shut down successfully")
+		dc.log.Info("All factories shut down successfully")
 	case <-ctx.Done():
-		dc.log.Error(ctx.Err(), "Timeout waiting for informers to shut down")
+		dc.log.Error(ctx.Err(), "Timeout waiting for factories to shut down")
 		return ctx.Err()
 	}
 
@@ -367,7 +370,7 @@ type ObjectIdentifiers struct {
 	GVR           schema.GroupVersionResource
 }
 
-// updateFunc is the update event handler for the GVR informers
+// updateFunc is the update event handler for the GVR factories
 func (dc *DynamicController) updateFunc(old, new interface{}) {
 	newObj, ok := new.(*unstructured.Unstructured)
 	if !ok {
@@ -422,16 +425,26 @@ func (dc *DynamicController) EnqueueObject(obj interface{}, eventType string) {
 	dc.queue.Add(objectIdentifiers)
 }
 
-// StartServingGVK registers a new GVK to the informers map safely.
-func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
+// StartServingGVK registers a new GVK to the factories map safely.
+func (dc *DynamicController) StartServingGVK(
+	ctx context.Context,
+	gvr schema.GroupVersionResource,
+	instanceHandler Handler,
+	resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs,
+) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
-	_, exists := dc.informers.Load(gvr)
-	if exists {
-		// Even thought the informer is already registered, we should still
-		// update the handler, as it might have changed.
-		dc.handlers.Store(gvr, handler)
-		// trigger reconciliation of the corresponding gvr's
+	if wrapper, exists := dc.factories.Load(gvr); exists {
+		// Ensure resource handlers for a given GVK are consistent with the running wrapper.
+		fw := wrapper.(*factoryWrapper)
+		if err := dc.refreshResourceHandlers(resourceHandlers, fw); err != nil {
+			return fmt.Errorf("failed to refresh resource handlers for instance gvr %s: %w", gvr, err)
+		}
+
+		// Even thought the fw is already registered, we should still
+		// update the instanceHandler, as it might have changed.
+		dc.handlers.Store(gvr, instanceHandler)
+		// trigger reconciliation of the corresponding resourceGVR's
 		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
@@ -442,39 +455,48 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 		return nil
 	}
 
-	// Create a new informer
-	gvkInformer := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+	// Create a new factory
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dc.kubeClient,
 		dc.config.ResyncPeriod,
 		// Maybe we can make this configurable in the future. Thinking that
 		// we might want to filter out some resources, by namespace or labels
-		"",
-		nil,
+		"", nil,
 	)
-	informer := gvkInformer.ForResource(gvr).Informer()
 
+	// TODO we can optimize this further by introducing a second factory that tweaks the list options
+	// to filter out resources not relevant for kro on server side. This reduces the amount of watched objects
+	// on the client side dramatically. For now we filter on client side so this should be fine.
+	registrations, err := dc.registerResourceHandlers(resourceHandlers, factory)
+	if err != nil {
+		return fmt.Errorf("failed to register resource handlers for GVR %s: %w", gvr, err)
+	}
+
+	informer := factory.ForResource(gvr).Informer()
 	// Set up event handlers
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { dc.EnqueueObject(obj, "add") },
 		UpdateFunc: dc.updateFunc,
 		DeleteFunc: func(obj interface{}) { dc.EnqueueObject(obj, "delete") },
-	})
-	if err != nil {
-		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)
-		return fmt.Errorf("failed to add event handler for GVR %s: %w", gvr, err)
+	}); err != nil {
+		dc.log.Error(err, "Failed to add event instanceHandler", "resourceGVR", gvr)
+		return fmt.Errorf("failed to add event instanceHandler for GVR %s: %w", gvr, err)
 	}
-	informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+	if err := informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
 		dc.log.Error(err, "Watch error", "gvr", gvr)
-	})
-	dc.handlers.Store(gvr, handler)
+	}); err != nil {
+		dc.log.Error(err, "Failed to set watch error handler", "gvr", gvr)
+	}
+
+	dc.handlers.Store(gvr, instanceHandler)
 
 	informerContext := context.Background()
 	cancelableContext, cancel := context.WithCancel(informerContext)
-	// Start the informer
+	// Start the factory
 	go func() {
-		dc.log.V(1).Info("Starting informer", "gvr", gvr)
-		// time.Sleep(5 * time.Millisecond)
-		informer.Run(cancelableContext.Done())
+		dc.log.V(1).Info("Starting factory", "gvr", gvr)
+		factory.Start(cancelableContext.Done())
 	}()
 
 	dc.log.V(1).Info("Waiting for cache sync", "gvr", gvr)
@@ -486,44 +508,112 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 
 	if !synced {
 		cancel()
-		return fmt.Errorf("failed to sync informer cache for GVR %s", gvr)
+		return fmt.Errorf("failed to sync factory cache for GVR %s", gvr)
 	}
 
-	dc.informers.Store(gvr, &informerWrapper{
-		informer: gvkInformer,
-		shutdown: cancel,
+	dc.factories.Store(gvr, &factoryWrapper{
+		factory:       factory,
+		shutdown:      cancel,
+		registrations: registrations,
 	})
 	gvrCount.Inc()
 	dc.log.V(1).Info("Successfully registered GVK", "gvr", gvr)
 	return nil
 }
 
+func (dc *DynamicController) registerResourceHandlers(resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs, factory dynamicinformer.DynamicSharedInformerFactory) (map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration, error) {
+	registrations := make(map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration, len(resourceHandlers))
+	for resourceGVR, handler := range resourceHandlers {
+		informer := factory.ForResource(resourceGVR).Informer()
+		registration, err := informer.AddEventHandler(handler)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add event handler for GVR %s: %w", resourceGVR, err)
+		}
+		if err := informer.SetTransform(partialObjectMetadataFromUnstructured); err != nil {
+			return nil, fmt.Errorf("failed to set transform for GVR %s: %w", resourceGVR, err)
+		}
+		if err := informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+			dc.log.Error(err, "Watch error on resource", "gvr", resourceGVR)
+		}); err != nil {
+			return nil, fmt.Errorf("failed to set watch error handler for GVR %s: %w", resourceGVR, err)
+		}
+		registrations[resourceGVR] = registration
+	}
+	return registrations, nil
+}
+
+func (dc *DynamicController) refreshResourceHandlers(resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs, wrapper *factoryWrapper) error {
+	expectedGVRs := maps.Keys(resourceHandlers)
+	for oldGVR, oldRegistration := range wrapper.registrations {
+		if !slices.Contains(slices.Collect(expectedGVRs), oldGVR) {
+			informer := wrapper.factory.ForResource(oldGVR).Informer()
+			if err := informer.RemoveEventHandler(oldRegistration); err != nil {
+				return fmt.Errorf("failed to remove event handler for GVR %s: %w", oldGVR, err)
+			}
+			delete(wrapper.registrations, oldGVR) // Clean up registration map
+		}
+	}
+	for resourceGVR, handler := range resourceHandlers {
+		if _, isRegistered := wrapper.registrations[resourceGVR]; isRegistered {
+			continue
+		}
+		informer := wrapper.factory.ForResource(resourceGVR).Informer()
+		registration, err := informer.AddEventHandler(handler)
+		if err != nil {
+			return fmt.Errorf("failed to add event handler for GVR %s: %w", resourceGVR, err)
+		}
+		wrapper.registrations[resourceGVR] = registration
+	}
+	return nil
+}
+
+var allowedFieldsForPartialObjectMetadata = map[string]struct{}{
+	"apiVersion": {},
+	"kind":       {},
+	"metadata":   {},
+}
+
+// partialObjectMetaDataFromUnstructured returns a transform function that
+// strips all fields from an unstructured object except apiVersion, kind, and metadata.
+func partialObjectMetadataFromUnstructured(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type %T, expected *unstructured.Unstructured", obj)
+	}
+	for key := range u.Object {
+		if _, allowed := allowedFieldsForPartialObjectMetadata[key]; !allowed {
+			delete(u.Object, key)
+		}
+	}
+	return u, nil
+}
+
 // UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
 func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
-	// Retrieve the informer
-	informerObj, ok := dc.informers.Load(gvr)
+	// Retrieve the factory
+	informerObj, ok := dc.factories.Load(gvr)
 	if !ok {
 		dc.log.V(1).Info("GVK not registered, nothing to unregister", "gvr", gvr)
 		return nil
 	}
 
-	wrapper, ok := informerObj.(*informerWrapper)
+	wrapper, ok := informerObj.(*factoryWrapper)
 	if !ok {
-		return fmt.Errorf("invalid informer type for GVR: %s", gvr)
+		return fmt.Errorf("invalid factory type for GVR: %s", gvr)
 	}
 
-	// Stop the informer
-	dc.log.V(1).Info("Stopping informer", "gvr", gvr)
+	// Stop the factory
+	dc.log.V(1).Info("Stopping factory", "gvr", gvr)
 
-	// Cancel the context to stop the informer
+	// Cancel the context to stop the factory
 	wrapper.shutdown()
-	// Wait for the informer to shut down
-	wrapper.informer.Shutdown()
+	// Wait for the factory to shut down
+	wrapper.factory.Shutdown()
 
-	// Remove the informer from the map
-	dc.informers.Delete(gvr)
+	// Remove the factory from the map
+	dc.factories.Delete(gvr)
 
 	// Unregister the handler if any
 	dc.handlers.Delete(gvr)
@@ -534,7 +624,7 @@ func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.Grou
 	// Thinking that we might want to have a queue per GVR.
 	// dc.cleanupQueue(gvr)
 	// time.Sleep(1 * time.Second)
-	// isStopped := wrapper.informer.ForResource(gvr).Informer().IsStopped()
+	// isStopped := wrapper.factory.ForResource(gvr).Informer().IsStopped()
 	dc.log.V(1).Info("Successfully unregistered GVK", "gvr", gvr)
 	return nil
 }

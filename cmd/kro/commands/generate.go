@@ -13,49 +13,78 @@ import (
 )
 
 type GenerateConfig struct {
-	resourceGroupDefinitionFile string
+	resourceGraphDefinitionFile string
 	outputFormat                string
 }
 
 var config = &GenerateConfig{}
 
 func init() {
-	generateCmd.PersistentFlags().StringVarP(&config.resourceGroupDefinitionFile, "file", "f", "",
-		"Path to the ResourceGroupDefinition file")
+	generateCmd.PersistentFlags().StringVarP(&config.resourceGraphDefinitionFile, "file", "f", "",
+		"Path to the ResourceGraphDefinition file")
 	generateCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
 }
 
 var generateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate the CRD from a given ResourceGroupDefinition",
-	Long: "Generate the CRD from a given ResourceGroupDefinition." +
-		"This command generates a CustomResourceDefinition (CRD) based on the provided ResourceGroupDefinition file.",
+	Short: "Generate the CRD from a given ResourceGraphDefinition",
+	Long: "Generate the CRD from a given ResourceGraphDefinition." +
+		"This command generates a CustomResourceDefinition (CRD) based on the provided ResourceGraphDefinition file.",
 }
 
 var generateCRDCmd = &cobra.Command{
 	Use:   "crd",
 	Short: "Generate a CustomResourceDefinition (CRD)",
 	Long: "Generate a CustomResourceDefinition (CRD) from a " +
-		"ResourceGroupDefinition file. This command reads the " +
-		"ResourceGroupDefinition and outputs the corresponding CRD " +
+		"ResourceGraphDefinition file. This command reads the " +
+		"ResourceGraphDefinition and outputs the corresponding CRD " +
 		"in the specified format.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGroupDefinitionFile == "" {
-			return fmt.Errorf("ResourceGroupDefinition file is required")
+		if config.resourceGraphDefinitionFile == "" {
+			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGroupDefinitionFile)
+		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
 		if err != nil {
-			return fmt.Errorf("failed to read ResourceGroupDefinition file: %w", err)
+			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}
 
 		var rgd v1alpha1.ResourceGraphDefinition
 		if err = yaml.Unmarshal(data, &rgd); err != nil {
-			return fmt.Errorf("failed to unmarshal ResourceGroupDefinition: %w", err)
+			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
 		}
 
 		if err = generateCRD(&rgd); err != nil {
 			return fmt.Errorf("failed to generate CRD: %w", err)
+		}
+
+		return nil
+	},
+}
+
+var generateInstanceCmd = &cobra.Command{
+	Use:   "instance",
+	Short: "Generate a ResourceGraphDefinition (RGD) instance",
+	Long: "Generate a ResourceGraphDefinition (RGD) instance from a " +
+		"ResourceGraphDefinition file. This command reads the " +
+		"ResourceGraphDefinition and outputs the corresponding RGD instance",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if config.resourceGraphDefinitionFile == "" {
+			return fmt.Errorf("ResourceGraphDefinition file is required")
+		}
+
+		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		if err != nil {
+			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
+		}
+
+		var rgd v1alpha1.ResourceGraphDefinition
+		if err = yaml.Unmarshal(data, &rgd); err != nil {
+			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
+		}
+
+		if err = generateInstance(&rgd); err != nil {
+			return fmt.Errorf("failed to generate RGD instance: %w", err)
 		}
 
 		return nil
@@ -72,6 +101,27 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	crd.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
 	b, err := marshalObject(crd, config.outputFormat)
+	if err != nil {
+		return fmt.Errorf("failed to marshal CRD: %w", err)
+	}
+
+	fmt.Println(string(b))
+
+	return nil
+}
+
+func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
+	rgdGraph, err := createGraphBuilder(rgd)
+	if err != nil {
+		return fmt.Errorf("failed to create resource graph definition: %w", err)
+	}
+
+	emulatedObj := rgdGraph.Instance.GetEmulatedObject()
+	emulatedObj.SetAnnotations(map[string]string{"kro.run/version": "dev"})
+
+	delete(emulatedObj.Object, "status")
+
+	b, err := marshalObject(emulatedObj, config.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}
@@ -130,5 +180,6 @@ func marshalObject(obj interface{}, outputFormat string) ([]byte, error) {
 
 func AddGenerateCommands(rootCmd *cobra.Command) {
 	generateCmd.AddCommand(generateCRDCmd)
+	generateCmd.AddCommand(generateInstanceCmd)
 	rootCmd.AddCommand(generateCmd)
 }

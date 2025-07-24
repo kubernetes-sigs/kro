@@ -75,7 +75,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// Retrieve resource handlers for the resources in the graph
 	// This will be used by the dynamic controller to handle events for these resources
 	// after the microcontroller has started dynamic watches.
-	resourceHandlers := r.getResourceGraphResourceHandlers(ctx, processedRGD)
+	var resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs
+	if metadata.GetInstanceWatchResources(rgd.ObjectMeta) {
+		resourceHandlers = r.getResourceGraphResourceHandlers(ctx, processedRGD)
+	}
 
 	// Setup and start microcontroller
 	controller := r.setupMicroController(processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)

@@ -41,6 +41,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
+
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 // ----------------- Test Resource ----------------------
@@ -51,7 +54,7 @@ type TestResource struct {
 
 	runtime.Object // hack to adhere to the Object contract.
 
-	c []Condition
+	c []v1alpha1.Condition
 }
 
 // hack to adhere to the Object contract.
@@ -63,17 +66,41 @@ func (tr *TestResource) DeepCopyObject() runtime.Object {
 	return tr
 }
 
-func (tr *TestResource) GetConditions() []Condition {
+func (tr *TestResource) GetConditions() []v1alpha1.Condition {
 	return tr.c
 }
 
-func (tr *TestResource) SetConditions(c []Condition) {
+func (tr *TestResource) SetConditions(c []v1alpha1.Condition) {
 	tr.c = c
 }
 
 // ------------------------------------------------------
 
-var ignoreFields = cmpopts.IgnoreFields(Condition{}, "LastTransitionTime")
+// Custom comparer for pointer fields
+var conditionComparer = cmp.Comparer(func(x, y v1alpha1.Condition) bool {
+	if x.Type != y.Type || x.Status != y.Status || x.ObservedGeneration != y.ObservedGeneration {
+		return false
+	}
+
+	// Compare Reason pointers
+	if !ptr.Equal(x.Reason, y.Reason) {
+		return false
+	}
+
+	// Compare Message pointers
+	if (x.Message == nil) != (y.Message == nil) {
+		return false
+	}
+	if x.Message != nil && y.Message != nil && *x.Message != *y.Message {
+		return false
+	}
+
+	// Ignore LastTransitionTime
+	return true
+})
+
+// Include LastTransitionTime in fields to ignore
+var ignoreFields = cmpopts.IgnoreFields(v1alpha1.Condition{}, "LastTransitionTime")
 
 func TestGetCondition(t *testing.T) {
 	ready := NewReadyConditions()
@@ -81,17 +108,19 @@ func TestGetCondition(t *testing.T) {
 		name   string
 		dut    Object
 		get    string
-		expect *Condition
+		expect *v1alpha1.Condition
 	}{{
 		name: "simple",
-		dut: &TestResource{c: []Condition{{
-			Type:   ConditionReady,
-			Status: metav1.ConditionTrue,
+		dut: &TestResource{c: []v1alpha1.Condition{{
+			Type:    ConditionReady,
+			Status:  metav1.ConditionTrue,
+			Message: ptr.To(""),
 		}}},
 		get: ConditionReady,
-		expect: &Condition{
-			Type:   ConditionReady,
-			Status: metav1.ConditionTrue,
+		expect: &v1alpha1.Condition{
+			Type:    ConditionReady,
+			Status:  metav1.ConditionTrue,
+			Message: ptr.To(""),
 		},
 	}, {
 		name:   "nil",
@@ -100,9 +129,10 @@ func TestGetCondition(t *testing.T) {
 		expect: nil,
 	}, {
 		name: "missing",
-		dut: &TestResource{c: []Condition{{
-			Type:   ConditionReady,
-			Status: metav1.ConditionTrue,
+		dut: &TestResource{c: []v1alpha1.Condition{{
+			Type:    ConditionReady,
+			Status:  metav1.ConditionTrue,
+			Message: ptr.To(""),
 		}}},
 		get:    "Missing",
 		expect: nil,
@@ -110,7 +140,7 @@ func TestGetCondition(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e, a := tc.expect, ready.For(tc.dut).Get(tc.get)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -122,26 +152,26 @@ func TestSetCondition(t *testing.T) {
 	cases := []struct {
 		name   string
 		dut    Object
-		set    Condition
-		expect *Condition
+		set    v1alpha1.Condition
+		expect *v1alpha1.Condition
 	}{{
 		name: "simple",
-		dut: &TestResource{c: []Condition{{
+		dut: &TestResource{c: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		}}},
-		set: Condition{
+		set: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
-		expect: &Condition{
+		expect: &v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
 	}, {
 		name: "nil",
 		dut:  nil,
-		set: Condition{
+		set: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
@@ -149,11 +179,11 @@ func TestSetCondition(t *testing.T) {
 	}, {
 		name: "empty",
 		dut:  &TestResource{},
-		set: Condition{
+		set: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
-		expect: &Condition{
+		expect: &v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
@@ -161,8 +191,8 @@ func TestSetCondition(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ready.For(tc.dut).Set(tc.set)
-			e, a := tc.expect, ready.For(tc.dut).Get(tc.set.Type)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			e, a := tc.expect, ready.For(tc.dut).Get(string(tc.set.Type))
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -178,14 +208,14 @@ func TestRootIsTrue(t *testing.T) {
 	}{{
 		name: "empty accessor should not be ready",
 		dut: &TestResource{
-			c: []Condition(nil),
+			c: []v1alpha1.Condition(nil),
 		},
 		cts:     NewReadyConditions(),
 		isHappy: false,
 	}, {
 		name: "Different condition type should not be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   "Foo",
 				Status: metav1.ConditionTrue,
 			}},
@@ -195,7 +225,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "False condition accessor should not be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   ConditionReady,
 				Status: metav1.ConditionFalse,
 			}},
@@ -205,7 +235,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Unknown condition accessor should not be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   ConditionReady,
 				Status: metav1.ConditionUnknown,
 			}},
@@ -215,7 +245,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Missing condition accessor should not be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type: ConditionReady,
 			}},
 		},
@@ -224,7 +254,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "True condition accessor should be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   ConditionReady,
 				Status: metav1.ConditionTrue,
 			}},
@@ -234,7 +264,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Multiple conditions with ready accessor should be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   "Foo",
 				Status: metav1.ConditionTrue,
 			}, {
@@ -247,7 +277,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Multiple conditions with ready accessor false should not be ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   "Foo",
 				Status: metav1.ConditionTrue,
 			}, {
@@ -260,7 +290,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Multiple conditions with mixed ready accessor, some don't matter, ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   "Foo",
 				Status: metav1.ConditionTrue,
 			}, {
@@ -276,7 +306,7 @@ func TestRootIsTrue(t *testing.T) {
 	}, {
 		name: "Multiple conditions with mixed ready accessor, some don't matter, not ready",
 		dut: &TestResource{
-			c: []Condition{{
+			c: []v1alpha1.Condition{{
 				Type:   "Foo",
 				Status: metav1.ConditionTrue,
 			}, {
@@ -305,42 +335,42 @@ func TestUpdateLastTransitionTime(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		conditions []Condition
-		condition  Condition
+		conditions []v1alpha1.Condition
+		condition  v1alpha1.Condition
 		update     bool
 	}{{
 		name: "LastTransitionTime should be set",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		}},
 
-		condition: Condition{
+		condition: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
 		update: true,
 	}, {
 		name: "LastTransitionTime should update",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:               ConditionReady,
 			Status:             metav1.ConditionFalse,
-			LastTransitionTime: metav1.NewTime(time.Unix(1337, 0)),
+			LastTransitionTime: ptr.To(metav1.NewTime(time.Unix(1337, 0))),
 		}},
-		condition: Condition{
+		condition: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
 		update: true,
 	}, {
 		name: "if LastTransitionTime is the only chance, don't do it",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:               ConditionReady,
 			Status:             metav1.ConditionFalse,
-			LastTransitionTime: metav1.NewTime(time.Unix(1337, 0)),
+			LastTransitionTime: ptr.To(metav1.NewTime(time.Unix(1337, 0))),
 		}},
 
-		condition: Condition{
+		condition: v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		},
@@ -351,9 +381,9 @@ func TestUpdateLastTransitionTime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			conds := &TestResource{c: tc.conditions}
 
-			was := condSet.For(conds).Get(tc.condition.Type)
+			was := condSet.For(conds).Get(string(tc.condition.Type))
 			condSet.For(conds).Set(tc.condition)
-			now := condSet.For(conds).Get(tc.condition.Type)
+			now := condSet.For(conds).Get(string(tc.condition.Type))
 
 			if e, a := tc.condition.Status, now.Status; e != a {
 				t.Errorf("%q expected: %v to match %v", tc.name, e, a)
@@ -377,11 +407,11 @@ func TestResourceConditions(t *testing.T) {
 
 	dut := &TestResource{}
 
-	foo := Condition{
+	foo := v1alpha1.Condition{
 		Type:   "Foo",
 		Status: "True",
 	}
-	bar := Condition{
+	bar := v1alpha1.Condition{
 		Type:   "Bar",
 		Status: "True",
 	}
@@ -390,33 +420,33 @@ func TestResourceConditions(t *testing.T) {
 	condSet.For(dut).Set(foo)
 
 	if got, want := len(dut.c), 2; got != want {
-		t.Fatalf("Unexpected Condition length; got %d, want %d", got, want)
+		t.Fatalf("Unexpected condition length; got %d, want %d", got, want)
 	}
 
 	// Add a second condition.
 	condSet.For(dut).Set(bar)
 
 	if got, want := len(dut.c), 3; got != want {
-		t.Fatalf("Unexpected Condition length; got %d, want %d", got, want)
+		t.Fatalf("Unexpected condition length; got %d, want %d", got, want)
 	}
 }
 
-// getTypes is a small helped to strip out the used ConditionTypes from []Condition
-func getTypes(conds []Condition) []string {
+// getTypes is a small helped to strip out the used ConditionTypes from []v1alpha1.Condition
+func getTypes(conds []v1alpha1.Condition) []string {
 	types := make([]string, 0, len(conds))
 	for _, c := range conds {
-		types = append(types, c.Type)
+		types = append(types, string(c.Type))
 	}
 	return types
 }
 
 type ConditionSetTrueTest struct {
 	name           string
-	conditions     []Condition
+	conditions     []v1alpha1.Condition
 	conditionTypes []string
 	set            string
 	happy          bool
-	happyWant      *Condition
+	happyWant      *v1alpha1.Condition
 }
 
 func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
@@ -435,7 +465,7 @@ func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
 				t.Errorf("%q expected: %v got: %v", tc.name, e, a)
 			} else if !e && tc.happyWant != nil {
 				e, a := tc.happyWant, condSet.For(dut).Root()
-				if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+				if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 					t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 				}
 			}
@@ -446,14 +476,15 @@ func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
 				return
 			}
 
-			expected := &Condition{
-				Type:   tc.set,
-				Status: metav1.ConditionTrue,
-				Reason: tc.set,
+			expected := &v1alpha1.Condition{
+				Type:    v1alpha1.ConditionType(tc.set),
+				Status:  metav1.ConditionTrue,
+				Reason:  ptr.To(tc.set),
+				Message: ptr.To(""),
 			}
 
 			e, a := expected, condSet.For(dut).Get(tc.set)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -472,7 +503,7 @@ func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
 				t.Errorf("%q expected: %v got: %v", tc.name, e, a)
 			} else if !e && tc.happyWant != nil {
 				e, a := tc.happyWant, cts.For(dut).Root()
-				if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+				if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 					t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 				}
 			}
@@ -483,15 +514,15 @@ func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
 				return
 			}
 
-			expected := &Condition{
-				Type:    tc.set,
+			expected := &v1alpha1.Condition{
+				Type:    v1alpha1.ConditionType(tc.set),
 				Status:  metav1.ConditionTrue,
-				Reason:  "UnitTest",
-				Message: "calm down, just testing",
+				Reason:  ptr.To("UnitTest"),
+				Message: ptr.To("calm down, just testing"),
 			}
 
 			e, a := expected, cts.For(dut).Get(tc.set)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -505,7 +536,7 @@ func TestSetTrue(t *testing.T) {
 		happy: true,
 	}, {
 		name: "existing conditions, turns happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		}},
@@ -513,7 +544,7 @@ func TestSetTrue(t *testing.T) {
 		happy: true,
 	}, {
 		name: "with deps, happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		}, {
@@ -522,40 +553,40 @@ func TestSetTrue(t *testing.T) {
 		}},
 		set:   "Foo",
 		happy: true,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
-			Reason: "Foo",
+			Reason: ptr.To("Foo"),
 		},
 	}, {
 		name: "with deps, not happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "ReadyReason",
-			Message: "ReadyMsg",
+			Reason:  ptr.To("ReadyReason"),
+			Message: ptr.To("ReadyMsg"),
 		}, {
 			Type:    "Foo",
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Bar",
 			Status:  metav1.ConditionTrue,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		}},
 		set:   "Bar",
 		happy: false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		},
 	}, {
 		name: "update dep, turns happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionFalse,
 		}, {
@@ -566,7 +597,7 @@ func TestSetTrue(t *testing.T) {
 		happy: true,
 	}, {
 		name: "update dep, happy was unknown, turns happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionUnknown,
 		}, {
@@ -577,121 +608,121 @@ func TestSetTrue(t *testing.T) {
 		happy: true,
 	}, {
 		name: "update dep 1/2, still not happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Foo",
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Bar",
 			Status:  metav1.ConditionFalse,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		}},
 		set:   "Foo",
 		happy: false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		},
 	}, {
 		name: "update dep 1/3, mixed status, still not happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Foo",
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Bar",
 			Status:  metav1.ConditionUnknown,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		}, {
 			Type:    "Baz",
 			Status:  metav1.ConditionFalse,
-			Reason:  "BazReason",
-			Message: "BazMsg",
+			Reason:  ptr.To("BazReason"),
+			Message: ptr.To("BazMsg"),
 		}},
 		set:   "Foo",
 		happy: false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "BazReason",
-			Message: "BazMsg",
+			Reason:  ptr.To("BazReason"),
+			Message: ptr.To("BazMsg"),
 		},
 	}, {
 		name: "update dep 1/3, unknown status, still not happy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Foo",
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Bar",
 			Status:  metav1.ConditionUnknown,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		}, {
 			Type:    "Baz",
 			Status:  metav1.ConditionUnknown,
-			Reason:  "BazReason",
-			Message: "BazMsg",
+			Reason:  ptr.To("BazReason"),
+			Message: ptr.To("BazMsg"),
 		}},
 		set:   "Foo",
 		happy: false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionUnknown,
-			Reason:  "BarReason",
-			Message: "BarMsg",
+			Reason:  ptr.To("BarReason"),
+			Message: ptr.To("BarMsg"),
 		},
 	}, {
 		name: "update dep 1/3, unknown status because nil",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}, {
 			Type:    "Foo",
 			Status:  metav1.ConditionFalse,
-			Reason:  "FooReason",
-			Message: "FooMsg",
+			Reason:  ptr.To("FooReason"),
+			Message: ptr.To("FooMsg"),
 		}},
 		set:            "Foo",
 		conditionTypes: []string{"Foo", "Bar", "Baz"},
 		happy:          false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionUnknown,
-			Reason:  "AwaitingReconciliation",
-			Message: "condition \"Bar\" is awaiting reconciliation",
+			Reason:  ptr.To("AwaitingReconciliation"),
+			Message: ptr.To("condition \"Bar\" is awaiting reconciliation"),
 		},
 	}, {
 		name: "all happy but not cover all dependents",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "LongStory",
-			Message: "Set manually",
+			Reason:  ptr.To("LongStory"),
+			Message: ptr.To("Set manually"),
 		}, {
 			Type:   "Foo",
 			Status: metav1.ConditionTrue,
@@ -699,19 +730,19 @@ func TestSetTrue(t *testing.T) {
 		set:            "Foo",
 		conditionTypes: []string{"Foo", "Bar"}, // dependents is more than conditions.
 		happy:          false,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionUnknown,
-			Reason:  "AwaitingReconciliation",
-			Message: "condition \"Bar\" is awaiting reconciliation",
+			Reason:  ptr.To("AwaitingReconciliation"),
+			Message: ptr.To("condition \"Bar\" is awaiting reconciliation"),
 		},
 	}, {
 		name: "all happy and cover all dependents",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:    ConditionReady,
 			Status:  metav1.ConditionFalse,
-			Reason:  "LongStory",
-			Message: "Set manually",
+			Reason:  ptr.To("LongStory"),
+			Message: ptr.To("Set manually"),
 		}, {
 			Type:   "Foo",
 			Status: metav1.ConditionTrue,
@@ -722,7 +753,7 @@ func TestSetTrue(t *testing.T) {
 		set:            "Foo",
 		conditionTypes: []string{"Foo"}, // dependents is less than conditions.
 		happy:          true,
-		happyWant: &Condition{
+		happyWant: &v1alpha1.Condition{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		},
@@ -732,7 +763,7 @@ func TestSetTrue(t *testing.T) {
 
 type ConditionSetFalseTest struct {
 	name       string
-	conditions []Condition
+	conditions []v1alpha1.Condition
 	set        string
 	unhappy    bool
 }
@@ -749,15 +780,15 @@ func doTestSetFalseAccessor(t *testing.T, cases []ConditionSetFalseTest) {
 				t.Errorf("%q expected: %v got: %v", tc.name, e, a)
 			}
 
-			expected := &Condition{
-				Type:    tc.set,
+			expected := &v1alpha1.Condition{
+				Type:    v1alpha1.ConditionType(tc.set),
 				Status:  metav1.ConditionFalse,
-				Reason:  "UnitTest",
-				Message: "calm down, just testing",
+				Reason:  ptr.To("UnitTest"),
+				Message: ptr.To("calm down, just testing"),
 			}
 
 			e, a := expected, condSet.For(dut).Get(tc.set)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -771,7 +802,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "existing conditions, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}},
@@ -779,7 +810,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "with deps, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -790,7 +821,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "with deps, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -801,7 +832,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "update dep, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -812,7 +843,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "update dep, happy was unknown, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionUnknown,
 		}, {
@@ -823,7 +854,7 @@ func TestSetFalse(t *testing.T) {
 		unhappy: true,
 	}, {
 		name: "update dep 1/2, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -841,7 +872,7 @@ func TestSetFalse(t *testing.T) {
 
 type ConditionSetUnknownTest struct {
 	name       string
-	conditions []Condition
+	conditions []v1alpha1.Condition
 	set        string
 	unhappy    bool
 	happyIs    metav1.ConditionStatus
@@ -863,15 +894,15 @@ func doTestSetUnknownAccessor(t *testing.T, cases []ConditionSetUnknownTest) {
 				t.Errorf("%q expected ConditionReady: %v got: %v", tc.name, e, a)
 			}
 
-			expected := &Condition{
-				Type:    tc.set,
+			expected := &v1alpha1.Condition{
+				Type:    v1alpha1.ConditionType(tc.set),
 				Status:  metav1.ConditionUnknown,
-				Reason:  "UnitTest",
-				Message: "idk, just testing",
+				Reason:  ptr.To("UnitTest"),
+				Message: ptr.To("idk, just testing"),
 			}
 
 			e, a := expected, condSet.For(dut).Get(tc.set)
-			if diff := cmp.Diff(e, a, ignoreFields); diff != "" {
+			if diff := cmp.Diff(e, a, ignoreFields, conditionComparer); diff != "" {
 				t.Errorf("%s (-want, +got) = %v", tc.name, diff)
 			}
 		})
@@ -886,7 +917,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionUnknown,
 	}, {
 		name: "existing conditions, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}},
@@ -895,7 +926,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionUnknown,
 	}, {
 		name: "with deps, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -907,7 +938,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionUnknown,
 	}, {
 		name: "with deps that are false, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -922,7 +953,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionFalse,
 	}, {
 		name: "update dep, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {
@@ -934,7 +965,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionUnknown,
 	}, {
 		name: "update dep, happy was unknown, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionUnknown,
 		}, {
@@ -946,7 +977,7 @@ func TestSetUnknown(t *testing.T) {
 		happyIs: metav1.ConditionUnknown,
 	}, {
 		name: "update dep 1/2, turns unhappy",
-		conditions: []Condition{{
+		conditions: []v1alpha1.Condition{{
 			Type:   ConditionReady,
 			Status: metav1.ConditionTrue,
 		}, {

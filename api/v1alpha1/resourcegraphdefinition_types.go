@@ -151,7 +151,7 @@ type ResourceGraphDefinitionStatus struct {
 	// TopologicalOrder is the topological order of the resourcegraphdefinition graph
 	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of an object's state
-	Conditions []Condition `json:"conditions,omitempty"`
+	Conditions Conditions `json:"conditions,omitempty"`
 	// Resources represents the resources, and their information (dependencies for now)
 	Resources []ResourceInformation `json:"resources,omitempty"`
 }
@@ -188,6 +188,14 @@ type ResourceGraphDefinition struct {
 
 	Spec   ResourceGraphDefinitionSpec   `json:"spec,omitempty"`
 	Status ResourceGraphDefinitionStatus `json:"status,omitempty"`
+}
+
+func (o *ResourceGraphDefinition) GetConditions() []Condition {
+	return o.Status.Conditions
+}
+
+func (o *ResourceGraphDefinition) SetConditions(conditions []Condition) {
+	o.Status.Conditions = conditions
 }
 
 //+kubebuilder:object:root=true

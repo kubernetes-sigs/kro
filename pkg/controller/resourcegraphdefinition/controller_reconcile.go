@@ -75,7 +75,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// Retrieve resource handlers for the resources in the graph
 	// This will be used by the dynamic controller to handle events for these resources
 	// after the microcontroller has started dynamic watches.
-	resourceHandlers := r.getResourceGraphResourceHandlers(processedRGD)
+	resourceHandlers := r.getResourceGraphResourceHandlers(ctx, processedRGD)
 
 	// Setup and start microcontroller
 	controller := r.setupMicroController(processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
@@ -94,7 +94,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
 
-func (r *ResourceGraphDefinitionReconciler) getResourceGraphResourceHandlers(processedRGD *graph.Graph) map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs {
+func (r *ResourceGraphDefinitionReconciler) getResourceGraphResourceHandlers(ctx context.Context, processedRGD *graph.Graph) map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs {
 	update := func(obj interface{}, eventType string) {
 		gvr := processedRGD.Instance.GetGroupVersionResource()
 		obju, ok := obj.(*unstructured.Unstructured)
@@ -119,8 +119,7 @@ func (r *ResourceGraphDefinitionReconciler) getResourceGraphResourceHandlers(pro
 
 		instance, err := r.clientSet.Dynamic().Resource(gvr).
 			Namespace(namespace).
-			// TODO: The context here needs to survive the lifetime of the reconciliation of a RGD but shouldnt be TODO.
-			Get(context.TODO(), name, metav1.GetOptions{})
+			Get(ctx, name, metav1.GetOptions{})
 		if err == nil {
 			r.instanceLogger.Info("update from resource",
 				"name", name,

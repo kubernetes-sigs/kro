@@ -145,6 +145,7 @@ type Handler func(ctx context.Context, req ctrl.Request) error
 type factoryWrapper struct {
 	factory       dynamicinformer.DynamicSharedInformerFactory
 	shutdown      func()
+	ctx           context.Context
 	registrations map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
 }
 
@@ -214,7 +215,6 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 // Run starts the DynamicController.
 func (dc *DynamicController) Run(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
-	defer dc.queue.ShutDown()
 
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
@@ -332,12 +332,17 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	dc.factories.Range(func(key, value interface{}) bool {
+	dc.handlers.Range(func(key, value interface{}) bool {
 		wg.Add(1)
-		go func(informer *factoryWrapper) {
-			defer wg.Done()
-			informer.factory.Shutdown()
-		}(value.(*factoryWrapper))
+		go func() {
+			gvr := key.(schema.GroupVersionResource)
+			dc.log.V(1).Info("Shutting down handler for GVR", "gvr", gvr)
+			if err := dc.StopServiceGVK(ctx, gvr); err != nil {
+				dc.log.Error(err, "Failed to stop service for GVR", "gvr", gvr)
+			} else {
+				dc.log.V(1).Info("Successfully stopped handler for GVR", "gvr", gvr)
+			}
+		}()
 		return true
 	})
 
@@ -440,12 +445,13 @@ func (dc *DynamicController) StartServingGVK(
 		if err := dc.refreshResourceHandlers(resourceHandlers, fw); err != nil {
 			return fmt.Errorf("failed to refresh resource handlers for instance gvr %s: %w", gvr, err)
 		}
+		fw.factory.Start(fw.ctx.Done())
 
 		// Even thought the fw is already registered, we should still
 		// update the instanceHandler, as it might have changed.
 		dc.handlers.Store(gvr, instanceHandler)
 		// trigger reconciliation of the corresponding resourceGVR's
-		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
+		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(fw.ctx, metav1.ListOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
 		}
@@ -491,29 +497,28 @@ func (dc *DynamicController) StartServingGVK(
 
 	dc.handlers.Store(gvr, instanceHandler)
 
-	informerContext := context.Background()
-	cancelableContext, cancel := context.WithCancel(informerContext)
-	// Start the factory
-	go func() {
-		dc.log.V(1).Info("Starting factory", "gvr", gvr)
-		factory.Start(cancelableContext.Done())
-	}()
+	cancelableContext, cancel := context.WithCancel(ctx)
+	dc.log.V(1).Info("Starting informer factory", "gvr", gvr)
+	factory.Start(cancelableContext.Done())
 
 	dc.log.V(1).Info("Waiting for cache sync", "gvr", gvr)
 	startTime := time.Now()
 	// Wait for cache sync with a timeout
-	synced := cache.WaitForCacheSync(cancelableContext.Done(), informer.HasSynced)
+	synced := factory.WaitForCacheSync(cancelableContext.Done())
 	syncDuration := time.Since(startTime)
 	informerSyncDuration.WithLabelValues(gvr.String()).Observe(syncDuration.Seconds())
 
-	if !synced {
-		cancel()
-		return fmt.Errorf("failed to sync factory cache for GVR %s", gvr)
+	for gvr, synced := range synced {
+		if !synced {
+			cancel()
+			return fmt.Errorf("failed to sync informer cache for GVR %s", gvr)
+		}
 	}
 
 	dc.factories.Store(gvr, &factoryWrapper{
 		factory:       factory,
 		shutdown:      cancel,
+		ctx:           cancelableContext,
 		registrations: registrations,
 	})
 	gvrCount.Inc()
@@ -625,6 +630,6 @@ func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.Grou
 	// dc.cleanupQueue(gvr)
 	// time.Sleep(1 * time.Second)
 	// isStopped := wrapper.factory.ForResource(gvr).Informer().IsStopped()
-	dc.log.V(1).Info("Successfully unregistered GVK", "gvr", gvr)
+	dc.log.V(1).Info("Successfully unregistered GVR", "gvr", gvr)
 	return nil
 }

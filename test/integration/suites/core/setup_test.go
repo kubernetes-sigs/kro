@@ -19,12 +19,11 @@ import (
 	"testing"
 	"time"
 
+	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
+	"github.com/kro-run/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
-	"github.com/kro-run/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -33,12 +32,13 @@ func TestCore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error
-		env, err = environment.New(
+		env, err = environment.NewWithContext(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 5 * time.Second,
 				},
+				Logger: &GinkgoLogr,
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())

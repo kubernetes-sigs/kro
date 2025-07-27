@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug LSP Client",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/client",
+        "${workspaceFolder}",
+        "${workspaceFolder}/../Examples"
+      ],
+      "outFiles": ["${workspaceFolder}/client/out/**/*.js"],
+      "preLaunchTask": "npm: compile",
+      "env": {
+        "KRO_SERVER_PATH": "${workspaceFolder}/server/kro-lsp",
+        "KRO_LSP_DEBUG": "true"
+      }
+    },
+    {
+      "name": "Attach to LSP Server",
+      "type": "go",
+      "request": "attach",
+      "mode": "local",
+      "processId": 0
+    }
+  ]
+}

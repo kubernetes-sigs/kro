@@ -16,6 +16,7 @@ package environment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -49,6 +51,7 @@ type Environment struct {
 	ClientSet        *kroclient.Set
 	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
+	ManagerResult    chan error
 }
 
 type ControllerConfig struct {
@@ -56,14 +59,14 @@ type ControllerConfig struct {
 	ReconcileConfig  ctrlinstance.ReconcileConfig
 }
 
-func New(controllerConfig ControllerConfig) (*Environment, error) {
+func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
 	}
 
 	// Setup logging
 	logf.SetLogger(zap.New(zap.WriteTo(io.Discard), zap.UseDevMode(true)))
-	env.context, env.cancel = context.WithCancel(context.Background())
+	env.context, env.cancel = context.WithCancel(ctx)
 
 	env.TestEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
@@ -139,20 +142,12 @@ func (e *Environment) setupController() error {
 			Workers:         3,
 			ResyncPeriod:    60 * time.Second,
 			QueueMaxRetries: 20,
-			ShutdownTimeout: 60 * time.Second,
 			MinRetryDelay:   200 * time.Millisecond,
 			MaxRetryDelay:   1000 * time.Second,
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
 		e.ClientSet.Dynamic())
-
-	go func() {
-		err := dc.Run(e.context)
-		if err != nil {
-			panic(fmt.Sprintf("failed to run dynamic controller: %v", err))
-		}
-	}()
 
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
@@ -169,19 +164,23 @@ func (e *Environment) setupController() error {
 			// Disable the metrics server
 			BindAddress: "0",
 		},
+		GracefulShutdownTimeout: ptr.To(30 * time.Second),
 	})
 	if err != nil {
 		return fmt.Errorf("creating manager: %w", err)
+	}
+
+	if err := e.CtrlManager.Add(dc); err != nil {
+		return fmt.Errorf("adding dynamic controller to manager: %w", err)
 	}
 
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
 	}
 
+	e.ManagerResult = make(chan error, 1)
 	go func() {
-		if err := e.CtrlManager.Start(e.context); err != nil {
-			panic(fmt.Sprintf("failed to start manager: %v", err))
-		}
+		e.ManagerResult <- e.CtrlManager.Start(e.context)
 	}()
 
 	return nil
@@ -190,7 +189,7 @@ func (e *Environment) setupController() error {
 func (e *Environment) Stop() error {
 	e.cancel()
 	time.Sleep(1 * time.Second)
-	return e.TestEnv.Stop()
+	return errors.Join(e.TestEnv.Stop(), <-e.ManagerResult)
 }
 
 func noopLogger() logr.Logger {

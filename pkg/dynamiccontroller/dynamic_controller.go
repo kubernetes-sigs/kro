@@ -94,10 +94,6 @@ type Config struct {
 	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
 	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
-	// ShutdownTimeout is the maximum duration to wait for the controller to
-	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving
-	// the controller enough time to finish processing any pending items.
-	ShutdownTimeout time.Duration
 	// MinRetryDelay is the minimum delay before retrying an item in the queue
 	MinRetryDelay time.Duration
 	// MaxRetryDelay is the maximum delay before retrying an item in the queue
@@ -209,7 +205,7 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 }
 
 // Run starts the DynamicController.
-func (dc *DynamicController) Run(ctx context.Context) error {
+func (dc *DynamicController) Start(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
 	defer dc.queue.ShutDown()
 
@@ -224,17 +220,40 @@ func (dc *DynamicController) Run(ctx context.Context) error {
 	// Spin up workers.
 	//
 	// TODO(a-hilaly): Allow for dynamic scaling of workers.
+	var wg sync.WaitGroup
 	for i := 0; i < dc.config.Workers; i++ {
-		go wait.UntilWithContext(ctx, dc.worker, time.Second)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wait.UntilWithContext(ctx, dc.worker, time.Second)
+		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		dc.log.Info("Received shutdown signal, shutting down dynamic controller queue")
+		dc.queue.ShutDown()
+	}()
 
-	<-ctx.Done()
-	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
+	wg.Wait()
+	dc.log.Info("All workers have stopped")
+
+	// when shutting down, the context given to Start is already closed,
+	// and the expectation is that we block until the graceful shutdown is complete.
+	return dc.shutdown(context.Background())
 }
 
 // worker processes items from the queue.
 func (dc *DynamicController) worker(ctx context.Context) {
-	for dc.processNextWorkItem(ctx) {
+	for {
+		select {
+		case <-ctx.Done():
+			dc.log.Info("Dynamic controller worker received shutdown signal, stopping")
+			return
+		default:
+			dc.processNextWorkItem(ctx)
+		}
 	}
 }
 
@@ -321,15 +340,14 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 	return err
 }
 
-// gracefulShutdown performs a graceful shutdown of the controller.
-func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
+// shutdown performs a graceful shutdown of the controller.
+func (dc *DynamicController) shutdown(ctx context.Context) error {
 	dc.log.Info("Starting graceful shutdown")
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	var wg sync.WaitGroup
 	dc.informers.Range(func(key, value interface{}) bool {
+		k := key.(schema.GroupVersionResource)
+		dc.log.V(1).Info("Shutting down informer", "gvr", k.String())
 		wg.Add(1)
 		go func(informer *informerWrapper) {
 			defer wg.Done()

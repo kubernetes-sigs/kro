@@ -63,5 +63,6 @@ func NewRootCommand() *cobra.Command {
 	// TODO: Command groups
 	commands.AddValidateCommands(cmd)
 	commands.AddGenerateCommands(cmd)
+	commands.AddPackageCommand(cmd)
 	return cmd
 }

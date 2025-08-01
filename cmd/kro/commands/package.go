@@ -35,7 +35,8 @@ func init() {
 var packageRGDCmd = &cobra.Command{
 	Use:   "package",
 	Short: "Package ResourceGraphDefinition file into an OCI image",
-	Long:  "Package command packages the ResourceGraphDefinition file into an OCI image, which can be used for distribution and deployment.",
+	Long: "Package command packages the ResourceGraphDefinition" +
+		"file into an OCI image, which can be used for distribution and deployment.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if packageConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")

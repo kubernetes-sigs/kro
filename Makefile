@@ -289,6 +289,27 @@ cli:
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
 
+.PHONY: lsp-server
+lsp-server:
+	cd tools/lsp/server && go build -o kro-lsp .
+
+.PHONY: lsp-client
+lsp-client:
+	cd tools/lsp/client && npm install
+	cd tools/lsp/client && npm run compile
+
+.PHONY: lsp-clean
+lsp-clean:
+	rm -f tools/lsp/server/kro-lsp
+	rm -rf tools/lsp/client/out
+	rm -rf tools/lsp/client/node_modules
+	rm -rf tools/lsp/client/package-lock.json
+
+.PHONY: lsp-install
+lsp-install:
+	cd tools/lsp/client && npm install
+	go mod tidy
+
 ##@ E2E Tests
 
 .PHONY: test-e2e

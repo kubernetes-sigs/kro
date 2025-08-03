@@ -1,0 +1,38 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: builtin-k8s-multiple-errors
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: MultiErrorApp
+    spec:
+      appName: string
+      namespace: string
+      port: integer
+      replicas: integer
+      enabled: boolean
+  resources:
+    # This should pass CRD validation but fail on CEL
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.appName}-deployment
+          namespace: ${schema.spec.namespace}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.spec.replicas} # ❌ Error 1: CEL - field doesn't exist
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.appName}
+            spec:
+              containers:
+                - name: app
+                  image: nginx
+                  ports:
+                    - containerPort: ${schema.spec.port + schema.spec.appName} # ❌ Error 2: CEL - int + string

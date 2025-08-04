@@ -33,12 +33,12 @@ type GenerateConfig struct {
 	outputFormat                string
 }
 
-var config = &GenerateConfig{}
+var generateConfig = &GenerateConfig{}
 
 func init() {
-	generateCmd.PersistentFlags().StringVarP(&config.resourceGraphDefinitionFile, "file", "f", "",
+	generateCmd.PersistentFlags().StringVarP(&generateConfig.resourceGraphDefinitionFile, "file", "f", "",
 		"Path to the ResourceGraphDefinition file")
-	generateCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
+	generateCmd.PersistentFlags().StringVarP(&generateConfig.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
 }
 
 var generateCmd = &cobra.Command{
@@ -56,11 +56,11 @@ var generateCRDCmd = &cobra.Command{
 		"ResourceGraphDefinition and outputs the corresponding CRD " +
 		"in the specified format.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGraphDefinitionFile == "" {
+		if generateConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		data, err := os.ReadFile(generateConfig.resourceGraphDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}
@@ -85,11 +85,11 @@ var generateInstanceCmd = &cobra.Command{
 		"ResourceGraphDefinition file. This command reads the " +
 		"ResourceGraphDefinition and outputs the corresponding RGD instance",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGraphDefinitionFile == "" {
+		if generateConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		data, err := os.ReadFile(generateConfig.resourceGraphDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}
@@ -114,11 +114,11 @@ var generateDiagramCmd = &cobra.Command{
 		"ResourceGraphDefinition and outputs the corresponding diagram " +
 		"in the specified format.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGraphDefinitionFile == "" {
+		if generateConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		data, err := os.ReadFile(generateConfig.resourceGraphDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}
@@ -145,7 +145,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	crd := rgdGraph.Instance.GetCRD()
 	crd.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
-	b, err := marshalObject(crd, config.outputFormat)
+	b, err := marshalObject(crd, generateConfig.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}
@@ -253,7 +253,7 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 
 	delete(emulatedObj.Object, "status")
 
-	b, err := marshalObject(emulatedObj, config.outputFormat)
+	b, err := marshalObject(emulatedObj, generateConfig.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}

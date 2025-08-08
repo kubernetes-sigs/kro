@@ -59,7 +59,7 @@ func (j *jsonSafeNamespaceableResourceInterface) Namespace(namespace string) dyn
 }
 
 func (j *jsonSafeNamespaceableResourceInterface) Create(ctx context.Context, obj *unstructured.Unstructured, options metav1.CreateOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (j *jsonSafeNamespaceableResourceInterface) Create(ctx context.Context, obj
 }
 
 func (j *jsonSafeNamespaceableResourceInterface) Update(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (j *jsonSafeNamespaceableResourceInterface) Update(ctx context.Context, obj
 }
 
 func (j *jsonSafeNamespaceableResourceInterface) UpdateStatus(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (j *jsonSafeNamespaceableResourceInterface) Patch(ctx context.Context, name
 }
 
 func (j *jsonSafeNamespaceableResourceInterface) Apply(ctx context.Context, name string, obj *unstructured.Unstructured, options metav1.ApplyOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (j *jsonSafeNamespaceableResourceInterface) Apply(ctx context.Context, name
 }
 
 func (j *jsonSafeNamespaceableResourceInterface) ApplyStatus(ctx context.Context, name string, obj *unstructured.Unstructured, options metav1.ApplyOptions) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ type jsonSafeResourceInterface struct {
 }
 
 func (j *jsonSafeResourceInterface) Create(ctx context.Context, obj *unstructured.Unstructured, options metav1.CreateOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +136,7 @@ func (j *jsonSafeResourceInterface) Create(ctx context.Context, obj *unstructure
 }
 
 func (j *jsonSafeResourceInterface) Update(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (j *jsonSafeResourceInterface) Update(ctx context.Context, obj *unstructure
 }
 
 func (j *jsonSafeResourceInterface) UpdateStatus(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,7 @@ func (j *jsonSafeResourceInterface) Patch(ctx context.Context, name string, pt t
 }
 
 func (j *jsonSafeResourceInterface) Apply(ctx context.Context, name string, obj *unstructured.Unstructured, options metav1.ApplyOptions, subresources ...string) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -184,16 +184,16 @@ func (j *jsonSafeResourceInterface) Apply(ctx context.Context, name string, obj 
 }
 
 func (j *jsonSafeResourceInterface) ApplyStatus(ctx context.Context, name string, obj *unstructured.Unstructured, options metav1.ApplyOptions) (*unstructured.Unstructured, error) {
-	sanitized, err := sanitizeUnstructured(obj)
+	sanitized, err := deepCopyUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
 	return j.resource.ApplyStatus(ctx, name, sanitized, options)
 }
 
-// sanitizeUnstructured performs JSON marshal/unmarshal to sanitize unstructured data
+// deepCopyUnstructured performs JSON marshal/unmarshal to sanitize unstructured data
 // This removes pointer references and makes the data safe for fake client deep copying
-func sanitizeUnstructured(obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+func deepCopyUnstructured(obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	// Marshal to JSON
 	jsonData, err := json.Marshal(obj)
 	if err != nil {

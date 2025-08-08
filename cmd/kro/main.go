@@ -60,8 +60,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
 	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
 
-	// TODO: Command groups
-	commands.AddValidateCommands(cmd)
-	commands.AddGenerateCommands(cmd)
+	// Cli commands
+	commands.AddCommands(cmd)
 	return cmd
 }

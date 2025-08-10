@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	keyTypeInteger = string(AtomicTypeInteger)
 	keyTypeBoolean = string(AtomicTypeBool)
 	keyTypeNumber  = "number"
+	keyTypeObject  = "object"
 )
 
 // A predefinedType is a type that is predefined in the schema.
@@ -128,6 +130,9 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 
 	if isAtomicType(fieldType) {
 		fieldJSONSchemaProps.Type = fieldType
+	} else if fieldType == keyTypeObject {
+		fieldJSONSchemaProps.Type = fieldType
+		fieldJSONSchemaProps.XPreserveUnknownFields = ptr.To(true)
 	} else if isCollectionType(fieldType) {
 		if isMapType(fieldType) {
 			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)

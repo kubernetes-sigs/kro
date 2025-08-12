@@ -22,6 +22,8 @@ import (
 // ConditionType is a type of condition for a resource.
 type ConditionType string
 
+func (c ConditionType) String() string { return string(c) }
+
 const (
 	// ResourceGraphDefinitionConditionTypeGraphVerified indicates the state of the directed
 	// acyclic graph (DAG) that kro uses to manage the resources in a
@@ -36,19 +38,6 @@ const (
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
 	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
-)
-
-const (
-	InstanceConditionTypeReady ConditionType = "Ready"
-
-	// InstanceConditionTypeProgressing used for Creating Deleting Migrating
-	InstanceConditionTypeProgressing ConditionType = "Progressing"
-
-	// InstanceConditionTypeDegraded used in unexpected situation, behaviour, need human intervention
-	InstanceConditionTypeDegraded ConditionType = "Degraded"
-
-	// InstanceConditionTypeError used in something is wrong but i'm going to try again
-	InstanceConditionTypeError ConditionType = "Error"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service
@@ -76,18 +65,39 @@ type Condition struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
-// NewCondition returns a new Condition instance.
-func NewCondition(t ConditionType, status metav1.ConditionStatus, reason, message string) Condition {
-	return Condition{
-		Type:               t,
-		Status:             status,
-		LastTransitionTime: &metav1.Time{Time: metav1.Now().Time},
-		Reason:             &reason,
-		Message:            &message,
+func (c *Condition) IsTrue() bool {
+	if c == nil {
+		return false
 	}
+	return c.Status == metav1.ConditionTrue
 }
 
-func SetCondition(conditions []Condition, condition Condition) []Condition {
+func (c *Condition) IsFalse() bool {
+	if c == nil {
+		return false
+	}
+	return c.Status == metav1.ConditionFalse
+}
+
+func (c *Condition) IsUnknown() bool {
+	if c == nil {
+		return true
+	}
+	return c.Status == metav1.ConditionUnknown
+}
+
+func (c *Condition) GetStatus() metav1.ConditionStatus {
+	if c == nil {
+		return metav1.ConditionUnknown
+	}
+	return c.Status
+}
+
+// Conditions is a list of conditions.
+type Conditions []Condition
+
+// Set sets the provided condition into the conditions list, if it exists already the condition is replaced.
+func (conditions Conditions) Set(condition Condition) []Condition {
 	for i, c := range conditions {
 		if c.Type == condition.Type {
 			conditions[i] = condition
@@ -97,7 +107,8 @@ func SetCondition(conditions []Condition, condition Condition) []Condition {
 	return append(conditions, condition)
 }
 
-func HasCondition(conditions []Condition, t ConditionType) bool {
+// Has returns true if the conditions list contains the given condition type.
+func (conditions Conditions) Has(t ConditionType) bool {
 	return slices.ContainsFunc(conditions, func(c Condition) bool {
 		return c.Type == t
 	})

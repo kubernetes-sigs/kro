@@ -16,119 +16,48 @@ package resourcegraphdefinition
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
 	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/apis"
 	"github.com/kro-run/kro/pkg/metadata"
 )
 
-// StatusProcessor handles the processing of ResourceGraphDefinition status updates
-type StatusProcessor struct {
-	conditions []v1alpha1.Condition
-	state      v1alpha1.ResourceGraphDefinitionState
-}
-
-// NewStatusProcessor creates a new StatusProcessor with default active state
-func NewStatusProcessor() *StatusProcessor {
-	return &StatusProcessor{
-		conditions: []v1alpha1.Condition{},
-		state:      v1alpha1.ResourceGraphDefinitionStateActive,
-	}
-}
-
-// setDefaultConditions sets the default conditions for an active resource graph definition
-func (sp *StatusProcessor) setDefaultConditions() {
-	sp.conditions = []v1alpha1.Condition{
-		newReconcilerReadyCondition(metav1.ConditionTrue, ""),
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
-	}
-}
-
-// processGraphError handles graph-related errors
-func (sp *StatusProcessor) processGraphError(err error) {
-	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionFalse, err.Error()),
-		newReconcilerReadyCondition(metav1.ConditionUnknown, "Faulty Graph"),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionUnknown, "Faulty Graph"),
-	}
-	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
-}
-
-// processCRDError handles CRD-related errors
-func (sp *StatusProcessor) processCRDError(err error) {
-	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionFalse, err.Error()),
-		newReconcilerReadyCondition(metav1.ConditionUnknown, "CRD not-synced"),
-	}
-	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
-}
-
-// processMicroControllerError handles microcontroller-related errors
-func (sp *StatusProcessor) processMicroControllerError(err error) {
-	sp.conditions = []v1alpha1.Condition{
-		newGraphVerifiedCondition(metav1.ConditionTrue, ""),
-		newCustomResourceDefinitionSyncedCondition(metav1.ConditionTrue, ""),
-		newReconcilerReadyCondition(metav1.ConditionFalse, err.Error()),
-	}
-	sp.state = v1alpha1.ResourceGraphDefinitionStateInactive
-}
-
 // setResourceGraphDefinitionStatus calculates the ResourceGraphDefinition status and updates it
 // in the API server.
-func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
+func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	ctx context.Context,
-	resourcegraphdefinition *v1alpha1.ResourceGraphDefinition,
+	o *v1alpha1.ResourceGraphDefinition,
 	topologicalOrder []string,
 	resources []v1alpha1.ResourceInformation,
-	reconcileErr error,
 ) error {
 	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource graph definition status and conditions")
 
-	processor := NewStatusProcessor()
-
-	if reconcileErr == nil {
-		processor.setDefaultConditions()
+	// Set status.state.
+	if rgdConditionTypes.For(o).IsRootReady() {
+		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
-		log.V(1).Info("processing reconciliation error", "error", reconcileErr)
-
-		var graphErr *graphError
-		var crdErr *crdError
-		var microControllerErr *microControllerError
-
-		switch {
-		case errors.As(reconcileErr, &graphErr):
-			processor.processGraphError(reconcileErr)
-		case errors.As(reconcileErr, &crdErr):
-			processor.processCRDError(reconcileErr)
-		case errors.As(reconcileErr, &microControllerErr):
-			processor.processMicroControllerError(reconcileErr)
-		default:
-			log.Error(reconcileErr, "unhandled reconciliation error type")
-			return fmt.Errorf("unhandled reconciliation error: %w", reconcileErr)
-		}
+		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
 	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Get fresh copy to avoid conflicts
 		current := &v1alpha1.ResourceGraphDefinition{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(resourcegraphdefinition), current); err != nil {
+		if err := r.Get(ctx, client.ObjectKeyFromObject(o), current); err != nil {
 			return fmt.Errorf("failed to get current resource graph definition: %w", err)
 		}
 
 		// Update status
 		dc := current.DeepCopy()
-		dc.Status.Conditions = processor.conditions
-		dc.Status.State = processor.state
+		dc.Status.Conditions = o.Status.Conditions
+		dc.Status.State = o.Status.State
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
 
@@ -136,6 +65,11 @@ func (r *ResourceGraphDefinitionReconciler) setResourceGraphDefinitionStatus(
 			"state", dc.Status.State,
 			"conditions", len(dc.Status.Conditions),
 		)
+
+		// If there's nothing to update, just return.
+		if equality.Semantic.DeepEqual(current.Status, o.Status) {
+			return nil
+		}
 
 		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
 	})
@@ -171,14 +105,66 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 	return r.Patch(ctx, dc, client.MergeFrom(rgd))
 }
 
-func newReconcilerReadyCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeReconcilerReady, status, reason, "micro controller is ready")
+const (
+	Ready                 = "Ready"
+	ResourceGraphAccepted = "ResourceGraphAccepted"
+	KindReady             = "KindReady"
+	ControllerReady       = "ControllerReady"
+)
+
+var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady)
+
+// NewConditionsMarkerFor creates a marker to manage conditions and sub-conditions for ResourceGraphDefinitions.
+//
+// ```
+// Ready
+//	├─ ResourceGraphAccepted - This controller has accepted the spec.schema and spec.resources.
+//	├─ KindReady - The CRD status created on behalf of this RGD.
+//	└─ ControllerReady - The status of the controller thread reconciling this resource.
+// ```
+
+func NewConditionsMarkerFor(o apis.Object) *ConditionsMarker {
+	return &ConditionsMarker{cs: rgdConditionTypes.For(o)}
 }
 
-func newGraphVerifiedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified, status, reason, "Directed Acyclic Graph is synced")
+// A ConditionsMarker provides an API to mark conditions onto a ResourceGraphDefinition as the controller does work.
+type ConditionsMarker struct {
+	cs apis.ConditionSet
 }
 
-func newCustomResourceDefinitionSyncedCondition(status metav1.ConditionStatus, reason string) v1alpha1.Condition {
-	return v1alpha1.NewCondition(v1alpha1.ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced, status, reason, "Custom Resource Definition is synced")
+// ResourceGraphValid signals the rgd.spec.schema and rgd.spec.resources fields have been accepted.
+func (m *ConditionsMarker) ResourceGraphValid() {
+	m.cs.SetTrueWithReason(ResourceGraphAccepted, "Valid", "resource graph and schema are valid")
+}
+
+// ResourceGraphInvalid signals there is something wrong with the rgd.spec.schema or rgd.spec.resources fields.
+func (m *ConditionsMarker) ResourceGraphInvalid(msg string) {
+	m.cs.SetFalse(ResourceGraphAccepted, "InvalidResourceGraph", msg)
+}
+
+// FailedLabelerSetup signals that the controller was unable to start the resource labeler and failed to continue.
+func (m *ConditionsMarker) FailedLabelerSetup(msg string) {
+	m.cs.SetFalse(ControllerReady, "FailedLabelerSetup", msg)
+}
+
+// KindUnready signals the CustomResourceDefinition has either not been synced or has not become ready to use.
+func (m *ConditionsMarker) KindUnready(msg string) {
+	m.cs.SetFalse(KindReady, "Failed", msg)
+}
+
+// TODO: it would be nice to know if the Kind was not accepted at all OR if a CRD exists.
+
+// KindReady signals the CustomResourceDefinition has been synced and is ready.
+func (m *ConditionsMarker) KindReady(kind string) {
+	m.cs.SetTrueWithReason(KindReady, "Ready", fmt.Sprintf("kind %s has been accepted and ready", kind))
+}
+
+// ControllerFailedToStart signals the microcontroller had an issue when starting.
+func (m *ConditionsMarker) ControllerFailedToStart(msg string) {
+	m.cs.SetFalse(ControllerReady, "FailedToStart", msg)
+}
+
+// ControllerRunning signals the microcontroller is up and running for this RGD-Kind.
+func (m *ConditionsMarker) ControllerRunning() {
+	m.cs.SetTrueWithReason(ControllerReady, "Running", "controller is running")
 }

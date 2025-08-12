@@ -18,21 +18,15 @@
 package apis
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/kro-run/kro/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Condition aliases the upstream type and adds additional helper methods
-type Condition metav1.Condition
-
 type Object interface {
 	client.Object
-	GetConditions() []Condition
-	SetConditions([]Condition)
+	GetConditions() []v1alpha1.Condition
+	SetConditions([]v1alpha1.Condition)
 }
-
-// ConditionType is an upper-camel-cased condition type.
-type ConditionType string
 
 const (
 	// ConditionReady specifies that the resource is ready.
@@ -42,31 +36,3 @@ const (
 	// For resource which run to completion.
 	ConditionSucceeded = "Succeeded"
 )
-
-func (c *Condition) IsTrue() bool {
-	if c == nil {
-		return false
-	}
-	return c.Status == metav1.ConditionTrue
-}
-
-func (c *Condition) IsFalse() bool {
-	if c == nil {
-		return false
-	}
-	return c.Status == metav1.ConditionFalse
-}
-
-func (c *Condition) IsUnknown() bool {
-	if c == nil {
-		return true
-	}
-	return c.Status == metav1.ConditionUnknown
-}
-
-func (c *Condition) GetStatus() metav1.ConditionStatus {
-	if c == nil {
-		return metav1.ConditionUnknown
-	}
-	return c.Status
-}

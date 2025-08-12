@@ -36,17 +36,21 @@ import (
 // 3. Setting up and starting the microcontroller
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
+	mark := NewConditionsMarkerFor(rgd)
 
 	// Process resource graph definition graph first to validate structure
 	log.V(1).Info("reconciling resource graph definition graph")
 	processedRGD, resourcesInfo, err := r.reconcileResourceGraphDefinitionGraph(ctx, rgd)
 	if err != nil {
+		mark.ResourceGraphInvalid(err.Error())
 		return nil, nil, err
 	}
+	mark.ResourceGraphValid()
 
 	// Setup metadata labeling
 	graphExecLabeler, err := r.setupLabeler(rgd)
 	if err != nil {
+		mark.FailedLabelerSetup(err.Error())
 		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
@@ -56,7 +60,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
 	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
+	}
+	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
+		mark.KindUnready(err.Error())
+	} else {
+		mark.KindReady(crd.Status.AcceptedNames.Kind)
 	}
 
 	// Setup and start microcontroller
@@ -68,8 +78,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
 	// rather than have it ignore this context and use the background context.
 	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile); err != nil {
+		mark.ControllerFailedToStart(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
+	mark.ControllerRunning()
 
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }

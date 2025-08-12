@@ -23,6 +23,9 @@ import (
 	"sort"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 // ConditionSet provides methods for evaluating Conditions.
@@ -33,14 +36,26 @@ type ConditionSet struct {
 }
 
 // Root returns the root Condition, typically "Ready" or "Succeeded"
-func (c ConditionSet) Root() *Condition {
+func (c ConditionSet) Root() *v1alpha1.Condition {
 	if c.object == nil {
 		return nil
 	}
 	return c.Get(c.root)
 }
 
-func (c ConditionSet) List() []Condition {
+// IsRootReady returns the readiness of the root Condition.
+func (c ConditionSet) IsRootReady() bool {
+	if c.object == nil {
+		return false
+	}
+	root := c.Get(c.root)
+	if root.IsTrue() && root.ObservedGeneration == c.object.GetGeneration() {
+		return true
+	}
+	return false
+}
+
+func (c ConditionSet) List() []v1alpha1.Condition {
 	if c.object == nil {
 		return nil
 	}
@@ -49,12 +64,12 @@ func (c ConditionSet) List() []Condition {
 
 // Get finds and returns the Condition that matches the ConditionType
 // previously set on Conditions.
-func (c ConditionSet) Get(t string) *Condition {
+func (c ConditionSet) Get(t string) *v1alpha1.Condition {
 	if c.object == nil {
 		return nil
 	}
 	for _, c := range c.object.GetConditions() {
-		if c.Type == t {
+		if string(c.Type) == t {
 			return &c
 		}
 	}
@@ -83,12 +98,12 @@ func (c ConditionSet) IsDependentCondition(t string) bool {
 
 // Set sets or updates the Condition on Conditions for Condition.Type.
 // If there is an update, Conditions are stored back sorted.
-func (c ConditionSet) Set(condition Condition) (modified bool) {
+func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 	if c.object == nil {
 		return false
 	}
 
-	var conditions []Condition
+	var conditions []v1alpha1.Condition
 	var foundCondition bool
 
 	condition.ObservedGeneration = c.object.GetGeneration()
@@ -104,7 +119,7 @@ func (c ConditionSet) Set(condition Condition) (modified bool) {
 			if condition.Status == cond.Status {
 				condition.LastTransitionTime = cond.LastTransitionTime
 			} else {
-				condition.LastTransitionTime = metav1.Now()
+				condition.LastTransitionTime = ptr.To(metav1.Now())
 			}
 			if reflect.DeepEqual(condition, cond) {
 				return false
@@ -114,25 +129,37 @@ func (c ConditionSet) Set(condition Condition) (modified bool) {
 	if !foundCondition {
 		// Dependent conditions should always be set, so if it's not found, that means
 		// that we are initializing the condition type, and it's last "transition" was object creation
-		if c.IsDependentCondition(condition.Type) {
-			condition.LastTransitionTime = c.object.GetCreationTimestamp()
+		if c.IsDependentCondition(condition.Type.String()) {
+			condition.LastTransitionTime = ptr.To(c.object.GetCreationTimestamp())
 		} else {
-			condition.LastTransitionTime = metav1.Now()
+			condition.LastTransitionTime = ptr.To(metav1.Now())
 		}
 	}
 	conditions = append(conditions, condition)
 	// Sorted for convenience of the consumer, i.e. kubectl.
 	sort.SliceStable(conditions, func(i, j int) bool {
 		// Order the root status condition at the end
-		if conditions[i].Type == c.root || conditions[j].Type == c.root {
-			return conditions[j].Type == c.root
+		if conditions[i].Type.String() == c.root || conditions[j].Type.String() == c.root {
+			return conditions[j].Type.String() == c.root
 		}
+
+		// Handle nil LastTransitionTime
+		if conditions[i].LastTransitionTime == nil && conditions[j].LastTransitionTime == nil {
+			return false // Equal, order doesn't matter
+		}
+		if conditions[i].LastTransitionTime == nil {
+			return true // nil comes before non-nil
+		}
+		if conditions[j].LastTransitionTime == nil {
+			return false // non-nil comes after nil
+		}
+
 		return conditions[i].LastTransitionTime.Time.Before(conditions[j].LastTransitionTime.Time)
 	})
 	c.object.SetConditions(conditions)
 
 	// Recompute the root condition after setting any other condition
-	c.recomputeRootCondition(condition.Type)
+	c.recomputeRootCondition(condition.Type.String())
 	return true
 }
 
@@ -143,7 +170,7 @@ func (c ConditionSet) Clear(t string) error {
 		return nil
 	}
 
-	var conditions []Condition
+	var conditions []v1alpha1.Condition
 
 	// Dependent conditions are not handled as they can't be nil
 	if c.IsDependentCondition(t) {
@@ -154,7 +181,7 @@ func (c ConditionSet) Clear(t string) error {
 		return nil
 	}
 	for _, c := range c.object.GetConditions() {
-		if c.Type != t {
+		if c.Type.String() != t {
 			conditions = append(conditions, c)
 		}
 	}
@@ -175,11 +202,11 @@ func (c ConditionSet) SetTrue(conditionType string) (modified bool) {
 // SetTrueWithReason sets the status of conditionType to true with the reason, and then marks the root condition to
 // true if all other dependents are also true.
 func (c ConditionSet) SetTrueWithReason(conditionType string, reason, message string) (modified bool) {
-	return c.Set(Condition{
-		Type:    conditionType,
+	return c.Set(v1alpha1.Condition{
+		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionTrue,
-		Reason:  reason,
-		Message: message,
+		Reason:  ptr.To(reason),
+		Message: ptr.To(message),
 	})
 }
 
@@ -193,21 +220,21 @@ func (c ConditionSet) SetUnknown(conditionType string) (modified bool) {
 // SetUnknownWithReason sets the status of conditionType to Unknown with the reason, and also sets the root condition
 // to Unknown if no other dependent condition is in an error state.
 func (c ConditionSet) SetUnknownWithReason(conditionType string, reason, message string) (modified bool) {
-	return c.Set(Condition{
-		Type:    conditionType,
+	return c.Set(v1alpha1.Condition{
+		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionUnknown,
-		Reason:  reason,
-		Message: message,
+		Reason:  ptr.To(reason),
+		Message: ptr.To(message),
 	})
 }
 
 // SetFalse sets the status of conditionType and the root condition to False.
 func (c ConditionSet) SetFalse(conditionType string, reason, message string) (modified bool) {
-	return c.Set(Condition{
-		Type:    conditionType,
+	return c.Set(v1alpha1.Condition{
+		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionFalse,
-		Reason:  reason,
-		Message: message,
+		Reason:  ptr.To(reason),
+		Message: ptr.To(message),
 	})
 }
 
@@ -219,8 +246,8 @@ func (c ConditionSet) recomputeRootCondition(conditionType string) {
 	if conditions := c.findUnhealthyDependents(); len(conditions) == 0 {
 		c.SetTrue(c.root)
 	} else if unhealthy, found := findMostUnhealthy(conditions); found {
-		c.Set(Condition{
-			Type:    c.root,
+		c.Set(v1alpha1.Condition{
+			Type:    v1alpha1.ConditionType(c.root),
 			Status:  unhealthy.Status,
 			Reason:  unhealthy.Reason,
 			Message: unhealthy.Message,
@@ -228,9 +255,20 @@ func (c ConditionSet) recomputeRootCondition(conditionType string) {
 	}
 }
 
-func findMostUnhealthy(deps []Condition) (Condition, bool) {
+func findMostUnhealthy(deps []v1alpha1.Condition) (v1alpha1.Condition, bool) {
 	// Sort set conditions by time.
 	sort.Slice(deps, func(i, j int) bool {
+		// Handle nil LastTransitionTime
+		if deps[i].LastTransitionTime == nil && deps[j].LastTransitionTime == nil {
+			return false // Equal, order doesn't matter
+		}
+		if deps[i].LastTransitionTime == nil {
+			return false // nil comes after non-nil (opposite of Before)
+		}
+		if deps[j].LastTransitionTime == nil {
+			return true // non-nil comes before nil (opposite of Before)
+		}
+
 		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
 	})
 
@@ -249,16 +287,16 @@ func findMostUnhealthy(deps []Condition) (Condition, bool) {
 	}
 
 	// All dependents are fine.
-	return Condition{}, false
+	return v1alpha1.Condition{}, false
 }
 
-func (c ConditionSet) findUnhealthyDependents() []Condition {
+func (c ConditionSet) findUnhealthyDependents() []v1alpha1.Condition {
 	if len(c.dependents) == 0 {
 		return nil
 	}
-	deps := make([]Condition, 0, len(c.object.GetConditions()))
+	deps := make([]v1alpha1.Condition, 0, len(c.object.GetConditions()))
 	for _, dep := range c.object.GetConditions() {
-		if c.DependsOn(dep.Type) {
+		if c.DependsOn(dep.Type.String()) {
 			if dep.IsFalse() || dep.IsUnknown() || dep.ObservedGeneration != c.object.GetGeneration() {
 				deps = append(deps, dep)
 			}
@@ -267,7 +305,18 @@ func (c ConditionSet) findUnhealthyDependents() []Condition {
 
 	// Sort set conditions by time.
 	sort.Slice(deps, func(i, j int) bool {
-		return deps[i].LastTransitionTime.After(deps[j].LastTransitionTime.Time)
+		// Handle nil LastTransitionTime
+		if deps[i].LastTransitionTime == nil && deps[j].LastTransitionTime == nil {
+			return false // Equal, order doesn't matter
+		}
+		if deps[i].LastTransitionTime == nil {
+			return false // nil comes after non-nil (opposite of Before)
+		}
+		if deps[j].LastTransitionTime == nil {
+			return true // non-nil comes before nil (opposite of Before)
+		}
+
+		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
 	})
 	return deps
 }

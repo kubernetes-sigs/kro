@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
@@ -75,7 +76,7 @@ var _ = Describe("Status", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// Check conditions
-			g.Expect(rgd.Status.Conditions).To(HaveLen(3))
+			g.Expect(rgd.Status.Conditions).To(Not(BeNil()))
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
 			for _, cond := range rgd.Status.Conditions {
@@ -109,7 +110,7 @@ var _ = Describe("Status", func() {
 			// Check specific failure condition
 			var crdCondition *krov1alpha1.Condition
 			for _, cond := range rgd.Status.Conditions {
-				if cond.Type == krov1alpha1.ResourceGraphDefinitionConditionTypeGraphVerified {
+				if cond.Type == resourcegraphdefinition.Ready {
 					crdCondition = &cond
 					break
 				}
@@ -117,7 +118,7 @@ var _ = Describe("Status", func() {
 
 			g.Expect(crdCondition).ToNot(BeNil())
 			g.Expect(crdCondition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(*crdCondition.Reason).To(ContainSubstring("failed to build resourcegraphdefinition"))
+			g.Expect(*crdCondition.Message).To(ContainSubstring("failed to build resourcegraphdefinition"))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 })

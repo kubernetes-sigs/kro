@@ -1,3 +1,4 @@
 clusters:
   workload-cluster1: "012345678910" # AWS account for workload cluster 1
   workload-cluster2: "123456789101" # AWS account for workload cluster 2
+  workload-cluster3: "234567891012" # AWS account for workload cluster 3

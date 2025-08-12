@@ -1,7 +1,7 @@
 {{- range $name, $cluster := .Values.clusters }}
 ---
 apiVersion: kro.run/v1alpha1
-kind: EksclusterWithVpc
+kind: EksCluster
 metadata:
   name: {{ $name }}
   annotations:
@@ -23,11 +23,9 @@ spec:
   subHostedZone:
     {{- toYaml $cluster.subHostedZone | nindent 4 }}
   {{- end }}
-  {{- if $cluster.cidr }}
-  cidr:
-    {{- toYaml $cluster.cidr | nindent 4 }}
-  {{- else }}
-  cidr: {}
+  {{- if $cluster.vpc | quote}}
+  vpc:
+    {{- toYaml $cluster.vpc | nindent 4 }}
   {{- end }}
   {{- if $cluster.gitops }}
   gitops:

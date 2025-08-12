@@ -16,6 +16,7 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"errors"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -49,7 +50,7 @@ type ResourceGraphDefinitionReconciler struct {
 	client.Client
 	instanceLogger logr.Logger
 
-	clientSet  *kroclient.Set
+	clientSet  kroclient.SetInterface
 	crdManager kroclient.CRDClient
 
 	metadataLabeler         metadata.Labeler
@@ -59,7 +60,7 @@ type ResourceGraphDefinitionReconciler struct {
 }
 
 func NewResourceGraphDefinitionReconciler(
-	clientSet *kroclient.Set,
+	clientSet kroclient.SetInterface,
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
@@ -120,7 +121,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				},
 			}),
 		).
-		Complete(reconcile.AsReconciler(mgr.GetClient(), r))
+		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
@@ -168,6 +169,9 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1
 
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
-	return ctrl.Result{},
-		r.setResourceGraphDefinitionStatus(ctx, o, topologicalOrder, resourcesInformation, reconcileErr)
+	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
+		reconcileErr = errors.Join(reconcileErr, err)
+	}
+
+	return ctrl.Result{}, reconcileErr
 }

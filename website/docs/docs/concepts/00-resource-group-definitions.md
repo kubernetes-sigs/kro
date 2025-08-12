@@ -123,7 +123,7 @@ kro automatically:
 - Validates that referenced resources exist
 - Updates these fields as your resources change
 
-## ResourceGraphDefinition Processing
+## Processing
 
 When you create a **ResourceGraphDefinition**, kro processes it in several steps to ensure
 correctness and set up the necessary components:
@@ -164,7 +164,7 @@ etc.) automatically.
 kro continuously monitors your ResourceGraphDefinition for changes, updating the API and
 its behavior accordingly.
 
-## ResourceGraphDefinition Instance Example
+## Instance Example
 
 After the **ResourceGraphDefinition** is validated and registered in the cluster, users
 can create instances of it. Here's an example of how an instance for the
@@ -181,17 +181,21 @@ spec:
   replicas: 3
 ```
 
-## ResourceGraphDefinition More about Resources
+## More about Resources
 
 Users can specify more controls in resources in `.spec.resources[]` 
 
 ```yaml
 spec:
   resources:
-    - id: {}
-      template || externalRef: {}
-      readyWhen: {}
-      includeWhen: {}
+    - id: my-resource
+      template || externalRef: {} # users can either template resources or reference objects outside the graph
+      readyWhen:
+      # users can specify CEL expressions to determine when a resource is ready
+      - ${deployment.status.conditions.exists(x, x.type == 'Available' && x.status == "True")}
+      includeWhen:
+      # users can specify CEL expressions to determine when a resource should be included in the graph
+      - ${schema.spec.value.enabled}
 ```
 
 ### Using `externalRef` to reference Objects outside the ResourceGraphDefinition.
@@ -256,7 +260,7 @@ ${external.data.?VALUE}
 
 _For a more detailed example, see the [Optional Values & External References](../../examples/basic/optionals.md) documentation._
 
-## ResourceGraphDefinition Status Reporting
+## Status Reporting
 
 The `status` section of a `ResourceGraphDefinition` provides information about the state of the graph and it's generated `CustomResourceDefinition` and controller.
 

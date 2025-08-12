@@ -25,6 +25,28 @@ import (
 	"sigs.k8s.io/release-utils/version"
 )
 
+// SetInterface provides a unified interface for different Kubernetes clients
+type SetInterface interface {
+
+	// Kubernetes returns the standard Kubernetes clientset
+	Kubernetes() kubernetes.Interface
+
+	// Dynamic returns the dynamic client
+	Dynamic() dynamic.Interface
+
+	// APIExtensionsV1 returns the API extensions client
+	APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface
+
+	// RESTConfig returns a copy of the underlying REST config
+	RESTConfig() *rest.Config
+
+	// CRD returns a new CRDInterface instance
+	CRD(cfg CRDWrapperConfig) CRDInterface
+
+	// WithImpersonation returns a new client that impersonates the given user
+	WithImpersonation(user string) (SetInterface, error)
+}
+
 // Set provides a unified interface for different Kubernetes clients
 type Set struct {
 	config          *rest.Config
@@ -32,6 +54,8 @@ type Set struct {
 	dynamic         *dynamic.DynamicClient
 	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
 }
+
+var _ SetInterface = (*Set)(nil)
 
 // Config holds configuration for client creation
 type Config struct {
@@ -105,17 +129,17 @@ func (c *Set) init() error {
 }
 
 // Kubernetes returns the standard Kubernetes clientset
-func (c *Set) Kubernetes() *kubernetes.Clientset {
+func (c *Set) Kubernetes() kubernetes.Interface {
 	return c.kubernetes
 }
 
 // Dynamic returns the dynamic client
-func (c *Set) Dynamic() *dynamic.DynamicClient {
+func (c *Set) Dynamic() dynamic.Interface {
 	return c.dynamic
 }
 
 // APIExtensionsV1 returns the API extensions client
-func (c *Set) APIExtensionsV1() *apiextensionsv1.ApiextensionsV1Client {
+func (c *Set) APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface {
 	return c.apiExtensionsV1
 }
 
@@ -124,8 +148,8 @@ func (c *Set) RESTConfig() *rest.Config {
 	return rest.CopyConfig(c.config)
 }
 
-// CRD returns a new CRDWrapper instance
-func (c *Set) CRD(cfg CRDWrapperConfig) *CRDWrapper {
+// CRD returns a new CRDInterface instance
+func (c *Set) CRD(cfg CRDWrapperConfig) CRDInterface {
 	if cfg.Client == nil {
 		cfg.Client = c.apiExtensionsV1
 	}
@@ -134,7 +158,7 @@ func (c *Set) CRD(cfg CRDWrapperConfig) *CRDWrapper {
 }
 
 // WithImpersonation returns a new client that impersonates the given user
-func (c *Set) WithImpersonation(user string) (*Set, error) {
+func (c *Set) WithImpersonation(user string) (SetInterface, error) {
 	return NewSet(Config{
 		RestConfig:      c.config,
 		ImpersonateUser: user,

@@ -50,6 +50,22 @@ type CRDClient interface {
 	Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
 }
 
+// CRDInterface provides a simplified interface for CRD operations
+type CRDInterface interface {
+	// Ensure ensures a CRD exists, up-to-date, and is ready. This can be
+	// a dangerous operation as it will update the CRD if it already exists.
+	//
+	// The caller is responsible for ensuring the CRD, isn't introducing
+	// breaking changes.
+	Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error
+
+	// Get retrieves a CRD by name
+	Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error)
+
+	// Delete removes a CRD if it exists
+	Delete(ctx context.Context, name string) error
+}
+
 // CRDWrapper provides a simplified interface for CRD operations
 type CRDWrapper struct {
 	client       apiextensionsv1.CustomResourceDefinitionInterface
@@ -57,9 +73,11 @@ type CRDWrapper struct {
 	timeout      time.Duration
 }
 
+var _ CRDInterface = (*CRDWrapper)(nil)
+
 // CRDWrapperConfig contains configuration for the CRD wrapper
 type CRDWrapperConfig struct {
-	Client       *apiextensionsv1.ApiextensionsV1Client
+	Client       apiextensionsv1.ApiextensionsV1Interface
 	PollInterval time.Duration
 	Timeout      time.Duration
 }

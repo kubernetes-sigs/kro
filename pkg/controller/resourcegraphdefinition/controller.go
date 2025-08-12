@@ -50,7 +50,7 @@ type ResourceGraphDefinitionReconciler struct {
 	client.Client
 	instanceLogger logr.Logger
 
-	clientSet  *kroclient.Set
+	clientSet  kroclient.SetInterface
 	crdManager kroclient.CRDClient
 
 	metadataLabeler         metadata.Labeler
@@ -60,7 +60,7 @@ type ResourceGraphDefinitionReconciler struct {
 }
 
 func NewResourceGraphDefinitionReconciler(
-	clientSet *kroclient.Set,
+	clientSet kroclient.SetInterface,
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
@@ -121,7 +121,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				},
 			}),
 		).
-		Complete(reconcile.AsReconciler(mgr.GetClient(), r))
+		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition

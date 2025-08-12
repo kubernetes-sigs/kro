@@ -208,3 +208,58 @@ resources:
 ```
 
 As part of processing the Resource Graph, the instance reconciler waits for the `externalRef` object to be present and reads the object from the cluster as a node in the graph. Subsequent resources can use data from this node.
+
+## ResourceGraphDefinition Status Reporting
+
+The `status` section of a `ResourceGraphDefinition` provides information about the state of the graph and it's generated `CustomResourceDefinition` and controller.
+
+`status` includes a stable `Ready` condition (as well as a set of technical `status.conditions` that provide more detailed information about the state of the graph and its resources).
+
+:::info
+
+When the `Ready` condition `status` is `True`, it indicates that the ResourceGraphDefinition is valid and you can use it to create [instances](./15-instances.md).
+
+:::
+
+:::warning
+
+Try to only rely on the `Ready` condition, as other condition types may change frequently and are more technical in nature, can change their API over time and are generally more indicative of KRO's internal state.
+
+:::
+
+Additionally, the ResourceGraphDefinition contains a `topologicalOrder` field that provides a list of resources in the order they should be processed. This is useful for understanding the dependencies between resources and their apply order.
+
+Generally a status in `ResourceGraphDefinition` may look like
+
+```yaml
+status:
+  conditions:
+    - lastTransitionTime: "2025-08-06T17:26:41Z"
+      message: resource graph and schema are valid
+      observedGeneration: 1
+      reason: Valid
+      status: "True"
+      type: ResourceGraphAccepted
+    - lastTransitionTime: "2025-08-06T17:26:41Z"
+      message: kind DeploymentService has been accepted and ready
+      observedGeneration: 1
+      reason: Ready
+      status: "True"
+      type: KindReady
+    - lastTransitionTime: "2025-08-06T17:26:41Z"
+      message: controller is running
+      observedGeneration: 1
+      reason: Running
+      status: "True"
+      type: ControllerReady
+    - lastTransitionTime: "2025-08-06T17:26:41Z"
+      message: ""
+      observedGeneration: 1
+      reason: Ready
+      status: "True"
+      type: Ready
+  state: Active
+  topologicalOrder:
+    - configmap
+    - deployment
+```

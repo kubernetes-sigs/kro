@@ -76,7 +76,7 @@ type Controller struct {
 	// this controller is responsible for.
 	gvr schema.GroupVersionResource
 	// client holds the dynamic client to use for interacting with the Kubernetes API.
-	clientSet *kroclient.Set
+	clientSet kroclient.SetInterface
 	// rgd is a read-only reference to the Graph that the controller is
 	// managing instances for.
 	// TODO: use a read-only interface for the ResourceGraphDefinition
@@ -97,7 +97,7 @@ func NewController(
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
-	clientSet *kroclient.Set,
+	clientSet kroclient.SetInterface,
 	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
 ) *Controller {

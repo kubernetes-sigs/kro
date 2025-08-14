@@ -1,0 +1,32 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-nested-rgd-labels
+spec:
+  description: | 
+    Tests if a we use separate labels for nested RGD instance
+  steps:
+  - try:
+    - apply:
+        file: rgd2.yaml
+      description: Apply RGD2
+    - assert:
+        file: rgd2-assert.yaml
+  - try:
+    - apply:
+        file: rgd1.yaml
+      description: Apply RGD1
+    - assert:
+        file: rgd1-assert.yaml
+  - try:
+    - apply:
+        file: instance.yaml
+  - try:
+    - assert:
+        file: rgd1-instance-assert.yaml
+  - try:
+    - assert:
+        file: rgd2-instance-assert.yaml
+  - try:
+    - assert:
+        file: configmap-assert.yaml

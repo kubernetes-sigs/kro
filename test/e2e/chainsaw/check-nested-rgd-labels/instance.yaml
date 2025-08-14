@@ -1,0 +1,6 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckNestedRGD1
+metadata:
+  name: check-nested-test-instance
+spec:
+  name: rgd2-from-rgd1

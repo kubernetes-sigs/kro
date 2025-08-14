@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/release-utils/version"
 )
@@ -193,10 +194,13 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 		name := "rgd-name"
 		uid := types.UID("rgd-uid")
 		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
-		labeler := NewResourceGraphDefinitionLabeler(obj)
+		labeler := NewDefinedByRGDLabeler(obj)
 		assert.Equal(t, GenericLabeler{
-			ResourceGraphDefinitionNameLabel: name,
+			DefinedByRGDLabel: name,
+			// TODO (barney-s) BEGIN: deprecate by 0.7 --------V
 			ResourceGraphDefinitionIDLabel:   string(uid),
+			ResourceGraphDefinitionNameLabel: name,
+			// TODO (barney-s) END: deprecate by 0.7 --------V
 		}, labeler)
 	})
 }
@@ -205,13 +209,21 @@ func TestNewInstanceLabeler(t *testing.T) {
 	t.Run("NewInstanceLabeler", func(t *testing.T) {
 		name := "instance-name"
 		namespace := "instance-namespace"
-		uid := types.UID("instance-uid")
-		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: uid}}
-		labeler := NewInstanceLabeler(obj)
+		uid := "someuid"
+		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(uid)}}
+		gvk := schema.GroupVersionKind{Group: "kro.run", Version: "v1alpha1", Kind: "SomeKind"}
+		labeler := NewManagedByInstanceLabeler(obj, gvk)
 		assert.Equal(t, GenericLabeler{
+			ManagedByInstanceGroupLabel:     gvk.Group,
+			ManagedByInstanceVersionLabel:   gvk.Version,
+			ManagedByInstanceKindLabel:      gvk.Kind,
+			ManagedByInstanceNamespaceLabel: namespace,
+			ManagedByInstanceNameLabel:      name,
+			// TODO (barney-s) BEGIN: deprecate by 0.7 --------V
+			InstanceIDLabel:        uid,
 			InstanceLabel:          name,
 			InstanceNamespaceLabel: namespace,
-			InstanceIDLabel:        string(uid),
+			// TODO (barney-s) END: deprecate by 0.7 --------V
 		}, labeler)
 	})
 }

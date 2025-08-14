@@ -1,0 +1,19 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-nested-rgd1
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: CheckNestedRGD1
+    spec:
+      name: string
+  resources:
+    - id: rgd2Instance
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: CheckNestedRGD2
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          name: ${schema.spec.name}-configmap

@@ -38,7 +38,8 @@ var generateConfig = &GenerateConfig{}
 func init() {
 	generateCmd.PersistentFlags().StringVarP(&generateConfig.resourceGraphDefinitionFile, "file", "f", "",
 		"Path to the ResourceGraphDefinition file")
-	generateCmd.PersistentFlags().StringVarP(&generateConfig.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
+	generateCmd.PersistentFlags().StringVarP(&generateConfig.outputFormat, "format", "o",
+		"yaml", "Output format (yaml|json)")
 }
 
 var generateCmd = &cobra.Command{

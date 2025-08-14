@@ -297,6 +297,9 @@ lsp-server:
 lsp-client:
 	cd tools/lsp/client && npm run compile
 
+.PHONY: lsp
+lsp: lsp-client lsp-server	
+
 .PHONY: lsp-clean
 lsp-clean:
 	rm -f tools/lsp/server/kro-lsp

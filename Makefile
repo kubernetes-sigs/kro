@@ -295,7 +295,6 @@ lsp-server:
 
 .PHONY: lsp-client
 lsp-client:
-	cd tools/lsp/client && npm install
 	cd tools/lsp/client && npm run compile
 
 .PHONY: lsp-clean

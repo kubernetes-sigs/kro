@@ -17,7 +17,7 @@ truth for your application's desired state. Here's an example instance of our
 WebApplication API:
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: WebApplication
 metadata:
   name: my-app

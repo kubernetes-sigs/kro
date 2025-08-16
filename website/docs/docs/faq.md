@@ -64,3 +64,78 @@ sidebar_position: 100
    This project is in active development and not yet intended for production
    use. The _ResourceGraphDefinition_ CRD and other APIs used in this project are not
    solidified and highly subject to change.
+
+
+6. **What are the current known issues and limitations?**
+
+   This section documents frequently encountered issues and limitations reported by the kro community.
+
+   ### Current Known Issues
+
+   **1. Kro does not detect deleted resources**
+
+   - **Impact**: Deleted resources from kro instances are not detected and recreated automatically
+   - **Status**: Open bug
+   - **Workaround**: Manual recreation of deleted resources required
+   - **GitHub Issue**: [#520](https://github.com/kro-run/kro/issues/520)
+
+   **2. RGD instances stuck in "IN_PROGRESS" status**
+
+   - **Impact**: ResourceGraphDefinition instances remain in IN_PROGRESS status indefinitely
+   - **Status**: Under investigation
+   - **Workaround**: Manual intervention may be required
+   - **GitHub Issue**: [#407](https://github.com/kro-run/kro/issues/407)
+
+   **3. Missing detection of CRD breaking changes**
+
+   - **Impact**: Kro does not detect breaking changes in ResourceGroup schemas when modified
+   - **Status**: Feature enhancement needed
+   - **Workaround**: Manual validation of schema changes required
+   - **GitHub Issue**: [#186](https://github.com/kro-run/kro/issues/186)
+
+   **4. SNS topic creation failures**
+
+   - **Impact**: Cannot create SNS topics through kro despite correct IAM permissions
+   - **Status**: Open bug
+   - **Workaround**: Create topics manually or use manifest files directly
+   - **GitHub Issue**: [#522](https://github.com/kro-run/kro/issues/522)
+
+ 
+
+   ## Current Limitations
+
+   **1. Production readiness**
+   - **Limitation**: Project is in active development and not intended for production use
+   - **Impact**: ResourceGraphDefinition CRD and APIs are not solidified and subject to change
+   - **Recommendation**: Use only for development and testing environments
+
+   **2. API stability**
+   - **Limitation**: No guarantee of backward compatibility between versions
+   - **Impact**: Upgrades may require manual migration of existing ResourceGraphDefinitions
+   - **Recommendation**: Plan for potential breaking changes during upgrades
+
+   **3. Resource dependency complexity**
+   - **Limitation**: Complex dependency chains may be difficult to troubleshoot
+   - **Impact**: Issues in deeply nested resource dependencies can be hard to diagnose
+   - **Recommendation**: Keep ResourceGraphDefinition designs as simple as possible
+
+
+
+   **How to Contribute**
+
+   This section is community-maintained:
+
+   - Found a recurring issue? Check if it's already tracked in our [GitHub Issues](https://github.com/kro-run/kro/issues)
+   - For widespread issues affecting multiple users, consider updating this page via pull request
+   - Issues discussed in community calls will be added here
+
+
+
+
+   **Stay Updated**
+
+   - **Community Calls**: Join our [bi-weekly community meetings](https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit)
+   - **Live Issues**: [GitHub Issues](https://github.com/kro-run/kro/issues)
+   - **Community Slack**: [#kro channel](https://kubernetes.slack.com/archives/C081TMY9D6Y) in Kubernetes Slack
+
+   *Last updated: August 16, 2025 | This section is updated during major releases*

@@ -61,11 +61,7 @@ func (l *mapsLib) CompileOptions() []cel.EnvOption {
 					if !ok {
 						return types.ValOrErr(arg1, "no such overload: %v.merge(%v)", arg1.Type(), arg2.Type())
 					}
-					result, err := merge(self, other)
-					if err != nil {
-						return types.WrapErr(err)
-					}
-					return result
+					return merge(self, other)
 				}),
 			),
 		),
@@ -80,7 +76,7 @@ func (l *mapsLib) ProgramOptions() []cel.ProgramOption {
 
 // merge merges two maps. Keys from the first map take precedence over keys in
 // the second map.
-func merge(self traits.Mapper, other traits.Mapper) (traits.Mapper, error) {
+func merge(self traits.Mapper, other traits.Mapper) traits.Mapper {
 	var result traits.MutableMapper
 
 	if mapVal, ok := self.Value().(map[ref.Val]ref.Val); ok {
@@ -102,5 +98,5 @@ func merge(self traits.Mapper, other traits.Mapper) (traits.Mapper, error) {
 		v := other.Get(k)
 		result.Insert(k, v)
 	}
-	return result.ToImmutableMap(), nil
+	return result.ToImmutableMap()
 }

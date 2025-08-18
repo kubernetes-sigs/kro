@@ -17,7 +17,7 @@ func TestMaps(t *testing.T) {
 		{expr: `{}.merge({'a': 1}) == {'a': 1}`},
 		{expr: `{'a': 1}.merge({}) == {'a': 1}`},
 		{expr: `{'a': 1}.merge({'b': 2}) == {'a': 1, 'b': 2}`},
-		{expr: `{'a': 1}.merge({'a': 2, 'b': 2}) == {'a': 1, 'b': 2}`},
+		{expr: `{'a': 1}.merge({'a': 2, 'b': 2}) == {'a': 2, 'b': 2}`},
 		{expr: `{'a': 1}.merge({'b': 2.1}) == {'a': 1, 'b': 2.1}`},
 		{expr: `{'a': 1}.merge({'b': 'foo'}) == {'a': 1, 'b': 'foo'}`},
 		{expr: `{'a': 1}.merge({'b': {'c': 2}}) == {'a': 1, 'b': {'c': 2}}`},

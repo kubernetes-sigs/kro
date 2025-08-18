@@ -13,9 +13,10 @@ import (
 //
 // # Merge
 //
-// Merges two maps. Keys from the first map take precedence over keys in the second map.
+// Merges two maps. Keys from the second map overwrite already available keys in the first map.
+// Keys must be of type string, values can be of any type.
 //
-//	map(string, int).merge(map(string, int)) -> map(string, int)
+//	map(string, any).merge(map(string, any)) -> map(string, any)
 //
 // Examples:
 //
@@ -79,23 +80,23 @@ func (l *mapsLib) ProgramOptions() []cel.ProgramOption {
 func merge(self traits.Mapper, other traits.Mapper) traits.Mapper {
 	var result traits.MutableMapper
 
-	if mapVal, ok := self.Value().(map[ref.Val]ref.Val); ok {
+	if mapVal, ok := other.Value().(map[ref.Val]ref.Val); ok {
 		result = types.NewMutableMap(types.DefaultTypeAdapter, mapVal)
 	} else {
 		result = types.NewMutableMap(types.DefaultTypeAdapter, nil)
-		for i := self.Iterator(); i.HasNext().(types.Bool); {
+		for i := other.Iterator(); i.HasNext().(types.Bool); {
 			k := i.Next()
-			v := self.Get(k)
+			v := other.Get(k)
 			result.Insert(k, v)
 		}
 	}
 
-	for i := other.Iterator(); i.HasNext().(types.Bool); {
+	for i := self.Iterator(); i.HasNext().(types.Bool); {
 		k := i.Next()
 		if result.Contains(k).(types.Bool) {
 			continue
 		}
-		v := other.Get(k)
+		v := self.Get(k)
 		result.Insert(k, v)
 	}
 	return result.ToImmutableMap()

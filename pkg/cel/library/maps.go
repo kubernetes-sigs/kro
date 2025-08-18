@@ -14,9 +14,9 @@ import (
 // # Merge
 //
 // Merges two maps. Keys from the second map overwrite already available keys in the first map.
-// Keys must be of type string, values can be of any type.
+// Keys must be of type string, value types must be identical in the maps merged.
 //
-//	map(string, any).merge(map(string, any)) -> map(string, any)
+//	map(string, T).merge(map(string, T)) -> map(string, T)
 //
 // Examples:
 //
@@ -46,7 +46,7 @@ func (l *mapsLib) LibraryName() string {
 
 // CompileOptions implements the cel.Library interface method.
 func (l *mapsLib) CompileOptions() []cel.EnvOption {
-	mapType := cel.MapType(cel.TypeParamType("K"), cel.DynType)
+	mapType := cel.MapType(cel.TypeParamType("K"), cel.TypeParamType("V"))
 	// mapDynType := cel.MapType(cel.DynType, cel.DynType)
 	opts := []cel.EnvOption{
 		cel.Function("merge",

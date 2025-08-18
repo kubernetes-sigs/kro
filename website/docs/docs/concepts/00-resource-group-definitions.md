@@ -28,7 +28,7 @@ consistent, controlled way.
 
 A ResourceGraphDefinition, like any Kubernetes resource, consists of three main parts:
 
-1. **Metadata**: name, namespace, labels, etc.
+1. **Metadata**: name, labels, etc.
 2. **Spec**: Defines the structure and properties of the ResourceGraphDefinition
 3. **Status**: Reflects the current state of the ResourceGraphDefinition
 

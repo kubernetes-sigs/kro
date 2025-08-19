@@ -94,9 +94,9 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet ## Run tests. Use WHAT=unit or WHAT=integration
+test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	go test -v ./test/integration/suites/... -coverprofile integration-cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else
@@ -190,6 +190,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
+ENVTEST_VERSION ?= 1.31.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -214,6 +215,12 @@ controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessar
 $(CONTROLLER_GEN): $(LOCALBIN)
 	test -s $(LOCALBIN)/controller-gen && $(LOCALBIN)/controller-gen --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
 
 .PHONY: image
 build-image: ko ## Build the kro controller images using ko build

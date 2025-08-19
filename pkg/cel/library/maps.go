@@ -67,17 +67,7 @@ func (l *mapsLib) CompileOptions() []cel.EnvOption {
 			cel.MemberOverload("map_merge",
 				[]*cel.Type{mapType, mapType},
 				mapType,
-				cel.BinaryBinding(func(arg1, arg2 ref.Val) ref.Val {
-					self, ok := arg1.(traits.Mapper)
-					if !ok {
-						return types.ValOrErr(arg1, "no such overload: %v.merge(%v)", arg1.Type(), arg2.Type())
-					}
-					other, ok := arg2.(traits.Mapper)
-					if !ok {
-						return types.ValOrErr(arg1, "no such overload: %v.merge(%v)", arg1.Type(), arg2.Type())
-					}
-					return merge(self, other)
-				}),
+				cel.BinaryBinding(mergeVals),
 			),
 		),
 	}

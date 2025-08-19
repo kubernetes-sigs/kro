@@ -16,16 +16,17 @@ package library
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMaps(t *testing.T) {
 	mapsTests := []struct {
 		expr string
-		err  string
+		err  require.ErrorAssertionFunc
 	}{
 		{expr: `{}.merge({}) == {}`},
 		{expr: `{}.merge({'a': 1}) == {'a': 1}`},
@@ -35,44 +36,29 @@ func TestMaps(t *testing.T) {
 		{expr: `{'a': 1}.merge({'b': 2}) == {'a': 1, 'b': 2}`},
 		{expr: `{'a': 1}.merge({'a': 2, 'b': 2}) == {'a': 2, 'b': 2}`},
 
-		// {expr: `{}.merge([])`, err: "ERROR: <input>:1:9: found no matching overload for 'merge' applied to 'map(dyn, dyn).(list(dyn))'"},
+		{expr: `{}.merge([])`, err: func(t require.TestingT, err error, i ...interface{}) {
+			require.ErrorContains(t, err, "no matching overload for 'merge'")
+		}},
 	}
 
 	env := testMapsEnv(t)
 	for i, tc := range mapsTests {
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			var asts []*cel.Ast
-			pAst, iss := env.Parse(tc.expr)
-			if iss.Err() != nil {
-				t.Fatalf("env.Parse(%v) failed: %v", tc.expr, iss.Err())
-			}
-			asts = append(asts, pAst)
-			cAst, iss := env.Check(pAst)
-			if iss.Err() != nil {
-				t.Fatalf("env.Check(%v) failed: %v", tc.expr, iss.Err())
-			}
-			asts = append(asts, cAst)
+			r := require.New(t)
 
-			for _, ast := range asts {
-				prg, err := env.Program(ast)
-				if err != nil {
-					t.Fatalf("env.Program() failed: %v", err)
-				}
-				out, _, err := prg.Eval(cel.NoVars())
-				if tc.err != "" {
-					if err == nil {
-						t.Fatalf("got value %v, wanted error %s for expr: %s",
-							out.Value(), tc.err, tc.expr)
-					}
-					if !strings.Contains(err.Error(), tc.err) {
-						t.Errorf("got error %v, wanted error %s for expr: %s", err, tc.err, tc.expr)
-					}
-				} else if err != nil {
-					t.Fatal(err)
-				} else if out.Value() != true {
-					t.Errorf("got %v, wanted true for expr: %s", out.Value(), tc.expr)
-				}
+			ast, iss := env.Compile(tc.expr)
+			if tc.err != nil {
+				tc.err(t, iss.Err())
+				return
 			}
+			r.NoError(iss.Err(), "compile failed for expr: %s", tc.expr)
+
+			prg, err := env.Program(ast)
+			require.NoError(t, err)
+
+			out, _, err := prg.Eval(cel.NoVars())
+			require.NoError(t, err)
+			assert.True(t, out.Value().(bool))
 		})
 	}
 }

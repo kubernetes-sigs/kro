@@ -20,17 +20,17 @@ import (
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
-	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kro-run/kro/api/v1alpha1"
 )
 
 var generateDiagramCmd = &cobra.Command{
 	Use:   "diagram",
 	Short: "Generate a diagram from a ResourceGraphDefinition",
 	Long: "Generate a diagram from a ResourceGraphDefinition file. This command reads the " +
-		"ResourceGraphDefinition and outputs the corresponding diagram " +
-		"in the specified format.",
+		"ResourceGraphDefinition and outputs the corresponding diagram",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if config.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")

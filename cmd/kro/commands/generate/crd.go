@@ -60,7 +60,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	}
 
 	crd := rgdGraph.Instance.GetCRD()
-	crd.SetAnnotations(map[string]string{"kro.run/version": "dev"})
+	crd.SetAnnotations(map[string]string{"kro.run/cli-version": "dev"})
 
 	b, err := marshalObject(crd, config.outputFormat)
 	if err != nil {

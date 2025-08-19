@@ -17,6 +17,7 @@ package generate
 import (
 	"encoding/json"
 	"fmt"
+
 	kroclient "github.com/kro-run/kro/pkg/client"
 
 	"github.com/kro-run/kro/api/v1alpha1"

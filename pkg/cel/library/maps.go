@@ -89,29 +89,34 @@ func (l *mapsLib) ProgramOptions() []cel.ProgramOption {
 	return []cel.ProgramOption{}
 }
 
-// merge merges two maps. Keys from the first map take precedence over keys in
-// the second map.
-func merge(self traits.Mapper, other traits.Mapper) traits.Mapper {
-	var result traits.MutableMapper
-
-	if mapVal, ok := other.Value().(map[ref.Val]ref.Val); ok {
-		result = types.NewMutableMap(types.DefaultTypeAdapter, mapVal)
-	} else {
-		result = types.NewMutableMap(types.DefaultTypeAdapter, nil)
-		for i := other.Iterator(); i.HasNext().(types.Bool); {
-			k := i.Next()
-			v := other.Get(k)
-			result.Insert(k, v)
-		}
+func mergeVals(lhs, rhs ref.Val) ref.Val {
+	left, lok := lhs.(traits.Mapper)
+	right, rok := rhs.(traits.Mapper)
+	if !lok || !rok {
+		return types.ValOrErr(lhs, "no such overload: %v.merge(%v)", lhs.Type(), rhs.Type())
 	}
+	return merge(left, right)
+}
 
+// merge returns a new map containing entries from both maps.
+// Keys in 'other' overwrite keys in 'self'.
+func merge(self, other traits.Mapper) traits.Mapper {
+	result := mapperTraitToMutableMapper(other)
 	for i := self.Iterator(); i.HasNext().(types.Bool); {
 		k := i.Next()
-		if result.Contains(k).(types.Bool) {
-			continue
+		if !result.Contains(k).(types.Bool) {
+			result.Insert(k, self.Get(k))
 		}
-		v := self.Get(k)
-		result.Insert(k, v)
 	}
 	return result.ToImmutableMap()
+}
+
+// mapperTraitToMutableMapper copies a traits.Mapper into a MutableMap.
+func mapperTraitToMutableMapper(m traits.Mapper) traits.MutableMapper {
+	vals := make(map[ref.Val]ref.Val, m.Size().(types.Int))
+	for it := m.Iterator(); it.HasNext().(types.Bool); {
+		k := it.Next()
+		vals[k] = m.Get(k)
+	}
+	return types.NewMutableMap(types.DefaultTypeAdapter, vals)
 }

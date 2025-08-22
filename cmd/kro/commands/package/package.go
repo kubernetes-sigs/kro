@@ -17,6 +17,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -43,21 +44,17 @@ func init() {
 	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.resourceGraphDefinitionFile, "file", "f", "",
 		"Path to the ResourceGraphDefinition file")
 	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.outputFile, "output", "o", "",
-		"Output file name for the OCI image tarball")
+		"Output file name for the OCI image tarball (if not provided, derived from RGD name)")
 }
 
 var packageRGDCmd = &cobra.Command{
 	Use:   "package",
-	Short: "Package ResourceGraphDefinition file into an OCI image",
+	Short: "Create an OCI Image packaging the ResourceGraphDefinition",
 	Long: "Package command packages the ResourceGraphDefinition" +
 		"file into an OCI image, which can be used for distribution and deployment.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if packageConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
-		}
-
-		if packageConfig.outputFile == "" {
-			return fmt.Errorf("output file name is required")
 		}
 
 		data, err := os.ReadFile(packageConfig.resourceGraphDefinitionFile)
@@ -68,6 +65,17 @@ var packageRGDCmd = &cobra.Command{
 		var rgd v1alpha1.ResourceGraphDefinition
 		if err := yaml.Unmarshal(data, &rgd); err != nil {
 			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
+		}
+
+		if packageConfig.outputFile == "" {
+			if rgd.Name != "" {
+				packageConfig.outputFile = rgd.Name + ".tar"
+			} else {
+				basename := filepath.Base(packageConfig.resourceGraphDefinitionFile)
+				extension := filepath.Ext(basename)
+				nameWithoutExt := basename[:len(basename)-len(extension)]
+				packageConfig.outputFile = nameWithoutExt + ".tar"
+			}
 		}
 
 		fmt.Fprintf(os.Stderr, "Packaging ResourceGraphDefinition into %s...\n",

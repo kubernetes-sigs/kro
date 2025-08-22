@@ -12,20 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package commands
+package generate
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-
-	"github.com/go-echarts/go-echarts/v2/charts"
-	"github.com/go-echarts/go-echarts/v2/opts"
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/graph"
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 )
 
 type GenerateConfig struct {

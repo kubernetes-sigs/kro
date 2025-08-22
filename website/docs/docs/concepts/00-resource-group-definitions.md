@@ -28,7 +28,7 @@ consistent, controlled way.
 
 A ResourceGraphDefinition, like any Kubernetes resource, consists of three main parts:
 
-1. **Metadata**: name, namespace, labels, etc.
+1. **Metadata**: name, labels, etc.
 2. **Spec**: Defines the structure and properties of the ResourceGraphDefinition
 3. **Status**: Reflects the current state of the ResourceGraphDefinition
 
@@ -123,7 +123,7 @@ kro automatically:
 - Validates that referenced resources exist
 - Updates these fields as your resources change
 
-## ResourceGraphDefinition Processing
+## Processing
 
 When you create a **ResourceGraphDefinition**, kro processes it in several steps to ensure
 correctness and set up the necessary components:
@@ -164,7 +164,7 @@ etc.) automatically.
 kro continuously monitors your ResourceGraphDefinition for changes, updating the API and
 its behavior accordingly.
 
-## ResourceGraphDefinition Instance Example
+## Instance Example
 
 After the **ResourceGraphDefinition** is validated and registered in the cluster, users
 can create instances of it. Here's an example of how an instance for the
@@ -181,20 +181,26 @@ spec:
   replicas: 3
 ```
 
-## ResourceGraphDefinition More about Resources
+## More about Resources
 
 Users can specify more controls in resources in `.spec.resources[]` 
 
 ```yaml
 spec:
   resources:
-    - id:
-      template || externalRef:
+    - id: my-resource
+      template || externalRef: {} # users can either template resources or reference objects outside the graph
       readyWhen:
+      # users can specify CEL expressions to determine when a resource is ready
+      - ${deployment.status.conditions.exists(x, x.type == 'Available' && x.status == "True")}
       includeWhen:
+      # users can specify CEL expressions to determine when a resource should be included in the graph
+      - ${schema.spec.value.enabled}
 ```
 
-Using `externalRef` An user can specify if the object is something that is created out-of-band and needs to be referenced in the RGD.
+### Using `externalRef` to reference Objects outside the ResourceGraphDefinition.
+
+Users can specify if the object is something that is created out-of-band and needs to be referenced in the RGD.
 An external reference could be specified like this:
 ```
 resources:
@@ -209,7 +215,52 @@ resources:
 
 As part of processing the Resource Graph, the instance reconciler waits for the `externalRef` object to be present and reads the object from the cluster as a node in the graph. Subsequent resources can use data from this node.
 
-## ResourceGraphDefinition Status Reporting
+
+### Using Conditional CEL Expressions (`?`)
+
+KRO can make use of CEL Expressions (see [this proposal for details](https://github.com/google/cel-spec/wiki/proposal-246) or look at the [CEL Implementation Reference](https://pkg.go.dev/github.com/google/cel-go/cel#hdr-Syntax_Changes-OptionalTypes)) to define optional runtime conditions for resources based on the conditional operator `?`.
+
+This allows you to optionally define values that have no predefined schema or are not hard dependencies in the Graph.
+
+#### Using `?` for referencing schema-less objects like `ConfigMap` or `Secret`
+
+You can use the `optional` operator to reference objects that do not have a predefined schema in the ResourceGraphDefinition. This is useful for referencing objects that may or may not exist at runtime.
+
+> :warning: `?` removes the ability of KRO to introspect the schema of the referenced object. Thus, it cannot wait for fields after the `?` to be present. It is recommended to use conditional expressions only for objects that are not critical to the ResourceGraphDefinition's operation or when the schema cannot be known at design time.
+
+A config map can be referenced like this:
+
+```yaml title="config-map.yaml"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo
+data:
+  VALUE: "foobar"
+```
+
+```yaml title="external reference in ResourceGraphDefinition"
+- id: external
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: demo
+      namespace: default
+```
+
+With this reference, you can access the data in your schema:
+
+```text title="CEL Expression"
+${external.data.?VALUE}
+```
+
+> :warning: KRO will only wait for the external reference to be present in the cluster, but it will not validate the schema of the referenced config. If the config map does not have the `VALUE` field, the expression will evaluate to `null` and might result in unexpected behavior in your application if not handled properly.
+
+
+_For a more detailed example, see the [Optional Values & External References](../../examples/basic/optionals.md) documentation._
+
+## Status Reporting
 
 The `status` section of a `ResourceGraphDefinition` provides information about the state of the graph and it's generated `CustomResourceDefinition` and controller.
 

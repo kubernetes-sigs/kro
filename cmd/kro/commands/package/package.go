@@ -36,6 +36,7 @@ import (
 type PackageConfig struct {
 	resourceGraphDefinitionFile string
 	outputFile                  string
+	tag                         string
 }
 
 var packageConfig = &PackageConfig{}
@@ -45,6 +46,8 @@ func init() {
 		"Path to the ResourceGraphDefinition file")
 	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.outputFile, "output", "o", "",
 		"Output file name for the OCI image tarball (if not provided, derived from RGD name)")
+	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.tag, "tag", "t",
+		"latest", "Tag to use for the OCI image (default: latest)")
 }
 
 var packageRGDCmd = &cobra.Command{
@@ -121,7 +124,7 @@ func packageRGD(data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to update image config: %w", err)
 	}
 
-	ref, err := name.ParseReference(fmt.Sprintf("kro.run/rgd/%s:latest", rgd.Name))
+	ref, err := name.ParseReference(fmt.Sprintf("kro.run/rgd/%s:%s", rgd.Name, packageConfig.tag))
 	if err != nil {
 		return fmt.Errorf("failed to parse image reference: %w", err)
 	}

@@ -31,11 +31,11 @@ var generateCRDCmd = &cobra.Command{
 		"ResourceGraphDefinition and outputs the corresponding CRD " +
 		"in the specified format.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGraphDefinitionFile == "" {
+		if generateConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		data, err := os.ReadFile(generateConfig.resourceGraphDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}
@@ -62,7 +62,7 @@ func generateCRD(rgd *v1alpha1.ResourceGraphDefinition) error {
 	crd := rgdGraph.Instance.GetCRD()
 	crd.SetAnnotations(map[string]string{"kro.run/cli-version": "dev"})
 
-	b, err := marshalObject(crd, config.outputFormat)
+	b, err := marshalObject(crd, generateConfig.outputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to marshal CRD: %w", err)
 	}

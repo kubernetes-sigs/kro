@@ -45,4 +45,8 @@ spec:
   - name: check-that-crd-is-deleted
     try:
     - error:
-        file: instancecrd-assert.yaml        
+        resource:
+          apiVersion: kro.run/v1alpha1
+          kind: ResourceGraphDefinition
+          name: simple-deployment-for-deletion-rgd
+          namespace: default

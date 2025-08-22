@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: config-map-service
+spec:
+  defaultServiceAccounts:
+    my-custom-namespace: configmap-creator-update
+  schema:
+    apiVersion: v1alpha1
+    kind: ConfigMapService
+    spec:
+      name: string
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}-configmap
+          namespace: my-custom-namespace
+        data:
+          key: value

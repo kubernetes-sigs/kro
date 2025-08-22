@@ -1,0 +1,19 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: namespace-creator
+spec:
+  defaultServiceAccounts:
+    "*": namespace-creator
+  schema:
+    apiVersion: v1alpha1
+    kind: NamespaceService
+    spec:
+      name: string
+  resources:
+    - id: namespaceInstance
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.name}-namespace

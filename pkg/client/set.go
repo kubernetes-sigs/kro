@@ -20,6 +20,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	authclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	"k8s.io/client-go/rest"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/release-utils/version"
@@ -37,6 +38,8 @@ type SetInterface interface {
 	// APIExtensionsV1 returns the API extensions client
 	APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface
 
+	Authorization() authclient.AuthorizationV1Interface
+
 	// RESTConfig returns a copy of the underlying REST config
 	RESTConfig() *rest.Config
 
@@ -53,6 +56,7 @@ type Set struct {
 	kubernetes      *kubernetes.Clientset
 	dynamic         *dynamic.DynamicClient
 	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
+	authClient      *authclient.AuthorizationV1Client
 }
 
 var _ SetInterface = (*Set)(nil)
@@ -125,6 +129,11 @@ func (c *Set) init() error {
 		return err
 	}
 
+	c.authClient, err = authclient.NewForConfigAndClient(c.config, sharedHttpClient)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -141,6 +150,11 @@ func (c *Set) Dynamic() dynamic.Interface {
 // APIExtensionsV1 returns the API extensions client
 func (c *Set) APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface {
 	return c.apiExtensionsV1
+}
+
+// Authorization returns the authorization client
+func (c *Set) Authorization() authclient.AuthorizationV1Interface {
+	return c.authClient
 }
 
 // RESTConfig returns a copy of the underlying REST config

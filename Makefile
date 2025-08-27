@@ -86,8 +86,12 @@ tt:
 	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
 
 .PHONY: fmt
-fmt: ## Run go fmt against code.
+fmt: go-generate ## Run go fmt against code and add licenses.
 	go fmt ./...
+
+.PHONY: go-generate
+go-generate: ## Run go generate against code.
+	go generate
 
 .PHONY: vet
 vet: ## Run go vet against code.
@@ -220,7 +224,6 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-
 
 .PHONY: image
 build-image: ko ## Build the kro controller images using ko build

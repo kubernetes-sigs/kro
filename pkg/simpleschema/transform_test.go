@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
@@ -372,6 +373,57 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want:    nil,
 			wantErr: true,
+		},
+		{
+			name: "Object with unknown fields",
+			obj: map[string]interface{}{
+				"values": "object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with required marker",
+			obj: map[string]interface{}{
+				"values": "object | required=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+				Required: []string{"values"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with default marker",
+			obj: map[string]interface{}{
+				"values": "object | default={\"a\": \"b\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+						Default:                &extv1.JSON{Raw: []byte("{\"a\": \"b\"}")},
+					},
+				},
+				Default: &extv1.JSON{Raw: []byte("{}")},
+			},
+			wantErr: false,
 		},
 		{
 			name: "Simple string validation",

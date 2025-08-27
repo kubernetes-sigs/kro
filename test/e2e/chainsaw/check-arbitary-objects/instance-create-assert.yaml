@@ -1,0 +1,30 @@
+apiVersion: kro.run/v1alpha1
+kind: CheckArbitraryObjectsNoOp
+metadata:
+  finalizers:
+  - kro.run/finalizer
+  generation: 1
+  labels:
+    kro.run/owned: "true"
+  name: test-instance
+spec:
+  values:
+    bool-value: true
+    numeric-value: 42
+    structural-type:
+      with-additional:
+        nested: fields
+    string-value: my-string
+    mapping-value:
+      - item1
+      - item2
+      - item3
+status:
+  conditions:
+  - message: Instance reconciled successfully
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: InstanceSynced
+  state: ACTIVE
+

@@ -35,19 +35,20 @@ import (
 
 type PackageConfig struct {
 	resourceGraphDefinitionFile string
-	outputFile                  string
 	tag                         string
 }
 
 var packageConfig = &PackageConfig{}
 
 func init() {
-	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.resourceGraphDefinitionFile, "file", "f", "",
-		"Path to the ResourceGraphDefinition file")
-	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.outputFile, "output", "o", "",
-		"Output file name for the OCI image tarball (if not provided, derived from RGD name)")
-	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.tag, "tag", "t",
-		"latest", "Tag to use for the OCI image (default: latest)")
+	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.resourceGraphDefinitionFile,
+		"file", "f", "",
+		"Path to the ResourceGraphDefinition file",
+	)
+
+	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.tag,
+		"tag", "t", "latest",
+		"Tag to use for the OCI image (default: latest)")
 }
 
 var packageRGDCmd = &cobra.Command{
@@ -70,32 +71,22 @@ var packageRGDCmd = &cobra.Command{
 			return fmt.Errorf("failed to unmarshal ResourceGraphDefinition: %w", err)
 		}
 
-		if packageConfig.outputFile == "" {
-			if rgd.Name != "" {
-				packageConfig.outputFile = rgd.Name + ".tar"
-			} else {
-				basename := filepath.Base(packageConfig.resourceGraphDefinitionFile)
-				extension := filepath.Ext(basename)
-				nameWithoutExt := basename[:len(basename)-len(extension)]
-				packageConfig.outputFile = nameWithoutExt + ".tar"
-			}
-		}
+		basename := filepath.Base(packageConfig.resourceGraphDefinitionFile)
+		extension := filepath.Ext(basename)
+		nameWithoutExt := basename[:len(basename)-len(extension)]
+		outputFile := nameWithoutExt + ".tar"
 
-		fmt.Fprintf(os.Stderr, "Packaging ResourceGraphDefinition into %s...\n",
-			packageConfig.outputFile)
-
-		if err = packageRGD(data, &rgd); err != nil {
+		if err = packageRGD(outputFile, data, &rgd); err != nil {
 			return fmt.Errorf("failed to package ResourceGraphDefinition: %w", err)
 		}
 
-		fmt.Fprintf(os.Stderr, "Successfully packaged ResourceGraphDefinition to %s\n",
-			packageConfig.outputFile)
+		fmt.Println("Successfully packaged ResourceGraphDefinition to", outputFile)
 
 		return nil
 	},
 }
 
-func packageRGD(data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
+func packageRGD(outputFile string, data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
 	layer := static.NewLayer(data, types.MediaType("application/vnd.kro.resourcegraphdefinition.v1alpha1+yaml"))
 
 	img := empty.Image
@@ -129,7 +120,7 @@ func packageRGD(data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to parse image reference: %w", err)
 	}
 
-	if err := tarball.WriteToFile(packageConfig.outputFile, ref, img); err != nil {
+	if err := tarball.WriteToFile(outputFile, ref, img); err != nil {
 		return fmt.Errorf("failed to write image to file: %w", err)
 	}
 

@@ -59,7 +59,26 @@ sidebar_position: 100
    resource dependency management and customization, paving the way for a simple
    and scalable way to create complex custom resources for Kubernetes.
 
-5. **Can I use this in production?**
+5. **How do I use KRO resources with ArgoCD?**
+
+   To use KRO resources with ArgoCD, you need to add a specific tracking annotation
+   to all templated resources in your ResourceGraphDefinition. 
+   
+   The following code needs to be added to each templated resource:
+
+   ```yaml
+   annotations:
+     argocd.argoproj.io/tracking-id: ${schema.metadata.?annotations["argocd.argoproj.io/tracking-id"]}
+   ```
+
+   This annotation allows ArgoCD to properly track and manage the resources
+   created by KRO instances. 
+   
+   Note that this approach only works when using ArgoCD's default resource tracking 
+   via annotations. For more information about ArgoCD resource tracking, see the
+   [ArgoCD documentation](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
+
+6. **Can I use this in production?**
 
    This project is in active development and not yet intended for production
    use. The _ResourceGraphDefinition_ CRD and other APIs used in this project are not

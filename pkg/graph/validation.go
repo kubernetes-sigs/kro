@@ -88,12 +88,29 @@ func isKROReservedWord(word string) bool {
 // validateResourceGraphDefinitionNamingConventions validates the naming conventions of
 // the given resource graph definition.
 func validateResourceGraphDefinitionNamingConventions(rgd *v1alpha1.ResourceGraphDefinition) error {
+	agg := []error{}
+
 	if !isValidKindName(rgd.Spec.Schema.Kind) {
-		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind)
+		agg = append(agg,
+			NewValidationError(
+				ValidationErrorTypeResource,
+				"",
+				"",
+				"spec.schema.kind",
+				fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind),
+			),
+		)
 	}
+
 	err := validateResourceIDs(rgd)
-	if err != nil {
-		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
+	if me, ok := err.(*MultiError); ok {
+		agg = append(agg, me.Errors...)
+	} else if err != nil {
+		agg = append(agg, err)
+	}
+
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
 	}
 	return nil
 }
@@ -108,19 +125,55 @@ func validateResourceGraphDefinitionNamingConventions(rgd *v1alpha1.ResourceGrap
 // - Does not contain any special characters, underscores, or hyphens.
 func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 	seen := make(map[string]struct{})
-	for _, res := range rgd.Spec.Resources {
+	agg := []error{}
+
+	for i, res := range rgd.Spec.Resources {
+
+		path := fmt.Sprintf("spec.resources[%d].id", i)
+
 		if isKROReservedWord(res.ID) {
-			return fmt.Errorf("id %s is a reserved keyword in KRO", res.ID)
+			agg = append(agg,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					res.ID,
+					"",
+					path,
+					fmt.Errorf("id %s is a reserved keyword in KRO", res.ID),
+				),
+			)
+			continue
 		}
 
 		if !isValidResourceID(res.ID) {
-			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID)
+			agg = append(agg,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					res.ID,
+					"",
+					path,
+					fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID),
+				),
+			)
+			continue
 		}
 
 		if _, ok := seen[res.ID]; ok {
-			return fmt.Errorf("found duplicate resource IDs %s", res.ID)
+			agg = append(agg,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					res.ID,
+					"",
+					path,
+					fmt.Errorf("found duplicate resource IDs %s", res.ID),
+				),
+			)
+			continue
 		}
 		seen[res.ID] = struct{}{}
+	}
+
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
 	}
 	return nil
 }

@@ -106,6 +106,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// original object.
 	rgd := originalCR.DeepCopy()
 
+	// Collect all the errors from ALL validation stages
+	allErrors := []error{}
+
 	// There are a few steps to build a resource graph definition:
 	// 1. Validate the naming convention of the resource graph definition and its resources.
 	//    kro leverages CEL expressions to allow users to define new types and
@@ -114,8 +117,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    for example name-something-something is not a valid name for a resource,
 	//    because in CEL - is a subtraction operator.
 	err := validateResourceGraphDefinitionNamingConventions(rgd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
+	if me, ok := err.(*MultiError); ok {
+		allErrors = append(allErrors, me.Errors...)
+	} else if err != nil {
+		allErrors = append(allErrors, err)
 	}
 
 	// Now that we did a basic validation of the resource graph definition, we can start understanding
@@ -143,17 +148,43 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// we'll also store the resources in a map for easy access later.
 	resources := make(map[string]*Resource)
+	aggErrors := []error{}
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
 		order := i
 		r, err := b.buildRGResource(rgResource, namespacedResources, order)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
+		if me, ok := err.(*MultiError); ok {
+			aggErrors = append(aggErrors, me.Errors...)
+			continue
+		} else if err != nil {
+			aggErrors = append(aggErrors,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					id,
+					"",
+					fmt.Sprintf("resources.%s", id),
+					fmt.Errorf("%w", err),
+				),
+			)
+			continue
 		}
+
 		if resources[id] != nil {
-			return nil, fmt.Errorf("found resources with duplicate id %q", id)
+			aggErrors = append(aggErrors,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					id,
+					"",
+					fmt.Sprintf("resources.%s", id),
+					fmt.Errorf("found resources with duplicate id %q", id),
+				),
+			)
+			continue
 		}
 		resources[id] = r
+	}
+	if len(aggErrors) > 0 {
+		return nil, &MultiError{Errors: aggErrors}
 	}
 
 	// At this stage we have a superficial understanding of the resources that are
@@ -247,7 +278,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Resources:        resources,
 		TopologicalOrder: topologicalOrder,
 	}
-	return resourceGraphDefinition, nil
+	return resourceGraphDefinition, &MultiError{Errors: allErrors}
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
@@ -269,42 +300,105 @@ func (b *Builder) buildExternalRefResource(
 // buildRGResource builds a resource from the given resource definition.
 // It provides a high-level understanding of the resource, by extracting the
 // OpenAPI schema, emulating the resource and extracting the cel expressions
-// from the schema.
+// from the schema. Returns multiple errors if validation fails at different stages.
 func (b *Builder) buildRGResource(
 	rgResource *v1alpha1.Resource,
 	namespacedResources map[k8sschema.GroupKind]bool,
 	order int,
 ) (*Resource, error) {
+	// Collect all errors instead of returning early
+	errors := []error{}
+
 	// 1. We need to unmarshal the resource into a map[string]interface{} to
 	//    make it easier to work with.
 	resourceObject := map[string]interface{}{}
 	if len(rgResource.Template.Raw) > 0 {
 		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+			errors = append(errors,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					rgResource.ID,
+					"",
+					fmt.Sprintf("resources.%s", rgResource.ID),
+					fmt.Errorf("failed to unmarshal resource template: %w", err),
+				),
+			)
 		}
 	} else if rgResource.ExternalRef != nil {
 		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
 	} else {
-		return nil, fmt.Errorf("exactly one of template or externalRef must be provided")
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeResource,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s", rgResource.ID),
+				fmt.Errorf("exactly one of template or externalRef must be provided"),
+			),
+		)
 	}
 
-	// 1. Check if it looks like a valid Kubernetes resource.
+	// If we couldn't get a valid resource object, return early with errors
+	if len(errors) > 0 {
+		return nil, &MultiError{Errors: errors}
+	}
+
+	// 2. Check if it looks like a valid Kubernetes resource.
 	err := validateKubernetesObjectStructure(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeGVK,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s", rgResource.ID),
+				fmt.Errorf("not a valid Kubernetes object: %w", err),
+			),
+		)
 	}
 
-	// 2. Based the GVK, we need to load the OpenAPI schema for the resource.
+	// If we couldn't get a valid resource object, return early with errors
+	if err != nil {
+		return nil, &MultiError{Errors: errors}
+	}
+
+	// 3. Based the GVK, we need to load the OpenAPI schema for the resource.
 	gvk, err := metadata.ExtractGVKFromUnstructured(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeGVK,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s.template.apiVersion/kind", rgResource.ID),
+				fmt.Errorf("failed to extract GVK: %w", err),
+			),
+		)
 	}
 
-	// 3. Load the OpenAPI schema for the resource.
+	// If we couldn't get a valid GVK, return early with errors
+	if err != nil {
+		return nil, &MultiError{Errors: errors}
+	}
+
+	// 4. Load the OpenAPI schema for the resource.
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeGVK,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s", rgResource.ID),
+				fmt.Errorf("failed to get schema: %w", err),
+			),
+		)
+	}
+
+	// If we couldn't get a valid schema, return early with errors
+	if err != nil {
+		return nil, &MultiError{Errors: errors}
 	}
 
 	var emulatedResource *unstructured.Unstructured
@@ -315,24 +409,55 @@ func (b *Builder) buildRGResource(
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		celExpressions, err := parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
+			errors = append(errors,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					rgResource.ID,
+					"",
+					fmt.Sprintf("resources.%s", rgResource.ID),
+					fmt.Errorf("failed to parse schemaless resource: %w", err),
+				),
+			)
 		}
 		if len(celExpressions) > 0 {
-			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.ID)
+			errors = append(errors,
+				NewValidationError(
+					ValidationErrorTypeExpr,
+					rgResource.ID,
+					"",
+					fmt.Sprintf("resources.%s", rgResource.ID),
+					fmt.Errorf("CEL expressions are not supported for CRDs"),
+				),
+			)
 		}
 	} else {
 
-		// 4. Emulate the resource, this is later used to verify the validity of the
-		//    CEL expressions.
+		// 5. Emulate the resource, this is later used to verify the validity of the CEL expressions.
 		emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.ID, err)
+			errors = append(errors,
+				NewValidationError(
+					ValidationErrorTypeResource,
+					rgResource.ID,
+					"",
+					fmt.Sprintf("resources.%s", rgResource.ID),
+					fmt.Errorf("failed to generate dummy CR: %w", err),
+				),
+			)
 		}
 
 		// 5. Extract CEL fieldDescriptors from the schema.
 		fieldDescriptors, err := parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
+			errors = append(errors,
+				NewValidationError(
+					ValidationErrorTypeExpr,
+					rgResource.ID,
+					"",
+					fmt.Sprintf("resources.%s", rgResource.ID),
+					fmt.Errorf("failed to extract CEL expressions from schema: %w", err),
+				),
+			)
 		}
 		for _, fieldDescriptor := range fieldDescriptors {
 			resourceVariables = append(resourceVariables, &variable.ResourceField{
@@ -343,16 +468,37 @@ func (b *Builder) buildRGResource(
 		}
 	}
 
-	// 6. Parse ReadyWhen expressions
+	// 7. Parse ReadyWhen expressions - continue even if previous steps failed
 	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeReadyWhen,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s.readyWhen", rgResource.ID),
+				fmt.Errorf("failed to parse readyWhen expressions: %w", err),
+			),
+		)
 	}
 
-	// 7. Parse condition expressions
+	// 8. Parse condition expressions - continue even if previous steps failed
 	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
+		errors = append(errors,
+			NewValidationError(
+				ValidationErrorTypeIncludeWhen,
+				rgResource.ID,
+				"",
+				fmt.Sprintf("resources.%s.includeWhen", rgResource.ID),
+				fmt.Errorf("failed to parse includeWhen expressions: %w", err),
+			),
+		)
+	}
+
+	// If we have any errors, return them all
+	if len(errors) > 0 {
+		return nil, &MultiError{Errors: errors}
 	}
 
 	_, isNamespaced := namespacedResources[gvk.GroupKind()]

@@ -125,13 +125,27 @@ spec:
                   apiVersion, kind, spec, status, types, and some validation
                   rules.
                 properties:
+                  additionalPrinterColumnPolicy:
+                    default: Replace
+                    description: |-
+                      AdditionalPrinterColumnPolicy defines additional printer columns
+                      that will be passed down to the created CRD. The default policy is "Replace".
+
+                      AdditionalPrinterColumnPolicy controls how provided additional printer
+                      columns via AdditionalPrinterColumns are applied to the generated CRD.
+
+                      - "Replace": uses the provided columns as is; if no or empty AdditionalPrinterColumns are provided, fallback to the default columns.
+                      - "Add": merge the provided columns with the defaults, with user
+                        definitions overriding defaults when they share a identifying key
+                        (Name preferred, fallback to JSONPath).
+                    enum:
+                    - Replace
+                    - Add
+                    type: string
                   additionalPrinterColumns:
                     description: |-
-                      AdditionalPrinterColumns defines additional printer columns
-                      that will be passed down to the created CRD. If set, no
-                      default printer columns will be added to the created CRD,
-                      and if default printer columns need to be retained, they
-                      need to be added explicitly.
+                      AdditionalPrinterColumns is the list of user-specified printer columns
+                      to apply according to AdditionalPrinterColumnPolicy.
                     items:
                       description: CustomResourceColumnDefinition specifies a column
                         for server side printing.

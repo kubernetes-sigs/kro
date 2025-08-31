@@ -73,9 +73,13 @@ sidebar_position: 100
 
    This annotation allows ArgoCD to properly track and manage the resources
    created by KRO instances. 
+
+   ![ArgoCD RGD tracked Instance](../../../images/architecture-diagrams/kro-ArgoCD-Tracking.png)
    
-   Note that this approach only works when using ArgoCD's default resource tracking 
-   via annotations. For more information about ArgoCD resource tracking, see the
+   Note that the example shown above depicts ArgoCD's default resource tracking 
+   via annotations. You may choose to use `annotation+label` or just `label` and 
+   if so the example has to be modified to support your configuration. 
+   For more detailed information about ArgoCD resource tracking, please see the
    [ArgoCD documentation](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_tracking/).
 
 6. **Can I use this in production?**

@@ -23,11 +23,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
+
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/oci"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 )

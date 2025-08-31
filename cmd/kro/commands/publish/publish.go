@@ -97,17 +97,40 @@ var publishCmd = &cobra.Command{
 			publishConfig.password = string(bytePassword)
 		}
 
+		ctx := context.Background()
+		repo, err := remote.NewRepository(publishConfig.remoteRef)
+		if err != nil {
+			return fmt.Errorf("failed to create remote repository for %s: %w", publishConfig.remoteRef, err)
+		}
+
+		credentialFunc := func(ctx context.Context, registry string) (auth.Credential, error) {
+			return auth.Credential{
+				Username: publishConfig.username,
+				Password: publishConfig.password,
+			}, nil
+		}
+
+		repo.Client = &auth.Client{
+			Client:     retry.DefaultClient,
+			Cache:      auth.NewCache(),
+			Credential: credentialFunc,
+		}
+
+		if publishConfig.username == "" || publishConfig.password == "" {
+			return fmt.Errorf("username and password are required")
+		}
+
 		tempDir, err := os.MkdirTemp("", "kro-publish-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temp dir: %w", err)
 		}
 		defer func() {
 			if err := os.RemoveAll(tempDir); err != nil {
-				fmt.Printf("Warning: failed to remove temp dir %s: %v\n", tempDir, err)
+				fmt.Println("Warning: failed to remove temp dir", tempDir, ":", err)
 			}
 		}()
 
-		fmt.Printf("Extracting %s to %s...\n", publishConfig.ociTarballPath, tempDir)
+		fmt.Println("Extracting", publishConfig.ociTarballPath, "to", tempDir, "...")
 		if err := untar(publishConfig.ociTarballPath, tempDir); err != nil {
 			return fmt.Errorf("failed to extract OCI tarball: %w", err)
 		}
@@ -121,41 +144,9 @@ var publishCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to find root manifest in OCI layout: %w", err)
 		}
-		fmt.Printf("Found manifest to push: %s\n", rootDesc.Digest)
+		fmt.Println("Found manifest to push:", rootDesc.Digest)
 
-		ctx := context.Background()
-		repo, err := remote.NewRepository(publishConfig.remoteRef)
-		if err != nil {
-			return fmt.Errorf("failed to create remote repository for %s: %w", publishConfig.remoteRef, err)
-		}
-
-		if publishConfig.username != "" && publishConfig.password != "" {
-			fmt.Println("Using provided username/password for authentication")
-
-			credentialFunc := func(ctx context.Context, registry string) (auth.Credential, error) {
-				return auth.Credential{
-					Username: publishConfig.username,
-					Password: publishConfig.password,
-				}, nil
-			}
-
-			repo.Client = &auth.Client{
-				Client:     retry.DefaultClient,
-				Cache:      auth.NewCache(),
-				Credential: credentialFunc,
-			}
-		} else {
-			fmt.Println("No credentials provided, attempting anonymous access")
-			repo.Client = &auth.Client{
-				Client: retry.DefaultClient,
-				Cache:  auth.NewCache(),
-				Credential: auth.StaticCredential(publishConfig.remoteRef, auth.Credential{
-					Username: publishConfig.username,
-					Password: publishConfig.password,
-				})}
-		}
-
-		fmt.Printf("Publishing to %s...\n", publishConfig.remoteRef)
+		fmt.Println("Publishing to", publishConfig.remoteRef, "...")
 		_, err = oras.Copy(ctx, store, rootDesc.Digest.String(), repo, publishConfig.remoteRef, oras.DefaultCopyOptions)
 		if err != nil {
 			return fmt.Errorf("failed to publish OCI image: %w", err)

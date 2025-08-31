@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 )
 
@@ -153,11 +154,16 @@ func saveCredentials(registry, username, password string) error {
 		}
 	}
 
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
 	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 
 	config.Auths[registry] = RegistryAuth{
 		Username: username,
-		Password: password,
+		Password: string(hashedPassword),
 		Auth:     auth,
 	}
 

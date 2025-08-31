@@ -15,19 +15,18 @@
 package commands
 
 import (
+	"archive/tar"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/static"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"github.com/google/go-containerregistry/pkg/v1/types"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
+	oras "oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content/oci"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kro-run/kro/api/v1alpha1"
@@ -42,7 +41,7 @@ var packageConfig = &PackageConfig{}
 
 func init() {
 	packageRGDCmd.PersistentFlags().StringVarP(&packageConfig.resourceGraphDefinitionFile,
-		"file", "f", "",
+		"file", "f", "rgd.yaml",
 		"Path to the ResourceGraphDefinition file",
 	)
 
@@ -55,7 +54,7 @@ var packageRGDCmd = &cobra.Command{
 	Use:   "package",
 	Short: "Create an OCI Image packaging the ResourceGraphDefinition",
 	Long: "Package command packages the ResourceGraphDefinition" +
-		"file into an OCI image, which can be used for distribution and deployment.",
+		"file into an OCI image bundle, which can be used for distribution and deployment.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if packageConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
@@ -72,59 +71,140 @@ var packageRGDCmd = &cobra.Command{
 		}
 
 		basename := filepath.Base(packageConfig.resourceGraphDefinitionFile)
-		extension := filepath.Ext(basename)
-		nameWithoutExt := basename[:len(basename)-len(extension)]
-		outputFile := nameWithoutExt + ".tar"
+		ext := filepath.Ext(basename)
+		nameWithoutExt := basename[:len(basename)-len(ext)]
+		outputTar := nameWithoutExt + ".tar"
 
-		if err = packageRGD(outputFile, data, &rgd); err != nil {
+		if err := packageRGD(outputTar, data, &rgd); err != nil {
 			return fmt.Errorf("failed to package ResourceGraphDefinition: %w", err)
 		}
 
-		fmt.Println("Successfully packaged ResourceGraphDefinition to", outputFile)
-
+		fmt.Println("Successfully packaged ResourceGraphDefinition to", outputTar)
 		return nil
 	},
 }
 
-func packageRGD(outputFile string, data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
-	layer := static.NewLayer(data, types.MediaType("application/vnd.kro.resourcegraphdefinition.v1alpha1+yaml"))
+func packageRGD(outputTar string, data []byte, rgd *v1alpha1.ResourceGraphDefinition) error {
+	ctx := context.Background()
 
-	img := empty.Image
-
-	img, err := mutate.AppendLayers(img, layer)
-
+	tempDir, err := os.MkdirTemp("", "kro-oci-*")
 	if err != nil {
-		return fmt.Errorf("failed to append layer: %w", err)
+		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			fmt.Println("failed to remove temp dir", tempDir, ":", err)
+		}
+	}()
 
-	configFile, err := img.ConfigFile()
+	store, err := oci.New(tempDir)
 	if err != nil {
-		return fmt.Errorf("failed to get config file: %w", err)
+		return fmt.Errorf("failed to create OCI layout store: %w", err)
 	}
 
-	now := time.Now()
-	configFile.Created = v1.Time{Time: now}
-
-	configFile.Config.Labels = map[string]string{
-		"kro.run/type": "resourcegraphdefinition",
-		"kro.run/name": rgd.Name,
-	}
-
-	img, err = mutate.ConfigFile(img, configFile)
+	mediaType := "application/vnd.kro.resourcegraphdefinition"
+	blobDesc, err := oras.PushBytes(ctx, store, mediaType, data)
 	if err != nil {
-		return fmt.Errorf("failed to update image config: %w", err)
+		return fmt.Errorf("failed to push RGD blob: %w", err)
 	}
 
-	ref, err := name.ParseReference(fmt.Sprintf("kro.run/rgd/%s:%s", rgd.Name, packageConfig.tag))
+	layer := blobDesc
+	if layer.Annotations == nil {
+		layer.Annotations = map[string]string{}
+	}
+	layer.Annotations[ocispec.AnnotationTitle] = filepath.Base(packageConfig.resourceGraphDefinitionFile)
+
+	artifactType := "application/vnd.kro.resourcegraphdefinition"
+	packOpts := oras.PackManifestOptions{
+		Layers: []ocispec.Descriptor{layer},
+		ManifestAnnotations: map[string]string{
+			"kro.run/type": "resourcegraphdefinition",
+			"kro.run/name": rgd.Name,
+		},
+	}
+
+	manifestDesc, err := oras.PackManifest(ctx, store, oras.PackManifestVersion1_1, artifactType, packOpts)
 	if err != nil {
-		return fmt.Errorf("failed to parse image reference: %w", err)
+		return fmt.Errorf("failed to pack manifest: %w", err)
 	}
 
-	if err := tarball.WriteToFile(outputFile, ref, img); err != nil {
-		return fmt.Errorf("failed to write image to file: %w", err)
+	tag := fmt.Sprintf("%s:%s", rgd.Name, packageConfig.tag)
+	if err := store.Tag(ctx, manifestDesc, tag); err != nil {
+		return fmt.Errorf("failed to tag manifest in layout: %w", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(tempDir, "ingest")); err != nil {
+		fmt.Println("failed to remove ingest folder: ", err)
+	}
+
+	if err := tarDir(tempDir, outputTar); err != nil {
+		return fmt.Errorf("failed to write OCI layout tar: %w", err)
 	}
 
 	return nil
+}
+
+func tarDir(srcDir, tarPath string) error {
+	out, err := os.Create(tarPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := out.Close(); err != nil {
+			fmt.Println("failed to close tar file: ", err)
+		}
+	}()
+
+	tw := tar.NewWriter(out)
+	defer func() {
+		if err := tw.Close(); err != nil {
+			fmt.Println("failed to close tar writer: ", err)
+		}
+	}()
+
+	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || path == srcDir {
+			return err
+		}
+
+		info, _ := d.Info()
+		rel, _ := filepath.Rel(srcDir, path)
+		rel = filepath.ToSlash(rel)
+
+		switch {
+		case strings.HasPrefix(rel, "ingest/"),
+			strings.HasPrefix(rel, "blobs/sha256/") && info.Size() == 0,
+			filepath.Clean(path) == filepath.Clean(tarPath):
+			return nil
+		}
+
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = rel
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := f.Close(); err != nil {
+				fmt.Println("failed to close file ", path, ":", err)
+			}
+		}()
+
+		_, err = io.Copy(tw, f)
+		return err
+	})
 }
 
 func AddPackageCommand(rootCmd *cobra.Command) {

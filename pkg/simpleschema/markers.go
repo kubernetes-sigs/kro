@@ -55,12 +55,14 @@ const (
 	MarkerTypeValidation MarkerType = "validation"
 	// MarkerTypeEnum represents the `enum` marker.
 	MarkerTypeEnum MarkerType = "enum"
+	// MarkerTypeImmutable represents the `immutable` marker.
+	MarkerTypeImmutable MarkerType = "immutable"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
 	switch MarkerType(s) {
 	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription,
-		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum:
+		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum, MarkerTypeImmutable:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("unknown marker type: %s", s)

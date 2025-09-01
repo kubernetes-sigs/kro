@@ -486,6 +486,73 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "Simple immutable field",
+			obj: map[string]interface{}{
+				"id": "string | immutable=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"id": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Simple immutable field with false value",
+			obj: map[string]interface{}{
+				"name": "string | immutable=false",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Immutable with other markers",
+			obj: map[string]interface{}{
+				"resourceId": `string | required=true immutable=true description="Unique resource identifier"`,
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"resourceId"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"resourceId": {
+						Type:        "string",
+						Description: "Unique resource identifier",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid immutable value",
+			obj: map[string]interface{}{
+				"id": "string | immutable=invalid",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
 			name: "Custom simple type (required)",
 			obj: map[string]interface{}{
 				"myValue": "myType",

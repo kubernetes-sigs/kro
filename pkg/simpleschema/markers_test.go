@@ -125,6 +125,15 @@ func TestParseMarkers(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:  "immutable marker with other markers",
+			input: "immutable=true required=false",
+			want: []*Marker{
+				{MarkerType: MarkerTypeImmutable, Key: "immutable", Value: "true"},
+				{MarkerType: MarkerTypeRequired, Key: "required", Value: "false"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

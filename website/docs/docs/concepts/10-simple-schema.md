@@ -19,7 +19,7 @@ spec:
     kind: WebApplication
     spec:
       # Basic types
-      name: string | required=true description="My Name"
+      name: string | required=true immutable=true description="My Name"
       replicas: integer | default=1 minimum=1 maximum=100
       image: string | required=true
 
@@ -193,6 +193,7 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `enum="value1,value2"`: Allowed values
 - `minimum=value`: Minimum value for numbers
 - `maximum=value`: Maximum value for numbers
+- `immutable=true`: Field cannot be changed after creation
 
 Multiple markers can be combined using the `|` separator.
 
@@ -200,6 +201,7 @@ For example:
 
 ```yaml
 name: string | required=true default="app" description="Application name"
+id: string | required=true immutable=true description="Unique identifier"
 replicas: integer | default=3 minimum=1 maximum=10
 price: float | minimum=0.01 maximum=999.99
 mode: string | enum="debug,info,warn,error" default="info"

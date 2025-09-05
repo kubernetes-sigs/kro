@@ -67,8 +67,16 @@ sidebar_position: 100
    The following code needs to be added to each templated resource:
 
    ```yaml
-   annotations:
-     argocd.argoproj.io/tracking-id: ${schema.metadata.?annotations["argocd.argoproj.io/tracking-id"]}
+   metadata:
+      ownerReferences:
+         - apiVersion: kro.run/v1alpha1
+           kind: ${schema.kind}
+           name: ${schema.metadata.name}
+           uid: ${schema.metadata.uid}
+           blockOwnerDeletion: true
+           controller: false
+      annotations:
+        argocd.argoproj.io/tracking-id: ${schema.metadata.?annotations["argocd.argoproj.io/tracking-id"]}
    ```
 
    This annotation allows ArgoCD to properly track and manage the resources

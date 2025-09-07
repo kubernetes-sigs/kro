@@ -16,7 +16,9 @@ package delta
 
 import (
 	"fmt"
+	"reflect"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -97,10 +99,15 @@ func cleanMetadata(obj *unstructured.Unstructured) {
 // differences found. It handles different types appropriately:
 // - For maps: recursively compares all keys/values
 // - For slices: checks length and recursively compares elements
-// - For primitives: directly compares values
+// - For primitives: directly compares values using Kubernetes-aware semantics
 //
 // Records a Difference if values don't match or are of different types.
 func walkCompare(desired, observed interface{}, path string, differences *[]Difference) {
+	// Handle Kubernetes-specific semantic equivalence
+	if areKubernetesEquivalent(desired, observed, path) {
+		return
+	}
+
 	switch d := desired.(type) {
 	case map[string]interface{}:
 		e, ok := observed.(map[string]interface{})
@@ -139,7 +146,7 @@ func walkCompare(desired, observed interface{}, path string, differences *[]Diff
 
 // walkMap compares two maps recursively. For each key in desired:
 //
-// - If key missing in observed: records a difference
+// - If key missing in observed: checks for Kubernetes equivalence before recording difference
 // - If key exists: recursively compares values
 func walkMap(desired, observed map[string]interface{}, path string, differences *[]Difference) {
 	for k, desiredVal := range desired {
@@ -149,12 +156,15 @@ func walkMap(desired, observed map[string]interface{}, path string, differences 
 		}
 
 		observedVal, exists := observed[k]
-		if !exists && desiredVal != nil {
-			*differences = append(*differences, Difference{
-				Path:     newPath,
-				Observed: nil,
-				Desired:  desiredVal,
-			})
+		if !exists {
+			// Check for Kubernetes equivalence before treating as a difference
+			if !areKubernetesEquivalent(desiredVal, nil, newPath) && desiredVal != nil {
+				*differences = append(*differences, Difference{
+					Path:     newPath,
+					Observed: nil,
+					Desired:  desiredVal,
+				})
+			}
 			continue
 		}
 
@@ -179,4 +189,144 @@ func walkSlice(desired, observed []interface{}, path string, differences *[]Diff
 		newPath := fmt.Sprintf("%s[%d]", path, i)
 		walkCompare(desired[i], observed[i], newPath, differences)
 	}
+}
+
+// areKubernetesEquivalent checks for Kubernetes-specific semantic equivalence between values.
+// This handles common cases where different representations are semantically equivalent:
+// - Resource quantities: "100m" == "0.1" for CPU
+// - Empty vs nil: [] == null, {} == null
+// - Zero vs nil: 0 == null for optional integer fields
+func areKubernetesEquivalent(desired, observed interface{}, path string) bool {
+	// Direct equality check first
+	if reflect.DeepEqual(desired, observed) {
+		return true
+	}
+
+	// Handle resource quantities (CPU, memory)
+	if isResourceQuantityPath(path) {
+		return areResourceQuantitiesEqual(desired, observed)
+	}
+
+	// Handle empty vs nil arrays
+	if isEmptyVsNilArray(desired, observed) {
+		return true
+	}
+
+	// Handle zero vs nil for optional integer fields
+	if isZeroVsNilInteger(desired, observed) {
+		return true
+	}
+
+	return false
+}
+
+// isResourceQuantityPath checks if the path refers to a Kubernetes resource quantity field
+func isResourceQuantityPath(path string) bool {
+	// Common resource quantity paths
+	resourcePaths := []string{
+		".resources.requests.cpu",
+		".resources.requests.memory",
+		".resources.limits.cpu",
+		".resources.limits.memory",
+		".resources.requests.storage",
+		".resources.limits.storage",
+	}
+
+	for _, suffix := range resourcePaths {
+		if len(path) >= len(suffix) && path[len(path)-len(suffix):] == suffix {
+			return true
+		}
+	}
+	return false
+}
+
+// areResourceQuantitiesEqual compares two values as Kubernetes resource quantities
+func areResourceQuantitiesEqual(a, b interface{}) bool {
+	strA, okA := a.(string)
+	strB, okB := b.(string)
+
+	if !okA || !okB {
+		return false
+	}
+
+	// Parse as resource quantities
+	qtyA, errA := resource.ParseQuantity(strA)
+	qtyB, errB := resource.ParseQuantity(strB)
+
+	if errA != nil || errB != nil {
+		// If either fails to parse, fall back to string comparison
+		return strA == strB
+	}
+
+	return qtyA.Equal(qtyB)
+}
+
+// isEmptyVsNilArray checks if one value is an empty array and the other is nil
+func isEmptyVsNilArray(a, b interface{}) bool {
+	// Check if a is empty array and b is nil
+	if arr, ok := a.([]interface{}); ok && len(arr) == 0 && b == nil {
+		return true
+	}
+	// Check if b is empty array and a is nil
+	if arr, ok := b.([]interface{}); ok && len(arr) == 0 && a == nil {
+		return true
+	}
+
+	// Handle case where one side is []interface{}{} and other is nil
+	if a != nil && b == nil {
+		if v := reflect.ValueOf(a); v.Kind() == reflect.Slice && v.Len() == 0 {
+			return true
+		}
+	}
+	if b != nil && a == nil {
+		if v := reflect.ValueOf(b); v.Kind() == reflect.Slice && v.Len() == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isZeroVsNilInteger checks if one value is zero and the other is nil for integer fields
+func isZeroVsNilInteger(a, b interface{}) bool {
+	// Check various integer types vs nil
+	switch v := a.(type) {
+	case int:
+		return v == 0 && b == nil
+	case int32:
+		return v == 0 && b == nil
+	case int64:
+		return v == 0 && b == nil
+	case float64:
+		return v == 0 && b == nil
+	}
+
+	switch v := b.(type) {
+	case int:
+		return v == 0 && a == nil
+	case int32:
+		return v == 0 && a == nil
+	case int64:
+		return v == 0 && a == nil
+	case float64:
+		return v == 0 && a == nil
+	}
+
+	// Handle JSON unmarshaling cases where numbers can be different types
+	if a != nil && b == nil {
+		if v := reflect.ValueOf(a); v.Kind() >= reflect.Int && v.Kind() <= reflect.Float64 {
+			if v.Convert(reflect.TypeOf(float64(0))).Float() == 0 {
+				return true
+			}
+		}
+	}
+	if b != nil && a == nil {
+		if v := reflect.ValueOf(b); v.Kind() >= reflect.Int && v.Kind() <= reflect.Float64 {
+			if v.Convert(reflect.TypeOf(float64(0))).Float() == 0 {
+				return true
+			}
+		}
+	}
+
+	return false
 }

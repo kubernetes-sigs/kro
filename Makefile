@@ -292,7 +292,6 @@ cli:
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
 
-
 ##@ E2E Tests
 
 .PHONY: test-e2e

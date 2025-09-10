@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kro-run/kro/pkg/controller/instance/delta"
 	"github.com/kro-run/kro/pkg/metadata"
@@ -271,8 +272,18 @@ func (igr *instanceGraphReconciler) updateResource(
 ) error {
 	igr.log.V(1).Info("Processing resource update", "resourceID", resourceID)
 
-	// Compare desired and observed states
-	differences, err := delta.Compare(desired, observed)
+	// Get the resource schema for enhanced semantic comparison
+	var schema *spec.Schema
+	if resourceDescriptor := igr.runtime.ResourceDescriptor(resourceID); resourceDescriptor != nil {
+		// Try to access the schema through a type assertion to avoid interface pollution
+		// The ResourceDescriptor is actually a *graph.Resource which has GetSchema() method
+		if graphResource, ok := resourceDescriptor.(interface{ GetSchema() *spec.Schema }); ok {
+			schema = graphResource.GetSchema()
+		}
+	}
+
+	// Compare desired and observed states with schema-aware comparison
+	differences, err := delta.CompareWithSchema(desired, observed, schema)
 	if err != nil {
 		resourceState.State = ResourceStateError
 		resourceState.Err = fmt.Errorf("failed to compare desired and observed states: %w", err)

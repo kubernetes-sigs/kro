@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 func TestCompare_Simple(t *testing.T) {
@@ -455,6 +456,147 @@ func TestCompare_EmptyMaps(t *testing.T) {
 			} else {
 				assert.Empty(t, differences,
 					"expected no differences but got: %+v", differences)
+			}
+		})
+	}
+}
+
+func TestCompareWithSchema_ResourceQuantities(t *testing.T) {
+	// Test schema-based resource quantity detection
+	tests := []struct {
+		name         string
+		desired      *unstructured.Unstructured
+		observed     *unstructured.Unstructured
+		schema       *spec.Schema
+		expectNoDiff bool
+	}{
+		{
+			name: "schema-based resource quantity detection - cpu equivalent",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"cpu": "100m", // 0.1 CPU
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"cpu": "0.1", // 0.1 CPU
+					},
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"cpu": {
+										SchemaProps: spec.SchemaProps{
+											Type:   []string{"string"},
+											Format: "quantity", // This tells us it's a resource quantity
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectNoDiff: true,
+		},
+		{
+			name: "schema-based resource quantity detection - memory equivalent",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"memory": "1Gi",
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"memory": "1073741824", // 1Gi in bytes
+					},
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"memory": {
+										SchemaProps: spec.SchemaProps{
+											Type:   []string{"string"},
+											Format: "quantity",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectNoDiff: true,
+		},
+		{
+			name: "schema-based detection for non-quantity field",
+			desired: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"name": "100m", // Not a quantity, just a string
+					},
+				},
+			},
+			observed: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"spec": map[string]interface{}{
+						"name": "0.1", // Different string
+					},
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"spec": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"name": {
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"string"},
+											// No format field, so not a quantity
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectNoDiff: false, // Should detect difference since it's not a quantity
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			differences, err := CompareWithSchema(tt.desired, tt.observed, tt.schema)
+			assert.NoError(t, err)
+			
+			if tt.expectNoDiff {
+				assert.Empty(t, differences, 
+					"expected no differences but got: %+v", differences)
+			} else {
+				assert.NotEmpty(t, differences,
+					"expected differences but got none")
 			}
 		})
 	}

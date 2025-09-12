@@ -101,7 +101,11 @@ config:
   # The number of requests that can be stored for processing before the server starts enforcing the QPS limit
   clientBurst: 150
   # Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.
-  enableLeaderElection: false
+  enableLeaderElection: true
+  # Leader election can be scoped to a specific namespace. By default, the controller
+  # will attempt to use the namespace of the service account mounted to the Controller
+  # pod.
+  leaderElectionNamespace: ""
   # The address the metric endpoint binds to
   metricsBindAddress: :8078
   # The address the probe endpoint binds to

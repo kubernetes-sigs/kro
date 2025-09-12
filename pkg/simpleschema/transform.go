@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	keyTypeInteger = string(AtomicTypeInteger)
 	keyTypeBoolean = string(AtomicTypeBool)
 	keyTypeNumber  = "number"
+	keyTypeObject  = "object"
 )
 
 // A predefinedType is a type that is predefined in the schema.
@@ -128,6 +130,9 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 
 	if isAtomicType(fieldType) {
 		fieldJSONSchemaProps.Type = fieldType
+	} else if fieldType == keyTypeObject {
+		fieldJSONSchemaProps.Type = fieldType
+		fieldJSONSchemaProps.XPreserveUnknownFields = ptr.To(true)
 	} else if isCollectionType(fieldType) {
 		if isMapType(fieldType) {
 			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)
@@ -270,6 +275,20 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				},
 			}
 			schema.XValidations = validation
+		case MarkerTypeImmutable:
+			isImmutable, err := strconv.ParseBool(marker.Value)
+			if err != nil {
+				return fmt.Errorf("failed to parse immutable marker value: %w", err)
+			}
+			if isImmutable {
+				immutableValidation := []extv1.ValidationRule{
+					{
+						Rule:    "self == oldSelf",
+						Message: "field is immutable",
+					},
+				}
+				schema.XValidations = append(schema.XValidations, immutableValidation...)
+			}
 		case MarkerTypeEnum:
 			var enumJSONValues []extv1.JSON
 

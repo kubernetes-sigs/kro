@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 )
@@ -44,32 +45,18 @@ func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
 
 // SetInstanceFinalizerUnstructured adds an instance-specific finalizer to an unstructured object.
 func SetInstanceFinalizerUnstructured(obj *unstructured.Unstructured) error {
-	finalizers, found, err := unstructured.NestedStringSlice(obj.Object, "metadata", "finalizers")
-	if err != nil {
-		return fmt.Errorf("error getting finalizers: %w", err)
-	}
-
-	if !found || !containsString(finalizers, kroFinalizer) {
+	finalizers := obj.GetFinalizers()
+	if !containsString(finalizers, kroFinalizer) {
 		finalizers = append(finalizers, kroFinalizer)
-		if err := unstructured.SetNestedStringSlice(obj.Object, finalizers, "metadata", "finalizers"); err != nil {
-			return fmt.Errorf("error setting finalizers: %w", err)
-		}
+		obj.SetFinalizers(finalizers)
 	}
 	return nil
 }
 
 // RemoveInstanceFinalizerUnstructured removes an instance-specific finalizer from an unstructured object.
 func RemoveInstanceFinalizerUnstructured(obj *unstructured.Unstructured) error {
-	finalizers, found, err := unstructured.NestedStringSlice(obj.Object, "metadata", "finalizers")
-	if err != nil {
-		return fmt.Errorf("error getting finalizers: %w", err)
-	}
-
-	if found {
-		finalizers = removeString(finalizers, kroFinalizer)
-		if err := unstructured.SetNestedStringSlice(obj.Object, finalizers, "metadata", "finalizers"); err != nil {
-			return fmt.Errorf("error setting finalizers: %w", err)
-		}
+	if controllerutil.ContainsFinalizer(obj, kroFinalizer) {
+		controllerutil.RemoveFinalizer(obj, kroFinalizer)
 	}
 	return nil
 }

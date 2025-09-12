@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
@@ -374,6 +375,57 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "Object with unknown fields",
+			obj: map[string]interface{}{
+				"values": "object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with required marker",
+			obj: map[string]interface{}{
+				"values": "object | required=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+				Required: []string{"values"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with default marker",
+			obj: map[string]interface{}{
+				"values": "object | default={\"a\": \"b\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+						Default:                &extv1.JSON{Raw: []byte("{\"a\": \"b\"}")},
+					},
+				},
+				Default: &extv1.JSON{Raw: []byte("{}")},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Simple string validation",
 			obj: map[string]interface{}{
 				"name": `string | validation="self.name != 'invalid'"`,
@@ -429,6 +481,73 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			name: "Empty validation",
 			obj: map[string]interface{}{
 				"age": `integer | validation=""`,
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Simple immutable field",
+			obj: map[string]interface{}{
+				"id": "string | immutable=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"id": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Simple immutable field with false value",
+			obj: map[string]interface{}{
+				"name": "string | immutable=false",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Immutable with other markers",
+			obj: map[string]interface{}{
+				"resourceId": `string | required=true immutable=true description="Unique resource identifier"`,
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"resourceId"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"resourceId": {
+						Type:        "string",
+						Description: "Unique resource identifier",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid immutable value",
+			obj: map[string]interface{}{
+				"id": "string | immutable=invalid",
 			},
 			want:    nil,
 			wantErr: true,

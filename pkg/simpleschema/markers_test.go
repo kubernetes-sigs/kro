@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -122,6 +122,15 @@ func TestParseMarkers(t *testing.T) {
 			want: []*Marker{
 				{MarkerType: MarkerTypeDescription, Key: "description", Value: "This has \"quotes\" and a \\n newline"},
 				{MarkerType: MarkerTypeDefault, Key: "default", Value: "\"quoted\""},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "immutable marker with other markers",
+			input: "immutable=true required=false",
+			want: []*Marker{
+				{MarkerType: MarkerTypeImmutable, Key: "immutable", Value: "true"},
+				{MarkerType: MarkerTypeRequired, Key: "required", Value: "false"},
 			},
 			wantErr: false,
 		},

@@ -19,9 +19,12 @@ spec:
     kind: WebApplication
     spec:
       # Basic types
-      name: string | required=true description="My Name"
+      name: string | required=true immutable=true description="My Name"
       replicas: integer | default=1 minimum=1 maximum=100
       image: string | required=true
+
+      # Unstructured objects
+      values: object | required=true
 
       # Structured type
       ingress:
@@ -88,6 +91,46 @@ user:
   contacts: "[]string" # Array of strings
 ```
 
+### Unstructured Objects
+
+Unstructured objects are declared using `object` as a type.
+
+:::warning
+
+This disables the field-validation normally offered by kro, and forwards the values to your RGD as-is. This is generally discouraged and should therefore be used with caution. In most cases, using a structured object is a better approach.
+
+:::
+
+```yaml
+kind: ResourceGraphDefintion
+metadata: {}
+spec:
+  schema:
+    spec:
+      additionalHelmChartValues: object
+```
+
+This allows you to pass data to your CRDs directly in cases where the schema is not known in advance. This type supports any valid object, and can mix and match different primitives as well as structured types.
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: CRDWithUnstructuredObjects
+metadata:
+  name: test-instance
+spec:
+  additionalHelmChartValues:
+    boolean-value: true
+    numeric-value: 42
+    structural-type:
+      with-additional:
+        nested: fields
+    string-value: my-string
+    mapping-value:
+      - item1
+      - item2
+      - item3
+```
+
 ### Array Types
 
 Arrays are denoted using `[]` syntax:
@@ -150,6 +193,7 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `enum="value1,value2"`: Allowed values
 - `minimum=value`: Minimum value for numbers
 - `maximum=value`: Maximum value for numbers
+- `immutable=true`: Field cannot be changed after creation
 
 Multiple markers can be combined using the `|` separator.
 
@@ -157,6 +201,7 @@ For example:
 
 ```yaml
 name: string | required=true default="app" description="Application name"
+id: string | required=true immutable=true description="Unique identifier"
 replicas: integer | default=3 minimum=1 maximum=10
 price: float | minimum=0.01 maximum=999.99
 mode: string | enum="debug,info,warn,error" default="info"
@@ -228,7 +273,7 @@ schema:
   spec:
     image: string | default="nginx"
   status:
-      availableReplicas: ${deployment.status.availableReplicas}
+    availableReplicas: ${deployment.status.availableReplicas}
   additionalPrinterColumns:
     - jsonPath: .status.availableReplicas
       name: Available replicas

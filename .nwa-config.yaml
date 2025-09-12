@@ -6,3 +6,4 @@ nwa:
     - cmd/**/*.go
     - pkg/**/*.go
     - test/**/*.go
+  mute: true

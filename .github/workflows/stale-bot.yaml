@@ -1,0 +1,54 @@
+# .github/workflows/stale.yml
+name: Stale Bot
+
+on:
+  schedule:
+    # run daily at 03:17 UTC, to avoid clashing with a lot of other runs on Github CI
+    - cron: '17 3 * * *'
+  workflow_dispatch: # allow manual triggering
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run stale action
+        uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # General
+          operations-per-run: 50
+          remove-stale-when-updated: true
+          enable-statistics: true
+
+          # Labels
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: keepalive
+          exempt-pr-labels: keepalive
+
+          # Timing
+          days-before-issue-stale: 30
+          # never auto-close issues
+          days-before-issue-close: -1
+          days-before-pr-stale: 30
+          # auto close PRs after 60 days of inactivity.
+          # Authors can simply reopen the PR when coming back to it.
+          days-before-pr-close: 60
+
+          # Messaging
+          stale-issue-message: >
+            This issue has been marked **stale** due to 30 days of inactivity.
+            Maintainers use this label for hygiene. 
+            Comment or add a relevant label (keepalive) to keep it from becoming stale.
+          stale-pr-message: >
+            This pull request has been marked **stale** due to 30 days of inactivity.
+            Push changes, comment or add a relevant label (keepalive) to keep it from becoming stale.
+            It will be closed in 30 days if no activity occurs.
+          close-pr-message: >
+            Closing this PR due to prolonged inactivity. Feel free to reopen or submit a new PR when coming back to it.
+

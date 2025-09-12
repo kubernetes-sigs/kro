@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@ func main() {
 	var (
 		metricsAddr                                 string
 		enableLeaderElection                        bool
+		leaderElectionNamespace                     string
 		probeAddr                                   string
 		allowCRDDeletion                            bool
 		resourceGraphDefinitionConcurrentReconciles int
@@ -86,6 +87,10 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
+		"Specific namespace that the controller will utilize to manage the coordination.k8s.io/lease object for"+
+			"leader election. By default it will try to use the namespace of the service account mounted"+
+			" to the controller pod.")
 	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
 	flag.DurationVar(&gracefulShutdownTimeout, "graceful-shutdown-timeout", 60*time.Second,
 		"maximum duration to wait for the controller manager to gracefully shutdown")
@@ -150,6 +155,7 @@ func main() {
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "6f0f64a5.kro.run",
+		LeaderElectionNamespace: leaderElectionNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

@@ -91,6 +91,10 @@ spec:
             - "$(KRO_CLIENT_BURST)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
+            {{- if ne .Values.config.leaderElectionNamespace "" }}
+            - --leader-election-namespace
+            - {{ .Values.config.leaderElectionNamespace | quote }}
+            {{- end }}
             {{- end }}
           livenessProbe:
             httpGet:

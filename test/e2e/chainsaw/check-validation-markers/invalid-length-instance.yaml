@@ -1,0 +1,10 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-length-test
+spec:
+  email: user@example.com
+  username: ab  # Too short - violates minLength=3
+  tags:
+    - test
+  replicas: 1

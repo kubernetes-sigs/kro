@@ -1,0 +1,17 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: valid-test-app
+spec:
+  email: user@example.com
+  username: testuser123
+  tags:
+    - production
+    - frontend
+    - webapp
+  description: A test application
+  replicas: 3
+status:
+  (conditions[?type == 'InstanceSynced']):
+    - status: 'True'
+  state: "ACTIVE"

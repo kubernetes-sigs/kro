@@ -1,0 +1,23 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-array-limits-app
+spec:
+  email: user@example.com
+  username: testuser123
+  tags:
+    # This violates maxItems=5 constraint
+    - tag1
+    - tag2
+    - tag3
+    - tag4
+    - tag5
+    - tag6
+  priorities:
+    # This violates maxItems=3 constraint
+    - 1
+    - 2
+    - 3
+    - 4
+  description: This app should fail validation
+  replicas: 3

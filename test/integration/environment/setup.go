@@ -161,7 +161,7 @@ func (e *Environment) setupController() error {
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
-		e.ClientSet.Dynamic())
+		e.ClientSet.Metadata())
 
 	go func() {
 		err := dc.Run(e.context)

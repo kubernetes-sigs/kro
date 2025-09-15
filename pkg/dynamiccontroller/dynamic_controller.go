@@ -59,7 +59,6 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -67,14 +66,14 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	k8smetadata "k8s.io/client-go/metadata"
+	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -125,7 +124,7 @@ type DynamicController struct {
 	config Config
 
 	// kubeClient is the dynamic client used to create the factories
-	kubeClient dynamic.Interface
+	kubeClient k8smetadata.Interface
 	// factories is a safe map of GVR to factories. Each factory is responsible
 	// for watching a specific GVR.
 	factories sync.Map
@@ -143,7 +142,7 @@ type DynamicController struct {
 type Handler func(ctx context.Context, req ctrl.Request) error
 
 type factoryWrapper struct {
-	factory       dynamicinformer.DynamicSharedInformerFactory
+	factory       metadatainformer.SharedInformerFactory
 	shutdown      func()
 	ctx           context.Context
 	registrations map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
@@ -153,7 +152,7 @@ type factoryWrapper struct {
 func NewDynamicController(
 	log logr.Logger,
 	config Config,
-	kubeClient dynamic.Interface) *DynamicController {
+	kubeClient k8smetadata.Interface) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
 	dc := &DynamicController{
@@ -376,13 +375,13 @@ type ObjectIdentifiers struct {
 }
 
 // updateFunc is the update event handler for the GVR factories
-func (dc *DynamicController) updateFunc(old, new interface{}) {
-	newObj, ok := new.(*unstructured.Unstructured)
+func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, old, new interface{}) {
+	newObj, ok := new.(*metav1.PartialObjectMetadata)
 	if !ok {
 		dc.log.Error(nil, "failed to cast new object to unstructured")
 		return
 	}
-	oldObj, ok := old.(*unstructured.Unstructured)
+	oldObj, ok := old.(*metav1.PartialObjectMetadata)
 	if !ok {
 		dc.log.Error(nil, "failed to cast old object to unstructured")
 		return
@@ -396,37 +395,27 @@ func (dc *DynamicController) updateFunc(old, new interface{}) {
 		return
 	}
 
-	dc.EnqueueObject(new, "update")
+	dc.enqueueParent(parentGVR, new, "update")
 }
 
-// EnqueueObject adds an object to the workqueue
-func (dc *DynamicController) EnqueueObject(obj interface{}, eventType string) {
+// enqueueParent adds an object to the workqueue
+func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj interface{}, eventType string) {
 	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
 		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
 		return
 	}
 
-	u, ok := obj.(*unstructured.Unstructured)
-	if !ok {
-		err := fmt.Errorf("object is not an Unstructured")
-		dc.log.Error(err, "Failed to cast object to Unstructured", "eventType", eventType, "namespacedKey", namespacedKey)
-		return
-	}
-
-	gvk := u.GroupVersionKind()
-	gvr := metadata.GVKtoGVR(gvk)
-
 	objectIdentifiers := ObjectIdentifiers{
 		NamespacedKey: namespacedKey,
-		GVR:           gvr,
+		GVR:           parentGVR,
 	}
 
 	dc.log.V(1).Info("Enqueueing object",
 		"objectIdentifiers", objectIdentifiers,
 		"eventType", eventType)
 
-	informerEventsTotal.WithLabelValues(gvr.String(), eventType).Inc()
+	informerEventsTotal.WithLabelValues(parentGVR.String(), eventType).Inc()
 	dc.queue.Add(objectIdentifiers)
 }
 
@@ -435,14 +424,14 @@ func (dc *DynamicController) StartServingGVK(
 	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	instanceHandler Handler,
-	resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs,
+	resourceHandlers []schema.GroupVersionResource,
 ) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
 	if wrapper, exists := dc.factories.Load(gvr); exists {
 		// Ensure resource handlers for a given GVK are consistent with the running wrapper.
 		fw := wrapper.(*factoryWrapper)
-		if err := dc.refreshResourceHandlers(resourceHandlers, fw); err != nil {
+		if err := dc.refreshResourceHandlers(gvr, resourceHandlers, fw); err != nil {
 			return fmt.Errorf("failed to refresh resource handlers for instance gvr %s: %w", gvr, err)
 		}
 		fw.factory.Start(fw.ctx.Done())
@@ -456,13 +445,13 @@ func (dc *DynamicController) StartServingGVK(
 			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
 		}
 		for _, obj := range objs.Items {
-			dc.EnqueueObject(&obj, "update")
+			dc.enqueueParent(gvr, &obj, "update")
 		}
 		return nil
 	}
 
 	// Create a new factory
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+	factory := metadatainformer.NewFilteredSharedInformerFactory(
 		dc.kubeClient,
 		dc.config.ResyncPeriod,
 		// Maybe we can make this configurable in the future. Thinking that
@@ -473,7 +462,7 @@ func (dc *DynamicController) StartServingGVK(
 	// TODO we can optimize this further by introducing a second factory that tweaks the list options
 	// to filter out resources not relevant for kro on server side. This reduces the amount of watched objects
 	// on the client side dramatically. For now we filter on client side so this should be fine.
-	registrations, err := dc.registerResourceHandlers(resourceHandlers, factory)
+	registrations, err := dc.registerResourceHandlers(gvr, resourceHandlers, factory)
 	if err != nil {
 		return fmt.Errorf("failed to register resource handlers for GVR %s: %w", gvr, err)
 	}
@@ -482,9 +471,11 @@ func (dc *DynamicController) StartServingGVK(
 	// Set up event handlers
 
 	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { dc.EnqueueObject(obj, "add") },
-		UpdateFunc: dc.updateFunc,
-		DeleteFunc: func(obj interface{}) { dc.EnqueueObject(obj, "delete") },
+		AddFunc: func(obj interface{}) { dc.enqueueParent(gvr, obj, "add") },
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			dc.updateFunc(gvr, oldObj, newObj)
+		},
+		DeleteFunc: func(obj interface{}) { dc.enqueueParent(gvr, obj, "delete") },
 	}); err != nil {
 		dc.log.Error(err, "Failed to add event instanceHandler", "resourceGVR", gvr)
 		return fmt.Errorf("failed to add event instanceHandler for GVR %s: %w", gvr, err)
@@ -526,16 +517,13 @@ func (dc *DynamicController) StartServingGVK(
 	return nil
 }
 
-func (dc *DynamicController) registerResourceHandlers(resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs, factory dynamicinformer.DynamicSharedInformerFactory) (map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration, error) {
+func (dc *DynamicController) registerResourceHandlers(parent schema.GroupVersionResource, resourceHandlers []schema.GroupVersionResource, factory metadatainformer.SharedInformerFactory) (map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration, error) {
 	registrations := make(map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration, len(resourceHandlers))
-	for resourceGVR, handler := range resourceHandlers {
+	for _, resourceGVR := range resourceHandlers {
 		informer := factory.ForResource(resourceGVR).Informer()
-		registration, err := informer.AddEventHandler(handler)
+		registration, err := informer.AddEventHandler(dc.handlerForGVR(parent, resourceGVR))
 		if err != nil {
 			return nil, fmt.Errorf("failed to add event handler for GVR %s: %w", resourceGVR, err)
-		}
-		if err := informer.SetTransform(partialObjectMetadataFromUnstructured); err != nil {
-			return nil, fmt.Errorf("failed to set transform for GVR %s: %w", resourceGVR, err)
 		}
 		if err := informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
 			dc.log.Error(err, "Watch error on resource", "gvr", resourceGVR)
@@ -547,10 +535,56 @@ func (dc *DynamicController) registerResourceHandlers(resourceHandlers map[schem
 	return registrations, nil
 }
 
-func (dc *DynamicController) refreshResourceHandlers(resourceHandlers map[schema.GroupVersionResource]cache.ResourceEventHandlerFuncs, wrapper *factoryWrapper) error {
-	expectedGVRs := maps.Keys(resourceHandlers)
+func (dc *DynamicController) handlerForGVR(parent, gvr schema.GroupVersionResource) cache.ResourceEventHandler {
+	handle := func(obj interface{}, eventType string) {
+		meta, err := meta.Accessor(obj)
+		if err != nil {
+			dc.log.Error(err, "failed to get metadata accessor")
+			return
+		}
+
+		// if there is no kro instance label set, we assume the object is irrelevant for the instance.
+		labels := meta.GetLabels()
+		owned, ok := labels[metadata.OwnedLabel]
+		if !ok || owned != "true" {
+			return
+		}
+		name, ok := labels[metadata.InstanceLabel]
+		if !ok {
+			return
+		}
+		namespace, ok := labels[metadata.InstanceNamespaceLabel]
+		if !ok {
+			return
+		}
+
+		parentGVK := metadata.GVRtoGVK(parent)
+		pom := &metav1.PartialObjectMetadata{}
+		pom.SetGroupVersionKind(parentGVK)
+		pom.SetName(name)
+		pom.SetNamespace(namespace)
+
+		if err == nil {
+			dc.log.Info("update from resource",
+				"name", name,
+				"namespace", namespace,
+				"gvr", gvr,
+				"resourceName", meta.GetName(),
+				"resourceNamespace", meta.GetNamespace(),
+				"eventType", eventType)
+			dc.enqueueParent(parent, pom, eventType)
+		}
+	}
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { handle(obj, "add") },
+		UpdateFunc: func(oldObj, newObj interface{}) { handle(newObj, "update") },
+		DeleteFunc: func(obj interface{}) { handle(obj, "delete") },
+	}
+}
+
+func (dc *DynamicController) refreshResourceHandlers(parent schema.GroupVersionResource, expectedGVRs []schema.GroupVersionResource, wrapper *factoryWrapper) error {
 	for oldGVR, oldRegistration := range wrapper.registrations {
-		if !slices.Contains(slices.Collect(expectedGVRs), oldGVR) {
+		if !slices.Contains(expectedGVRs, oldGVR) {
 			informer := wrapper.factory.ForResource(oldGVR).Informer()
 			if err := informer.RemoveEventHandler(oldRegistration); err != nil {
 				return fmt.Errorf("failed to remove event handler for GVR %s: %w", oldGVR, err)
@@ -558,39 +592,18 @@ func (dc *DynamicController) refreshResourceHandlers(resourceHandlers map[schema
 			delete(wrapper.registrations, oldGVR) // Clean up registration map
 		}
 	}
-	for resourceGVR, handler := range resourceHandlers {
+	for _, resourceGVR := range expectedGVRs {
 		if _, isRegistered := wrapper.registrations[resourceGVR]; isRegistered {
 			continue
 		}
 		informer := wrapper.factory.ForResource(resourceGVR).Informer()
-		registration, err := informer.AddEventHandler(handler)
+		registration, err := informer.AddEventHandler(dc.handlerForGVR(parent, resourceGVR))
 		if err != nil {
 			return fmt.Errorf("failed to add event handler for GVR %s: %w", resourceGVR, err)
 		}
 		wrapper.registrations[resourceGVR] = registration
 	}
 	return nil
-}
-
-var allowedFieldsForPartialObjectMetadata = map[string]struct{}{
-	"apiVersion": {},
-	"kind":       {},
-	"metadata":   {},
-}
-
-// partialObjectMetaDataFromUnstructured returns a transform function that
-// strips all fields from an unstructured object except apiVersion, kind, and metadata.
-func partialObjectMetadataFromUnstructured(obj any) (any, error) {
-	u, ok := obj.(*unstructured.Unstructured)
-	if !ok {
-		return nil, fmt.Errorf("unexpected type %T, expected *unstructured.Unstructured", obj)
-	}
-	for key := range u.Object {
-		if _, allowed := allowedFieldsForPartialObjectMetadata[key]; !allowed {
-			delete(u.Object, key)
-		}
-	}
-	return u, nil
 }
 
 // UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.

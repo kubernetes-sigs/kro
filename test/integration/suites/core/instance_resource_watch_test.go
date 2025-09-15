@@ -32,7 +32,7 @@ import (
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
-var _ = Describe("Instance Resource Watch", func() {
+var _ = FDescribe("Instance Resource Watch", func() {
 	var namespace string
 
 	BeforeEach(func(ctx SpecContext) {

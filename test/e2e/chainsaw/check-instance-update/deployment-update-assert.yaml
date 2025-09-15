@@ -16,7 +16,6 @@ spec:
     type: RollingUpdate
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: test-instance
     spec:
@@ -24,12 +23,10 @@ spec:
       - image: nginx:1.25
         imagePullPolicy: IfNotPresent
         name: main
-        resources: {}
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
-      securityContext: {}
       terminationGracePeriodSeconds: 30
 

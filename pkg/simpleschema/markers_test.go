@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -122,6 +122,128 @@ func TestParseMarkers(t *testing.T) {
 			want: []*Marker{
 				{MarkerType: MarkerTypeDescription, Key: "description", Value: "This has \"quotes\" and a \\n newline"},
 				{MarkerType: MarkerTypeDefault, Key: "default", Value: "\"quoted\""},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "immutable marker with other markers",
+			input: "immutable=true required=false",
+			want: []*Marker{
+				{MarkerType: MarkerTypeImmutable, Key: "immutable", Value: "true"},
+				{MarkerType: MarkerTypeRequired, Key: "required", Value: "false"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "pattern marker",
+			input: "pattern=\"^[a-zA-Z0-9]+$\"",
+			want: []*Marker{
+				{MarkerType: MarkerTypePattern, Key: "pattern", Value: "^[a-zA-Z0-9]+$"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "minLength and maxLength markers",
+			input: "minLength=5 maxLength=20",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinLength, Key: "minLength", Value: "5"},
+				{MarkerType: MarkerTypeMaxLength, Key: "maxLength", Value: "20"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "all string validation markers",
+			input: "pattern=\"[a-z]+\" minLength=3 maxLength=15 description=\"String field with validation\"",
+			want: []*Marker{
+				{MarkerType: MarkerTypePattern, Key: "pattern", Value: "[a-z]+"},
+				{MarkerType: MarkerTypeMinLength, Key: "minLength", Value: "3"},
+				{MarkerType: MarkerTypeMaxLength, Key: "maxLength", Value: "15"},
+				{MarkerType: MarkerTypeDescription, Key: "description", Value: "String field with validation"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "pattern with special regex characters",
+			input: "pattern=\"^(foo|bar)\\d{2,4}$\"",
+			want: []*Marker{
+				{MarkerType: MarkerTypePattern, Key: "pattern", Value: "^(foo|bar)\\d{2,4}$"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "zero minLength",
+			input: "minLength=0",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinLength, Key: "minLength", Value: "0"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "uniqueItems marker true",
+			input: "uniqueItems=true",
+			want: []*Marker{
+				{MarkerType: MarkerTypeUniqueItems, Key: "uniqueItems", Value: "true"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "uniqueItems marker false",
+			input: "uniqueItems=false",
+			want: []*Marker{
+				{MarkerType: MarkerTypeUniqueItems, Key: "uniqueItems", Value: "false"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "array field with uniqueItems and validation",
+			input: "uniqueItems=true description=\"Array with unique elements\"",
+			want: []*Marker{
+				{MarkerType: MarkerTypeUniqueItems, Key: "uniqueItems", Value: "true"},
+				{MarkerType: MarkerTypeDescription, Key: "description", Value: "Array with unique elements"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "minItems marker",
+			input: "minItems=2",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinItems, Key: "minItems", Value: "2"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "maxItems marker",
+			input: "maxItems=10",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMaxItems, Key: "maxItems", Value: "10"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "minItems and maxItems markers",
+			input: "minItems=1 maxItems=5",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinItems, Key: "minItems", Value: "1"},
+				{MarkerType: MarkerTypeMaxItems, Key: "maxItems", Value: "5"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "array field with all validation markers",
+			input: "uniqueItems=true minItems=2 maxItems=8 description=\"Array with comprehensive validation\"",
+			want: []*Marker{
+				{MarkerType: MarkerTypeUniqueItems, Key: "uniqueItems", Value: "true"},
+				{MarkerType: MarkerTypeMinItems, Key: "minItems", Value: "2"},
+				{MarkerType: MarkerTypeMaxItems, Key: "maxItems", Value: "8"},
+				{MarkerType: MarkerTypeDescription, Key: "description", Value: "Array with comprehensive validation"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "zero minItems",
+			input: "minItems=0",
+			want: []*Marker{
+				{MarkerType: MarkerTypeMinItems, Key: "minItems", Value: "0"},
 			},
 			wantErr: false,
 		},

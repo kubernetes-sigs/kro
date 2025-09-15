@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ type ResourceGraphDefinitionReconciler struct {
 
 	instanceLogger logr.Logger
 
-	clientSet  *kroclient.Set
+	clientSet  kroclient.SetInterface
 	crdManager kroclient.CRDClient
 
 	metadataLabeler         metadata.Labeler
@@ -61,7 +61,7 @@ type ResourceGraphDefinitionReconciler struct {
 }
 
 func NewResourceGraphDefinitionReconciler(
-	clientSet *kroclient.Set,
+	clientSet kroclient.SetInterface,
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
@@ -122,7 +122,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				},
 			}),
 		).
-		Complete(reconcile.AsReconciler(mgr.GetClient(), r))
+		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition

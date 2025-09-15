@@ -66,7 +66,7 @@ Looking at the existing issues is a great way to find something to work on. As t
 
 ## Code of Conduct
 
-This project has adopted the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
+This project has adopted the [Kubernetes Community Code of Conduct](https://git.k8s.io/community/code-of-conduct.md)
 
 
 ## Security

@@ -1,0 +1,10 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-pattern-test
+spec:
+  email: invalid-email-format
+  username: testuser
+  tags:
+    - test
+  replicas: 1

@@ -3,6 +3,7 @@ module github.com/kro-run/kro
 go 1.24.0
 
 require (
+	github.com/go-echarts/go-echarts/v2 v2.6.1
 	github.com/go-logr/logr v1.4.2
 	github.com/gobuffalo/flect v1.0.2
 	github.com/google/cel-go v0.24.1
@@ -25,6 +26,7 @@ require (
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
 	sigs.k8s.io/controller-runtime v0.19.0
 	sigs.k8s.io/release-utils v0.11.0
+	sigs.k8s.io/yaml v1.4.0
 )
 
 require (
@@ -102,7 +104,6 @@ require (
 	k8s.io/klog/v2 v2.130.1 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
-	sigs.k8s.io/yaml v1.4.0 // indirect
 )
 
 tool (

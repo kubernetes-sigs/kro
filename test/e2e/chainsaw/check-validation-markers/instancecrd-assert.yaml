@@ -1,0 +1,118 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: validationtestapps.kro.run
+spec:
+  conversion:
+    strategy: None
+  group: kro.run
+  names:
+    kind: ValidationTestApp
+    listKind: ValidationTestAppList
+    plural: validationtestapps
+    singular: validationtestapp
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The state of a ResourceGraphDefinition instance
+      jsonPath: .status.state
+      name: State
+      type: string
+    - description: Whether a ResourceGraphDefinition instance have all it's subresources
+        ready
+      jsonPath: .status.conditions[?(@.type=="InstanceSynced")].status
+      name: Synced
+      type: string
+    - description: Age of the resource
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              description: 
+                default: Test application
+                maxLength: 100
+                type: string
+              email:
+                description: Valid email address
+                pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+                type: string
+              replicas:
+                maximum: 10
+                minimum: 1
+                default: 1
+                type: integer
+              tags:
+                description: 1-3 unique tags
+                items:
+                  type: string
+                maxItems: 3
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              priorities:
+                description: Up to 3 priority levels
+                items:
+                  type: integer
+                maxItems: 3
+                minItems: 0
+                type: array
+              username:
+                description: Username must be 3-15 chars, alphanumeric and underscore only
+                maxLength: 15
+                minLength: 3
+                pattern: "^[a-zA-Z0-9_]+$"
+                type: string
+            type: object
+          status:
+            properties:
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  type: object
+                type: array
+              state:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ValidationTestApp
+    listKind: ValidationTestAppList
+    plural: validationtestapps
+    singular: validationtestapp
+  conditions:
+  - message: no conflicts found
+    reason: NoConflicts
+    status: "True"
+    type: NamesAccepted
+  - message: the initial names have been accepted
+    reason: InitialNamesAccepted
+    status: "True"
+    type: Established

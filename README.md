@@ -8,15 +8,15 @@
 [![Build and Publish](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml/badge.svg?branch=main)](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml)
 ![GitHub Repo stars](https://img.shields.io/github/stars/kro-run/kro)
 
-This project aims to simplify the creation and management of complex custom resources for Kubernetes.
+Kube Resource Orchestrator (kro) is a subproject of [Kubernetes SIG Cloud Provider](https://github.com/kubernetes/community/blob/master/sig-cloud-provider/README.md). This project aims to simplify the creation and management of complex custom resources for Kubernetes.
 
-Kube Resource Orchestrator (**kro**) helps you to define complex multi-resource constructs as reusable components in your applications and systems. It does this by providing a Kubernetes-native, vendor agnostic way to define groupings of Kubernetes resources. 
+Kro helps you to define complex multi-resource constructs as reusable components in your applications and systems. It does this by providing a Kubernetes-native, vendor agnostic way to define groupings of Kubernetes resources.
 
-kro's fundamental custom resource is the *ResourceGraphDefinition*. A ResourceGraphDefinition defines collections of underlying Kubernetes resources. It can define any Kubernetes resources, either native or custom, and can specify the dependencies between them. This lets you define complex custom resources, and include default configurations for their use.
+Kro's fundamental custom resource is the *ResourceGraphDefinition*. A ResourceGraphDefinition defines collections of underlying Kubernetes resources. It can define any Kubernetes resources, either native or custom, and can specify the dependencies between them. This lets you define complex custom resources, and include default configurations for their use.
 
 The kro controller will determine the dependencies between resources, establish the correct order of operations to create and configure them, and then dynamically create and manage all of the underlying resources for you.
 
-kro is Kubernetes native and integrates seamlessly with existing tools to preserve familiar processes and interfaces.
+Kro is Kubernetes native and integrates seamlessly with existing tools to preserve familiar processes and interfaces.
 
 ## Documentation
 
@@ -92,9 +92,13 @@ Please join our community meeting.
 [zoom]: https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1
 [youtube]: https://www.youtube.com/channel/UCUlcI3NYq9ehl5wsdfbJzSA
 
+### Code of conduct
+
+Participation in the project community is governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
+
 ## Security
 
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+See [CONTRIBUTING](CONTRIBUTING.md#security) and [SECURITY](SECURITY.md) for information.
 
 ## License
 

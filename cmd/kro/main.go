@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,8 +60,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.Context, "context", "", "Kubernetes context to use")
 	cmd.PersistentFlags().BoolVar(&opts.Verbose, "verbose", false, "Enable verbose logging")
 
-	// TODO: Command groups
-	commands.AddValidateCommands(cmd)
-	commands.AddGenerateCommands(cmd)
+	// Cli commands
+	commands.AddCommands(cmd)
 	return cmd
 }

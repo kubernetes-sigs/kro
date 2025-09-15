@@ -19,9 +19,12 @@ spec:
     kind: WebApplication
     spec:
       # Basic types
-      name: string | required=true description="My Name"
+      name: string | required=true immutable=true description="My Name"
       replicas: integer | default=1 minimum=1 maximum=100
       image: string | required=true
+
+      # Unstructured objects
+      values: object | required=true
 
       # Structured type
       ingress:
@@ -88,6 +91,46 @@ user:
   contacts: "[]string" # Array of strings
 ```
 
+### Unstructured Objects
+
+Unstructured objects are declared using `object` as a type.
+
+:::warning
+
+This disables the field-validation normally offered by kro, and forwards the values to your RGD as-is. This is generally discouraged and should therefore be used with caution. In most cases, using a structured object is a better approach.
+
+:::
+
+```yaml
+kind: ResourceGraphDefintion
+metadata: {}
+spec:
+  schema:
+    spec:
+      additionalHelmChartValues: object
+```
+
+This allows you to pass data to your CRDs directly in cases where the schema is not known in advance. This type supports any valid object, and can mix and match different primitives as well as structured types.
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: CRDWithUnstructuredObjects
+metadata:
+  name: test-instance
+spec:
+  additionalHelmChartValues:
+    boolean-value: true
+    numeric-value: 42
+    structural-type:
+      with-additional:
+        nested: fields
+    string-value: my-string
+    mapping-value:
+      - item1
+      - item2
+      - item3
+```
+
 ### Array Types
 
 Arrays are denoted using `[]` syntax:
@@ -150,16 +193,79 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `enum="value1,value2"`: Allowed values
 - `minimum=value`: Minimum value for numbers
 - `maximum=value`: Maximum value for numbers
+- `immutable=true`: Field cannot be changed after creation
+- `pattern="regex"`: Regular expression pattern for string validation
+- `minLength=number`: Minimum length for strings
+- `maxLength=number`: Maximum length for strings
+- `uniqueItems=true`: Ensures array elements are unique
+- `minItems=number`: Minimum number of items in arrays
+- `maxItems=number`: Maximum number of items in arrays
 
 Multiple markers can be combined using the `|` separator.
+
+### String Validation Markers
+
+String fields support additional validation markers:
+
+- **`pattern="regex"`**: Validates the string against a regular expression pattern
+- **`minLength=number`**: Sets the minimum number of characters
+- **`maxLength=number`**: Sets the maximum number of characters
+
+Examples:
+
+```yaml
+# Email validation
+email: string | pattern="^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$" required=true
+
+# Username with length constraints and pattern
+username: string | minLength=3 maxLength=15 pattern="^[a-zA-Z0-9_]+$"
+
+# Country code format
+countryCode: string | pattern="^[A-Z]{2}$" minLength=2 maxLength=2
+
+# Password with minimum length
+password: string | minLength=8 description="Password must be at least 8 characters"
+```
+
+### Array Validation Markers
+
+Array fields support validation markers to ensure data quality:
+
+- **`uniqueItems=true`**: Ensures all elements in the array are unique
+- **`uniqueItems=false`**: Allows duplicate elements (default behavior)
+- **`minItems=number`**: Sets the minimum number of elements required in the array
+- **`maxItems=number`**: Sets the maximum number of elements allowed in the array
+
+Examples:
+
+```yaml
+# Unique tags with size constraints
+tags: "[]string" | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"
+
+# Unique port numbers with minimum requirement
+ports: "[]integer" | uniqueItems=true minItems=1 description="At least one unique port"
+
+# Allow duplicate comments with size limits
+comments: "[]string" | uniqueItems=false maxItems=50 description="Up to 50 comments"
+
+# Complex validation with multiple markers
+roles: "[]string" | uniqueItems=true minItems=1 maxItems=5 required=true description="1-5 unique user roles"
+
+# Optional array with size constraints
+priorities: "[]integer" | minItems=0 maxItems=3 description="Up to 3 priority levels"
+```
 
 For example:
 
 ```yaml
 name: string | required=true default="app" description="Application name"
+id: string | required=true immutable=true description="Unique identifier"
 replicas: integer | default=3 minimum=1 maximum=10
 price: float | minimum=0.01 maximum=999.99
 mode: string | enum="debug,info,warn,error" default="info"
+email: string | pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" description="Valid email address"
+username: string | minLength=3 maxLength=20 pattern="^[a-zA-Z0-9_]+$"
+tags: "[]string" | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"
 ```
 
 ## Status Fields
@@ -228,7 +334,7 @@ schema:
   spec:
     image: string | default="nginx"
   status:
-      availableReplicas: ${deployment.status.availableReplicas}
+    availableReplicas: ${deployment.status.availableReplicas}
   additionalPrinterColumns:
     - jsonPath: .status.availableReplicas
       name: Available replicas

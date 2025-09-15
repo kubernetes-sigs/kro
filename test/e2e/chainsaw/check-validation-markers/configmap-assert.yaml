@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valid-test-app-config
+data:
+  properties: |
+    email: user@example.com
+    username: testuser123
+    description: A test application
+    tags: [production frontend webapp]
+    replicas: 3

@@ -150,7 +150,7 @@ func TestEnqueueObject(t *testing.T) {
 	obj.SetNamespace("default")
 	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
 
-	dc.enqueueParent(schema.GroupVersionResource{"some", "group", "resource"}, obj, "add")
+	dc.enqueueParent(schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}, obj, "add")
 
 	assert.Equal(t, 1, dc.queue.Len())
 }

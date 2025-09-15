@@ -74,9 +74,9 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// Retrieve resource handlers for the resources in the graph
 	// This will be used by the dynamic controller to handle events for these resources
 	// after the microcontroller has started dynamic watches.
-	var resourceHandlers []schema.GroupVersionResource
+	var resourceGVRsToWatch []schema.GroupVersionResource
 	if metadata.GetInstanceWatchResources(rgd.ObjectMeta) {
-		resourceHandlers = r.getResourceGraphResourceHandlers(processedRGD)
+		resourceGVRsToWatch = r.getResourceGVRsToWatchForRGD(processedRGD)
 	}
 
 	// Setup and start microcontroller
@@ -87,7 +87,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
 	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
 	// rather than have it ignore this context and use the background context.
-	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile, resourceHandlers); err != nil {
+	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, &gvr, controller.Reconcile, resourceGVRsToWatch); err != nil {
 		mark.ControllerFailedToStart(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
@@ -96,7 +96,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
 
-func (r *ResourceGraphDefinitionReconciler) getResourceGraphResourceHandlers(processedRGD *graph.Graph) []schema.GroupVersionResource {
+func (r *ResourceGraphDefinitionReconciler) getResourceGVRsToWatchForRGD(processedRGD *graph.Graph) []schema.GroupVersionResource {
 	resourceHandlers := make(map[schema.GroupVersionResource]struct{}, len(processedRGD.Resources))
 	for _, resource := range processedRGD.Resources {
 		resourceHandlers[resource.GetGroupVersionResource()] = struct{}{}
@@ -182,9 +182,9 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	ctx context.Context,
 	gvr *schema.GroupVersionResource,
 	handler dynamiccontroller.Handler,
-	resourceHandlers []schema.GroupVersionResource,
+	resourceGVRsToWatch []schema.GroupVersionResource,
 ) error {
-	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler, resourceHandlers)
+	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler, resourceGVRsToWatch)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

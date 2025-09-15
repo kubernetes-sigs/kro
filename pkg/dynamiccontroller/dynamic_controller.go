@@ -424,14 +424,14 @@ func (dc *DynamicController) StartServingGVK(
 	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	instanceHandler Handler,
-	resourceHandlers []schema.GroupVersionResource,
+	resourceGVRsToWatch []schema.GroupVersionResource,
 ) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
 	if wrapper, exists := dc.factories.Load(gvr); exists {
 		// Ensure resource handlers for a given GVK are consistent with the running wrapper.
 		fw := wrapper.(*factoryWrapper)
-		if err := dc.refreshResourceHandlers(gvr, resourceHandlers, fw); err != nil {
+		if err := dc.refreshResourceHandlers(gvr, resourceGVRsToWatch, fw); err != nil {
 			return fmt.Errorf("failed to refresh resource handlers for instance gvr %s: %w", gvr, err)
 		}
 		fw.factory.Start(fw.ctx.Done())
@@ -462,7 +462,7 @@ func (dc *DynamicController) StartServingGVK(
 	// TODO we can optimize this further by introducing a second factory that tweaks the list options
 	// to filter out resources not relevant for kro on server side. This reduces the amount of watched objects
 	// on the client side dramatically. For now we filter on client side so this should be fine.
-	registrations, err := dc.registerResourceHandlers(gvr, resourceHandlers, factory)
+	registrations, err := dc.registerResourceHandlers(gvr, resourceGVRsToWatch, factory)
 	if err != nil {
 		return fmt.Errorf("failed to register resource handlers for GVR %s: %w", gvr, err)
 	}
@@ -537,14 +537,16 @@ func (dc *DynamicController) registerResourceHandlers(parent schema.GroupVersion
 
 func (dc *DynamicController) handlerForGVR(parent, gvr schema.GroupVersionResource) cache.ResourceEventHandler {
 	handle := func(obj interface{}, eventType string) {
-		meta, err := meta.Accessor(obj)
+		objMeta, err := meta.Accessor(obj)
 		if err != nil {
-			dc.log.Error(err, "failed to get metadata accessor")
+			dc.log.Error(err, "failed to get metadata accessor for object", "eventType", eventType,
+				"resourceName", objMeta.GetName(),
+				"resourceNamespace", objMeta.GetNamespace())
 			return
 		}
 
 		// if there is no kro instance label set, we assume the object is irrelevant for the instance.
-		labels := meta.GetLabels()
+		labels := objMeta.GetLabels()
 		owned, ok := labels[metadata.OwnedLabel]
 		if !ok || owned != "true" {
 			return
@@ -569,8 +571,8 @@ func (dc *DynamicController) handlerForGVR(parent, gvr schema.GroupVersionResour
 				"name", name,
 				"namespace", namespace,
 				"gvr", gvr,
-				"resourceName", meta.GetName(),
-				"resourceNamespace", meta.GetNamespace(),
+				"resourceName", objMeta.GetName(),
+				"resourceNamespace", objMeta.GetNamespace(),
 				"eventType", eventType)
 			dc.enqueueParent(parent, pom, eventType)
 		}
@@ -606,8 +608,8 @@ func (dc *DynamicController) refreshResourceHandlers(parent schema.GroupVersionR
 	return nil
 }
 
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
-func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
+// StopServiceGVK safely removes a GVK from the controller and cleans up associated resources.
+func (dc *DynamicController) StopServiceGVK(_ context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
 	// Retrieve the factory

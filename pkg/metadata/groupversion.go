@@ -16,6 +16,7 @@ package metadata
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gobuffalo/flect"
@@ -87,8 +88,34 @@ func GVRtoGVK(gvr schema.GroupVersionResource) schema.GroupVersionKind {
 	}
 }
 
+func loadSpecialCases() map[string]string {
+	cases := map[string]string{}
+
+	// Example: GROUP_RESOURCE_MAP="groupalias=groupaliases,person=people"
+	envVal := os.Getenv("KRO_GROUP_RESOURCE_MAP")
+	if envVal == "" {
+		return cases
+	}
+
+	pairs := strings.Split(envVal, ",")
+	for _, p := range pairs {
+		kv := strings.SplitN(strings.TrimSpace(p), "=", 2)
+		if len(kv) == 2 {
+			cases[strings.ToLower(kv[0])] = strings.ToLower(kv[1])
+		}
+	}
+	return cases
+}
+
+var specialCases = loadSpecialCases()
+
 func GVKtoGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
 	resource := flect.Pluralize(strings.ToLower(gvk.Kind))
+
+	if corrected, exists := specialCases[resource]; exists {
+		resource = corrected
+	}
+
 	return schema.GroupVersionResource{
 		Group:    gvk.Group,
 		Version:  gvk.Version,

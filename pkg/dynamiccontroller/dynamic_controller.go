@@ -16,44 +16,6 @@
 // managing multiple GroupVersionResources (GVRs) in a Kubernetes environment.
 // It implements a single controller capable of dynamically handling various
 // resource types concurrently, adapting to runtime changes without system restarts.
-//
-// Key features and design considerations:
-//
-//  1. Multi GVR management: It handles multiple resource types concurrently,
-//     creating and managing separate workflows for each.
-//
-//  2. Dynamic informer management: Creates and deletes informers on the fly
-//     for new resource types, allowing real time adaptation to changes in the
-//     cluster.
-//
-//  3. Minimal disruption: Operations on one resource type do not affect
-//     the performance or functionality of others.
-//
-//  4. Minimalism: Unlike controller-runtime, this implementation
-//     is tailored specifically for kro's needs, avoiding unnecessary
-//     dependencies and overhead.
-//
-//  5. Future Extensibility: It allows for future enhancements such as
-//     sharding and CEL cost aware leader election, which are not readily
-//     achievable with k8s.io/controller-runtime.
-//
-// Why not use k8s.io/controller-runtime:
-//
-//  1. Static nature: controller-runtime is optimized for statically defined
-//     controllers, however kro requires runtime creation and management
-//     of controllers for various GVRs.
-//
-//  2. Overhead reduction: by not including unused features like leader election
-//     and certain metrics, this implementation remains minimalistic and efficient.
-//
-//  3. Customization: this design allows for deep customization and
-//     optimization specific to kro's unique requirements for managing
-//     multiple GVRs dynamically.
-//
-// This implementation aims to provide a reusable, efficient, and flexible
-// solution for dynamic multi-GVR controller management in Kubernetes environments.
-//
-// NOTE(a-hilaly): Potentially we might open source this package for broader use cases.
 package dynamiccontroller
 
 import (
@@ -88,14 +50,10 @@ type Config struct {
 	ResyncPeriod    time.Duration
 	QueueMaxRetries int
 	ShutdownTimeout time.Duration
-	// MinRetryDelay is the minimum delay before retrying an item in the queue
-	MinRetryDelay time.Duration
-	// MaxRetryDelay is the maximum delay before retrying an item in the queue
-	MaxRetryDelay time.Duration
-	// RateLimit is the maximum number of events processed per second
-	RateLimit int
-	// BurstLimit is the maximum number of events in a burst
-	BurstLimit int
+	MinRetryDelay   time.Duration
+	MaxRetryDelay   time.Duration
+	RateLimit       int
+	BurstLimit      int
 }
 
 type Handler func(ctx context.Context, req ctrl.Request) error
@@ -201,19 +159,12 @@ func NewDynamicController(
 	}
 }
 
-// WaitForInformerSync waits for all informers to sync or timeout
-func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
-	dc.log.V(1).Info("Waiting for all informers to sync")
-	start := time.Now()
-	defer func() {
-		dc.log.V(1).Info("Finished waiting for informers to sync", "duration", time.Since(start))
-	}()
+// Run starts workers and blocks until ctx.Done().
+func (dc *DynamicController) Run(ctx context.Context) error {
+	if dc.ctx != nil {
+		return fmt.Errorf("already running")
+	}
 
-	return cache.WaitForCacheSync(stopCh, dc.AllInformerHaveSynced)
-}
-
-// Run starts the DynamicController.
-func (dc *DynamicController) Start(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
 
 	dc.log.Info("Starting dynamic controller")
@@ -221,42 +172,17 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 
 	dc.ctx = ctx
 
-	// Spin up workers.
-	//
-	// TODO(a-hilaly): Allow for dynamic scaling of workers.
-	var wg sync.WaitGroup
+	// Workers.
 	for i := 0; i < dc.config.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			wait.UntilWithContext(ctx, dc.worker, time.Second)
-		}()
+		go wait.UntilWithContext(ctx, dc.worker, time.Second)
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ctx.Done()
-		dc.log.Info("Received shutdown signal, shutting down dynamic controller queue")
-		dc.queue.ShutDown()
-	}()
 
-	wg.Wait()
-	dc.log.Info("All workers have stopped")
-
-	// when shutting down, the context given to Start is already closed,
-	// and the expectation is that we block until the graceful shutdown is complete.
-	return dc.shutdown(context.Background())
+	<-ctx.Done()
+	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			dc.log.Info("Dynamic controller worker received shutdown signal, stopping")
-			return
-		default:
-			dc.processNextWorkItem(ctx)
-		}
+	for dc.processNextWorkItem(ctx) {
 	}
 }
 
@@ -333,35 +259,11 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 	return err
 }
 
-// shutdown performs a graceful shutdown of the controller.
-func (dc *DynamicController) shutdown(ctx context.Context) error {
-	dc.log.Info("Starting graceful shutdown")
-
-	var wg sync.WaitGroup
-	dc.informers.Range(func(key, value interface{}) bool {
-		k := key.(schema.GroupVersionResource)
-		dc.log.V(1).Info("Shutting down informer", "gvr", k.String())
-		wg.Add(1)
-		go func(informer *informerWrapper) {
-			defer wg.Done()
-			informer.informer.Shutdown()
-		}(value.(*informerWrapper))
-		return true
-	})
-
-	// Wait for all informers to shut down or timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		dc.log.Info("All informers shut down successfully")
-	case <-ctx.Done():
-		dc.log.Error(ctx.Err(), "Timeout waiting for informers to shut down")
-		return ctx.Err()
+func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj interface{}, eventType string) {
+	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
+		return
 	}
 
 	oi := ObjectIdentifiers{NamespacedKey: namespacedKey, GVR: parentGVR}

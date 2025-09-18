@@ -69,6 +69,25 @@ spec:
                   Special key "*" defines the default service account for any
                   namespace not explicitly mapped.
                 type: object
+              reconcile:
+                description: Reconcile defines the desired reconciliation settings
+                  for a ResourceGraphDefinition.
+                properties:
+                  instancePolicy:
+                    default: Periodic
+                    description: |-
+                      InstancePolicy defines the reconciliation policy for the instances
+                      created from the ResourceGraphDefinition.
+                      When set to "Periodic", or not set, the instances will be reconciled periodically.
+                      When set to "Reactive", the instances will be reconciled when any changes are detected
+                      on the resources owned by the instance. This change detection is achieved by watching
+                      the resources owned by the instance and enqueueing a reconcile request for the controller
+                      responsible for the instance.
+                    enum:
+                    - Periodic
+                    - Reactive
+                    type: string
+                type: object
               resources:
                 description: The resources that are part of the resourcegraphdefinition.
                 items:

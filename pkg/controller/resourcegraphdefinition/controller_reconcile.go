@@ -71,11 +71,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 		mark.KindReady(crd.Status.AcceptedNames.Kind)
 	}
 
-	// Retrieve resource handlers for the resources in the graph
-	// This will be used by the dynamic controller to handle events for these resources
-	// after the microcontroller has started dynamic watches.
+	// If we want to react to changes to resources, we need to watch for them
+	// and trigger reconciliations of the instances whenever these resources change.
 	var resourceGVRsToWatch []schema.GroupVersionResource
-	if metadata.GetInstanceWatchResources(rgd.ObjectMeta) {
+	if rgd.Spec.Reconcile != nil && rgd.Spec.Reconcile.InstancePolicy == v1alpha1.ResourceGraphDefinitionInstancePolicyReactive {
 		resourceGVRsToWatch = r.getResourceGVRsToWatchForRGD(processedRGD)
 	}
 

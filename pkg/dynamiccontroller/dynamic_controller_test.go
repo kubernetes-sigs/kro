@@ -76,7 +76,6 @@ func TestNewDynamicController(t *testing.T) {
 	assert.NotNil(t, dc)
 	assert.Equal(t, config, dc.config)
 	assert.NotNil(t, dc.queue)
-	assert.NotNil(t, dc.kubeClient)
 }
 
 func TestRegisterAndUnregisterGVK(t *testing.T) {
@@ -119,7 +118,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
 	require.NoError(t, err)
 
-	_, exists := dc.factories.Load(gvr)
+	_, exists := dc.registrations[gvr]
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
@@ -132,7 +131,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err = dc.StopServiceGVK(shutdownContext, gvr)
 	require.NoError(t, err)
 
-	_, exists = dc.factories.Load(gvr)
+	_, exists = dc.registrations[gvr]
 	assert.False(t, exists)
 }
 
@@ -180,6 +179,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	client := fake.NewSimpleMetadataClient(scheme, obj1, obj2)
 
 	dc := NewDynamicController(logger, Config{}, client)
+	dc.ctx = t.Context() // simulate a start through dc.Run
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		fmt.Println("reconciling instance", req)

@@ -45,8 +45,6 @@ const (
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
-
-	InstanceWatchResourcesLabel = LabelKROPrefix + "instance-watch-resources"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -63,11 +61,6 @@ func SetKROOwned(meta metav1.ObjectMeta) {
 // SetKROUnowned sets the OwnedLabel to false on the resource.
 func SetKROUnowned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
-}
-
-func GetInstanceWatchResources(meta metav1.ObjectMeta) bool {
-	v, ok := meta.Labels[InstanceWatchResourcesLabel]
-	return ok && booleanFromString(v)
 }
 
 var (

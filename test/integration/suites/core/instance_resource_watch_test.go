@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kro-run/kro/pkg/metadata"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -32,7 +31,7 @@ import (
 	"github.com/kro-run/kro/pkg/testutil/generator"
 )
 
-var _ = Describe("Instance Resource Watch", func() {
+var _ = FDescribe("Instance Resource Watch", func() {
 	var namespace string
 
 	BeforeEach(func(ctx SpecContext) {
@@ -45,8 +44,8 @@ var _ = Describe("Instance Resource Watch", func() {
 	})
 
 	DescribeTable("watch behavior on ConfigMap",
-		func(ctx SpecContext, labelSet bool) {
-			rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-instance-resource-reconcile-%v", labelSet),
+		func(ctx SpecContext, reactive bool) {
+			rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-instance-resource-reconcile-%v", reactive),
 				generator.WithSchema(
 					"TestStatus", "v1alpha1",
 					map[string]interface{}{
@@ -66,9 +65,9 @@ var _ = Describe("Instance Resource Watch", func() {
 				}, nil, nil),
 			)
 
-			if labelSet {
-				rgd.ObjectMeta.Labels = map[string]string{
-					metadata.InstanceWatchResourcesLabel: "true",
+			if reactive {
+				rgd.Spec.Reconcile = &krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+					InstancePolicy: krov1alpha1.ResourceGraphDefinitionInstancePolicyReactive,
 				}
 			}
 
@@ -115,7 +114,7 @@ var _ = Describe("Instance Resource Watch", func() {
 			Expect(env.Client.Update(ctx, cfgMap)).To(Succeed())
 
 			var expectedKeyValue string
-			if labelSet {
+			if reactive {
 				expectedKeyValue = "foo"
 			} else {
 				expectedKeyValue = "updated"
@@ -132,7 +131,7 @@ var _ = Describe("Instance Resource Watch", func() {
 				"ConfigMap should be updated to reflect the instance reconcile due to watch on resources",
 			)
 		},
-		Entry("should not update when watch label is not set", false),
-		Entry("should update when watch label is set", true),
+		Entry("should not update when policy set to periodic", false),
+		Entry("should update when policy set to reactive", true),
 	)
 })

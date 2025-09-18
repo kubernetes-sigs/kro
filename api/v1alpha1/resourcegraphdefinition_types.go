@@ -16,7 +16,7 @@ package v1alpha1
 import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -27,6 +27,8 @@ const (
 
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
 type ResourceGraphDefinitionSpec struct {
+	// Reconcile defines the desired reconciliation settings for a ResourceGraphDefinition.
+	Reconcile *ResourceGraphDefinitionReconcileSpec `json:"reconcile,omitempty"`
 	// The schema of the resourcegraphdefinition, which includes the
 	// apiVersion, kind, spec, status, types, and some validation
 	// rules.
@@ -45,6 +47,35 @@ type ResourceGraphDefinitionSpec struct {
 	// +kubebuilder:validation:Optional
 	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
+
+type ResourceGraphDefinitionReconcileSpec struct {
+	// InstancePolicy defines the reconciliation policy for the instances
+	// created from the ResourceGraphDefinition.
+	// When set to "Periodic", or not set, the instances will be reconciled periodically.
+	// When set to "Reactive", the instances will be reconciled when any changes are detected
+	// on the resources owned by the instance. This change detection is achieved by watching
+	// the resources owned by the instance and enqueueing a reconcile request for the controller
+	// responsible for the instance.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=Periodic
+	// +kubebuilder:validation:Enum=Periodic;Reactive
+	InstancePolicy ResourceGraphDefinitionInstancePolicy `json:"instancePolicy,omitempty"`
+}
+
+type ResourceGraphDefinitionInstancePolicy string
+
+const (
+	// ResourceGraphDefinitionInstancePolicyPeriodic represents a periodic reconciliation
+	// of the ResourceGraphDefinition disregarding any intermediate changes
+	// or drifts in the instances derived from the RGD.
+	ResourceGraphDefinitionInstancePolicyPeriodic ResourceGraphDefinitionInstancePolicy = "Periodic"
+
+	// ResourceGraphDefinitionInstancePolicyReactive represents a reactive reconciliation
+	// of the ResourceGraphDefinition, which will reconcile the instances
+	// when any changes to resources owned by the instance are detected.
+	ResourceGraphDefinitionInstancePolicyReactive ResourceGraphDefinitionInstancePolicy = "Reactive"
+)
 
 // Schema represents the attributes that define an instance of
 // a resourcegraphdefinition.
@@ -198,7 +229,7 @@ func (o *ResourceGraphDefinition) SetConditions(conditions []Condition) {
 	o.Status.Conditions = conditions
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
 type ResourceGraphDefinitionList struct {

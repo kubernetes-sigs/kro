@@ -34,12 +34,10 @@ import (
 
 var _ = Describe("CRD", func() {
 	var (
-		ctx       context.Context
 		namespace string
 	)
 
-	BeforeEach(func() {
-		ctx = context.Background()
+	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
 		// Create namespace
 		Expect(env.Client.Create(ctx, &corev1.Namespace{
@@ -50,7 +48,7 @@ var _ = Describe("CRD", func() {
 	})
 
 	Context("CRD Creation", func() {
-		It("should create CRD when ResourceGraphDefinition is created", func() {
+		It("should create CRD when ResourceGraphDefinition is created", func(ctx SpecContext) {
 			// Create a simple ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd",
 				generator.WithSchema(
@@ -78,7 +76,7 @@ var _ = Describe("CRD", func() {
 
 			// Verify CRD is created
 			crd := &apiextensionsv1.CustomResourceDefinition{}
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: "testresources.kro.run",
 				}, crd)
@@ -96,10 +94,10 @@ var _ = Describe("CRD", func() {
 				g.Expect(props["spec"].Properties["field1"].Type).To(Equal("string"))
 				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
 				g.Expect(props["spec"].Properties["field2"].Default.Raw).To(Equal([]byte("42")))
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 
-		It("should update CRD when ResourceGraphDefinition is updated", func() {
+		It("should update CRD when ResourceGraphDefinition is updated", func(ctx SpecContext) {
 			// Create initial ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-update",
 				generator.WithSchema(
@@ -115,14 +113,14 @@ var _ = Describe("CRD", func() {
 
 			// Wait for initial CRD
 			crd := &apiextensionsv1.CustomResourceDefinition{}
-			Eventually(func() error {
+			Eventually(func(ctx context.Context) error {
 				return env.Client.Get(ctx, types.NamespacedName{
 					Name: "testupdates.kro.run",
 				}, crd)
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Update ResourceGraphDefinition with new fields
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: rgd.Name,
 				}, rgd)
@@ -136,10 +134,10 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Verify CRD is updated
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: "testupdates.kro.run",
 				}, crd)
@@ -148,10 +146,10 @@ var _ = Describe("CRD", func() {
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties).To(HaveLen(3))
 				g.Expect(props["spec"].Properties["field3"].Type).To(Equal("boolean"))
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 
-		It("should delete CRD when ResourceGraphDefinition is deleted", func() {
+		It("should delete CRD when ResourceGraphDefinition is deleted", func(ctx SpecContext) {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",
 				generator.WithSchema(
@@ -166,25 +164,25 @@ var _ = Describe("CRD", func() {
 
 			// Wait for CRD creation
 			crdName := "testdeletes.kro.run"
-			Eventually(func() error {
+			Eventually(func(ctx context.Context) error {
 				return env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Delete ResourceGraphDefinition
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 			// Verify CRD is deleted
-			Eventually(func() bool {
+			Eventually(func(ctx context.Context) bool {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				return errors.IsNotFound(err)
-			}, 10*time.Second, time.Second).Should(BeTrue())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
 		})
 	})
 
 	Context("CRD Watch Reconciliation", func() {
-		It("should reconcile the ResourceGraphDefinition back when CRD is manually modified", func() {
+		It("should reconcile the ResourceGraphDefinition back when CRD is manually modified", func(ctx SpecContext) {
 			rgdName := "test-crd-watch"
 			rgd := generator.NewResourceGraphDefinition(rgdName,
 				generator.WithSchema(
@@ -204,7 +202,7 @@ var _ = Describe("CRD", func() {
 			crd := &apiextensionsv1.CustomResourceDefinition{}
 			var originalCRDVersion string
 
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: crdName,
 				}, crd)
@@ -221,10 +219,10 @@ var _ = Describe("CRD", func() {
 
 				// store the original resource version
 				originalCRDVersion = crd.ResourceVersion
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Manually modify the CRD to simulate external modification
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: crdName,
 				}, crd)
@@ -235,11 +233,11 @@ var _ = Describe("CRD", func() {
 
 				err = env.Client.Update(ctx, crd)
 				g.Expect(err).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// verify that the ResourceGraphDefinition controller reconciles the CRD
 			// back to its original state
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx context.Context) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: crdName,
 				}, crd)
@@ -252,7 +250,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(schemaProps["field1"].Type).To(Equal("string"))
 				g.Expect(schemaProps["field2"].Type).To(Equal("integer")) // Should be restored
 				g.Expect(schemaProps["field2"].Default.Raw).To(Equal([]byte("42")))
-			}, 20*time.Second, 2*time.Second).Should(Succeed())
+			}, 20*time.Second, 2*time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 })

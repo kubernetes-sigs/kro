@@ -54,16 +54,26 @@ type Environment struct {
 type ControllerConfig struct {
 	AllowCRDDeletion bool
 	ReconcileConfig  ctrlinstance.ReconcileConfig
+	Logger           *logr.Logger
 }
 
 func New(controllerConfig ControllerConfig) (*Environment, error) {
+	return NewWithContext(context.Background(), controllerConfig)
+}
+
+func NewWithContext(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
 	}
 
 	// Setup logging
-	logf.SetLogger(zap.New(zap.WriteTo(io.Discard), zap.UseDevMode(true)))
-	env.context, env.cancel = context.WithCancel(context.Background())
+	if controllerConfig.Logger != nil {
+		logf.SetLogger(*controllerConfig.Logger)
+	} else {
+		logf.SetLogger(zap.New(zap.WriteTo(io.Discard), zap.UseDevMode(true)))
+	}
+
+	env.context, env.cancel = context.WithCancel(ctx)
 
 	env.TestEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
@@ -133,8 +143,14 @@ func (e *Environment) initializeClients() error {
 }
 
 func (e *Environment) setupController() error {
+	var logger logr.Logger
+	if e.ControllerConfig.Logger != nil {
+		logger = *e.ControllerConfig.Logger
+	} else {
+		logger = noopLogger()
+	}
 	dc := dynamiccontroller.NewDynamicController(
-		noopLogger(),
+		logger,
 		dynamiccontroller.Config{
 			Workers:         3,
 			ResyncPeriod:    60 * time.Second,
@@ -145,7 +161,7 @@ func (e *Environment) setupController() error {
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
-		e.ClientSet.Dynamic())
+		e.ClientSet.Metadata())
 
 	go func() {
 		err := dc.Run(e.context)

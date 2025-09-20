@@ -18,18 +18,16 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
-	"slices"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/metadata/fake"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -48,20 +46,19 @@ func noopLogger() logr.Logger {
 	return logger
 }
 
-func setupFakeClient() *fake.FakeDynamicClient {
+func setupFakeClient(t testing.TB) *fake.FakeMetadataClient {
+	t.Helper()
 	scheme := runtime.NewScheme()
-	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	assert.NoError(t, v1.AddMetaToScheme(scheme))
 	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"}
-	obj := &unstructured.Unstructured{}
+	obj := &v1.PartialObjectMetadata{}
 	obj.SetGroupVersionKind(gvk)
-	return fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-		gvr: "TestList",
-	}, obj)
+	return fake.NewSimpleMetadataClient(scheme, obj)
 }
 
 func TestNewDynamicController(t *testing.T) {
 	logger := noopLogger()
-	client := setupFakeClient()
+	client := setupFakeClient(t)
 
 	config := Config{
 		Workers:         2,
@@ -84,7 +81,7 @@ func TestNewDynamicController(t *testing.T) {
 
 func TestRegisterAndUnregisterGVK(t *testing.T) {
 	logger := noopLogger()
-	client := setupFakeClient()
+	client := setupFakeClient(t)
 
 	config := Config{
 		Workers:         1,
@@ -119,14 +116,14 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	})
 
 	// Register GVK
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
 	require.NoError(t, err)
 
-	_, exists := dc.informers.Load(gvr)
+	_, exists := dc.factories.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// Unregister GVK
@@ -135,25 +132,25 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err = dc.StopServiceGVK(shutdownContext, gvr)
 	require.NoError(t, err)
 
-	_, exists = dc.informers.Load(gvr)
+	_, exists = dc.factories.Load(gvr)
 	assert.False(t, exists)
 }
 
 func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
-	client := setupFakeClient()
+	client := setupFakeClient(t)
 
 	dc := NewDynamicController(logger, Config{MinRetryDelay: 200 * time.Millisecond,
 		MaxRetryDelay: 1000 * time.Second,
 		RateLimit:     10,
 		BurstLimit:    100}, client)
 
-	obj := &unstructured.Unstructured{}
+	obj := &v1.PartialObjectMetadata{}
 	obj.SetName("test-object")
 	obj.SetNamespace("default")
 	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
 
-	dc.enqueueObject(obj, "add")
+	dc.enqueueParent(schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}, obj, "add")
 
 	assert.Equal(t, 1, dc.queue.Len())
 }
@@ -162,26 +159,25 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	logger := noopLogger()
 
 	scheme := runtime.NewScheme()
+	assert.NoError(t, v1.AddMetaToScheme(scheme))
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 	gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"}
 
 	objs := make(map[string]runtime.Object)
 
-	obj1 := &unstructured.Unstructured{}
+	obj1 := &v1.PartialObjectMetadata{}
 	obj1.SetGroupVersionKind(gvk)
 	obj1.SetNamespace("default")
 	obj1.SetName("test-object-1")
 	objs[obj1.GetNamespace()+"/"+obj1.GetName()] = obj1
 
-	obj2 := &unstructured.Unstructured{}
+	obj2 := &v1.PartialObjectMetadata{}
 	obj2.SetGroupVersionKind(gvk)
 	obj2.SetNamespace("test-namespace")
 	obj2.SetName("test-object-2")
 	objs[obj2.GetNamespace()+"/"+obj2.GetName()] = obj2
 
-	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-		gvr: "TestList",
-	}, slices.Collect(maps.Values(objs))...)
+	client := fake.NewSimpleMetadataClient(scheme, obj1, obj2)
 
 	dc := NewDynamicController(logger, Config{}, client)
 
@@ -191,7 +187,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	})
 
 	// simulate initial creation of the resource graph
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// simulate reconciling the instances
@@ -202,7 +198,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	}
 
 	// simulate updating the resource graph
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// check if the expected objects are queued

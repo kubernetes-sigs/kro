@@ -20,6 +20,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/release-utils/version"
@@ -52,6 +53,7 @@ type Set struct {
 	config          *rest.Config
 	kubernetes      *kubernetes.Clientset
 	dynamic         *dynamic.DynamicClient
+	metadata        metadata.Interface
 	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
 }
 
@@ -115,6 +117,11 @@ func (c *Set) init() error {
 		return err
 	}
 
+	c.metadata, err = metadata.NewForConfigAndClient(c.config, sharedHttpClient)
+	if err != nil {
+		return err
+	}
+
 	c.dynamic, err = dynamic.NewForConfigAndClient(c.config, sharedHttpClient)
 	if err != nil {
 		return err
@@ -131,6 +138,11 @@ func (c *Set) init() error {
 // Kubernetes returns the standard Kubernetes clientset
 func (c *Set) Kubernetes() kubernetes.Interface {
 	return c.kubernetes
+}
+
+// Metadata returns the metadata client
+func (c *Set) Metadata() metadata.Interface {
+	return c.metadata
 }
 
 // Dynamic returns the dynamic client

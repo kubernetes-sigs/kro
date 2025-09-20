@@ -37,9 +37,9 @@ import (
 	"github.com/kro-run/kro/pkg/metadata"
 )
 
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
@@ -48,6 +48,7 @@ type ResourceGraphDefinitionReconciler struct {
 	// Client and instanceLogger are set with SetupWithManager
 
 	client.Client
+
 	instanceLogger logr.Logger
 
 	clientSet  kroclient.SetInterface
@@ -152,7 +153,10 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 	}
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
+func (r *ResourceGraphDefinitionReconciler) Reconcile(
+	ctx context.Context,
+	o *v1alpha1.ResourceGraphDefinition,
+) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err

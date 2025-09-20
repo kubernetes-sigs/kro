@@ -35,7 +35,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -48,7 +48,7 @@ func init() {
 
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -183,7 +183,7 @@ func main() {
 		MaxRetryDelay:   maxRetryDelay,
 		RateLimit:       rateLimit,
 		BurstLimit:      burstLimit,
-	}, set.Dynamic())
+	}, set.Metadata())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig,
@@ -212,7 +212,7 @@ func main() {
 		}
 	}()
 
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

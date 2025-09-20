@@ -32,11 +32,11 @@ var generateDiagramCmd = &cobra.Command{
 	Long: "Generate a diagram from a ResourceGraphDefinition file. This command reads the " +
 		"ResourceGraphDefinition and outputs the corresponding diagram",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if config.resourceGraphDefinitionFile == "" {
+		if generateConfig.resourceGraphDefinitionFile == "" {
 			return fmt.Errorf("ResourceGraphDefinition file is required")
 		}
 
-		data, err := os.ReadFile(config.resourceGraphDefinitionFile)
+		data, err := os.ReadFile(generateConfig.resourceGraphDefinitionFile)
 		if err != nil {
 			return fmt.Errorf("failed to read ResourceGraphDefinition file: %w", err)
 		}

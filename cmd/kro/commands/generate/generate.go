@@ -23,12 +23,13 @@ type GenerateConfig struct {
 	outputFormat                string
 }
 
-var config = &GenerateConfig{}
+var generateConfig = &GenerateConfig{}
 
 func init() {
-	generateCmd.PersistentFlags().StringVarP(&config.resourceGraphDefinitionFile, "file", "f", "",
+	generateCmd.PersistentFlags().StringVarP(&generateConfig.resourceGraphDefinitionFile, "file", "f", "",
 		"Path to the ResourceGraphDefinition file")
-	generateCmd.PersistentFlags().StringVarP(&config.outputFormat, "format", "o", "yaml", "Output format (yaml|json)")
+	generateCmd.PersistentFlags().StringVarP(&generateConfig.outputFormat, "format", "o",
+		"yaml", "Output format (yaml|json)")
 }
 
 var generateCmd = &cobra.Command{

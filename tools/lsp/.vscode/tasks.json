@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": "build",
+      "presentation": {
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/client"
+      },
+      "label": "npm: compile"
+    },
+    {
+      "label": "Build LSP Server",
+      "type": "shell",
+      "command": "go",
+      "args": ["build", "-o", "server/kro-lsp", "./server"],
+      "group": "build",
+      "presentation": {
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

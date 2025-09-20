@@ -22,6 +22,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	authclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	"k8s.io/client-go/rest"
 )
 
@@ -30,6 +31,7 @@ type FakeSet struct {
 	DynamicClient       dynamic.Interface
 	KubernetesClient    kubernetes.Interface
 	ApiExtensionsClient apiextensionsv1.ApiextensionsV1Interface
+	AuthorizationClient authclient.AuthorizationV1Interface
 	Config              *rest.Config
 }
 
@@ -51,6 +53,10 @@ func (f *FakeSet) Kubernetes() kubernetes.Interface {
 // Dynamic returns the dynamic client
 func (f *FakeSet) Dynamic() dynamic.Interface {
 	return f.DynamicClient
+}
+
+func (f *FakeSet) Authorization() authclient.AuthorizationV1Interface {
+	return f.AuthorizationClient
 }
 
 // APIExtensionsV1 returns the API extensions client

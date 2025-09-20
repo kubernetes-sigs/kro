@@ -1,0 +1,44 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-rgd-creation
+spec:
+  description: | 
+    Tests if a ResourceGraphDefinition can reject wrong service account configurations based on
+    SubjectAccessReview
+  steps:
+  - name: service-account-restricted-catch-all
+    try:
+    #description: Install the RGD that creates an Instance CRD
+    - apply:
+        file: service-account-restricted.yaml
+      description: Apply Base Role
+    - apply:
+        file: rgd-restricted-catchall.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: service-account-restricted-namespace-specific
+    try:
+      #description: Install the RGD that creates an Instance CRD
+      - apply:
+          file: my-custom-namespace.yaml
+      - apply:
+          file: service-account-restricted-namespaced.yaml
+      - apply:
+          file: rgd-restricted-namespace.yaml
+        description: Apply RGD
+      - assert:
+          file: rgd-assert-namespaced.yaml
+        description: Verify RGD state
+    catch:
+      - description: kro controller pod logs collector
+        podLogs:
+          selector: app.kubernetes.io/instance=kro
+          namespace: kro-system

@@ -16,11 +16,19 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"sync"
 	"time"
 
+	"github.com/kro-run/kro/pkg/client"
+	authv1 "k8s.io/api/authorization/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	authclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kro-run/kro/api/v1alpha1"
@@ -122,7 +130,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
 // and extract resource information
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd)
 	if err != nil {
 		return nil, nil, newGraphError(err)
@@ -134,6 +142,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGrap
 		if len(deps) > 0 {
 			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))
 		}
+	}
+
+	// make sure the service accounts configured in the resource graph definition have the required permissions.
+	if err := r.reconcileResourceGraphDefinitionPermissions(ctx, processedRGD.Resources, rgd.Spec.DefaultServiceAccounts); err != nil {
+		return nil, nil, err
 	}
 
 	return processedRGD, resourcesInfo, nil
@@ -189,3 +202,137 @@ func (e *microControllerError) Unwrap() error { return e.err }
 func newGraphError(err error) error           { return &graphError{err} }
 func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
+
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionPermissions(ctx context.Context, resources map[string]*graph.Resource, accounts map[string]string) error {
+	var errs []error
+	for _, resource := range resources {
+		selectedServiceAccount := selectServiceAccountForResource(accounts, resource)
+		if err := verifyResourcePermissions(ctx, r.clientSet, selectedServiceAccount, resource); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func verifyResourcePermissions(ctx context.Context, clientSet client.SetInterface, serviceAccount string, resource *graph.Resource) error {
+	var clnt authclient.SelfSubjectAccessReviewInterface
+	if serviceAccount != "" {
+		impersonatedClientSet, err := clientSet.WithImpersonation(serviceAccount)
+		if err != nil {
+			return err
+		}
+		clnt = impersonatedClientSet.Authorization().SelfSubjectAccessReviews()
+	} else {
+		clnt = clientSet.Authorization().SelfSubjectAccessReviews()
+	}
+
+	allowed, err := hasPermission(ctx, clnt, resource, "create", "update", "delete", "patch", "watch")
+	if err != nil {
+		return err
+	}
+
+	errs := make([]error, 0, len(allowed))
+	for _, verb := range slices.Sorted(maps.Keys(allowed)) {
+		if allowed[verb] {
+			continue
+		}
+		description := fmt.Sprintf("specified service account %s does not have permission to %s %q (%s)",
+			serviceAccount, verb, resource.GetID(), resource.GetGroupVersionResource().String())
+		if resource.IsNamespaced() {
+			namespace := resource.Unstructured().GetNamespace()
+			if namespace == "" {
+				namespace = metav1.NamespaceDefault
+			}
+			description += fmt.Sprintf(" in namespace %s", namespace)
+		}
+		errs = append(errs, errors.New(description))
+	}
+	return errors.Join(errs...)
+}
+
+func selectServiceAccountForResource(accounts map[string]string, resource *graph.Resource) string {
+	var selectedServiceAccount string
+	for namespace, serviceAccount := range accounts {
+		if resource.IsNamespaced() && namespace == resource.Unstructured().GetNamespace() {
+			selectedServiceAccount = getServiceAccountUserName(resource.Unstructured().GetNamespace(), serviceAccount)
+			break
+		}
+	}
+
+	if selectedServiceAccount == "" && accounts[v1alpha1.DefaultServiceAccountKey] != "" {
+		selectedServiceAccount = getServiceAccountUserName(resource.Unstructured().GetNamespace(), accounts[v1alpha1.DefaultServiceAccountKey])
+	}
+
+	return selectedServiceAccount
+}
+
+func hasPermission(
+	ctx context.Context,
+	clnt authclient.SelfSubjectAccessReviewInterface,
+	resource *graph.Resource,
+	verbs ...string,
+) (map[string]bool, error) {
+	gvr := resource.GetGroupVersionResource()
+
+	namespace := metav1.NamespaceDefault
+	if ns := resource.Unstructured().GetNamespace(); ns != "" {
+		namespace = ns
+	}
+
+	results := make(map[string]bool, len(verbs))
+	var mu sync.Mutex
+	errCh := make(chan error, len(verbs))
+
+	var wg sync.WaitGroup
+	wg.Add(len(verbs))
+
+	for _, verb := range verbs {
+		go func() {
+			defer wg.Done()
+
+			review := &authv1.SelfSubjectAccessReview{
+				Spec: authv1.SelfSubjectAccessReviewSpec{
+					ResourceAttributes: &authv1.ResourceAttributes{
+						Namespace: namespace,
+						Verb:      verb,
+						Group:     gvr.Group,
+						Version:   gvr.Version,
+						Resource:  gvr.Resource,
+					},
+				},
+			}
+
+			resp, err := clnt.Create(ctx, review, metav1.CreateOptions{})
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			mu.Lock()
+			results[verb] = resp.Status.Allowed
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// return first error if any
+	for err := range errCh {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return results, nil
+}
+
+// getServiceAccountUserName builds the impersonate service account user name.
+// The format of the user name is "system:serviceaccount:<serviceaccount>"
+func getServiceAccountUserName(namespace, serviceAccount string) string {
+	if namespace == "" {
+		namespace = metav1.NamespaceDefault
+	}
+	return fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccount)
+}

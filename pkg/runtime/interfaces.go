@@ -18,7 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // Interface defines the main runtime interface for managing and synchronizing

@@ -183,7 +183,7 @@ Install KRO following [instructions here](https://kro.run/docs/getting-started/I
 
 ```bash
 export KRO_VERSION=$(curl -sL \
-    https://api.github.com/repos/kro-run/kro/releases/latest | \
+    https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
     jq -r '.tag_name | ltrimstr("v")'
   )
 echo $KRO_VERSION

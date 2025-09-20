@@ -18,7 +18,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 
-	"github.com/kro-run/kro/pkg/cel/library"
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 )
 
 // EnvOption is a function that modifies the environment options.

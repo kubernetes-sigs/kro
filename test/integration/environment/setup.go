@@ -30,12 +30,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
-	ctrlresourcegraphdefinition "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
 type Environment struct {

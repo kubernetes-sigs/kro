@@ -29,8 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/utils/ptr"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("ExternalRef", func() {

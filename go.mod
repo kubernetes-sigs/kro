@@ -1,4 +1,4 @@
-module github.com/kro-run/kro
+module github.com/kubernetes-sigs/kro
 
 go 1.24.0
 

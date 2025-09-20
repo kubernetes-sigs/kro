@@ -26,10 +26,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/kro-run/kro/pkg/controller/instance/delta"
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
-	"github.com/kro-run/kro/pkg/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/delta"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 const (

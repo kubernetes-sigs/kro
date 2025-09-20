@@ -30,11 +30,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 //+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete

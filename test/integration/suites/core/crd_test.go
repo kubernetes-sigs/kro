@@ -28,8 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/testutil/generator"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("CRD", func() {

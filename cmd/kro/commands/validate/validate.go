@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )

@@ -77,8 +77,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // Config holds the configuration for DynamicController

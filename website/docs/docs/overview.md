@@ -109,8 +109,8 @@ achieving consistency across deployment environments.
 
 We welcome questions, suggestions, and contributions from the community! To get
 involved, check out our
-[contributing guide](https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md).
+[contributing guide](https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md).
 For bugs or feature requests, feel free to
-[submit an issue](https://github.com/kro-run/kro/issues). You’re also invited to
+[submit an issue](https://github.com/kubernetes-sigs/kro/issues). You’re also invited to
 join our
-[community](https://github.com/kro-run/kro?tab=readme-ov-file#community-participation).
+[community](https://github.com/kubernetes-sigs/kro?tab=readme-ov-file#community-participation).

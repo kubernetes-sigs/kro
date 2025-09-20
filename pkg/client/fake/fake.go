@@ -17,7 +17,7 @@ package fake
 import (
 	"context"
 
-	"github.com/kro-run/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/client"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/dynamic"

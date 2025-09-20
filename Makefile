@@ -229,14 +229,14 @@ $(ENVTEST): $(LOCALBIN)
 build-image: ko ## Build the kro controller images using ko build
 	echo "Building kro image $(RELEASE_VERSION).."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
-		$(KO) build --bare github.com/kro-run/kro/cmd/controller \
+		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--local\
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
 publish-image: ko ## Publish the kro controller images to ghcr.io
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
-		$(KO) publish --bare github.com/kro-run/kro/cmd/controller \
+		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: package-helm

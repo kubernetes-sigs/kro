@@ -77,7 +77,7 @@ spec:
               - member: serviceAccount:${project.spec.resourceID}.svc.id.goog[${schema.metadata.namespace}/default]
   - id: annotateDefaultServiceAccount
     # TODO KRO/BUG: Missing support for dont-delete lifecycle
-    #  https://github.com/kro-run/kro/issues/542
+    #  https://github.com/kubernetes-sigs/kro/issues/542
     template:
       apiVersion: v1
       kind: ServiceAccount

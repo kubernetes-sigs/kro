@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 const (

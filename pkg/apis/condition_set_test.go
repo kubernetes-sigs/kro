@@ -43,7 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 // ----------------- Test Resource ----------------------

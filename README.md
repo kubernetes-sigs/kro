@@ -1,12 +1,12 @@
 # kro | Kube Resource Orchestrator
 
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/kro-run/kro)](https://goreportcard.com/report/github.com/kro-run/kro)
-[![unit tests](https://github.com/kro-run/kro/actions/workflows/unit-tests.yaml/badge.svg)](https://github.com/kro-run/kro/actions/workflows/unit-tests.yaml)
-![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/kro-run/Kro)
-![GitHub License](https://img.shields.io/github/license/kro-run/kro)
-[![Build and Publish](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml/badge.svg?branch=main)](https://github.com/kro-run/kro/actions/workflows/build-push-image.yaml)
-![GitHub Repo stars](https://img.shields.io/github/stars/kro-run/kro)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kubernetes-sigs/kro)](https://goreportcard.com/report/github.com/kubernetes-sigs/kro)
+[![unit tests](https://github.com/kubernetes-sigs/kro/actions/workflows/unit-tests.yaml/badge.svg)](https://github.com/kubernetes-sigs/kro/actions/workflows/unit-tests.yaml)
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/kubernetes-sigs/kro)
+![GitHub License](https://img.shields.io/github/license/kubernetes-sigs/kro)
+[![Build and Publish](https://github.com/kubernetes-sigs/kro/actions/workflows/build-push-image.yaml/badge.svg?branch=main)](https://github.com/kubernetes-sigs/kro/actions/workflows/build-push-image.yaml)
+![GitHub Repo stars](https://img.shields.io/github/stars/kubernetes-sigs/kro)
 
 Kube Resource Orchestrator (kro) is a subproject of [Kubernetes SIG Cloud Provider](https://github.com/kubernetes/community/blob/master/sig-cloud-provider/README.md). This project aims to simplify the creation and management of complex custom resources for Kubernetes.
 

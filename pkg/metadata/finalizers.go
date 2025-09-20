@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 const kroFinalizer = v1alpha1.KRODomainName + "/finalizer"

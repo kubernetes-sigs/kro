@@ -19,8 +19,8 @@ for the technical decisions that affect the project.
 - [Contributing guidelines][Contributing guidelines]
 - [License][License] (Apache 2.0)
 
-[Governance model]:https://github.com/kro-run/kro/blob/main/GOVERNANCE.md
-[Maintainers list]:https://github.com/kro-run/kro/blob/main/MAINTAINERS.md
-[Code of conduct]:https://github.com/kro-run/kro/blob/main/CODE_OF_CONDUCT.md
-[License]:https://github.com/kro-run/kro/blob/main/LICENSE
-[Contributing guidelines]:https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md
+[Governance model]:https://github.com/kubernetes-sigs/kro/blob/main/GOVERNANCE.md
+[Maintainers list]:https://github.com/kubernetes-sigs/kro/blob/main/MAINTAINERS.md
+[Code of conduct]:https://github.com/kubernetes-sigs/kro/blob/main/CODE_OF_CONDUCT.md
+[License]:https://github.com/kubernetes-sigs/kro/blob/main/LICENSE
+[Contributing guidelines]:https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md

@@ -21,7 +21,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 const (

@@ -29,17 +29,17 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	krocel "github.com/kro-run/kro/pkg/cel"
-	"github.com/kro-run/kro/pkg/cel/ast"
-	"github.com/kro-run/kro/pkg/graph/crd"
-	"github.com/kro-run/kro/pkg/graph/dag"
-	"github.com/kro-run/kro/pkg/graph/emulator"
-	"github.com/kro-run/kro/pkg/graph/parser"
-	"github.com/kro-run/kro/pkg/graph/schema"
-	"github.com/kro-run/kro/pkg/graph/variable"
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/simpleschema"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
 // NewBuilder creates a new GraphBuilder instance.

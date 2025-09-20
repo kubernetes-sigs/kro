@@ -30,11 +30,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	xv1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	resourcegraphdefinitionctrl "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
+	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	//+kubebuilder:scaffold:imports
 )
 

@@ -18,10 +18,12 @@ import (
 	"github.com/spf13/cobra"
 
 	generate "github.com/kro-run/kro/cmd/kro/commands/generate"
+	publish "github.com/kro-run/kro/cmd/kro/commands/publish"
 	validate "github.com/kro-run/kro/cmd/kro/commands/validate"
 )
 
 func AddCommands(root *cobra.Command) {
 	generate.AddGenerateCommands(root)
 	validate.AddValidateCommands(root)
+	publish.AddPublishCommand(root)
 }

@@ -12,313 +12,351 @@ spec:
     listKind: ResourceGraphDefinitionList
     plural: resourcegraphdefinitions
     shortNames:
-    - rgd
+      - rgd
     singular: resourcegraphdefinition
   scope: Cluster
   versions:
-  - additionalPrinterColumns:
-    - jsonPath: .spec.schema.apiVersion
-      name: APIVERSION
-      type: string
-    - jsonPath: .spec.schema.kind
-      name: KIND
-      type: string
-    - jsonPath: .status.state
-      name: STATE
-      type: string
-    - jsonPath: .status.topologicalOrder
-      name: TOPOLOGICALORDER
-      priority: 1
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: AGE
-      type: date
-    name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
-          API
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: ResourceGraphDefinitionSpec defines the desired state of
-              ResourceGraphDefinition
-            properties:
-              defaultServiceAccounts:
-                additionalProperties:
-                  type: string
-                description: |-
-                  ServiceAccount configuration for controller impersonation.
-                  Key is the namespace, value is the service account name to use.
-                  Special key "*" defines the default service account for any
-                  namespace not explicitly mapped.
-                type: object
-              resources:
-                description: The resources that are part of the resourcegraphdefinition.
-                items:
+    - additionalPrinterColumns:
+        - jsonPath: .spec.schema.apiVersion
+          name: APIVERSION
+          type: string
+        - jsonPath: .spec.schema.kind
+          name: KIND
+          type: string
+        - jsonPath: .status.state
+          name: STATE
+          type: string
+        - jsonPath: .status.topologicalOrder
+          name: TOPOLOGICALORDER
+          priority: 1
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: AGE
+          type: date
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description:
+            ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
+            API
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description:
+                ResourceGraphDefinitionSpec defines the desired state of
+                ResourceGraphDefinition
+              properties:
+                defaultServiceAccounts:
+                  additionalProperties:
+                    type: string
+                  description: |-
+                    ServiceAccount configuration for controller impersonation.
+                    Key is the namespace, value is the service account name to use.
+                    Special key "*" defines the default service account for any
+                    namespace not explicitly mapped.
+                  type: object
+                resources:
+                  description: The resources that are part of the resourcegraphdefinition.
+                  items:
+                    properties:
+                      externalRef:
+                        description: |-
+                          ExternalRef is a reference to an external resource.
+                          It allows the user to specify the Kind, Version, Name and Namespace of the resource
+                          to be read and used in the Graph.
+                        properties:
+                          apiVersion:
+                            type: string
+                          kind:
+                            type: string
+                          metadata:
+                            properties:
+                              name:
+                                type: string
+                              namespace:
+                                type: string
+                            required:
+                              - name
+                              - namespace
+                            type: object
+                        required:
+                          - apiVersion
+                          - kind
+                          - metadata
+                        type: object
+                      forEach:
+                        description: |-
+                          ForEach represents a CEL expression that is used to iterate over a collection
+                          of resources. This is used to create multiple instances of a resource
+                          based on the collection. The expression must return an array or a map of values.
+                          The values could be strings, numbers, or objects.
+
+                          For example:
+                            forEach: "${[1, 2, 3]}"
+                            forEach: "${["us-west-2", "us-east-1"]}"
+                            forEach: "${spec.schema.tags}"
+                            forEach: "${range(0, 10)}"
+                            forEach: "${range(0, spec.replicas)}"
+                            forEach: "${range(0, spec.replicas, 2)}"
+                            forEach: "${range(0, spec.replicas, 2).map(x => x * 2)}"
+                            forEach: "${spec.replicas.map(x => x * 2)}"
+                            forEach: "${spec.replicas.map(x => x * 2).filter(x => x > 5)}"
+
+                          To access the value of the forEach expression, use the following syntax:
+                            ${each.item} # To access the current item in the iteration
+                            ${each.index} # To access the index of the current item in the iteration
+                            ${each.length} # To access the length of the forEach expression
+                            ${each.value} # To access the value of the forEach expression
+                            ${each.key} # To access the key of the forEach expression
+                        type: string
+                      id:
+                        type: string
+                      includeWhen:
+                        items:
+                          type: string
+                        type: array
+                      readyWhen:
+                        items:
+                          type: string
+                        type: array
+                      template:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    required:
+                      - id
+                    type: object
+                    x-kubernetes-validations:
+                      - message: exactly one of template or externalRef must be provided
+                        rule:
+                          (has(self.template) && !has(self.externalRef)) || (!has(self.template)
+                          && has(self.externalRef))
+                  type: array
+                schema:
+                  description: |-
+                    The schema of the resourcegraphdefinition, which includes the
+                    apiVersion, kind, spec, status, types, and some validation
+                    rules.
                   properties:
-                    externalRef:
+                    additionalPrinterColumns:
                       description: |-
-                        ExternalRef is a reference to an external resource.
-                        It allows the user to specify the Kind, Version, Name and Namespace of the resource
-                        to be read and used in the Graph.
-                      properties:
-                        apiVersion:
-                          type: string
-                        kind:
-                          type: string
-                        metadata:
-                          properties:
-                            name:
-                              type: string
-                            namespace:
-                              type: string
-                          required:
+                        AdditionalPrinterColumns defines additional printer columns
+                        that will be passed down to the created CRD. If set, no
+                        default printer columns will be added to the created CRD,
+                        and if default printer columns need to be retained, they
+                        need to be added explicitly.
+                      items:
+                        description:
+                          CustomResourceColumnDefinition specifies a column
+                          for server side printing.
+                        properties:
+                          description:
+                            description:
+                              description is a human readable description
+                              of this column.
+                            type: string
+                          format:
+                            description: |-
+                              format is an optional OpenAPI type definition for this column. The 'name' format is applied
+                              to the primary identifier column to assist in clients identifying column is the resource name.
+                              See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
+                            type: string
+                          jsonPath:
+                            description: |-
+                              jsonPath is a simple JSON path (i.e. with array notation) which is evaluated against
+                              each custom resource to produce the value for this column.
+                            type: string
+                          name:
+                            description: name is a human readable name for the column.
+                            type: string
+                          priority:
+                            description: |-
+                              priority is an integer defining the relative importance of this column compared to others. Lower
+                              numbers are considered higher priority. Columns that may be omitted in limited space scenarios
+                              should be given a priority greater than 0.
+                            format: int32
+                            type: integer
+                          type:
+                            description: |-
+                              type is an OpenAPI type definition for this column.
+                              See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
+                            type: string
+                        required:
+                          - jsonPath
                           - name
-                          - namespace
-                          type: object
-                      required:
-                      - apiVersion
-                      - kind
-                      - metadata
-                      type: object
-                    id:
+                          - type
+                        type: object
+                      type: array
+                    apiVersion:
+                      description: |-
+                        The APIVersion of the resourcegraphdefinition. This is used to generate
+                        and create the CRD for the resourcegraphdefinition.
+                      pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                       type: string
-                    includeWhen:
-                      items:
-                        type: string
-                      type: array
-                    readyWhen:
-                      items:
-                        type: string
-                      type: array
-                    template:
+                      x-kubernetes-validations:
+                        - message: apiVersion is immutable
+                          rule: self == oldSelf
+                    group:
+                      default: kro.run
+                      description: |-
+                        The group of the resourcegraphdefinition. This is used to set the API group
+                        of the generated CRD. If omitted, it defaults to "kro.run".
+                      type: string
+                    kind:
+                      description: |-
+                        The kind of the resourcegraphdefinition. This is used to generate
+                        and create the CRD for the resourcegraphdefinition.
+                      pattern: ^[A-Z][a-zA-Z0-9]{0,62}$
+                      type: string
+                      x-kubernetes-validations:
+                        - message: kind is immutable
+                          rule: self == oldSelf
+                    spec:
+                      description: |-
+                        The spec of the resourcegraphdefinition. Typically, this is the spec of
+                        the CRD that the resourcegraphdefinition is managing. This is adhering
+                        to the SimpleSchema spec
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
-                  required:
-                  - id
-                  type: object
-                  x-kubernetes-validations:
-                  - message: exactly one of template or externalRef must be provided
-                    rule: (has(self.template) && !has(self.externalRef)) || (!has(self.template)
-                      && has(self.externalRef))
-                type: array
-              schema:
-                description: |-
-                  The schema of the resourcegraphdefinition, which includes the
-                  apiVersion, kind, spec, status, types, and some validation
-                  rules.
-                properties:
-                  additionalPrinterColumns:
-                    description: |-
-                      AdditionalPrinterColumns defines additional printer columns
-                      that will be passed down to the created CRD. If set, no
-                      default printer columns will be added to the created CRD,
-                      and if default printer columns need to be retained, they
-                      need to be added explicitly.
-                    items:
-                      description: CustomResourceColumnDefinition specifies a column
-                        for server side printing.
-                      properties:
-                        description:
-                          description: description is a human readable description
-                            of this column.
-                          type: string
-                        format:
-                          description: |-
-                            format is an optional OpenAPI type definition for this column. The 'name' format is applied
-                            to the primary identifier column to assist in clients identifying column is the resource name.
-                            See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
-                          type: string
-                        jsonPath:
-                          description: |-
-                            jsonPath is a simple JSON path (i.e. with array notation) which is evaluated against
-                            each custom resource to produce the value for this column.
-                          type: string
-                        name:
-                          description: name is a human readable name for the column.
-                          type: string
-                        priority:
-                          description: |-
-                            priority is an integer defining the relative importance of this column compared to others. Lower
-                            numbers are considered higher priority. Columns that may be omitted in limited space scenarios
-                            should be given a priority greater than 0.
-                          format: int32
-                          type: integer
-                        type:
-                          description: |-
-                            type is an OpenAPI type definition for this column.
-                            See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
-                          type: string
-                      required:
-                      - jsonPath
-                      - name
-                      - type
-                      type: object
-                    type: array
-                  apiVersion:
-                    description: |-
-                      The APIVersion of the resourcegraphdefinition. This is used to generate
-                      and create the CRD for the resourcegraphdefinition.
-                    pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
-                    type: string
-                    x-kubernetes-validations:
-                    - message: apiVersion is immutable
-                      rule: self == oldSelf
-                  group:
-                    default: kro.run
-                    description: |-
-                      The group of the resourcegraphdefinition. This is used to set the API group
-                      of the generated CRD. If omitted, it defaults to "kro.run".
-                    type: string
-                  kind:
-                    description: |-
-                      The kind of the resourcegraphdefinition. This is used to generate
-                      and create the CRD for the resourcegraphdefinition.
-                    pattern: ^[A-Z][a-zA-Z0-9]{0,62}$
-                    type: string
-                    x-kubernetes-validations:
-                    - message: kind is immutable
-                      rule: self == oldSelf
-                  spec:
-                    description: |-
-                      The spec of the resourcegraphdefinition. Typically, this is the spec of
-                      the CRD that the resourcegraphdefinition is managing. This is adhering
-                      to the SimpleSchema spec
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  status:
-                    description: |-
-                      The status of the resourcegraphdefinition. This is the status of the CRD
-                      that the resourcegraphdefinition is managing. This is adhering to the
-                      SimpleSchema spec.
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  types:
-                    description: |-
-                      Types is a map of custom type definitions. These can be used in the spec
-                      of the resourcegraphdefinition. Each type definition is also adhering to
-                      the SimpleSchema spec.
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  validation:
-                    description: |-
-                      Validation is a list of validation rules that are applied to the
-                      resourcegraphdefinition.
-                    items:
-                      properties:
-                        expression:
-                          type: string
-                        message:
-                          type: string
-                      type: object
-                    type: array
-                required:
-                - apiVersion
-                - kind
-                type: object
-            required:
-            - schema
-            type: object
-          status:
-            description: ResourceGraphDefinitionStatus defines the observed state
-              of ResourceGraphDefinition
-            properties:
-              conditions:
-                description: Conditions represent the latest available observations
-                  of an object's state
-                items:
-                  description: |-
-                    Condition is the common struct used by all CRDs managed by ACK service
-                    controllers to indicate terminal states  of the CR and its backend AWS
-                    service API resource
-                  properties:
-                    lastTransitionTime:
-                      description: Last time the condition transitioned from one status
-                        to another.
-                      format: date-time
-                      type: string
-                    message:
-                      description: A human-readable message indicating details about
-                        the transition.
-                      type: string
-                    observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
-                      format: int64
-                      minimum: 0
-                      type: integer
-                    reason:
-                      description: The reason for the condition's last transition.
-                      type: string
                     status:
-                      description: Status of the condition, one of True, False, Unknown.
-                      type: string
-                    type:
-                      description: Type is the type of the Condition
-                      type: string
-                  required:
-                  - status
-                  - type
-                  type: object
-                type: array
-              resources:
-                description: Resources represents the resources, and their information
-                  (dependencies for now)
-                items:
-                  description: |-
-                    ResourceInformation defines the information about a resource
-                    in the resourcegraphdefinition
-                  properties:
-                    dependencies:
-                      description: Dependencies represents the resource dependencies
-                        of a resource graph definition
+                      description: |-
+                        The status of the resourcegraphdefinition. This is the status of the CRD
+                        that the resourcegraphdefinition is managing. This is adhering to the
+                        SimpleSchema spec.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    types:
+                      description: |-
+                        Types is a map of custom type definitions. These can be used in the spec
+                        of the resourcegraphdefinition. Each type definition is also adhering to
+                        the SimpleSchema spec.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    validation:
+                      description: |-
+                        Validation is a list of validation rules that are applied to the
+                        resourcegraphdefinition.
                       items:
-                        description: |-
-                          Dependency defines the dependency a resource has observed
-                          from the resources it points to based on expressions
                         properties:
-                          id:
-                            description: ID represents the id of the dependency resource
+                          expression:
+                            type: string
+                          message:
                             type: string
                         type: object
                       type: array
-                    id:
-                      description: ID represents the id of the resources we're providing
-                        information for
-                      type: string
+                  required:
+                    - apiVersion
+                    - kind
                   type: object
-                type: array
-              state:
-                description: State is the state of the resourcegraphdefinition
-                type: string
-              topologicalOrder:
-                description: TopologicalOrder is the topological order of the resourcegraphdefinition
-                  graph
-                items:
+              required:
+                - schema
+              type: object
+            status:
+              description:
+                ResourceGraphDefinitionStatus defines the observed state
+                of ResourceGraphDefinition
+              properties:
+                conditions:
+                  description:
+                    Conditions represent the latest available observations
+                    of an object's state
+                  items:
+                    description: |-
+                      Condition is the common struct used by all CRDs managed by ACK service
+                      controllers to indicate terminal states  of the CR and its backend AWS
+                      service API resource
+                    properties:
+                      lastTransitionTime:
+                        description:
+                          Last time the condition transitioned from one status
+                          to another.
+                        format: date-time
+                        type: string
+                      message:
+                        description:
+                          A human-readable message indicating details about
+                          the transition.
+                        type: string
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: The reason for the condition's last transition.
+                        type: string
+                      status:
+                        description: Status of the condition, one of True, False, Unknown.
+                        type: string
+                      type:
+                        description: Type is the type of the Condition
+                        type: string
+                    required:
+                      - status
+                      - type
+                    type: object
+                  type: array
+                resources:
+                  description:
+                    Resources represents the resources, and their information
+                    (dependencies for now)
+                  items:
+                    description: |-
+                      ResourceInformation defines the information about a resource
+                      in the resourcegraphdefinition
+                    properties:
+                      dependencies:
+                        description:
+                          Dependencies represents the resource dependencies
+                          of a resource graph definition
+                        items:
+                          description: |-
+                            Dependency defines the dependency a resource has observed
+                            from the resources it points to based on expressions
+                          properties:
+                            id:
+                              description: ID represents the id of the dependency resource
+                              type: string
+                          type: object
+                        type: array
+                      id:
+                        description:
+                          ID represents the id of the resources we're providing
+                          information for
+                        type: string
+                    type: object
+                  type: array
+                state:
+                  description: State is the state of the resourcegraphdefinition
                   type: string
-                type: array
-            type: object
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+                topologicalOrder:
+                  description:
+                    TopologicalOrder is the topological order of the resourcegraphdefinition
+                    graph
+                  items:
+                    type: string
+                  type: array
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

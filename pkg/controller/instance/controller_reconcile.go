@@ -165,6 +165,10 @@ func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resou
 		return nil
 	}
 
+	if igr.runtime.IsCollection(resourceID) {
+		return igr.reconcileCollectionResource(ctx, resourceID)
+	}
+
 	// Get and validate resource state
 	resource, state := igr.runtime.GetResource(resourceID)
 	if state != runtime.ResourceStateResolved {
@@ -173,6 +177,46 @@ func (igr *instanceGraphReconciler) reconcileResource(ctx context.Context, resou
 
 	// Handle resource reconciliation
 	return igr.handleResourceReconciliation(ctx, resourceID, resource, resourceState)
+}
+
+func (igr *instanceGraphReconciler) reconcileCollectionResource(ctx context.Context, resourceID string) error {
+	log := igr.log.WithValues("resourceID", resourceID)
+	resources, state, err := igr.runtime.GetCollectionResources(resourceID)
+	if err != nil {
+		return fmt.Errorf("failed to get collection resources: %w", err)
+	}
+
+	if state != runtime.ResourceStateResolved {
+		return igr.delayedRequeue(fmt.Errorf("resource %s not resolved: state=%v", resourceID, state))
+	}
+
+	// Get resource client and namespace
+	rc := igr.getResourceClient(resourceID)
+
+	allFound := true
+	observedResources := []*unstructured.Unstructured{}
+	for _, resource := range resources {
+		observed, err := rc.Get(ctx, resource.GetName(), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				allFound = false
+				log.V(1).Info("Creating new resource", "resourceID", resourceID)
+				igr.instanceSubResourcesLabeler.ApplyLabels(resource)
+				if _, err := rc.Create(ctx, resource, metav1.CreateOptions{}); err != nil {
+					return fmt.Errorf("failed to create resource GGGGG: %w", err)
+				}
+			}
+		}
+		observedResources = append(observedResources, observed)
+	}
+	if allFound {
+		log.V(1).Info("All resources found", "resourceID", resourceID)
+		igr.state.ResourceStates[resourceID].State = "SYNCED"
+		igr.runtime.SetCollectionResources(resourceID, observedResources)
+		return nil
+	}
+
+	return igr.delayedRequeue(fmt.Errorf("collection requeue"))
 }
 
 // handleResourceReconciliation manages the reconciliation of a specific resource,
@@ -339,6 +383,36 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 			return fmt.Errorf("failed to synchronize during deletion state initialization: %w", err)
 		}
 
+		if igr.runtime.IsCollection(resourceID) {
+			resources, resolved, err := igr.runtime.GetCollectionResources(resourceID)
+			if err != nil {
+				return fmt.Errorf("failed to get collection resources: %w", err)
+			}
+			if resolved != runtime.ResourceStateResolved {
+				igr.state.ResourceStates[resourceID] = &ResourceState{
+					State: "SKIPPED",
+				}
+			}
+			rc := igr.getResourceClient(resourceID)
+			for _, resource := range resources {
+				igr.state.ResourceStates[resourceID] = &ResourceState{
+					State: "PENDING_DELETION",
+				}
+				allDeleted := false
+				_, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						allDeleted = true
+					}
+				}
+				if allDeleted {
+					igr.state.ResourceStates[resourceID].State = "DELETED"
+				}
+			}
+
+			continue
+		}
+
 		resource, state := igr.runtime.GetResource(resourceID)
 		if state != runtime.ResourceStateResolved {
 			igr.state.ResourceStates[resourceID] = &ResourceState{
@@ -387,9 +461,33 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 			continue
 		}
 
-		if err := igr.deleteResource(ctx, resourceID); err != nil {
-			return err
+		if igr.runtime.IsCollection(resourceID) {
+			resources, _, err := igr.runtime.GetCollectionResources(resourceID)
+			if err != nil {
+				return fmt.Errorf("failed to get collection resources: %w", err)
+			}
+			for _, resource := range resources {
+				rc := igr.getResourceClient(resourceID)
+
+				// Attempt to delete the resource
+				err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						resourceState.State = "DELETED"
+						continue
+					}
+					resourceState.State = InstanceStateError
+					resourceState.Err = fmt.Errorf("failed to delete resource: %w", err)
+					return resourceState.Err
+				}
+			}
+			continue
+		} else {
+			if err := igr.deleteResource(ctx, resourceID); err != nil {
+				return err
+			}
 		}
+
 	}
 	return nil
 }

@@ -1,0 +1,16 @@
+apiVersion: kro.run/v1alpha1
+kind: ReplicaSet
+metadata:
+  name: replicate-my-pod
+spec:
+  name: replicate-my-pod
+  image: nginx
+  roles:
+    - reader
+    - writer
+    - dancer
+    - singer
+    - artist
+    - chef
+    - test-ignore-me
+    - engineer

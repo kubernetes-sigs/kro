@@ -132,6 +132,37 @@ type Resource struct {
 	ReadyWhen []string `json:"readyWhen,omitempty"`
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+	// ForEach represents a CEL expression that is used to iterate over a collection
+	// of resources. This is used to create multiple instances of a resource
+	// based on the collection. The expression must return an array or a map of values.
+	// The values could be strings, numbers, or objects.
+	//
+	// For example:
+	//   forEach: "${[1, 2, 3]}"
+	//   forEach: "${["us-west-2", "us-east-1"]}"
+	//   forEach: "${spec.schema.tags}"
+	//   forEach: "${range(0, 10)}"
+	//   forEach: "${range(0, spec.replicas)}"
+	//   forEach: "${range(0, spec.replicas, 2)}"
+	//   forEach: "${range(0, spec.replicas, 2).map(x => x * 2)}"
+	//   forEach: "${spec.replicas.map(x => x * 2)}"
+	//   forEach: "${spec.replicas.map(x => x * 2).filter(x => x > 5)}"
+	//
+	// To access the value of the forEach expression, use the following syntax:
+	//   ${each.item} # To access the current item in the iteration
+	//   ${each.index} # To access the index of the current item in the iteration
+	//   ${each.length} # To access the length of the forEach expression
+	//   ${each.value} # To access the value of the forEach expression
+	//   ${each.key} # To access the key of the forEach expression
+	ForEach *string `json:"forEach,omitempty"`
+}
+
+// Collection defines the collection of resources
+// that are part of the resourcegraphdefinition. This is the equivalent
+// of for loops.. but non-turing complete.
+type Collection struct {
+	Index    string               `json:"index,omitempty"`
+	Template runtime.RawExtension `json:"template,omitempty"`
 }
 
 // ResourceGraphDefinitionState defines the state of the resource graph definition.

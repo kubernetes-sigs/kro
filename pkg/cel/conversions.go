@@ -53,6 +53,7 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return GoNativeType(opt.GetValue())
 	case types.NullType:
 		return nil, nil
+
 	default:
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
@@ -62,4 +63,18 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 // IsBoolType checks if the given ref.Val is of type BoolType
 func IsBoolType(v ref.Val) bool {
 	return v.Type() == types.BoolType
+}
+
+// IsListType checks if the given ref.Val is of type ListType
+func IsListType(v ref.Val) bool {
+	return v.Type() == types.ListType
+}
+
+// IsMapType checks if the given ref.Val is of type MapType
+func IsMapType(v ref.Val) bool {
+	return v.Type() == types.MapType
+}
+
+func IsCollectionType(v ref.Val) bool {
+	return IsListType(v) || IsMapType(v)
 }

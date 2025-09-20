@@ -127,7 +127,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 		for _, expr := range field.Expressions {
 			key := strings.Trim(expr, "${}")
 			replacement, ok := r.data[key]
-			if !ok {
+			if !ok && !strings.Contains(expr, "each") {
 				result.Error = fmt.Errorf("no data provided for expression: %s", expr)
 				return result
 			}

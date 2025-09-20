@@ -1,0 +1,39 @@
+# 0.4.0 - Mid june
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: replica-set
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ReplicaSet
+    spec:
+      name: string
+      image: string | default="nginx"
+      roles: "[]string" # "role-read" "role-write" "tester"
+
+  resources:
+    - id: replicaSet
+      # forEach a field that enables iteration on a set of values (arrays or maps).
+      # It can reference a field in the schema or a field from another resource.
+      # You can use CEL macros to manipulate the values before the iteration is executed.
+      # For example ${[1,2,3].map(x, x + 1)} will iterate using the values [2,3,4].
+      #
+      # Otherfields like includeWhen and excludeWhen can be used well.
+      forEach: ${schema.spec.roles.filter(x, x.substring(0, 4) != 'test')}
+      template:
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          # On each iteration, the value of each.item will be the current item in the list.
+          # Possible values are:
+          # each.item:    will point to the current item in the list.
+          # each.index:   will point to the index of the current item in the list.
+          # each.length:  will expose the length of the list.
+          # each.key:     will point to the key of the current item in the map.
+          # each.value:   will point to the value of the current item in the map.
+          name: ${schema.spec.name + '-' + each.item}
+        spec:
+          containers:
+            - name: ${schema.spec.name + '-' + each.item}
+              image: ${schema.spec.image}

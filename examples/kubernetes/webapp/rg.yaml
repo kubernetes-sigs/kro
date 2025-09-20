@@ -24,90 +24,89 @@ spec:
       url: ${ingress.status.loadBalancer.ingress[0].hostname}
 
   resources:
-  - id: deployment
-    readyWhen:
-      - ${deployment.spec.replicas == deployment.status.availableReplicas}
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-        labels:
-          app.kubernetes.io/name: ${schema.spec.name}
-      spec:
-        replicas: ${schema.spec.replicas}
-        selector:
-          matchLabels:
+    - id: deployment
+      readyWhen:
+        - ${deployment.spec.replicas == deployment.status.availableReplicas}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
             app.kubernetes.io/name: ${schema.spec.name}
-            app: ${schema.spec.name}
-        template:
-          metadata:
-            labels:
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
               app.kubernetes.io/name: ${schema.spec.name}
               app: ${schema.spec.name}
-          spec:
-            serviceAccountName: ${schema.spec.serviceAccount}
-            containers:
-            - name: s3-demo
-              image: ${schema.spec.image}
-              imagePullPolicy: Always
-              ports:
-              - containerPort: ${schema.spec.port}
-              resources:
-                requests:
-                  memory: "64Mi"
-                  cpu: "250m"
-                limits:
-                  memory: "1Gi"
-                  cpu: "1"
-              env:
-              - name: S3_BUCKET_NAME
-                value: ${schema.spec.s3bucketName}
-            restartPolicy: Always
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: ${schema.spec.name}
+                app: ${schema.spec.name}
+            spec:
+              serviceAccountName: ${schema.spec.serviceAccount}
+              containers:
+                - name: s3-demo
+                  image: ${schema.spec.image}
+                  imagePullPolicy: Always
+                  ports:
+                    - containerPort: ${schema.spec.port}
+                  resources:
+                    requests:
+                      memory: "64Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "1Gi"
+                      cpu: "1"
+                  env:
+                    - name: S3_BUCKET_NAME
+                      value: ${schema.spec.s3bucketName}
+              restartPolicy: Always
 
-  - id: service
-    includeWhen:
-    - ${schema.spec.service.enabled}  
-    template:
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: ${deployment.metadata.name}
-        namespace: ${deployment.metadata.namespace}
-      spec:
-        selector:
-          app: ${schema.spec.name}
-        ports:
-        - name: http
-          protocol: TCP
-          port: 80
-          targetPort: ${schema.spec.port}
-
-  - id: ingress
-    includeWhen:
-    - ${schema.spec.ingress.enabled}  
-    template:
-      apiVersion: networking.k8s.io/v1
-      kind: Ingress
-      metadata:
-        name: ${deployment.metadata.name}
-        namespace: ${deployment.metadata.namespace}
-        annotations:
-          kubernetes.io/ingress.class: alb
-          alb.ingress.kubernetes.io/scheme: internet-facing
-          alb.ingress.kubernetes.io/target-type: ip
-          alb.ingress.kubernetes.io/healthcheck-path: /health
-          alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
-          alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=60
-      spec:
-        rules:
-        - http:
-            paths:
-            - path: "/"
-              pathType: Prefix
-              backend:
-                service:
-                  name: ${service.metadata.name}
-                  port:
-                    number: 80
+    - id: service
+      includeWhen:
+        - ${schema.spec.service.enabled}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${deployment.metadata.name}
+          namespace: ${deployment.metadata.namespace}
+        spec:
+          selector:
+            app: ${schema.spec.name}
+          ports:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: ${schema.spec.port}
+    - id: ingress
+      includeWhen:
+        - ${schema.spec.ingress.enabled}
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: ${deployment.metadata.name}
+          namespace: ${deployment.metadata.namespace}
+          annotations:
+            kubernetes.io/ingress.class: alb
+            alb.ingress.kubernetes.io/scheme: internet-facing
+            alb.ingress.kubernetes.io/target-type: ip
+            alb.ingress.kubernetes.io/healthcheck-path: /health
+            alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+            alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=60
+        spec:
+          rules:
+            - http:
+                paths:
+                  - path: "/"
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: ${service.metadata.name}
+                        port:
+                          number: 80

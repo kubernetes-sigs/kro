@@ -20,6 +20,8 @@ import (
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -28,6 +30,11 @@ import (
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
 	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kro-run/kro/pkg/requeue"
+)
+
+const (
+	crdNotEstablishedRequeueDuration = 500 * time.Millisecond
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
@@ -59,11 +66,21 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+	established, err := r.reconcileResourceGraphDefinitionCRD(ctx, crd)
+	if err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
-	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
+	if !established {
+		log.V(1).Info("CRD not yet established, requeuing")
+
+		mark.KindUnready("CRD exists but not yet established")
+		// CRD establishment is async, requeue to check readiness
+		return processedRGD.TopologicalOrder, resourcesInfo, requeue.NeededAfter(nil, crdNotEstablishedRequeueDuration)
+	}
+	mark.KindReady(crd.Status.AcceptedNames.Kind)
+
+	if crd, err = r.clientSet.CRD().Get(ctx, crd.Name, metav1.GetOptions{}); err != nil {
 		mark.KindUnready(err.Error())
 	} else {
 		mark.KindReady(crd.Status.AcceptedNames.Kind)
@@ -151,10 +168,44 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 	}
 }
 
-// reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
-		return newCRDError(err)
+// reconcileResourceGraphDefinitionCRD checks if the CRD exists and is established, creating it if necessary
+// returns a boolean indicating if the CRD is established or not. If error is not nil, the CRD doesn't exist at all.
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) (bool, error) {
+	existing, err := r.clientSet.CRD().Get(ctx, crd.Name, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+
+		// CRD doesn't exist, create it
+		_, err = r.clientSet.CRD().Create(ctx, crd, metav1.CreateOptions{})
+		if err != nil {
+			return false, err
+		}
+
+		// CRDs will need time to be established after creation
+		// We optimistically return not ready here; the next reconciliation loop
+		// will check readiness
+		return false, nil
+	}
+
+	// CRD exists, check if it's ready (Established condition)
+	established := false
+	for _, cond := range existing.Status.Conditions {
+		if cond.Type == v1.Established && cond.Status == v1.ConditionTrue {
+			established = true
+			break
+		}
+	}
+
+	return established, nil
+}
+
+// For cleanup/deletion
+func (r *ResourceGraphDefinitionReconciler) deleteCRD(ctx context.Context, name string) error {
+	err := r.clientSet.CRD().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
 	}
 	return nil
 }

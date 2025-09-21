@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,7 +48,7 @@ type Environment struct {
 	TestEnv          *envtest.Environment
 	CtrlManager      ctrl.Manager
 	ClientSet        *kroclient.Set
-	CRDManager       kroclient.CRDClient
+	CRDManager       apiextensionsv1.CustomResourceDefinitionInterface
 	GraphBuilder     *graph.Builder
 }
 
@@ -121,7 +122,7 @@ func (e *Environment) initializeClients() error {
 		return fmt.Errorf("creating client: %w", err)
 	}
 
-	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
+	e.CRDManager = e.ClientSet.CRD()
 
 	restConfig := e.ClientSet.RESTConfig()
 	e.GraphBuilder, err = graph.NewBuilder(restConfig)

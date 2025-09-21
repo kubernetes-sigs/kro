@@ -70,7 +70,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ct
 		return nil
 	}
 
-	if err := r.crdManager.Delete(ctx, crdName); err != nil {
+	if err := r.deleteCRD(ctx, crdName); err != nil {
 		return fmt.Errorf("error deleting CRD: %w", err)
 	}
 	return nil

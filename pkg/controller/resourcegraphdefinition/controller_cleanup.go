@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -70,8 +72,17 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ct
 		return nil
 	}
 
-	if err := r.crdManager.Delete(ctx, crdName); err != nil {
+	if err := r.deleteCRD(ctx, crdName); err != nil {
 		return fmt.Errorf("error deleting CRD: %w", err)
+	}
+	return nil
+}
+
+// For cleanup/deletion
+func (r *ResourceGraphDefinitionReconciler) deleteCRD(ctx context.Context, name string) error {
+	err := r.clientSet.CRD().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
 	}
 	return nil
 }

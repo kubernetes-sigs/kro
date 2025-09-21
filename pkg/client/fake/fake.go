@@ -66,9 +66,8 @@ func (f *FakeSet) RESTConfig() *rest.Config {
 }
 
 // CRD returns a new CRD interface instance
-func (f *FakeSet) CRD(cfg client.CRDWrapperConfig) client.CRDInterface {
-	// Return a fake CRD implementation for testing
-	return &FakeCRD{}
+func (f *FakeSet) CRD() apiextensionsv1.CustomResourceDefinitionInterface {
+	return f.ApiExtensionsClient.CustomResourceDefinitions()
 }
 
 // WithImpersonation returns a new client that impersonates the given user
@@ -88,10 +87,8 @@ func (f *FakeSet) SetRESTMapper(restMapper meta.RESTMapper) {
 // FakeCRD is a fake implementation of CRDInterface for testing
 type FakeCRD struct{}
 
-var _ client.CRDInterface = (*FakeCRD)(nil)
-
-// Ensure ensures a CRD exists, up-to-date, and is ready
-func (f *FakeCRD) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
+// Create ensures a CRD exists, up-to-date, and is ready
+func (f *FakeCRD) Create(ctx context.Context, crd v1.CustomResourceDefinition) error {
 	// For testing, just return success
 	return nil
 }

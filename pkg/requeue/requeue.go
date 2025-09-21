@@ -15,6 +15,7 @@
 package requeue
 
 import (
+	"errors"
 	"time"
 )
 
@@ -133,6 +134,18 @@ func (e *RequeueNeededAfter) Unwrap() error {
 		return nil
 	}
 	return e.err
+}
+
+// Check checks if the error is a requeue error and returns the requeue duration if applicable.
+func Check(err error) (bool, time.Duration) {
+	var requeueErr *RequeueNeededAfter
+
+	if errors.As(err, &requeueErr) {
+		return true, requeueErr.Duration()
+	}
+
+	var requeueNeededErr *RequeueNeeded
+	return errors.As(err, &requeueNeededErr), 0
 }
 
 // Ensure RequeueNeededAfter implements the error interface

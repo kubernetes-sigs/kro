@@ -89,6 +89,7 @@ var _ = Describe("CRD", func() {
 					Name: "testresources.kro.run",
 				}, crd)
 				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(isCRDEstablished(crd)).To(BeTrue())
 
 				// Verify CRD spec
 				g.Expect(crd.Spec.Group).To(Equal("kro.run"))
@@ -152,6 +153,7 @@ var _ = Describe("CRD", func() {
 					Name: "testupdates.kro.run",
 				}, crd)
 				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(isCRDEstablished(crd)).To(BeTrue())
 
 				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
 				g.Expect(props["spec"].Properties).To(HaveLen(3))
@@ -305,6 +307,7 @@ var _ = Describe("CRD", func() {
 					Name: crdName,
 				}, crd)
 				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(isCRDEstablished(crd)).To(BeTrue())
 
 				// expect resource version to be different (indicating an update)
 				g.Expect(crd.ResourceVersion).NotTo(Equal(originalCRDVersion))
@@ -319,3 +322,12 @@ var _ = Describe("CRD", func() {
 		})
 	})
 })
+
+func isCRDEstablished(crd *apiextensionsv1.CustomResourceDefinition) bool {
+	for _, cond := range crd.Status.Conditions {
+		if cond.Type == apiextensionsv1.Established && cond.Status == apiextensionsv1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}

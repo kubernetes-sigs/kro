@@ -35,6 +35,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 //+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
@@ -51,8 +52,7 @@ type ResourceGraphDefinitionReconciler struct {
 
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
+	clientSet kroclient.SetInterface
 
 	metadataLabeler         metadata.Labeler
 	rgBuilder               *graph.Builder
@@ -67,12 +67,10 @@ func NewResourceGraphDefinitionReconciler(
 	builder *graph.Builder,
 	maxConcurrentReconciles int,
 ) *ResourceGraphDefinitionReconciler {
-	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
 		clientSet:               clientSet,
 		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
@@ -171,8 +169,14 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1
 
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
+	// Always update status
 	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
+	}
+
+	// Check if this is a requeue error
+	if needRequeue, duration := requeue.Check(reconcileErr); needRequeue {
+		return ctrl.Result{RequeueAfter: duration}, nil
 	}
 
 	return ctrl.Result{}, reconcileErr

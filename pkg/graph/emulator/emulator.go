@@ -32,6 +32,12 @@ var (
 	kubernetesTopLevelFields = []string{"apiVersion", "kind", "metadata"}
 )
 
+// Interface defines the methods for the Emulator, primarily for testing purposes.
+type Interface interface {
+	// GenerateSample generates a dummy CR based on the provided schema.
+	GenerateSample(gvk schema.GroupVersionKind, schema *spec.Schema) (*unstructured.Unstructured, error)
+}
+
 // Emulator is used to generate dummy CRs based on an OpenAPI schema.
 type Emulator struct {
 	rand *rand.Rand
@@ -44,15 +50,15 @@ func NewEmulator() *Emulator {
 	}
 }
 
-// GenerateDummyCR generates a dummy CR based on the provided schema.
-func (e *Emulator) GenerateDummyCR(gvk schema.GroupVersionKind,
+// GenerateSample generates a dummy CR based on the provided schema.
+func (e *Emulator) GenerateSample(gvk schema.GroupVersionKind,
 	schema *spec.Schema) (*unstructured.Unstructured, error) {
 	if schema == nil {
 		return nil, fmt.Errorf("schema is nil for %v", gvk)
 	}
 
 	cr := &unstructured.Unstructured{
-		Object: make(map[string]interface{}),
+		Object: make(map[string]interface{}, len(schema.Properties)),
 	}
 
 	// Only generate fields from the schema
@@ -144,7 +150,7 @@ func (e *Emulator) generateObject(schema *spec.Schema) (map[string]interface{}, 
 		return nil, fmt.Errorf("schema is nil")
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]interface{}, len(schema.Properties))
 	for propertyName, propertySchema := range schema.Properties {
 		value, err := e.generateValue(&propertySchema)
 		if err != nil {

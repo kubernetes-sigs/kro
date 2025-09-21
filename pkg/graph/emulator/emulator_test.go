@@ -24,7 +24,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-func TestGenerateDummyCR(t *testing.T) {
+func TestGenerateSample(t *testing.T) {
 	tests := []struct {
 		name           string
 		gvk            schema.GroupVersionKind
@@ -475,7 +475,7 @@ func TestGenerateDummyCR(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := NewEmulator()
-			cr, err := e.GenerateDummyCR(tt.gvk, tt.schema)
+			cr, err := e.GenerateSample(tt.gvk, tt.schema)
 			require.NoError(t, err)
 			require.NotNil(t, cr)
 
@@ -489,7 +489,7 @@ func TestGenerateDummyCR(t *testing.T) {
 	}
 }
 
-func TestGenerateDummyCRErrors(t *testing.T) {
+func TestGenerateSampleErrors(t *testing.T) {
 	e := NewEmulator()
 	gvk := schema.GroupVersionKind{
 		Group:   "kro.run",
@@ -498,7 +498,7 @@ func TestGenerateDummyCRErrors(t *testing.T) {
 	}
 
 	t.Run("nil schema", func(t *testing.T) {
-		_, err := e.GenerateDummyCR(gvk, nil)
+		_, err := e.GenerateSample(gvk, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "schema is nil")
 	})
@@ -521,7 +521,7 @@ func TestGenerateDummyCRErrors(t *testing.T) {
 				},
 			},
 		}
-		_, err := e.GenerateDummyCR(gvk, schema)
+		_, err := e.GenerateSample(gvk, schema)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported type")
 	})

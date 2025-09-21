@@ -51,11 +51,13 @@ func NewBuilder(
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
 	}
 
-	resourceEmulator := emulator.NewEmulator()
+	instanceEmulator := emulator.NewEmulator()
+	resourceEmulator := emulator.CachedFromEmulator(instanceEmulator)
 
 	rgBuilder := &Builder{
 		resourceEmulator: resourceEmulator,
 		schemaResolver:   schemaResolver,
+		instanceEmulator: instanceEmulator,
 		discoveryClient:  dc,
 	}
 	return rgBuilder, nil
@@ -93,8 +95,13 @@ type Builder struct {
 	//
 	// Maybe there is a better way, if anything probably there is a better way to
 	// validate the CEL expressions. To revisit.
-	resourceEmulator *emulator.Emulator
-	discoveryClient  discovery.DiscoveryInterface
+	resourceEmulator *emulator.CachedEmulator
+	// instanceEmulator is used to emulate the instance resource. This is not a cached
+	// emulator mainly because users can create/delete RGDs frequently, and hence we
+	// cache stale data. Resources on the other hand are more stable.
+	instanceEmulator *emulator.Emulator
+	// discoveryClient is used to discover the resources in the cluster.
+	discoveryClient discovery.DiscoveryInterface
 }
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
@@ -324,7 +331,7 @@ func (b *Builder) buildRGResource(
 
 		// 4. Emulate the resource, this is later used to verify the validity of the
 		//    CEL expressions.
-		emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
+		emulatedResource, err = b.resourceEmulator.GenerateSample(gvk, resourceSchema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.ID, err)
 		}
@@ -490,7 +497,7 @@ func (b *Builder) buildInstanceResource(
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert JSON schema to spec schema: %w", err)
 	}
-	emulatedInstance, err := b.resourceEmulator.GenerateDummyCR(gvk, instanceSchema)
+	emulatedInstance, err := b.instanceEmulator.GenerateSample(gvk, instanceSchema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate dummy CR for instance: %w", err)
 	}

@@ -33,7 +33,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
 		discoveryClient:  fakeDiscovery,
-		resourceEmulator: emulator.NewEmulator(),
+		resourceEmulator: emulator.NewCachedEmulator(),
+		instanceEmulator: emulator.NewEmulator(),
 	}
 
 	tests := []struct {
@@ -469,7 +470,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
 		discoveryClient:  fakeDiscovery,
-		resourceEmulator: emulator.NewEmulator(),
+		resourceEmulator: emulator.NewCachedEmulator(),
+		instanceEmulator: emulator.NewEmulator(),
 	}
 
 	tests := []struct {
@@ -1052,7 +1054,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
 		discoveryClient:  fakeDiscovery,
-		resourceEmulator: emulator.NewEmulator(),
+		resourceEmulator: emulator.NewCachedEmulator(),
+		instanceEmulator: emulator.NewEmulator(),
 	}
 
 	tests := []struct {
@@ -1408,7 +1411,8 @@ func Test_ValidateOpenAPISchema(t *testing.T) {
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
 		discoveryClient:  fakeDiscovery,
-		resourceEmulator: emulator.NewEmulator(),
+		resourceEmulator: emulator.NewCachedEmulator(),
+		instanceEmulator: emulator.NewEmulator(),
 	}
 
 	tests := []struct {

@@ -16,34 +16,150 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kro-run/kro/pkg/apis"
 	"github.com/kro-run/kro/pkg/requeue"
 )
 
-func createCondition(conditionType v1alpha1.ConditionType, status corev1.ConditionStatus, reason, message string, generation int64) map[string]interface{} {
-	return map[string]interface{}{
-		"type":               string(conditionType),
-		"status":             string(status),
-		"reason":             reason,
-		"message":            message,
-		"lastTransitionTime": time.Now().Format(time.RFC3339),
-		"observedGeneration": generation,
+const (
+	Ready           = "Ready"
+	InstanceManaged = "InstanceManaged"
+	GraphResolved   = "GraphResolved"
+	ResourcesReady  = "ResourcesReady"
+)
+
+var instanceConditionTypes = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)
+
+// unstructuredConditionAdapter adapts an unstructured.Unstructured to implement apis.Object
+type unstructuredConditionAdapter struct {
+	*unstructured.Unstructured
+}
+
+// GetConditions implements apis.Object interface
+func (u *unstructuredConditionAdapter) GetConditions() []v1alpha1.Condition {
+	if conditions, found, err := unstructured.NestedSlice(u.Object, "status", "conditions"); err == nil && found {
+		// Marshal the conditions slice to JSON and then unmarshal to []v1alpha1.Condition
+		conditionsJSON, err := json.Marshal(conditions)
+		if err != nil {
+			return []v1alpha1.Condition{}
+		}
+
+		var result []v1alpha1.Condition
+		if err := json.Unmarshal(conditionsJSON, &result); err != nil {
+			return []v1alpha1.Condition{}
+		}
+		return result
 	}
+	return []v1alpha1.Condition{}
+}
+
+// SetConditions implements apis.Object interface
+func (u *unstructuredConditionAdapter) SetConditions(conditions []v1alpha1.Condition) {
+	// Marshal the conditions to JSON and then unmarshal to interface{} slice
+	conditionsJSON, err := json.Marshal(conditions)
+	if err != nil {
+		return // Fail silently - could log this in the future
+	}
+
+	var conditionsInterface []interface{}
+	if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err != nil {
+		return // Fail silently - could log this in the future
+	}
+
+	if err := unstructured.SetNestedSlice(u.Object, conditionsInterface, "status", "conditions"); err != nil {
+		return // Fail silently - could log this in the future
+	}
+}
+
+// wrapInstance creates an adapter that allows unstructured instances to work with condition management
+func wrapInstance(instance *unstructured.Unstructured) *unstructuredConditionAdapter {
+	return &unstructuredConditionAdapter{Unstructured: instance}
+}
+
+// NewConditionsMarkerFor creates a marker to manage conditions and sub-conditions for instances.
+// ```
+// Ready
+//
+//	├─ InstanceManaged - Instance finalizers and labels are properly set
+//	├─ GraphResolved - Runtime graph created and all resources resolved
+//	└─ ResourcesReady - All resources are created and ready
+//
+// ```
+func NewConditionsMarkerFor(instance *unstructured.Unstructured) *ConditionsMarker {
+	wrapped := wrapInstance(instance)
+	return &ConditionsMarker{cs: instanceConditionTypes.For(wrapped)}
+}
+
+// A ConditionsMarker provides an API to mark conditions onto an instance as the controller does work.
+type ConditionsMarker struct {
+	cs apis.ConditionSet
+}
+
+// InstanceManaged signals the instance has proper finalizers and labels set.
+func (m *ConditionsMarker) InstanceManaged() {
+	m.cs.SetTrueWithReason(InstanceManaged, "Managed", "instance is properly managed with finalizers and labels")
+}
+
+// InstanceNotManaged signals there was an issue setting up the instance management.
+func (m *ConditionsMarker) InstanceNotManaged(format string, a ...any) {
+	m.cs.SetFalse(InstanceManaged, "ManagementFailed", fmt.Sprintf(format, a...))
+}
+
+// GraphResolved signals the runtime graph has been created and resources resolved.
+func (m *ConditionsMarker) GraphResolved() {
+	m.cs.SetTrueWithReason(GraphResolved, "Resolved", "runtime graph created and all resources resolved")
+}
+
+// GraphNotResolved signals there was an issue creating the runtime graph or resolving resources.
+func (m *ConditionsMarker) GraphNotResolved(format string, a ...any) {
+	m.cs.SetFalse(GraphResolved, "ResolutionFailed", fmt.Sprintf(format, a...))
+}
+
+// ResourcesReady signals all resources in the graph are created and ready.
+func (m *ConditionsMarker) ResourcesReady() {
+	m.cs.SetTrueWithReason(ResourcesReady, "AllResourcesReady", "all resources are created and ready")
+}
+
+// ResourcesNotReady signals some resources are not yet ready or failed to be created.
+func (m *ConditionsMarker) ResourcesNotReady(format string, a ...any) {
+	m.cs.SetFalse(ResourcesReady, "ResourcesNotReady", fmt.Sprintf(format, a...))
+}
+
+// ResourcesInProgress signals resources are being processed but not yet ready.
+func (m *ConditionsMarker) ResourcesInProgress(format string, a ...any) {
+	m.cs.SetUnknownWithReason(ResourcesReady, "ResourcesInProgress", fmt.Sprintf(format, a...))
 }
 
 // prepareStatus creates the status object for the instance based on current state.
 func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 	status := igr.getResolvedStatus()
-	generation := igr.runtime.GetInstance().GetGeneration()
 
-	status["state"] = igr.state.State
-	status["conditions"] = igr.prepareConditions(igr.state.ReconcileErr, generation)
+	// Set status.state based on readiness
+	instance := igr.runtime.GetInstance()
+	conditionSet := instanceConditionTypes.For(wrapInstance(instance))
+	if conditionSet.IsRootReady() {
+		status["state"] = InstanceStateActive
+	} else {
+		status["state"] = igr.state.State
+	}
+
+	// Get conditions from the instance (set by condition markers during reconciliation)
+	if conditions := conditionSet.List(); len(conditions) > 0 {
+		// Marshal conditions to JSON and then unmarshal to []interface{} to get map[string]interface{} representation
+		conditionsJSON, err := json.Marshal(conditions)
+		if err == nil {
+			var conditionsInterface []interface{}
+			if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err == nil {
+				status["conditions"] = conditionsInterface
+			}
+		}
+	}
 
 	return status
 }
@@ -64,35 +180,6 @@ func (igr *instanceGraphReconciler) getResolvedStatus() map[string]interface{} {
 	}
 
 	return status
-}
-
-// prepareConditions creates the conditions array for the instance status.
-func (igr *instanceGraphReconciler) prepareConditions(
-	reconcileErr error,
-	generation int64,
-) []interface{} {
-	var conditions []interface{}
-
-	// Add primary reconciliation condition
-	if reconcileErr != nil {
-		conditions = append(conditions, createCondition(
-			"InstanceSynced",
-			corev1.ConditionFalse,
-			"ReconciliationFailed",
-			reconcileErr.Error(),
-			generation,
-		))
-	} else {
-		conditions = append(conditions, createCondition(
-			"InstanceSynced",
-			corev1.ConditionTrue,
-			"ReconciliationSucceeded",
-			"Instance reconciled successfully",
-			generation,
-		))
-	}
-
-	return conditions
 }
 
 // patchInstanceStatus updates the status subresource of the instance.

@@ -144,8 +144,8 @@ func TestParseResource(t *testing.T) {
 			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
 			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
 			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"any"}, StandaloneExpression: true},
+			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"any"}, StandaloneExpression: true},
 		}
 
 		expressions, err := ParseResource(resource, schema)

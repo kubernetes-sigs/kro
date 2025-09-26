@@ -65,6 +65,10 @@ spec:
               value: {{ .Values.config.clientQps | quote }}
             - name: KRO_CLIENT_BURST
               value: {{ .Values.config.clientBurst | quote }}
+            {{- if .Values.config.groupResourceMap }}
+            - name: KRO_GROUP_RESOURCE_MAP
+              value: {{ .Values.config.groupResourceMap | quote }}
+            {{- end }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion

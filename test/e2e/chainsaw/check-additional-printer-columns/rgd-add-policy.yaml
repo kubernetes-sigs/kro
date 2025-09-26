@@ -1,0 +1,31 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: test-add-printer-columns
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TestAddPrinterColumns
+    additionalPrinterColumnPolicy: Add
+    additionalPrinterColumns:
+      - name: "State"  # This should override the default State column
+        type: "string"
+        jsonPath: ".spec.name"
+        description: "Custom state showing the name"
+      - name: "REPLICAS"  # This should be appended as a new column
+        type: "integer"
+        jsonPath: ".spec.replicas"
+        description: "Number of replicas"
+    spec:
+      name: string | default="test"
+      replicas: integer | default=1
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          name: ${schema.spec.name}
+          replicas: ${schema.spec.replicas}

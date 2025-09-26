@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 	"time"
@@ -35,7 +34,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -48,7 +47,7 @@ func init() {
 
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -74,9 +73,9 @@ func main() {
 		rateLimit     int
 		burstLimit    int
 		// reconciler parameters
-		resyncPeriod    int
-		queueMaxRetries int
-		shutdownTimeout int
+		resyncPeriod            int
+		queueMaxRetries         int
+		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
 		logLevel int
 		qps      float64
@@ -93,6 +92,8 @@ func main() {
 			"leader election. By default it will try to use the namespace of the service account mounted"+
 			" to the controller pod.")
 	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
+	flag.DurationVar(&gracefulShutdownTimeout, "graceful-shutdown-timeout", 60*time.Second,
+		"maximum duration to wait for the controller manager to gracefully shutdown")
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
 		"The number of resource graph definition reconciles to run in parallel",
@@ -117,8 +118,6 @@ func main() {
 		"interval at which the controller will re list resources even with no changes, in seconds")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
-	flag.IntVar(&shutdownTimeout, "dynamic-controller-default-shutdown-timeout", 60,
-		"maximum duration to wait for the controller to gracefully shutdown, in seconds")
 	// log level flags
 	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")
 	// qps and burst
@@ -152,6 +151,7 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
+		GracefulShutdownTimeout: &gracefulShutdownTimeout,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "6f0f64a5.kro.run",
@@ -176,7 +176,6 @@ func main() {
 
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers:         dynamicControllerConcurrentReconciles,
-		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Second,
 		QueueMaxRetries: queueMaxRetries,
 		MinRetryDelay:   minRetryDelay,
@@ -205,14 +204,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	go func() {
-		err := dc.Run(context.Background())
-		if err != nil {
-			setupLog.Error(err, "dynamic controller failed to run")
-		}
-	}()
+	if err := mgr.Add(dc); err != nil {
+		setupLog.Error(err, "unable to add dynamic controller to manager")
+		os.Exit(1)
+	}
 
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -224,15 +221,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := ctrl.SetupSignalHandler()
-
-	go func() {
-		if err := mgr.Start(ctx); err != nil {
-			setupLog.Error(err, "problem running manager")
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
 }

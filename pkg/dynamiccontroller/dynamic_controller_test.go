@@ -67,7 +67,6 @@ func TestNewDynamicController(t *testing.T) {
 		Workers:         2,
 		ResyncPeriod:    10 * time.Hour,
 		QueueMaxRetries: 20,
-		ShutdownTimeout: 60 * time.Second,
 		MinRetryDelay:   200 * time.Millisecond,
 		MaxRetryDelay:   1000 * time.Second,
 		RateLimit:       10,
@@ -90,7 +89,6 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 		Workers:         1,
 		ResyncPeriod:    1 * time.Second,
 		QueueMaxRetries: 5,
-		ShutdownTimeout: 5 * time.Second,
 		MinRetryDelay:   200 * time.Millisecond,
 		MaxRetryDelay:   1000 * time.Second,
 		RateLimit:       10,
@@ -102,12 +100,12 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
 	// Create a context with cancel for running the controller
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// Start the controller in a goroutine
 	go func() {
-		err := dc.Run(ctx)
+		err := dc.Start(ctx)
 		require.NoError(t, err)
 	}()
 

@@ -2,7 +2,10 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   labels:
-    kro.run/instance-name: test-app-instance
+    kro.run/managed-by-instance-name: test-app-instance
+    kro.run/managed-by-instance-version: v1alpha1
+    kro.run/managed-by-instance-kind: CheckMultiResourceAutoscaledDeployment
+    kro.run/managed-by-instance-group: kro.run
     kro.run/owned: "true"
   name: test-app-hpa
 spec:

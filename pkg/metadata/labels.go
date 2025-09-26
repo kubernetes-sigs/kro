@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
@@ -37,6 +38,24 @@ const (
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
+	// ReconciledByRGDLabel is added to an instance to indicate which RGD is reconciling it.
+	ReconciledByRGDLabel = LabelKROPrefix + "reconciled-by-rgd"
+
+	// DefinedByRGDLabel is added to resources created by an instance reconciliation to indicate which RGD they come from.
+	DefinedByRGDLabel = LabelKROPrefix + "defined-by-rgd"
+
+	// ManagedByInstanceGroupLabel is added to resources to link back to the instance's group that created them.
+	ManagedByInstanceGroupLabel = LabelKROPrefix + "managed-by-instance-group"
+	// ManagedByInstanceVersionLabel is added to resources to link back to the instance's group that created them.
+	ManagedByInstanceVersionLabel = LabelKROPrefix + "managed-by-instance-version"
+	// ManagedByInstanceKindLabel is added to resources to link back to the instance's kind that created them.
+	ManagedByInstanceKindLabel = LabelKROPrefix + "managed-by-instance-kind"
+	// ManagedByInstanceNamespaceLabel is added to resources to link back to the instance's namespace that created them.
+	ManagedByInstanceNamespaceLabel = LabelKROPrefix + "managed-by-instance-namespace"
+	// ManagedByInstanceNameLabel is added to resources to link back to the instance's name that created them.
+	ManagedByInstanceNameLabel = LabelKROPrefix + "managed-by-instance-name"
+
+	// TODO (barney-s) BEGIN: deprecate by 0.7 --------V
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
@@ -45,6 +64,7 @@ const (
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// TODO (barney-s) END: deprecate by 0.7  ----------^
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -115,23 +135,37 @@ func (gl GenericLabeler) Copy() map[string]string {
 	return newGenericLabeler
 }
 
-// NewResourceGraphDefinitionLabeler returns a new labeler that sets the
-// ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
-func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
+// NewDefinedByRGDLabeler returns a new labeler that sets the DefinedByRGDLabel on a resource.
+func NewDefinedByRGDLabeler(rgd metav1.Object) GenericLabeler {
 	return map[string]string{
-		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
-		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
+		DefinedByRGDLabel: rgd.GetName(),
+		// TODO (barney-s) BEGIN: deprecate by 0.7 --------V
+		ResourceGraphDefinitionIDLabel:   string(rgd.GetUID()),
+		ResourceGraphDefinitionNameLabel: rgd.GetName(),
+		// TODO (barney-s) END: deprecate by 0.7  ----------^
 	}
 }
 
-// NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
-// InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
-// and name of the instance that was reconciled to create the resource.
-func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
+// NewReconciledByRGDLabeler returns a new labeler that sets the ReconciledByRGDLabel on a resource.
+func NewReconciledByRGDLabeler(rgd metav1.Object) GenericLabeler {
 	return map[string]string{
-		InstanceIDLabel:        string(instanceMeta.GetUID()),
-		InstanceLabel:          instanceMeta.GetName(),
-		InstanceNamespaceLabel: instanceMeta.GetNamespace(),
+		ReconciledByRGDLabel: rgd.GetName(),
+	}
+}
+
+// NewManagedByInstanceLabeler returns a new labeler that sets the labels to link to the creating instance on a resource.
+func NewManagedByInstanceLabeler(instance metav1.Object, gvk schema.GroupVersionKind) GenericLabeler {
+	return map[string]string{
+		ManagedByInstanceGroupLabel:     gvk.Group,
+		ManagedByInstanceKindLabel:      gvk.Kind,
+		ManagedByInstanceVersionLabel:   gvk.Version,
+		ManagedByInstanceNamespaceLabel: instance.GetNamespace(),
+		ManagedByInstanceNameLabel:      instance.GetName(),
+		// TODO (barney-s) BEGIN: deprecate by 0.7 --------V
+		InstanceIDLabel:        string(instance.GetUID()),
+		InstanceLabel:          instance.GetName(),
+		InstanceNamespaceLabel: instance.GetNamespace(),
+		// TODO (barney-s) END: deprecate by 0.7  ----------^
 	}
 }
 

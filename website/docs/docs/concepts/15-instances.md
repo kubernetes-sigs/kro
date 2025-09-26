@@ -99,6 +99,22 @@ Every instance includes:
    - Values you defined in your ResourceGraphDefinition's status section
    - Automatically updated as resources change
 
+### Labels
+
+When reconciling Instances, kro adds certain labels for tracking purposes.
+
+Labels added to instance:
+* `kro.run/reconciled-by-rgd` - Name of the RGD that defines the instance CRD and reconciles the instance.
+
+Labels added to resources created by the instance to identify the RGD:
+* `kro.run/defined-by-rgd` - Name of the RGD where the resources are defined.
+
+Labels added to resources created by the instance to link back to the instance:
+* `kro.run/managed-by-instance-group`: The API group of the instance (e.g., `mygroup.example.com`).
+* `kro.run/managed-by-instance-kind`: The kind of the instance (e.g., `MyKind`).
+* `kro.run/managed-by-instance-namespace`: The namespace of the instance (e.g., `default`).
+* `kro.run/managed-by-instance-name`: The name of the instance (e.g., `my-instance`).
+
 ## Best Practices
 
 - **Version Control**: Keep your instance definitions in version control

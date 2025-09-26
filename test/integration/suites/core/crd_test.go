@@ -211,7 +211,7 @@ var _ = Describe("CRD", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 
 				g.Expect(metadata.IsKROOwned(crd.ObjectMeta)).To(BeTrue())
-				g.Expect(crd.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
+				g.Expect(crd.Labels[metadata.DefinedByRGDLabel]).To(Equal(rgdName))
 
 				// store the original schema for later comparison
 				originalSchema := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties

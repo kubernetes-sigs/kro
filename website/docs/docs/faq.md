@@ -64,3 +64,54 @@ sidebar_position: 100
    This project is in active development and not yet intended for production
    use. The _ResourceGraphDefinition_ CRD and other APIs used in this project are not
    solidified and highly subject to change.
+
+
+6. **What are the current known issues and limitations?**
+
+   This section documents the most frequently observed and problematic issues reported by the kro community.
+
+    **Current Known Issues**
+
+   **1. Missing API upgrade support for RGD-based CRDs**
+
+   - **Impact**: When Platform teams modify ResourceGraphDefinition schemas, there's no migration path for existing instances created by Developer teams
+   - **Status**: Major architectural limitation blocking production adoption  
+   - **Workaround**: Manual recreation of all instances when RGD schemas change
+   - **Community Impact**: Most frequently reported limitation preventing enterprise use
+
+   **2. Resource creation failures in complex dependency chains**
+
+   - **Impact**: Some resources may not be created when ResourceGraphDefinitions have complex dependencies, particularly with topological sorting issues
+   - **Status**: Confirmed issue affecting multiple users
+   - **Workaround**: Simplify resource dependencies or manually verify all resources are created
+   - **GitHub Issue**: [#225](https://github.com/kro-run/kro/issues/225)
+
+   **3. GitOps integration compatibility**
+
+   - **Impact**: Wrong API endpoints used with Fleet and other GitOps tools causing integration failures
+   - **Status**: Confirmed integration problem affecting GitOps workflows
+   - **Workaround**: Manual intervention or alternative deployment strategies  
+   - **GitHub Issue**: [#524](https://github.com/kro-run/kro/issues/524)
+
+
+   **Current Limitations**
+
+   **1. Production readiness**
+   - **Limitation**: Project is in active development with no guarantee of backward compatibility between versions
+   - **Impact**: ResourceGraphDefinition CRDs and APIs are subject to breaking changes, and upgrades may require manual migration of existing ResourceGraphDefinitions
+   - **Recommendation**: Use only for development and testing environments
+
+   **2. CEL expression observability**
+   - **Limitation**: No visibility into CEL expression execution costs, evaluation performance, or debugging information
+   - **Impact**: Difficult to troubleshoot and optimize complex ResourceGraphDefinitions when CEL expressions are expensive or fail
+   - **Status**: Architectural gap in observability framework
+   - **GitHub Issue**: [#190](https://github.com/kro-run/kro/issues/190)
+
+   **How to Report Issues**
+
+   For bug reports and feature requests, please follow our [contributing guidelines](https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md#reporting-bugsfeature-requests).
+
+   Note - This section focuses on the most frequently observed problematic issues confirmed by the community. 
+   Updated during majro releases based on community feedback. 
+
+ 

@@ -37,6 +37,7 @@ import (
 	"github.com/kro-run/kro/pkg/graph/emulator"
 	"github.com/kro-run/kro/pkg/graph/parser"
 	"github.com/kro-run/kro/pkg/graph/schema"
+	schemaresolver "github.com/kro-run/kro/pkg/graph/schema/resolver"
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/metadata"
 	"github.com/kro-run/kro/pkg/simpleschema"
@@ -46,7 +47,7 @@ import (
 func NewBuilder(
 	clientConfig *rest.Config,
 ) (*Builder, error) {
-	schemaResolver, dc, err := schema.NewCombinedResolver(clientConfig)
+	schemaResolver, dc, err := schemaresolver.NewCombinedResolver(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
 	}

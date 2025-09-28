@@ -34,7 +34,10 @@ import (
 // 1. Processing the resource graph
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
 
@@ -71,7 +74,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(gvr, processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(gvr, processedRGD,
+		rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
@@ -115,6 +119,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		gvr,
 		processedRGD,
 		r.clientSet,
+		r.clientSet.RESTMapper(),
 		defaultSVCs,
 		labeler,
 	)

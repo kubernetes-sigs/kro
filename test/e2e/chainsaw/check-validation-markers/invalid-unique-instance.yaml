@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-unique-test
+spec:
+  email: user@example.com
+  username: testuser
+  tags:
+    - production
+    - staging
+    - production  # Duplicate violates uniqueItems=true
+  replicas: 1

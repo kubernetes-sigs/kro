@@ -1,0 +1,17 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-max-items-app
+spec:
+  email: user@example.com
+  username: testuser123
+  tags:
+    # This violates maxItems=3 constraint
+    - tag1
+    - tag2
+    - tag3
+    - tag4
+  priorities:
+    - 1
+  description: This app should fail validation due to too many tags
+  replicas: 3

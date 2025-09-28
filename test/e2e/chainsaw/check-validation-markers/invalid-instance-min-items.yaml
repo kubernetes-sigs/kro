@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: invalid-min-items-app
+spec:
+  email: user@example.com
+  username: testuser123
+  tags: []  # This violates minItems=1 constraint
+  priorities:
+    - 1
+  description: This app should fail validation due to empty tags
+  replicas: 3

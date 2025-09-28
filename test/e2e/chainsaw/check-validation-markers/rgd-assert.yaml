@@ -1,0 +1,33 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-validation-markers
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ValidationTestApp
+    spec:
+      email: string | pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" description="Valid email address"
+      username: string | minLength=3 maxLength=15 pattern="^[a-zA-Z0-9_]+$" description="Username must be 3-15 chars, alphanumeric and underscore only"
+      tags: "[]string | uniqueItems=true minItems=1 maxItems=3 description=\"1-3 unique tags\""
+      priorities: "[]integer | minItems=0 maxItems=3 description=\"Up to 3 priority levels\""
+      description: string | default="Test application" maxLength=100
+      replicas: integer | default=1 minimum=1 maximum=10
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          properties: |
+            email: ${schema.spec.email}
+            username: ${schema.spec.username}
+            description: ${schema.spec.description}
+            tags: ${schema.spec.tags}
+            replicas: ${schema.spec.replicas}
+status:
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  state: "Active"

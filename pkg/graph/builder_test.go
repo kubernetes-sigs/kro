@@ -358,7 +358,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "expected string type or AdditionalProperties for path spec.cidrBlocks",
+			errMsg:  "expected array type for path spec.cidrBlocks, got string",
 		},
 		{
 			name: "crds aren't allowed to have variables in their spec fields",

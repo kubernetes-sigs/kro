@@ -16,6 +16,8 @@ package parser
 
 import (
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -144,8 +146,8 @@ func TestParseResource(t *testing.T) {
 			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
 			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
 			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"any"}, StandaloneExpression: true},
+			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"any"}, StandaloneExpression: true},
 		}
 
 		expressions, err := ParseResource(resource, schema)
@@ -153,12 +155,43 @@ func TestParseResource(t *testing.T) {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
 
-		if !areEqualExpressionFields(expressions, expectedExpressions) {
-			for i, expr := range expressions {
-				t.Logf("Got %d: %+v", i, expr)
+		// sort both slices to ensure consistent ordering
+		sort.Slice(expressions, func(i, j int) bool { return expressions[i].Path < expressions[j].Path })
+		sort.Slice(expectedExpressions, func(i, j int) bool { return expectedExpressions[i].Path < expectedExpressions[j].Path })
+
+		// first check the length
+		if len(expressions) != len(expectedExpressions) {
+			t.Fatalf("Expected %d expressions, got %d", len(expectedExpressions), len(expressions))
+		}
+
+		// compare each expression individually for better error messages
+		for i := range expectedExpressions {
+			expected := expectedExpressions[i]
+			actual := expressions[i]
+
+			if actual.Path != expected.Path {
+				t.Errorf("Expression[%d] path mismatch:\n  got:  %s\n  want: %s", i, actual.Path, expected.Path)
 			}
-			for i, expr := range expectedExpressions {
-				t.Logf("Want %d: %+v", i, expr)
+
+			if !equalStrings(actual.Expressions, expected.Expressions) {
+				t.Errorf(
+					"Expression[%d] expressions mismatch for path %s:\n  got:  %v\n  want: %v",
+					i, expected.Path, actual.Expressions, expected.Expressions,
+				)
+			}
+
+			if !areEqualSlices(actual.ExpectedTypes, expected.ExpectedTypes) {
+				t.Errorf(
+					"Expression[%d] types mismatch for path %s:\n  got:  %v\n  want: %v",
+					i, expected.Path, actual.ExpectedTypes, expected.ExpectedTypes,
+				)
+			}
+
+			if actual.StandaloneExpression != expected.StandaloneExpression {
+				t.Errorf(
+					"Expression[%d] StandaloneExpression mismatch for path %s:\n  got:  %v\n  want: %v",
+					i, expected.Path, actual.StandaloneExpression, expected.StandaloneExpression,
+				)
 			}
 		}
 	})
@@ -186,10 +219,11 @@ func TestParseResource(t *testing.T) {
 
 func TestTypeMismatches(t *testing.T) {
 	testCases := []struct {
-		name     string
-		resource map[string]interface{}
-		schema   *spec.Schema
-		wantErr  bool
+		name          string
+		resource      map[string]interface{}
+		schema        *spec.Schema
+		wantErr       bool
+		expectedError string
 	}{
 		{
 			name: "String instead of integer",
@@ -204,7 +238,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected integer type for path intField, got string",
 		},
 		{
 			name: "Integer instead of string",
@@ -219,7 +254,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "unexpected type for path stringField",
 		},
 		{
 			name: "Boolean instead of number",
@@ -234,7 +270,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected number type for path numberField, got bool",
 		},
 		{
 			name: "Array instead of object",
@@ -249,7 +286,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected object type for path objectField, got array",
 		},
 		{
 			name: "Object instead of array",
@@ -264,7 +302,46 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected array type for path arrayField, got object",
+		},
+		{
+			name: "Nested field type mismatch - string instead of number at 3 levels",
+			resource: map[string]interface{}{
+				"level1": map[string]interface{}{
+					"level2": map[string]interface{}{
+						"numberField": "not-a-number",
+					},
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"level1": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"level2": {
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											Properties: map[string]spec.Schema{
+												"numberField": {
+													SchemaProps: spec.SchemaProps{
+														Type: []string{"number"},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:       true,
+			expectedError: "expected number type for path level1.level2.numberField, got string",
 		},
 		{
 			name: "Nil schema",
@@ -307,7 +384,8 @@ func TestTypeMismatches(t *testing.T) {
 					Type: []string{},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "schema at path  has no valid type, OneOf, AnyOf, or AdditionalProperties",
 		},
 		{
 			name: "Valid types (no mismatch)",
@@ -365,6 +443,9 @@ func TestTypeMismatches(t *testing.T) {
 			_, err := ParseResource(tc.resource, tc.schema)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ParseResource() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && tc.expectedError != "" && !strings.Contains(err.Error(), tc.expectedError) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.expectedError)
 			}
 		})
 	}
@@ -541,7 +622,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      []interface{}{"test"},
-			expectedError: "expected array type for path , got [test]",
+			expectedError: "expected object type for path , got array",
 		},
 		{
 			name: "Type mismatch: bool/string",
@@ -551,7 +632,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      "true",
-			expectedError: "expected string type or AdditionalProperties for path , got true",
+			expectedError: "expected boolean type for path , got string",
 		},
 		{
 			name: "Type mismatch integer/float",
@@ -588,7 +669,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      map[string]interface{}{"key": "value"},
-			expectedError: "expected object type or AdditionalProperties allowed for path , got map[key:value]",
+			expectedError: "expected array type for path , got object",
 		},
 		{
 			name: "unknown property for object ..",

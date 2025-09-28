@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -98,6 +99,7 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	clientSet kroclient.SetInterface,
+	restMapper meta.RESTMapper,
 	defaultServiceAccounts map[string]string,
 	instanceLabeler metadata.Labeler,
 ) *Controller {
@@ -154,6 +156,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		log:                         log,
 		gvr:                         c.gvr,
 		client:                      executionClient,
+		restMapper:                  c.clientSet.RESTMapper(),
 		runtime:                     rgRuntime,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,

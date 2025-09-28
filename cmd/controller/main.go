@@ -34,7 +34,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kro-run/kro/pkg/dynamiccontroller"
 	"github.com/kro-run/kro/pkg/graph"
-	// +kubebuilder:scaffold:imports
+	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -47,7 +47,7 @@ func init() {
 
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	// +kubebuilder:scaffold:scheme
+	//+kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -154,7 +154,7 @@ func main() {
 		GracefulShutdownTimeout: &gracefulShutdownTimeout,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        "6f0f64a5.kro.run",
+		LeaderElectionID:        "kro-controller",
 		LeaderElectionNamespace: leaderElectionNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
@@ -166,8 +166,8 @@ func main() {
 		// the manager stops, so would be fine to enable this option. However,
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
-		Logger: rootLogger,
+		LeaderElectionReleaseOnCancel: false,
+		Logger:                        rootLogger,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -209,7 +209,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// +kubebuilder:scaffold:builder
+	//+kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

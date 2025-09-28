@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -358,7 +358,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "expected string type or AdditionalProperties for path spec.cidrBlocks",
+			errMsg:  "expected array type for path spec.cidrBlocks, got string",
 		},
 		{
 			name: "crds aren't allowed to have variables in their spec fields",

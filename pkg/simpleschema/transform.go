@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package simpleschema
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ const (
 	keyTypeBoolean = string(AtomicTypeBool)
 	keyTypeNumber  = "number"
 	keyTypeObject  = "object"
+	keyTypeArray   = "array"
 )
 
 // A predefinedType is a type that is predefined in the schema.
@@ -202,7 +204,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	}
 
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{
-		Type: "array",
+		Type: keyTypeArray,
 		Items: &extv1.JSONSchemaPropsOrArray{
 			Schema: &extv1.JSONSchemaProps{},
 		},
@@ -225,6 +227,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	return fieldJSONSchemaProps, nil
 }
 
+//nolint:gocyclo
 func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
 	for _, marker := range markers {
 		switch marker.MarkerType {
@@ -265,7 +268,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			}
 			schema.Maximum = &val
 		case MarkerTypeValidation:
-			if marker.Value == "" {
+			if strings.TrimSpace(marker.Value) == "" {
 				return fmt.Errorf("validation failed")
 			}
 			validation := []extv1.ValidationRule{
@@ -275,6 +278,20 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 				},
 			}
 			schema.XValidations = validation
+		case MarkerTypeImmutable:
+			isImmutable, err := strconv.ParseBool(marker.Value)
+			if err != nil {
+				return fmt.Errorf("failed to parse immutable marker value: %w", err)
+			}
+			if isImmutable {
+				immutableValidation := []extv1.ValidationRule{
+					{
+						Rule:    "self == oldSelf",
+						Message: "field is immutable",
+					},
+				}
+				schema.XValidations = append(schema.XValidations, immutableValidation...)
+			}
 		case MarkerTypeEnum:
 			var enumJSONValues []extv1.JSON
 
@@ -302,6 +319,75 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 			if len(enumJSONValues) > 0 {
 				schema.Enum = enumJSONValues
 			}
+		case MarkerTypeMinLength:
+			// MinLength is only valid for string types
+			if schema.Type != keyTypeString {
+				return fmt.Errorf("minLength marker is only valid for string types, got type: %s", schema.Type)
+			}
+			val, err := strconv.ParseInt(marker.Value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse minLength value: %w", err)
+			}
+			schema.MinLength = &val
+
+		case MarkerTypeMaxLength:
+			// MaxLength is only valid for string types
+			if schema.Type != keyTypeString {
+				return fmt.Errorf("maxLength marker is only valid for string types, got type: %s", schema.Type)
+			}
+			val, err := strconv.ParseInt(marker.Value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse maxLength value: %w", err)
+			}
+			schema.MaxLength = &val
+		case MarkerTypePattern:
+			if marker.Value == "" {
+				return fmt.Errorf("pattern marker value cannot be empty")
+			}
+			// Pattern is only valid for string types
+			if schema.Type != keyTypeString {
+				return fmt.Errorf("pattern marker is only valid for string types, got type: %s", schema.Type)
+			}
+			// Validate regex
+			if _, err := regexp.Compile(marker.Value); err != nil {
+				return fmt.Errorf("invalid pattern regex: %w", err)
+			}
+			schema.Pattern = marker.Value
+		case MarkerTypeUniqueItems:
+			// UniqueItems is only valid for array types
+			switch isUnique, err := strconv.ParseBool(marker.Value); {
+			case err != nil:
+				return fmt.Errorf("failed to parse uniqueItems marker value: %w", err)
+			case schema.Type != keyTypeArray:
+				return fmt.Errorf("uniqueItems marker is only valid for array types, got type: %s", schema.Type)
+			case isUnique:
+				// Always set x-kubernetes-list-type to "set" when uniqueItems is true
+				// https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions
+				// https://stackoverflow.com/questions/79399232/forbidden-uniqueitems-cannot-be-set-to-true-since-the-runtime-complexity-become
+				schema.XListType = ptr.To("set")
+			default:
+				// ignore
+			}
+		case MarkerTypeMinItems:
+			// MinItems is only valid for array types
+			if schema.Type != keyTypeArray {
+				return fmt.Errorf("minItems marker is only valid for array types, got type: %s", schema.Type)
+			}
+			val, err := strconv.ParseInt(marker.Value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse minItems value: %w", err)
+			}
+			schema.MinItems = &val
+		case MarkerTypeMaxItems:
+			// MaxItems is only valid for array types
+			if schema.Type != keyTypeArray {
+				return fmt.Errorf("maxItems marker is only valid for array types, got type: %s", schema.Type)
+			}
+			val, err := strconv.ParseInt(marker.Value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse maxItems value: %w", err)
+			}
+			schema.MaxItems = &val
 		}
 	}
 	return nil

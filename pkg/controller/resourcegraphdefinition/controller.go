@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,6 +48,7 @@ type ResourceGraphDefinitionReconciler struct {
 	// Client and instanceLogger are set with SetupWithManager
 
 	client.Client
+
 	instanceLogger logr.Logger
 
 	clientSet  kroclient.SetInterface
@@ -82,6 +83,7 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {

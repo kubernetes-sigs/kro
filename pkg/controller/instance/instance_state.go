@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 // limitations under the License.
 
 package instance
+
+import "errors"
 
 const (
 	InstanceStateInProgress = "IN_PROGRESS"
@@ -47,4 +49,14 @@ type InstanceState struct {
 	ResourceStates map[string]*ResourceState
 	// Any error encountered during reconciliation
 	ReconcileErr error
+}
+
+func (s *InstanceState) ResourceErrors() error {
+	errorsSeen := []error{}
+	for _, resourceState := range s.ResourceStates {
+		if resourceState.State == ResourceStateError {
+			errorsSeen = append(errorsSeen, resourceState.Err)
+		}
+	}
+	return errors.Join(errorsSeen...)
 }

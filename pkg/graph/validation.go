@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ var (
 		"graph",
 		"instance",
 		"kind",
+		"kro",
 		"metadata",
 		"namespace",
 		"object",
@@ -54,11 +55,12 @@ var (
 		"resourcegraphdefinition",
 		"resources",
 		"runtime",
-		"serviceAccountName",
 		"schema",
+		"self",
+		"serviceAccountName",
 		"spec",
 		"status",
-		"kro",
+		"this",
 		"variables",
 		"vars",
 		"version",

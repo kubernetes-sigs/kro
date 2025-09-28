@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -63,6 +63,7 @@ func main() {
 	var (
 		metricsAddr                                 string
 		enableLeaderElection                        bool
+		leaderElectionNamespace                     string
 		probeAddr                                   string
 		allowCRDDeletion                            bool
 		resourceGraphDefinitionConcurrentReconciles int
@@ -87,6 +88,10 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
+		"Specific namespace that the controller will utilize to manage the coordination.k8s.io/lease object for"+
+			"leader election. By default it will try to use the namespace of the service account mounted"+
+			" to the controller pod.")
 	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
@@ -147,21 +152,12 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "6f0f64a5.kro.run",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
-		Logger: rootLogger,
+		HealthProbeBindAddress:        probeAddr,
+		LeaderElection:                enableLeaderElection,
+		LeaderElectionID:              "kro-controller",
+		LeaderElectionNamespace:       leaderElectionNamespace,
+		LeaderElectionReleaseOnCancel: false,
+		Logger:                        rootLogger,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

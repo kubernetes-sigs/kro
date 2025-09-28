@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,12 +55,28 @@ const (
 	MarkerTypeValidation MarkerType = "validation"
 	// MarkerTypeEnum represents the `enum` marker.
 	MarkerTypeEnum MarkerType = "enum"
+	// MarkerTypeImmutable represents the `immutable` marker.
+	MarkerTypeImmutable MarkerType = "immutable"
+	// MarkerTypePattern represents the `pattern` marker.
+	MarkerTypePattern MarkerType = "pattern"
+	// MarkerTypeUniqueItems represents the `uniqueItems` marker.
+	MarkerTypeUniqueItems MarkerType = "uniqueItems"
+	// MarkerTypeMinLength represents the `minLength` marker.
+	MarkerTypeMinLength MarkerType = "minLength"
+	// MarkerTypeMaxLength represents the `maxLength` marker.
+	MarkerTypeMaxLength MarkerType = "maxLength"
+	// MarkerTypeMinItems represents the `minItems` marker.
+	MarkerTypeMinItems MarkerType = "minItems"
+	// MarkerTypeMaxItems represents the `maxItems` marker.
+	MarkerTypeMaxItems MarkerType = "maxItems"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
 	switch MarkerType(s) {
 	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription,
-		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum:
+		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum, MarkerTypeImmutable,
+		MarkerTypePattern, MarkerTypeUniqueItems, MarkerTypeMinLength, MarkerTypeMaxLength, MarkerTypeMinItems,
+		MarkerTypeMaxItems:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("unknown marker type: %s", s)

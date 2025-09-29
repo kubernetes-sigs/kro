@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -154,7 +155,23 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 	}
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
+func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (res ctrl.Result, reconcileErr error) {
+	var topologicalOrder []string
+	var resourcesInformation []v1alpha1.ResourceInformation
+	// defer function will ensure any errors that occur during reconcile will eventually be
+	// patched to the resource
+	defer func() {
+		// if the updateStatus error is a k8s NotFound error we want to skip it.
+		// If not, we will merge it to the returned error
+		if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
+			// we don't want to reconcile if resource is deleted
+			if !apierrors.IsNotFound(err) {
+				reconcileErr = errors.Join(reconcileErr, err)
+			} else {
+				reconcileErr = nil
+			}
+		}
+	}()
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err
@@ -169,11 +186,7 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
-
-	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
-		reconcileErr = errors.Join(reconcileErr, err)
-	}
+	topologicalOrder, resourcesInformation, reconcileErr = r.reconcileResourceGraphDefinition(ctx, o)
 
 	return ctrl.Result{}, reconcileErr
 }

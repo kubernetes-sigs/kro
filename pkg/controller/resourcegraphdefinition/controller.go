@@ -155,7 +155,7 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 	}
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (res ctrl.Result, reconcileErr error) {
+func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (res ctrl.Result, err error) {
 	var topologicalOrder []string
 	var resourcesInformation []v1alpha1.ResourceInformation
 	// defer function will ensure any errors that occur during reconcile will eventually be
@@ -163,30 +163,38 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1
 	defer func() {
 		// if the updateStatus error is a k8s NotFound error we want to skip it.
 		// If not, we will merge it to the returned error
-		if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
-			// we don't want to reconcile if resource is deleted
-			if !apierrors.IsNotFound(err) {
-				reconcileErr = errors.Join(reconcileErr, err)
+		if patchErr := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				// we don't want to return an error and requeue if
+				// rgd is not found (deleted)
+				err = nil
 			} else {
-				reconcileErr = nil
+				err = errors.Join(patchErr, err)
 			}
 		}
 	}()
+	mark := NewConditionsMarkerFor(o)
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
+			mark.ResourceGraphNotCleanedUp(err.Error())
 			return ctrl.Result{}, err
 		}
+		mark.ResourceGraphCleanedUp()
 		if err := r.setUnmanaged(ctx, o); err != nil {
+			mark.ResourceGraphUnfinalized(err.Error())
 			return ctrl.Result{}, err
 		}
+		mark.ResourceGraphFinalized("removed")
 		return ctrl.Result{}, nil
 	}
 
 	if err := r.setManaged(ctx, o); err != nil {
+		mark.ResourceGraphUnfinalized(err.Error())
 		return ctrl.Result{}, err
 	}
+	mark.ResourceGraphFinalized("added")
 
-	topologicalOrder, resourcesInformation, reconcileErr = r.reconcileResourceGraphDefinition(ctx, o)
+	topologicalOrder, resourcesInformation, err = r.reconcileResourceGraphDefinition(ctx, o)
 
-	return ctrl.Result{}, reconcileErr
+	return ctrl.Result{}, err
 }

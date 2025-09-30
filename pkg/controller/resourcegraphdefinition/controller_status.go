@@ -106,13 +106,15 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 }
 
 const (
-	Ready                 = "Ready"
-	ResourceGraphAccepted = "ResourceGraphAccepted"
-	KindReady             = "KindReady"
-	ControllerReady       = "ControllerReady"
+	Ready                  = "Ready"
+	ResourceGraphAccepted  = "ResourceGraphAccepted"
+	KindReady              = "KindReady"
+	ControllerReady        = "ControllerReady"
+	ResourceGraphFinalized = "ResourceGraphFinalized"
+	ResourceGraphCleanedUp = "ResourceGraphCleanedUp"
 )
 
-var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady)
+var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady, ResourceGraphFinalized)
 
 // NewConditionsMarkerFor creates a marker to manage conditions and sub-conditions for ResourceGraphDefinitions.
 //
@@ -120,7 +122,8 @@ var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady
 // Ready
 //	├─ ResourceGraphAccepted - This controller has accepted the spec.schema and spec.resources.
 //	├─ KindReady - The CRD status created on behalf of this RGD.
-//	└─ ControllerReady - The status of the controller thread reconciling this resource.
+//	├─ ControllerReady - The status of the controller thread reconciling this resource.
+//  └─ ResourceGraphFinalized - The RGD was successfully finalized
 // ```
 
 func NewConditionsMarkerFor(o apis.Object) *ConditionsMarker {
@@ -157,6 +160,26 @@ func (m *ConditionsMarker) KindUnready(msg string) {
 // KindReady signals the CustomResourceDefinition has been synced and is ready.
 func (m *ConditionsMarker) KindReady(kind string) {
 	m.cs.SetTrueWithReason(KindReady, "Ready", fmt.Sprintf("kind %s has been accepted and ready", kind))
+}
+
+// ResourceGraphUnfinalized signals the RGD finalizer failed to add/remove
+func (m *ConditionsMarker) ResourceGraphUnfinalized(msg string) {
+	m.cs.SetFalse(ResourceGraphFinalized, "Failed", msg)
+}
+
+// ResourceGraphFinalized signals the RGD finalizer was successfully added/removed
+func (m *ConditionsMarker) ResourceGraphFinalized(addedOrRemoved string) {
+	m.cs.SetTrueWithReason(ResourceGraphFinalized, "Success", fmt.Sprintf("resourcegraph finalizer has been successfully %s", addedOrRemoved))
+}
+
+// ResourceGraphCleanedUp signals the RGD was cleaned up successfully
+func (m *ConditionsMarker) ResourceGraphCleanedUp() {
+	m.cs.SetTrueWithReason(ResourceGraphCleanedUp, "Success", "resourcegraph cleaned up successfully")
+}
+
+// ResourceGraphNotCleanedUp signals the RGD failed to cleanup successfully
+func (m *ConditionsMarker) ResourceGraphNotCleanedUp(msg string) {
+	m.cs.SetFalse(ResourceGraphCleanedUp, "Failed", msg)
 }
 
 // ControllerFailedToStart signals the microcontroller had an issue when starting.

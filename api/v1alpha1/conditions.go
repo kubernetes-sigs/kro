@@ -24,22 +24,6 @@ type ConditionType string
 
 func (c ConditionType) String() string { return string(c) }
 
-const (
-	// ResourceGraphDefinitionConditionTypeGraphVerified indicates the state of the directed
-	// acyclic graph (DAG) that kro uses to manage the resources in a
-	// ResourceGraphDefinition.
-	ResourceGraphDefinitionConditionTypeGraphVerified ConditionType = "GraphVerified"
-	// ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced indicates the state of the
-	// CustomResourceDefinition (CRD) that kro uses to manage the resources in a
-	// ResourceGraphDefinition.
-	ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced ConditionType = "CustomResourceDefinitionSynced"
-	// ResourceGraphDefinitionConditionTypeReconcilerReady indicates the state of the reconciler.
-	// Whenever an ResourceGraphDefinition resource is created, kro will spin up a
-	// reconciler for that resource. This condition indicates the state of the
-	// reconciler.
-	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
-)
-
 // Condition is the common struct used by all CRDs managed by ACK service
 // controllers to indicate terminal states  of the CR and its backend AWS
 // service API resource

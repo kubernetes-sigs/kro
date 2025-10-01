@@ -60,11 +60,6 @@ type ControllerConfig struct {
 	Logger           *logr.Logger
 }
 
-func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
-func New(controllerConfig ControllerConfig) (*Environment, error) {
-	return NewWithContext(context.Background(), controllerConfig)
-}
-
 func NewWithContext(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,

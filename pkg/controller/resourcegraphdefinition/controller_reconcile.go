@@ -36,10 +36,7 @@ import (
 // 1. Processing the resource graph
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
-	ctx context.Context,
-	rgd *v1alpha1.ResourceGraphDefinition,
-) ([]string, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
 

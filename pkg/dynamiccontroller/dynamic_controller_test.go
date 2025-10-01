@@ -64,6 +64,7 @@ func TestNewDynamicController(t *testing.T) {
 		Workers:         2,
 		ResyncPeriod:    10 * time.Hour,
 		QueueMaxRetries: 20,
+		ShutdownTimeout: 60 * time.Second,
 		MinRetryDelay:   200 * time.Millisecond,
 		MaxRetryDelay:   1000 * time.Second,
 		RateLimit:       10,
@@ -85,6 +86,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 		Workers:         1,
 		ResyncPeriod:    1 * time.Second,
 		QueueMaxRetries: 5,
+		ShutdownTimeout: 5 * time.Second,
 		MinRetryDelay:   200 * time.Millisecond,
 		MaxRetryDelay:   1000 * time.Second,
 		RateLimit:       10,
@@ -113,18 +115,18 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	})
 
 	// Register GVK
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
+	err := dc.StartServingGVK(t.Context(), gvr, handlerFunc, nil)
 	require.NoError(t, err)
 
 	_, exists := dc.registrations[gvr]
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
+	err = dc.StartServingGVK(t.Context(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// Unregister GVK
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownContext, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	err = dc.StopServiceGVK(shutdownContext, gvr)
 	require.NoError(t, err)
@@ -185,7 +187,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	})
 
 	// simulate initial creation of the resource graph
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
+	err := dc.StartServingGVK(t.Context(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// simulate reconciling the instances
@@ -196,7 +198,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	}
 
 	// simulate updating the resource graph
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc, nil)
+	err = dc.StartServingGVK(t.Context(), gvr, handlerFunc, nil)
 	assert.NoError(t, err)
 
 	// check if the expected objects are queued

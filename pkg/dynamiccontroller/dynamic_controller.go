@@ -159,8 +159,8 @@ func NewDynamicController(
 	}
 }
 
-// Run starts workers and blocks until ctx.Done().
-func (dc *DynamicController) Run(ctx context.Context) error {
+// Start starts workers and blocks until ctx.Done().
+func (dc *DynamicController) Start(ctx context.Context) error {
 	if dc.ctx != nil {
 		return fmt.Errorf("already running")
 	}

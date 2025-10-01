@@ -6,12 +6,14 @@ on:
       - "**.go"
       - go.mod
       - go.sum
+      - scripts/ci/**
   pull_request:
     branches: [ main ]
     paths:
       - "**.go"
       - go.mod
       - go.sum
+      - scripts/ci/**
 
 jobs:
   build:
@@ -27,8 +29,5 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Build
-        run: go build cmd
-
-      - name: Run unit tests
-        run: make test WHAT=unit
+      - name: Run scripts/ci/presubmits/unit-tests
+        run: scripts/ci/presubmits/unit-tests

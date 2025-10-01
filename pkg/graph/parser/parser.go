@@ -193,7 +193,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 	}
 
 	if !slices.Contains(expectedTypes, "object") && (schema.AdditionalProperties == nil || !schema.AdditionalProperties.Allows) {
-		return nil, fmt.Errorf("expected object type or AdditionalProperties allowed for path %s, got %v", path, field)
+		return nil, fmt.Errorf("expected %s type for path %s, got object", strings.Join(expectedTypes, " or "), path)
 	}
 
 	var expressionsFields []variable.FieldDescriptor
@@ -230,7 +230,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 	}
 
 	if !slices.Contains(expectedTypes, "array") {
-		return nil, fmt.Errorf("expected array type for path %s, got %v", path, field)
+		return nil, fmt.Errorf("expected %s type for path %s, got array", strings.Join(expectedTypes, " or "), path)
 	}
 
 	itemSchema, err := getArrayItemSchema(schema, path)
@@ -267,7 +267,7 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 	}
 
 	if !slices.Contains(expectedTypes, "string") && !slices.Contains(expectedTypes, schemaTypeAny) {
-		return nil, fmt.Errorf("expected string type or AdditionalProperties for path %s, got %v", path, field)
+		return nil, fmt.Errorf("expected %s type for path %s, got string", strings.Join(expectedTypes, " or "), path)
 	}
 
 	expressions, err := extractExpressions(field)

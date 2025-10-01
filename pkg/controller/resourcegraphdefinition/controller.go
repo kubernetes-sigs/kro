@@ -83,6 +83,7 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {

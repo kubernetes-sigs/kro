@@ -32,7 +32,7 @@ func TestCore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error
-		env, err = environment.NewWithContext(t.Context(),
+		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{

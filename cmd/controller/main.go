@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 	"time"
@@ -74,9 +73,9 @@ func main() {
 		rateLimit     int
 		burstLimit    int
 		// reconciler parameters
-		resyncPeriod    int
-		queueMaxRetries int
-		shutdownTimeout int
+		resyncPeriod            int
+		queueMaxRetries         int
+		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
 		logLevel int
 		qps      float64
@@ -93,6 +92,8 @@ func main() {
 			"leader election. By default it will try to use the namespace of the service account mounted"+
 			" to the controller pod.")
 	flag.BoolVar(&allowCRDDeletion, "allow-crd-deletion", false, "allow kro to delete CRDs")
+	flag.DurationVar(&gracefulShutdownTimeout, "graceful-shutdown-timeout", 60*time.Second,
+		"maximum duration to wait for the controller manager to gracefully shutdown")
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
 		"The number of resource graph definition reconciles to run in parallel",
@@ -117,8 +118,6 @@ func main() {
 		"interval at which the controller will re list resources even with no changes, in seconds")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
-	flag.IntVar(&shutdownTimeout, "dynamic-controller-default-shutdown-timeout", 60,
-		"maximum duration to wait for the controller to gracefully shutdown, in seconds")
 	// log level flags
 	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")
 	// qps and burst
@@ -152,9 +151,10 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
+		GracefulShutdownTimeout: &gracefulShutdownTimeout,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        "6f0f64a5.kro.run",
+		LeaderElectionID:        "controller.kro.run",
 		LeaderElectionNamespace: leaderElectionNamespace,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
@@ -166,8 +166,8 @@ func main() {
 		// the manager stops, so would be fine to enable this option. However,
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
-		Logger: rootLogger,
+		LeaderElectionReleaseOnCancel: false,
+		Logger:                        rootLogger,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -176,7 +176,6 @@ func main() {
 
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers:         dynamicControllerConcurrentReconciles,
-		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Second,
 		QueueMaxRetries: queueMaxRetries,
 		MinRetryDelay:   minRetryDelay,
@@ -205,12 +204,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	go func() {
-		err := dc.Run(context.Background())
-		if err != nil {
-			setupLog.Error(err, "dynamic controller failed to run")
-		}
-	}()
+	if err := mgr.Add(dc); err != nil {
+		setupLog.Error(err, "unable to add dynamic controller to manager")
+		os.Exit(1)
+	}
 
 	// +kubebuilder:scaffold:builder
 
@@ -224,15 +221,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := ctrl.SetupSignalHandler()
-
-	go func() {
-		if err := mgr.Start(ctx); err != nil {
-			setupLog.Error(err, "problem running manager")
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
 }

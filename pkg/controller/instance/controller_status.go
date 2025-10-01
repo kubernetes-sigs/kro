@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/kro-run/kro/api/v1alpha1"
 	"github.com/kro-run/kro/pkg/requeue"
@@ -100,9 +101,22 @@ func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, sta
 	instance := igr.runtime.GetInstance().DeepCopy()
 	instance.Object["status"] = status
 
-	_, err := igr.client.Resource(igr.gvr).
-		Namespace(instance.GetNamespace()).
-		UpdateStatus(ctx, instance, metav1.UpdateOptions{})
+	// We are using retry.RetryOnConflict to handle conflicts.
+	// This is because this method is called in a defer path and there is no way to return an error.
+	// TODO(barney-s): We should explore removing the defer path and returning an error.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		instance, err := igr.client.Resource(igr.gvr).
+			Namespace(instance.GetNamespace()).
+			Get(ctx, instance.GetName(), metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		instance.Object["status"] = status
+		_, err = igr.client.Resource(igr.gvr).
+			Namespace(instance.GetNamespace()).
+			UpdateStatus(ctx, instance, metav1.UpdateOptions{})
+		return err
+	})
 
 	if err != nil {
 		return fmt.Errorf("failed to update instance status: %w", err)

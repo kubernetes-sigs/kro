@@ -178,7 +178,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: "kro.run",
+      copyright: "kro is a subproject of Kubernetes SIG Cloud Provider. Kubernetes is a CNCF graduated project."
     },
     /* announcementBar: {
       id: `beta announcement`,

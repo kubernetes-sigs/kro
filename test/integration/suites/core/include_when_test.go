@@ -15,7 +15,6 @@
 package core_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -37,12 +36,10 @@ import (
 
 var _ = Describe("Conditions", func() {
 	var (
-		ctx       context.Context
 		namespace string
 	)
 
-	BeforeEach(func() {
-		ctx = context.Background()
+	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
 		// Create namespace
 		ns := &corev1.Namespace{
@@ -53,7 +50,16 @@ var _ = Describe("Conditions", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 	})
 
-	It("should not create deployment, service, and configmap due to condition deploymentEnabled == false", func() {
+	AfterEach(func(ctx SpecContext) {
+		Expect(env.Client.Delete(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		})).To(Succeed())
+	})
+
+	It("should not create deployment, service, and configmap "+
+		"due to condition deploymentEnabled == false", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-conditions",
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
@@ -205,7 +211,7 @@ var _ = Describe("Conditions", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, createdRGD)
@@ -241,7 +247,7 @@ var _ = Describe("Conditions", func() {
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		name := "test-conditions"
 		// Create instance
@@ -268,7 +274,7 @@ var _ = Describe("Conditions", func() {
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// Check if instance is created
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
 				Namespace: namespace,
@@ -278,30 +284,30 @@ var _ = Describe("Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(b).To(BeTrue())
 			g.Expect(val).To(Equal("ACTIVE"))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify DeploymentA is not created
-		Eventually(func(g Gomega) bool {
+		Eventually(func(g Gomega, ctx SpecContext) bool {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name + "-a",
 				Namespace: namespace,
 			}, &appsv1.Deployment{})
 			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
 
 		// Verify serviceAccountA is created
 		serviceAccountA := &corev1.ServiceAccount{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("%s-a", name),
 				Namespace: namespace,
 			}, serviceAccountA)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify DeploymentB is created
 		deploymentB := &appsv1.Deployment{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name + "-b",
 				Namespace: namespace,
@@ -311,57 +317,57 @@ var _ = Describe("Conditions", func() {
 			// Verify deployment specs
 			g.Expect(deploymentB.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(deploymentB.Spec.Template.Spec.ServiceAccountName).To(Equal(name + "-a" + name))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceA is not created
-		Eventually(func(g Gomega) bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name + "-a",
 				Namespace: namespace,
 			}, &corev1.Service{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceA should not be created"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceB is not created
-		Eventually(func(g Gomega) bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name + "-b",
 				Namespace: namespace,
 			}, &corev1.Service{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceB should not be created"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify ServiceAccountB is not created
-		Eventually(func(g Gomega) bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
 				Namespace: namespace,
 			}, &corev1.ServiceAccount{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "serviceAccountB should not be created"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
 		// Verify instance is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
 				Namespace: namespace,
 			}, instance)
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
 })

@@ -100,7 +100,7 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else

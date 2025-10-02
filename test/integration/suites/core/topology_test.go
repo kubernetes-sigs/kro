@@ -15,7 +15,6 @@
 package core_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -33,12 +32,10 @@ import (
 
 var _ = Describe("Topology", func() {
 	var (
-		ctx       context.Context
 		namespace string
 	)
 
-	BeforeEach(func() {
-		ctx = context.Background()
+	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
 		// Create namespace
 		Expect(env.Client.Create(ctx, &corev1.Namespace{
@@ -48,7 +45,15 @@ var _ = Describe("Topology", func() {
 		})).To(Succeed())
 	})
 
-	It("should correctly order AWS resources in dependency graph", func() {
+	AfterEach(func(ctx SpecContext) {
+		Expect(env.Client.Delete(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		})).To(Succeed())
+	})
+
+	It("should correctly order AWS resources in dependency graph", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology",
 			generator.WithSchema(
 				"TestTopology", "v1alpha1",
@@ -141,7 +146,7 @@ var _ = Describe("Topology", func() {
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition topology
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rgd.Name,
 				Namespace: namespace,
@@ -168,10 +173,10 @@ var _ = Describe("Topology", func() {
 				"subnetB",
 				"cluster",
 			}))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
-	It("should detect cyclic dependencies in AWS resource definitions", func() {
+	It("should detect cyclic dependencies in AWS resource definitions", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology-cyclic",
 			generator.WithSchema(
 				"TestTopologyCyclic", "v1alpha1",
@@ -206,8 +211,11 @@ var _ = Describe("Topology", func() {
 		)
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rgd.Name,
 				Namespace: namespace,
@@ -225,6 +233,6 @@ var _ = Describe("Topology", func() {
 			g.Expect(graphCondition.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(*graphCondition.Message).To(ContainSubstring("graph contains a cycle"))
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 })

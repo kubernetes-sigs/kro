@@ -15,7 +15,6 @@
 package networkingstack_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ func TestNetworkingStack(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error
-		env, err = environment.NewWithContext(t.Context(),
+		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
@@ -60,8 +59,7 @@ func TestNetworkingStack(t *testing.T) {
 }
 
 var _ = Describe("NetworkingStack", func() {
-	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func() {
-		ctx := context.Background()
+	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
 		// Create namespace
@@ -78,7 +76,7 @@ var _ = Describe("NetworkingStack", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, createdRGD)
@@ -111,20 +109,20 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := genInstance(namespace, "test-instance")
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// Check if the instance is created
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify VPC creation
 		vpcGVK := schema.GroupVersionKind{
@@ -135,13 +133,13 @@ var _ = Describe("NetworkingStack", func() {
 		vpc := &unstructured.Unstructured{}
 		vpc.SetGroupVersionKind(vpcGVK)
 
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("vpc-%s", instance.GetName()),
 				Namespace: namespace,
 			}, vpc)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Mock VPC status
 		vpc.Object["status"] = map[string]interface{}{
@@ -158,7 +156,7 @@ var _ = Describe("NetworkingStack", func() {
 		sg := &unstructured.Unstructured{}
 		sg.SetGroupVersionKind(sgGVK)
 
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("security-group-%s", instance.GetName()),
 				Namespace: namespace,
@@ -169,7 +167,7 @@ var _ = Describe("NetworkingStack", func() {
 			vpcID, found, _ := unstructured.NestedString(sg.Object, "spec", "vpcID")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-12345"))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Mock security group status
 		sg.Object["status"] = map[string]interface{}{
@@ -196,7 +194,7 @@ var _ = Describe("NetworkingStack", func() {
 		for _, s := range subnets {
 			subnet := &unstructured.Unstructured{}
 			subnet.SetGroupVersionKind(subnetGVK)
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name:      s.name,
 					Namespace: namespace,
@@ -207,7 +205,7 @@ var _ = Describe("NetworkingStack", func() {
 				vpcID, found, _ := unstructured.NestedString(subnet.Object, "spec", "vpcID")
 				g.Expect(found).To(BeTrue())
 				g.Expect(vpcID).To(Equal("vpc-12345"))
-			}, 20*time.Second, time.Second).Should(Succeed())
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Mock subnet status
 			subnet.Object["status"] = map[string]interface{}{
@@ -217,7 +215,7 @@ var _ = Describe("NetworkingStack", func() {
 		}
 
 		// Verify instance status is updated with networking info
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
@@ -231,47 +229,47 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(networkingInfo["subnetAZB"]).To(Equal("subnet-b12345"))
 			g.Expect(networkingInfo["subnetAZC"]).To(Equal("subnet-c12345"))
 			g.Expect(networkingInfo["securityGroup"]).To(Equal("sg-12345"))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
 		// Verify resources are deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("vpc-%s", instance.GetName()),
 				Namespace: namespace,
 			}, vpc)
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "vpc should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      fmt.Sprintf("cluster-security-group-%s", instance.GetName()),
 				Namespace: namespace,
 			}, sg)
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "security group should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify instance is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
 			}, instance)
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Cleanup namespace
 		Expect(env.Client.Delete(ctx, ns)).To(Succeed())

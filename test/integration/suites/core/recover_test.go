@@ -35,12 +35,10 @@ import (
 
 var _ = Describe("Recovery", func() {
 	var (
-		ctx       context.Context
 		namespace string
 	)
 
-	BeforeEach(func() {
-		ctx = context.Background()
+	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
 		// Create namespace
 		ns := &corev1.Namespace{
@@ -51,7 +49,15 @@ var _ = Describe("Recovery", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 	})
 
-	It("should recover from invalid state and use latest valid configuration", func() {
+	AfterEach(func(ctx SpecContext) {
+		Expect(env.Client.Delete(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		})).To(Succeed())
+	})
+
+	It("should recover from invalid state and use latest valid configuration", func(ctx SpecContext) {
 		// Create initial valid ResourceGraphDefinition
 		rgd := generator.NewResourceGraphDefinition("test-recovery",
 			generator.WithSchema(
@@ -79,16 +85,16 @@ var _ = Describe("Recovery", func() {
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify initial ResourceGraphDefinition becomes active
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Update to invalid state with a cyclic dependency
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, rgd)
@@ -120,19 +126,19 @@ var _ = Describe("Recovery", func() {
 
 			err = env.Client.Update(ctx, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify ResourceGraphDefinition becomes inactive
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Update to new valid state with different configuration
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, rgd)
@@ -182,16 +188,16 @@ var _ = Describe("Recovery", func() {
 
 			err = env.Client.Update(ctx, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify ResourceGraphDefinition becomes active again
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, rgd)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		name := "test-recovery"
@@ -212,7 +218,7 @@ var _ = Describe("Recovery", func() {
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// Verify instance created Deployment with updated configuration
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx context.Context) {
 			deploy := &appsv1.Deployment{}
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
@@ -222,30 +228,30 @@ var _ = Describe("Recovery", func() {
 			g.Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("nginx"))
 			g.Expect(deploy.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(777)))
 
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
 		// Verify instance is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
 				Namespace: namespace,
 			}, instance)
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, &krov1alpha1.ResourceGraphDefinition{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 })

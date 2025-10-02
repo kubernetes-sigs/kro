@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/go-logr/logr"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -57,23 +56,20 @@ type Environment struct {
 type ControllerConfig struct {
 	AllowCRDDeletion bool
 	ReconcileConfig  ctrlinstance.ReconcileConfig
-	Logger           *logr.Logger
+	LogWriter        io.Writer
 }
 
-func NewWithContext(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
+func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
 	}
 
-	// Setup logging
-	logf.SetLogger(zap.New(zap.WriteTo(io.Discard), zap.UseDevMode(true)))
-	env.context, env.cancel = context.WithCancel(ctx)
-	if controllerConfig.Logger != nil {
-		logf.SetLogger(*controllerConfig.Logger)
-	} else {
-		logf.SetLogger(zap.New(zap.WriteTo(io.Discard), zap.UseDevMode(true)))
+	if env.ControllerConfig.LogWriter == nil {
+		env.ControllerConfig.LogWriter = io.Discard
 	}
 
+	// Setup logging
+	logf.SetLogger(zap.New(zap.WriteTo(env.ControllerConfig.LogWriter), zap.UseDevMode(true)))
 	env.context, env.cancel = context.WithCancel(ctx)
 
 	env.TestEnv = &envtest.Environment{
@@ -144,14 +140,8 @@ func (e *Environment) initializeClients() error {
 }
 
 func (e *Environment) setupController() error {
-	var logger logr.Logger
-	if e.ControllerConfig.Logger != nil {
-		logger = *e.ControllerConfig.Logger
-	} else {
-		logger = noopLogger()
-	}
 	dc := dynamiccontroller.NewDynamicController(
-		logger,
+		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
 		dynamiccontroller.Config{
 			Workers:         3,
 			ResyncPeriod:    60 * time.Second,
@@ -204,20 +194,4 @@ func (e *Environment) Stop() error {
 	e.cancel()
 	time.Sleep(1 * time.Second)
 	return errors.Join(e.TestEnv.Stop(), <-e.ManagerResult)
-}
-
-func noopLogger() logr.Logger {
-	// route all logs to a file
-	/* fileName := "test-integration.log"
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		panic(fmt.Sprintf("failed to open log file: %v", err))
-	} */
-
-	logger := zap.New(zap.UseFlagOptions(&zap.Options{
-		DestWriter:  io.Discard,
-		Development: true,
-	}))
-
-	return logger
 }

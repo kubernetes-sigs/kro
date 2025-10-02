@@ -15,7 +15,6 @@
 package core_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -34,8 +33,7 @@ import (
 )
 
 var _ = Describe("ExternalRef", func() {
-	It("should handle ResourceGraphDefinition with ExternalRef", func() {
-		ctx := context.Background()
+	It("should handle ResourceGraphDefinition with ExternalRef", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
 		// Create namespace
@@ -45,6 +43,9 @@ var _ = Describe("ExternalRef", func() {
 			},
 		}
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, ns)).To(Succeed())
+		})
 
 		// Create a Deployment that will be referenced
 		deployment1 := &appsv1.Deployment{
@@ -123,10 +124,13 @@ var _ = Describe("ExternalRef", func() {
 		)
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
 			}, createdRGD)
@@ -144,7 +148,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
 			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := &unstructured.Unstructured{
@@ -161,7 +165,7 @@ var _ = Describe("ExternalRef", func() {
 
 		// Verify Deployment is created with correct environment variables
 		deployment := &appsv1.Deployment{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "foo-instance",
 				Namespace: namespace,
@@ -171,12 +175,10 @@ var _ = Describe("ExternalRef", func() {
 			// Verify deployment has the ConfigMap reference in envFrom
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
-		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		Expect(env.Client.Delete(ctx, deployment1)).To(Succeed())
-		Expect(env.Client.Delete(ctx, ns)).To(Succeed())
 	})
 })

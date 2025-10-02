@@ -257,7 +257,7 @@ var _ = Describe("Validation", func() {
 	})
 
 	Context("Kind Names", func() {
-		It("should validate correct kind names", func(ctx SpecContext) {
+		It("should validate correct kind names", MustPassRepeatedly(5), func(ctx SpecContext) {
 			validKinds := []string{
 				"TestResource",
 				"AnotherTest",

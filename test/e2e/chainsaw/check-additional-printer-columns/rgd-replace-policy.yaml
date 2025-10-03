@@ -1,0 +1,31 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: test-replace-printer-columns
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TestReplacePrinterColumns
+    additionalPrinterColumnPolicy: Replace
+    additionalPrinterColumns:
+      - name: "NAME"
+        type: "string"
+        jsonPath: ".spec.name"
+        description: "The name specified in spec"
+      - name: "REPLICAS"
+        type: "integer"
+        jsonPath: ".spec.replicas"
+        description: "Number of replicas"
+    spec:
+      name: string | default="test"
+      replicas: integer | default=1
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          name: ${schema.spec.name}
+          replicas: ${schema.spec.replicas}

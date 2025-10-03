@@ -1,0 +1,21 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: test-default-printer-columns
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TestDefaultPrinterColumns
+    spec:
+      name: string | default="test"
+      replicas: integer | default=1
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          name: ${schema.spec.name}
+          replicas: ${schema.spec.replicas}

@@ -19,10 +19,25 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
+// AdditionalPrinterColumnPolicy defines how additional printer columns are applied to the generated CustomResourceDefinition (CRD). This policy controls whether user-provided columns replace or merge with the default columns.
+type AdditionalPrinterColumnPolicy string
+
 const (
 	// DefaultServiceAccountKey is the key to use for the default service account
 	// in the serviceAccounts map.
 	DefaultServiceAccountKey = "*"
+
+	// AdditionalPrinterColumnPolicyReplace specifies that the provided additional
+	// printer columns should completely replace the default columns. If no
+	// AdditionalPrinterColumns are provided or the list is empty, the system
+	// will fall back to using the default columns.
+	AdditionalPrinterColumnPolicyReplace AdditionalPrinterColumnPolicy = "Replace"
+
+	// AdditionalPrinterColumnPolicyAdd specifies that the provided additional
+	// printer columns should be appended to the default columns. When there are
+	// conflicts (columns with the same Name or JSONPath), the user-provided
+	// columns take precedence over the defaults.
+	AdditionalPrinterColumnPolicyAdd AdditionalPrinterColumnPolicy = "Add"
 )
 
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
@@ -86,11 +101,23 @@ type Schema struct {
 	// Validation is a list of validation rules that are applied to the
 	// resourcegraphdefinition.
 	Validation []Validation `json:"validation,omitempty"`
-	// AdditionalPrinterColumns defines additional printer columns
-	// that will be passed down to the created CRD. If set, no
-	// default printer columns will be added to the created CRD,
-	// and if default printer columns need to be retained, they
-	// need to be added explicitly.
+	// AdditionalPrinterColumnPolicy defines additional printer columns
+	// that will be passed down to the created CRD. The default policy is "Replace".
+	//
+	// AdditionalPrinterColumnPolicy controls how provided additional printer
+	// columns via AdditionalPrinterColumns are applied to the generated CRD.
+	//
+	// - "Replace": uses the provided columns as is; if no or empty AdditionalPrinterColumns are provided, fallback to the default columns.
+	// - "Add": appends the provided columns to the defaults, with user
+	//   definitions overriding defaults when they share a identifying key
+	//   (Name preferred, fallback to JSONPath).
+	//
+	// +kubebuilder:validation:Enum=Replace;Add
+	// +kubebuilder:default=Replace
+	AdditionalPrinterColumnPolicy AdditionalPrinterColumnPolicy `json:"additionalPrinterColumnPolicy,omitempty"`
+
+	// AdditionalPrinterColumns is the list of user-specified printer columns
+	// to apply according to AdditionalPrinterColumnPolicy.
 	//
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`

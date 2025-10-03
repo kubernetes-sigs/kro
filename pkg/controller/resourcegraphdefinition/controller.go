@@ -139,7 +139,7 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 		return nil
 	}
 
-	rgdName, ok := crd.Labels[metadata.ResourceGraphDefinitionNameLabel]
+	rgdName, ok := crd.Labels[metadata.DefinedByRGDLabel]
 	if !ok {
 		return nil
 	}

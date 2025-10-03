@@ -2,6 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-instance
+  labels:
+    kro.run/managed-by-instance-name: test-instance
+    kro.run/managed-by-instance-version: v1alpha1
+    kro.run/managed-by-instance-kind: CheckInstanceUpdateSimpleDeployment
+    kro.run/managed-by-instance-group: kro.run
 spec:
   progressDeadlineSeconds: 600
   replicas: 3

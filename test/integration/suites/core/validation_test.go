@@ -15,7 +15,6 @@
 package core_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -33,12 +32,10 @@ import (
 
 var _ = Describe("Validation", func() {
 	var (
-		ctx       context.Context
 		namespace string
 	)
 
-	BeforeEach(func() {
-		ctx = context.Background()
+	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
 		Expect(env.Client.Create(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
@@ -48,7 +45,7 @@ var _ = Describe("Validation", func() {
 	})
 
 	Context("Resource IDs", func() {
-		It("should validate correct resource naming conventions", func() {
+		It("should validate correct resource naming conventions", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-validation",
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
@@ -71,10 +68,12 @@ var _ = Describe("Validation", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		It("should reject invalid resource IDs", func() {
+		It("should reject invalid resource IDs", func(ctx SpecContext) {
 			invalidNames := []string{
 				"MyResource",  // Uppercase first letter
 				"my_resource", // Contains underscore
@@ -102,7 +101,8 @@ var _ = Describe("Validation", func() {
 
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-				Eventually(func(g Gomega) {
+				//nolint:dupl // we have many test cases checking for inactivity but with different conditions
+				Eventually(func(g Gomega, ctx SpecContext) {
 					err := env.Client.Get(ctx, types.NamespacedName{
 						Name: rgd.Name,
 					}, rgd)
@@ -120,11 +120,13 @@ var _ = Describe("Validation", func() {
 					g.Expect(condition).ToNot(BeNil())
 					g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 					g.Expect(*condition.Message).To(ContainSubstring("naming convention violation"))
-				}, 10*time.Second, time.Second).Should(Succeed())
+				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
 		})
 
-		It("should reject duplicate resource IDs", func() {
+		It("should reject duplicate resource IDs", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-validation-dup",
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
@@ -139,7 +141,8 @@ var _ = Describe("Validation", func() {
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			Eventually(func(g Gomega) {
+			//nolint:dupl // we have many test cases checking for inactivity but with different conditions
+			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: rgd.Name,
 				}, rgd)
@@ -157,12 +160,14 @@ var _ = Describe("Validation", func() {
 				g.Expect(condition).ToNot(BeNil())
 				g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 				g.Expect(*condition.Message).To(ContainSubstring("found duplicate resource IDs"))
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
 
 	Context("Kubernetes Object Structure", func() {
-		It("should validate correct kubernetes object structure", func() {
+		It("should validate correct kubernetes object structure", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-k8s-valid",
 				generator.WithSchema(
 					"TestK8sValidation", "v1alpha1",
@@ -182,16 +187,18 @@ var _ = Describe("Validation", func() {
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: rgd.Name,
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
-		It("should reject invalid kubernetes object structures", func() {
+		It("should reject invalid kubernetes object structures", func(ctx SpecContext) {
 			invalidObjects := []map[string]interface{}{
 				{
 					// Missing apiVersion
@@ -236,19 +243,21 @@ var _ = Describe("Validation", func() {
 
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-				Eventually(func(g Gomega) {
+				Eventually(func(g Gomega, ctx SpecContext) {
 					err := env.Client.Get(ctx, types.NamespacedName{
 						Name: rgd.Name,
 					}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-				}, 10*time.Second, time.Second).Should(Succeed())
+				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
 		})
 	})
 
 	Context("Kind Names", func() {
-		It("should validate correct kind names", func() {
+		It("should validate correct kind names", func(ctx SpecContext) {
 			validKinds := []string{
 				"TestResource",
 				"AnotherTest",
@@ -269,17 +278,19 @@ var _ = Describe("Validation", func() {
 
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-				Eventually(func(g Gomega) {
+				Eventually(func(g Gomega, ctx SpecContext) {
 					err := env.Client.Get(ctx, types.NamespacedName{
 						Name: rgd.Name,
 					}, rgd)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				}, 10*time.Second, time.Second).Should(Succeed())
+				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
 		})
 
-		It("should reject invalid kind names", func() {
+		It("should reject invalid kind names", func(ctx SpecContext) {
 			invalidKinds := []string{
 				"testResource",  // Lowercase first letter
 				"Test_Resource", // Contains underscore
@@ -307,7 +318,7 @@ var _ = Describe("Validation", func() {
 	})
 
 	Context("Proper Cleanup", func() {
-		It("should not panic when deleting an inactive ResourceGraphDefinition", func() {
+		It("should not panic when deleting an inactive ResourceGraphDefinition", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-cleanup",
 				generator.WithSchema(
 					"TestCleanup", "v1alpha1",
@@ -327,14 +338,14 @@ var _ = Describe("Validation", func() {
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			Eventually(func(g Gomega) {
+			Eventually(func(g Gomega, ctx SpecContext) {
 				err := env.Client.Get(ctx, types.NamespacedName{
 					Name: rgd.Name,
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 				g.Expect(rgd.Status.TopologicalOrder).To(BeEmpty())
-			}, 10*time.Second, time.Second).Should(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})

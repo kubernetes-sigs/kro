@@ -46,6 +46,8 @@ var (
 		"externalReferences",
 		"graph",
 		"instance",
+		"item",
+		"items",
 		"kind",
 		"kro",
 		"metadata",

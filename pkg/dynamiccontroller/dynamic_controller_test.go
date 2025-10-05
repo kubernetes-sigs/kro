@@ -117,20 +117,20 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	})
 
 	// Register GVK
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err := dc.Register(context.Background(), gvr, handlerFunc)
 	require.NoError(t, err)
 
 	_, exists := dc.informers.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err = dc.Register(context.Background(), gvr, handlerFunc)
 	assert.NoError(t, err)
 
 	// Unregister GVK
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err = dc.StopServiceGVK(shutdownContext, gvr)
+	err = dc.Deregister(shutdownContext, gvr)
 	require.NoError(t, err)
 
 	_, exists = dc.informers.Load(gvr)
@@ -189,7 +189,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	})
 
 	// simulate initial creation of the resource graph
-	err := dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err := dc.Register(context.Background(), gvr, handlerFunc)
 	assert.NoError(t, err)
 
 	// simulate reconciling the instances
@@ -200,7 +200,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	}
 
 	// simulate updating the resource graph
-	err = dc.StartServingGVK(context.Background(), gvr, handlerFunc)
+	err = dc.Register(context.Background(), gvr, handlerFunc)
 	assert.NoError(t, err)
 
 	// check if the expected objects are queued

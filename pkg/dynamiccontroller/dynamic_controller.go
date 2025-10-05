@@ -59,6 +59,7 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -308,14 +309,14 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 // syncFunc reconciles a single item.
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers) error {
 	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
-	dc.log.V(1).Info("Syncing resourcegraphdefinition instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
 
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
-		dc.log.V(1).Info("Finished syncing resourcegraphdefinition instance request",
+		dc.log.V(1).Info("Finished syncing object",
 			"gvr", gvrKey,
 			"namespacedKey", oi.NamespacedKey,
 			"duration", duration)
@@ -333,7 +334,15 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 	if !ok {
 		return fmt.Errorf("invalid handler type for GVR: %s", gvrKey)
 	}
-	err := handlerFunc(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
+
+	nn := types.NamespacedName{}
+	if parts := strings.Split(oi.NamespacedKey, "/"); len(parts) == 1 {
+		nn.Name = parts[0]
+	} else {
+		nn.Namespace = parts[0]
+		nn.Name = parts[1]
+	}
+	err := handlerFunc(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
@@ -440,8 +449,8 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	dc.queue.Add(objectIdentifiers)
 }
 
-// StartServingGVK registers a new GVK to the informers map safely.
-func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
+// Register registers a new GVK to the informers map safely.
+func (dc *DynamicController) Register(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
 	_, exists := dc.informers.Load(gvr)
@@ -519,14 +528,14 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	return nil
 }
 
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
-func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
+// Deregister safely removes a GVK from the controller and cleans up associated resources.
+func (dc *DynamicController) Deregister(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
 	// Retrieve the informer
 	informerObj, ok := dc.informers.Load(gvr)
 	if !ok {
-		dc.log.V(1).Info("GVK not registered, nothing to unregister", "gvr", gvr)
+		dc.log.V(1).Info("GVK not registered, nothing to deregister", "gvr", gvr)
 		return nil
 	}
 

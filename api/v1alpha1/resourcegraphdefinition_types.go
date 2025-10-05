@@ -16,13 +16,7 @@ package v1alpha1
 import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	runtime "k8s.io/apimachinery/pkg/runtime"
-)
-
-const (
-	// DefaultServiceAccountKey is the key to use for the default service account
-	// in the serviceAccounts map.
-	DefaultServiceAccountKey = "*"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
@@ -37,13 +31,6 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
-	// ServiceAccount configuration for controller impersonation.
-	// Key is the namespace, value is the service account name to use.
-	// Special key "*" defines the default service account for any
-	// namespace not explicitly mapped.
-	//
-	// +kubebuilder:validation:Optional
-	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of
@@ -198,7 +185,7 @@ func (o *ResourceGraphDefinition) SetConditions(conditions []Condition) {
 	o.Status.Conditions = conditions
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
 type ResourceGraphDefinitionList struct {

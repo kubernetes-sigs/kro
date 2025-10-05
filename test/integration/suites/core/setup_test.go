@@ -39,6 +39,7 @@ func TestCore(t *testing.T) {
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 5 * time.Second,
 				},
+				LogWriter: GinkgoWriter,
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())

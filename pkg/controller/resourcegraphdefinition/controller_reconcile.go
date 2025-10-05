@@ -74,8 +74,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(gvr, processedRGD,
-		rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(gvr, processedRGD, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
@@ -100,7 +99,6 @@ func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceG
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	gvr schema.GroupVersionResource,
 	processedRGD *graph.Graph,
-	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
 ) *instancectrl.Controller {
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
@@ -120,7 +118,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		processedRGD,
 		r.clientSet,
 		r.clientSet.RESTMapper(),
-		defaultSVCs,
 		labeler,
 	)
 }
@@ -166,7 +163,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 
 // reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource, handler dynamiccontroller.Handler) error {
-	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler)
+	err := r.dynamicController.Register(ctx, *gvr, handler)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

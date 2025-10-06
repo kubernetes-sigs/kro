@@ -13,4 +13,4 @@ jobs:
         mkdir -p hydrate-goproxy
         cd hydrate-goproxy
         go mod init hydrate-goproxy
-        go get github.com/kubernetes-sigs/kro@${GITHUB_SHA}
+        go get github.com/kro-run/kro@${GITHUB_SHA}

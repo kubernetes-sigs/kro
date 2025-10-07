@@ -27,9 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kro-run/kro/pkg/metadata"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -47,7 +47,7 @@ var _ = Describe("Validation", func() {
 		})).To(Succeed())
 	})
 
-	AfterEach(func() {
+	AfterEach(func(ctx SpecContext) {
 		// Clean up CRDs created by tests to avoid conflicts with other tests
 		crdList := &apiextensionsv1.CustomResourceDefinitionList{}
 		Expect(env.Client.List(ctx, crdList, client.MatchingLabels{

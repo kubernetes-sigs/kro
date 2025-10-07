@@ -67,12 +67,12 @@ func TestIsKROOwned(t *testing.T) {
 
 func TestHasMatchingKROOwner(t *testing.T) {
 	cases := []struct {
-		name        string
-		aOwnerName  string
-		aOwnerID    string
-		bOwnerName  string
-		bOwnerID    string
-		expected    bool
+		name       string
+		aOwnerName string
+		aOwnerID   string
+		bOwnerName string
+		bOwnerID   string
+		expected   bool
 	}{
 		{
 			name:       "matching owners",

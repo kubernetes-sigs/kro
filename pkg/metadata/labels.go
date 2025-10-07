@@ -53,7 +53,9 @@ func IsKROOwned(meta metav1.ObjectMeta) bool {
 	return ok && booleanFromString(v)
 }
 
-// HasMatchingKROOwner returns true if resources have the same RGD owner
+// HasMatchingKROOwner returns true if resources have the same RGD owner.
+// Note: The caller is responsible for ensuring that KRO labels exist on both
+// resources before calling this function.
 func HasMatchingKROOwner(a, b metav1.ObjectMeta) bool {
 	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
 	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]

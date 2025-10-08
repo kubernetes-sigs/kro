@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -22,7 +23,10 @@ import (
 	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
+
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 )
 
 const (
@@ -57,64 +61,208 @@ func newTransformer() *transformer {
 
 // loadPreDefinedTypes loads pre-defined types into the transformer.
 // The pre-defined types are used to resolve references in the schema.
-//
-// As of today, kro doesn't support custom types in the schema - do
-// not use this function.
+// Types are loaded one by one so that each type can reference one of the
+// other custom types.
+// Cyclic dependencies are detected and reported as errors.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
+	// Constructs a dag of the dependencies between the types
+	// If there is a cycle in the graph, then there is a cyclic dependency between the types
+	// and we cannot load the types
+	dagInstance := dag.NewDirectedAcyclicGraph[string]()
 	t.preDefinedTypes = make(map[string]predefinedType)
 
-	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
-	if err != nil {
-		return fmt.Errorf("failed to build pre-defined types schema: %w", err)
+	for k := range obj {
+		if err := dagInstance.AddVertex(k, 0); err != nil {
+			return err
+		}
 	}
 
-	for k, properties := range jsonSchemaProps.Properties {
-		required := false
-		if slices.Contains(jsonSchemaProps.Required, k) {
-			required = true
+	// Build dependencies and construct the schema
+	for k, v := range obj {
+		dependencies, err := extractDependenciesFromMap(v)
+		if err != nil {
+			return fmt.Errorf("failed to extract dependencies for type %s: %w", k, err)
 		}
-		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
+
+		// Add dependencies to the DAG and check for cycles
+		if err := dagInstance.AddDependencies(k, dependencies); err != nil {
+			var cycleErr *dag.CycleError[string]
+			if errors.As(err, &cycleErr) {
+				return fmt.Errorf("cyclic dependency detected loading type %s: %w", k, err)
+			}
+			return err
+		}
+	}
+
+	// Perform a topological sort of the DAG to get the order of the types
+	// to be processed
+	orderedVertexes, err := dagInstance.TopologicalSort()
+	if err != nil {
+		return fmt.Errorf("failed to resolve type dependencies (possible circular reference or missing type definition): %w", err)
+	}
+
+	// Build the pre-defined types from the sorted DAG
+	for _, vertex := range orderedVertexes {
+		objValueAtKey := obj[vertex]
+		objMap := map[string]interface{}{
+			vertex: objValueAtKey,
+		}
+		schemaProps, err := t.buildOpenAPISchemaWithDefault(objMap, true)
+		if err != nil {
+			return fmt.Errorf("failed to build pre-defined types schema : %w", err)
+		}
+		for propKey, properties := range schemaProps.Properties {
+			required := false
+			if slices.Contains(schemaProps.Required, propKey) {
+				required = true
+			}
+			t.preDefinedTypes[propKey] = predefinedType{Schema: properties, Required: required}
+		}
+	}
+
+	return nil
+}
+
+func extractDependenciesFromMap(obj interface{}) (dependencies []string, err error) {
+	dependenciesSet := sets.Set[string]{}
+
+	switch t := obj.(type) {
+	case map[string]interface{}:
+		if err := parseMap(t, dependenciesSet); err != nil {
+			return nil, err
+		}
+	case string:
+		// Handle Type Aliases (e.g., "MyType": "string")
+		if err := handleStringType(t, dependenciesSet); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("pre-defined type must be an object or string alias, got %T", obj)
+	}
+
+	return dependenciesSet.UnsortedList(), nil
+}
+
+func handleStringType(v string, dependencies sets.Set[string]) error {
+	// Extract and validate type information from field declaration.
+	// Markers (e.g., "required=true", "description=...") are stripped here and
+	// processed separately using parseFieldSchema helper to maintain consistency
+	// with main schema parsing. See parseFieldSchema for marker details.
+	typeStr, _, err := parseFieldSchema(v)
+	if err != nil {
+		return fmt.Errorf("failed to parse markers from string type %s: %w", v, err)
+	}
+	v = typeStr
+
+	return processParsedType(v, dependencies)
+}
+
+// processParsedType checks if a type is atomic, collection, object, or a custom type reference.
+// It recursively processes nested types and adds custom type references to the dependencies set.
+func processParsedType(v string, dependencies sets.Set[string]) error {
+	// Check if the value is an atomic type
+	if isAtomicType(v) {
+		return nil
+	}
+
+	// Check if the value is a slice type
+	if isSliceType(v) {
+		elementType, err := parseSliceType(v)
+		if err != nil {
+			return fmt.Errorf("failed to parse slice type %s: %w", v, err)
+		}
+		// Recursively handle the element type to find nested dependencies
+		return processParsedType(elementType, dependencies)
+	}
+
+	// Check if the value is a map type
+	if isMapType(v) {
+		keyType, valueType, err := parseMapType(v)
+		if err != nil {
+			return fmt.Errorf("failed to parse map type %s: %w", v, err)
+		}
+		// Only strings are supported as map keys
+		if keyType != keyTypeString {
+			return fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
+		}
+		// Recursively handle the value type to find nested dependencies
+		return processParsedType(valueType, dependencies)
+	}
+
+	// If the type is object, we do not add any dependency
+	if v == keyTypeObject {
+		return nil
+	}
+
+	// At this point, we have a new custom type, we add it as dependency
+	dependencies.Insert(v)
+	return nil
+}
+
+func parseMap(m map[string]interface{}, dependencies sets.Set[string]) error {
+	for key, value := range m {
+		switch v := value.(type) {
+		case map[string]interface{}:
+			if err := parseMap(v, dependencies); err != nil {
+				return err
+			}
+		case string:
+			if err := handleStringType(v, dependencies); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("invalid type in schema: key: %s, value: %v", key, value)
+		}
 	}
 	return nil
 }
 
 // buildOpenAPISchema builds an OpenAPI schema from the given object
-// of a SimpleSchema.
 func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+	return tf.buildOpenAPISchemaWithDefault(obj, true)
+}
+
+// buildOpenAPISchemaWithDefault builds an OpenAPI schema from the given object with control over object defaults
+func (tf *transformer) buildOpenAPISchemaWithDefault(obj map[string]interface{}, allowObjectDefault bool) (*extv1.JSONSchemaProps, error) {
 	schema := &extv1.JSONSchemaProps{
 		Type:       "object",
 		Properties: map[string]extv1.JSONSchemaProps{},
 	}
+
 	childHasDefault := false
 
 	for key, value := range obj {
-		fieldSchema, err := tf.transformField(key, value, schema)
+		fieldSchema, err := tf.transformField(key, value, schema, allowObjectDefault)
 		if err != nil {
 			return nil, err
 		}
 		schema.Properties[key] = *fieldSchema
+
 		if fieldSchema.Default != nil {
 			childHasDefault = true
 		}
 	}
 
-	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
+	// Only set default if this is a predefined type (allowObjectDefault=true) AND it has child defaults
+	if allowObjectDefault && childHasDefault {
 		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 
 	return schema, nil
 }
+
 func (tf *transformer) transformField(
 	key string, value interface{},
 	// parentSchema is used to add the key to the required list
 	parentSchema *extv1.JSONSchemaProps,
+	allowObjectDefault bool,
 ) (*extv1.JSONSchemaProps, error) {
 	switch v := value.(type) {
 	case map[interface{}]interface{}:
 		nMap := transformMap(v)
-		return tf.buildOpenAPISchema(nMap)
+		return tf.buildOpenAPISchemaWithDefault(nMap, allowObjectDefault)
 	case map[string]interface{}:
-		return tf.buildOpenAPISchema(v)
+		return tf.buildOpenAPISchemaWithDefault(v, allowObjectDefault)
 	case string:
 		return tf.parseFieldSchema(key, v, parentSchema)
 	default:
@@ -170,7 +318,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
 	}
 	if keyType != keyTypeString {
-		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
+		return nil, fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
 	}
 
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{
@@ -399,7 +547,7 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 	return nil
 }
 
-// Other functions (LoadPreDefinedTypes, transformMap) remain unchanged
+// transformMap converts a map[interface{}]interface{} to map[string]interface{}
 func transformMap(original map[interface{}]interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
 	for key, value := range original {

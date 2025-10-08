@@ -159,6 +159,16 @@ labels: "map[string]string"
 metrics: "map[string]float"
 ```
 
+### Nested Arrays and Maps
+
+Arrays and maps can be nested to create more complex data structures:
+
+| Pattern             | Description     | Example                          |
+| ------------------- | --------------- | -------------------------------- |
+| `[][]Type`          | Array of arrays | `matrix: "[][]integer"`          |
+| `map[string][]Type` | Map of arrays   | `tags: "map[string][]string"`    |
+| `[]map[string]Type` | Array of maps   | `configs: "[]map[string]string"` |
+
 ### Custom Types
 
 Custom types are specified in the separate `types` section.
@@ -175,6 +185,46 @@ schema:
   spec:
     people: '[]Person | required=true'
 ```
+
+#### Recursive Type References
+
+Custom types can reference other custom types. kro automatically resolves dependencies using topological sorting:
+
+```simpleschema
+schema:
+  types:
+    Address:
+      street: string
+      city: string
+    Company:
+      name: string
+      headquarters: Address
+    Employee:
+      name: string
+      company: Company
+  spec:
+    ceo: Employee
+```
+
+kro processes types in dependency order (Address → Company → Employee) and expands them inline in the generated CRD.
+
+#### Cyclic Dependency Detection
+
+kro detects and rejects cyclic dependencies between custom types:
+
+```simpleschema
+# This will fail validation
+schema:
+  types:
+    Person:
+      name: string
+      employer: Company
+    Company:
+      name: string
+      employees: "[]Person"  # Creates cycle: Person → Company → Person
+```
+
+To resolve cycles, restructure types to break the circular reference or use inline object definitions.
 
 ## Validation and Documentation
 

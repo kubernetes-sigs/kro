@@ -21,15 +21,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -45,17 +42,6 @@ var _ = Describe("Validation", func() {
 				Name: namespace,
 			},
 		})).To(Succeed())
-	})
-
-	AfterEach(func(ctx SpecContext) {
-		// Clean up CRDs created by tests to avoid conflicts with other tests
-		crdList := &apiextensionsv1.CustomResourceDefinitionList{}
-		Expect(env.Client.List(ctx, crdList, client.MatchingLabels{
-			metadata.OwnedLabel: "true",
-		})).To(Succeed())
-		for _, crd := range crdList.Items {
-			Expect(env.Client.Delete(ctx, &crd)).To(Succeed())
-		}
 	})
 
 	Context("Resource IDs", func() {

@@ -119,7 +119,7 @@ type Config struct {
 	// Log is used to inject the calling reconciler's logger
 	Log logr.Logger
 
-	// Concurrency is the maximum number of concurrent apply operations in a single applyset.
+	// Concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
 	// If not provided, the default value is the number of objects in the applyset.
 	Concurrency int
 }
@@ -267,7 +267,7 @@ type applySet struct {
 
 	log logr.Logger
 
-	// concurrency is the maximum number of concurrent apply operations in a single applyset.
+	// concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
 	// If not provided, the default value is the number of objects in the applyset.
 	concurrency int
 }

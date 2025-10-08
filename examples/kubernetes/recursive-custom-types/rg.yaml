@@ -1,0 +1,42 @@
+---
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: company.kro.run
+spec:
+  schema:
+    types:
+      Person:
+        name: string
+        role: "Role"
+      Division:
+        name: string
+        employees: "[]Person"
+      Role:
+        name: string
+        seniority: string
+    spec:
+      name: string
+      namespace: string | default=default
+      management: "[]Person"
+      divisions: "[]Division"
+      roles: "[]Role"
+    apiVersion: v1alpha1
+    kind: CompanyConfig
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            app.kubernetes.io/name: ${schema.spec.name}
+        data:
+          management: |
+            ${schema.spec.management.map(e, e.name + " (" + e.role.name + ")").join(", ")}
+          divisions: |
+            ${schema.spec.divisions.map(d, d.name + ": " + d.employees.map(e, e.name).join(", ")).join("\n")}
+          roles: |
+            ${schema.spec.roles.map(r, r.name + " (" + r.seniority + ")").join(", ")}

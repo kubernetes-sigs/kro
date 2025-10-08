@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/utils/ptr"
 )
@@ -57,25 +58,128 @@ func newTransformer() *transformer {
 
 // loadPreDefinedTypes loads pre-defined types into the transformer.
 // The pre-defined types are used to resolve references in the schema.
-//
+// Types are loaded one by one so that each type can reference one of the
+// other custom types.
+// Cyclic dependencies are detected and reported as errors.
 // As of today, kro doesn't support custom types in the schema - do
 // not use this function.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
+
+	//Constructs a dag of the dependencies between the types
+	//If there is a cycle in the graph, then there is a cyclic dependency between the types
+	//and we cannot load the types
+	dagInstance := dag.NewDirectedAcyclicGraph[string]()
 	t.preDefinedTypes = make(map[string]predefinedType)
 
-	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
-	if err != nil {
-		return fmt.Errorf("failed to build pre-defined types schema: %w", err)
+	for k := range obj {
+		if err := dagInstance.AddVertex(k, 0); err != nil {
+			return err
+		}
 	}
 
-	for k, properties := range jsonSchemaProps.Properties {
-		required := false
-		if slices.Contains(jsonSchemaProps.Required, k) {
-			required = true
+	// Build dependencies and construct the schema
+	for k, v := range obj {
+		dependencies := extractDependenciesFromMap(v)
+
+		// Add dependencies to the DAG and check for cycles
+		err := dagInstance.AddDependencies(k, dependencies)
+		if err != nil {
+			if cycleErr, isCycle := err.(*dag.CycleError[string]); isCycle {
+				return fmt.Errorf("failed to load type %s due to cyclic dependency. Please remove the cyclic dependency: %w", k, cycleErr)
+			}
+			return err
 		}
-		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
 	}
+
+	// Perform a topological sort of the DAG to get the order of the types
+	// to be processed
+	orderedVertexes, err := dagInstance.TopologicalSort()
+	if err != nil {
+		return fmt.Errorf("failed to sort DAG: %w", err)
+	}
+
+	// Build the pre-defined types from the sorted DAG
+	for _, vertex := range orderedVertexes {
+		objValueAtKey, ok := obj[vertex]
+		if !ok {
+			return fmt.Errorf("failed to assert type for vertex %s", vertex)
+		}
+		objMap := map[string]interface{}{
+			vertex: objValueAtKey,
+		}
+		if schemaProps, err := t.buildOpenAPISchema(objMap); err == nil {
+			for propKey, properties := range schemaProps.Properties {
+				required := false
+				if slices.Contains(schemaProps.Required, propKey) {
+					required = true
+				}
+				t.preDefinedTypes[propKey] = predefinedType{Schema: properties, Required: required}
+			}
+		} else {
+			return fmt.Errorf("failed to build schema props for %s: %w", vertex, err)
+		}
+	}
+
 	return nil
+}
+
+// Define the set of basic types as
+// defined in https://kro.run/docs/concepts/simple-schema#basic-types
+var excludedTypes = map[string]struct{}{
+	"string":  {},
+	"integer": {},
+	"bool":    {},
+	"float":   {},
+	"object":  {},
+}
+
+func extractDependenciesFromMap(obj interface{}) []string {
+	var dependencies []string
+
+	// Use a recursive helper function to traverse the map and extract dependencies
+	var parseMap func(map[string]interface{})
+	parseMap = func(m map[string]interface{}) {
+		for _, value := range m {
+			switch v := value.(type) {
+			case string:
+				// Strip array prefixes like "[]"
+				trimmed := strings.TrimPrefix(v, "[]")
+
+				// Filter out primitive types
+				if _, isExcluded := excludedTypes[trimmed]; !isExcluded {
+					dependencies = append(dependencies, trimmed)
+				}
+			case map[string]interface{}:
+				// Recursively parse nested maps
+				parseMap(v)
+			case []interface{}:
+				// Handle slices of types (e.g., []string or [][nested type])
+				for _, elem := range v {
+					if nestedMap, ok := elem.(map[string]interface{}); ok {
+						parseMap(nestedMap)
+					}
+				}
+			}
+		}
+	}
+
+	if rootMap, ok := obj.(map[string]interface{}); ok {
+		parseMap(rootMap)
+	}
+
+	// Remove duplicates using a set
+	dependencySet := make(map[string]struct{})
+	for _, dep := range dependencies {
+		dependencySet[dep] = struct{}{}
+	}
+
+	// Convert the set back to a slice
+	result := make([]string, 0, len(dependencySet))
+	for dep := range dependencySet {
+		result = append(result, dep)
+	}
+
+	return result
 }
 
 // buildOpenAPISchema builds an OpenAPI schema from the given object

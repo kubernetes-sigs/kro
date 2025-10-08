@@ -33,6 +33,18 @@ import (
 )
 
 var _ = Describe("ExternalRef", func() {
+	DescribeTableSubtree("apply mode",
+		testExternalRef,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testExternalRef(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle ResourceGraphDefinition with ExternalRef", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -75,9 +87,13 @@ var _ = Describe("ExternalRef", func() {
 			},
 		}
 		Expect(env.Client.Create(ctx, deployment1)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, deployment1)).To(Succeed())
+		})
 
 		// Create ResourceGraphDefinition with ExternalRef
 		rgd := generator.NewResourceGraphDefinition("test-externalref",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestExternalRef", "v1alpha1",
 				map[string]interface{}{},
@@ -162,6 +178,9 @@ var _ = Describe("ExternalRef", func() {
 			},
 		}
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		})
 
 		// Verify Deployment is created with correct environment variables
 		deployment := &appsv1.Deployment{}
@@ -176,9 +195,5 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		// Cleanup
-		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
-		Expect(env.Client.Delete(ctx, deployment1)).To(Succeed())
 	})
-})
+}

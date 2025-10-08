@@ -32,6 +32,18 @@ import (
 )
 
 var _ = Describe("Nested ResourceGraphDefinition", func() {
+	DescribeTableSubtree("apply mode",
+		testNested,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testNested(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		ns *corev1.Namespace
 	)
@@ -51,7 +63,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 
 	It("should handle nested ResourceGraphDefinition lifecycle", func(ctx SpecContext) {
 		// Create parent ResourceGraphDefinition
-		rg, genInstance := nestedResourceGraphDefinition("testnestedrg")
+		rg, genInstance := nestedResourceGraphDefinition("testnestedrg", reconcileSpec)
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
@@ -66,6 +78,9 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 		// Create instance
 		instance := genInstance(ns.Name, "test-string", "string", "10")
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		})
 
 		// Expect instance status to eventually be Active
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -109,7 +124,7 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 	It("should dynamically create RGDs with different schema field types", func(ctx SpecContext) {
 		// Create parent ResourceGraphDefinition
 		By("Creating parent ResourceGraphDefinition")
-		rg, genInstance := nestedResourceGraphDefinition("testmultirg")
+		rg, genInstance := nestedResourceGraphDefinition("testmultirg", reconcileSpec)
 		Expect(env.Client.Create(ctx, rg)).To(Succeed())
 
 		// Wait for parent ResourceGraphDefinition to be ready
@@ -199,15 +214,16 @@ var _ = Describe("Nested ResourceGraphDefinition", func() {
 			g.Expect(err).To(MatchError(errors.IsNotFound, "parent RGD should be deleted"))
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-})
+}
 
 // nestedResourceGraphDefinition creates a ResourceGraphDefinition inception
-func nestedResourceGraphDefinition(rgName string) (
+func nestedResourceGraphDefinition(rgName string, reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) (
 	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name string, typeVal string, defaultVal string) *unstructured.Unstructured,
 ) {
 
 	rg := generator.NewResourceGraphDefinition(rgName,
+		generator.WithReconcileSpec(reconcileSpec),
 		generator.WithSchema(
 			"NestedRGD"+rgName, "v1alpha1",
 			map[string]interface{}{

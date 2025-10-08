@@ -15,15 +15,12 @@
 package core_test
 
 import (
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
@@ -31,30 +28,21 @@ import (
 )
 
 var _ = Describe("Status", func() {
-	var (
-		namespace string
+	DescribeTableSubtree("apply mode",
+		testStatus,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
 	)
+})
 
-	BeforeEach(func(ctx SpecContext) {
-		namespace = fmt.Sprintf("test-%s", rand.String(5))
-		// Create namespace
-		Expect(env.Client.Create(ctx, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-			},
-		})).To(Succeed())
-	})
-
-	AfterEach(func(ctx SpecContext) {
-		Expect(env.Client.Delete(ctx, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-			},
-		})).To(Succeed())
-	})
-
+func testStatus(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should have correct conditions when ResourceGraphDefinition is created", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-status",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestStatus", "v1alpha1",
 				map[string]interface{}{
@@ -96,6 +84,7 @@ var _ = Describe("Status", func() {
 
 	It("should reflect failure conditions when definition is invalid", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-status-fail",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestStatusFail", "v1alpha1",
 				map[string]interface{}{
@@ -133,4 +122,4 @@ var _ = Describe("Status", func() {
 			g.Expect(*crdCondition.Message).To(ContainSubstring("failed to build resourcegraphdefinition"))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-})
+}

@@ -19,6 +19,11 @@ import (
 	"testing"
 	"time"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -29,12 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/release-utils/version"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
-	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -61,6 +60,18 @@ func TestDeploymentservice(t *testing.T) {
 }
 
 var _ = Describe("DeploymentService", func() {
+	DescribeTableSubtree("apply mode",
+		testDeploymentService,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testDeploymentService(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -73,7 +84,7 @@ var _ = Describe("DeploymentService", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 
 		// Create ResourceGraphDefinition
-		rgd, genInstance := deploymentService("test-deployment-service")
+		rgd, genInstance := deploymentService("test-deployment-service", reconcileSpec)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is created and becomes ready
@@ -243,4 +254,4 @@ var _ = Describe("DeploymentService", func() {
 			return errors.IsNotFound(err)
 		}, 30*time.Second, time.Second).Should(BeTrue()) */
 	})
-})
+}

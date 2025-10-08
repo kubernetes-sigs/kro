@@ -31,6 +31,18 @@ import (
 )
 
 var _ = Describe("Topology", func() {
+	DescribeTableSubtree("apply mode",
+		testTopology,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -55,6 +67,7 @@ var _ = Describe("Topology", func() {
 
 	It("should correctly order AWS resources in dependency graph", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestTopology", "v1alpha1",
 				map[string]interface{}{
@@ -144,6 +157,9 @@ var _ = Describe("Topology", func() {
 		)
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 
 		// Verify ResourceGraphDefinition topology
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -178,6 +194,7 @@ var _ = Describe("Topology", func() {
 
 	It("should detect cyclic dependencies in AWS resource definitions", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology-cyclic",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestTopologyCyclic", "v1alpha1",
 				map[string]interface{}{
@@ -235,4 +252,4 @@ var _ = Describe("Topology", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-})
+}

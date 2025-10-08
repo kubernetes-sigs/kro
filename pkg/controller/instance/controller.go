@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,9 @@ type ReconcileConfig struct {
 	// TODO(a-hilaly): need to define think the different deletion policies we need to
 	// support.
 	DeletionPolicy string
+
+	// ApplyMode is the apply mode to use when creating resources in the graph.
+	ApplyMode v1alpha1.ApplyMode
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,

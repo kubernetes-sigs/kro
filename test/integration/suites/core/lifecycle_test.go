@@ -33,6 +33,18 @@ import (
 )
 
 var _ = Describe("Update", func() {
+	DescribeTableSubtree("apply mode",
+		testUpdate,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testUpdate(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle updates to instance resources correctly", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -49,6 +61,7 @@ var _ = Describe("Update", func() {
 
 		// Create ResourceGraphDefinition for a simple deployment service
 		rgd := generator.NewResourceGraphDefinition("test-update",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestInstanceUpdate", "v1alpha1",
 				map[string]interface{}{
@@ -187,4 +200,4 @@ var _ = Describe("Update", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 	})
-})
+}

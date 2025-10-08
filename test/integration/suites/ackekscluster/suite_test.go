@@ -20,6 +20,10 @@ import (
 	"testing"
 	"time"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -29,11 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
-	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -60,6 +59,18 @@ func TestEKSCluster(t *testing.T) {
 }
 
 var _ = Describe("EKSCluster", func() {
+	DescribeTableSubtree("apply mode",
+		testEKS,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testEKS(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -72,7 +83,7 @@ var _ = Describe("EKSCluster", func() {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 
 		// Create ResourceGraphDefinition
-		rgd, genInstance := eksCluster(namespace, "test-eks-cluster")
+		rgd, genInstance := eksCluster(namespace, "test-eks-cluster", reconcileSpec)
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is created and becomes ready
@@ -483,4 +494,4 @@ var _ = Describe("EKSCluster", func() {
 		Expect(env.Client.Delete(ctx, ns)).To(Succeed())
 	})
 
-})
+}

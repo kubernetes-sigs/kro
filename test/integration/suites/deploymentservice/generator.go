@@ -26,11 +26,13 @@ import (
 // deploymentService creates a ResourceGraphDefinition for testing deployment+service combinations
 func deploymentService(
 	name string,
+	reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec,
 ) (
 	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name string, port int) *unstructured.Unstructured,
 ) {
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
+		generator.WithReconcileSpec(reconcileSpec),
 		generator.WithSchema(
 			"DeploymentService", "v1alpha1",
 			map[string]interface{}{

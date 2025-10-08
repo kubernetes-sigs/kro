@@ -31,6 +31,18 @@ import (
 )
 
 var _ = Describe("Validation", func() {
+	DescribeTableSubtree("apply mode",
+		testValidation,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testValidation(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -47,6 +59,7 @@ var _ = Describe("Validation", func() {
 	Context("Resource IDs", func() {
 		It("should validate correct resource naming conventions", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-validation",
+				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
 					map[string]interface{}{
@@ -128,6 +141,7 @@ var _ = Describe("Validation", func() {
 
 		It("should reject duplicate resource IDs", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-validation-dup",
+				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestValidation", "v1alpha1",
 					map[string]interface{}{
@@ -169,6 +183,7 @@ var _ = Describe("Validation", func() {
 	Context("Kubernetes Object Structure", func() {
 		It("should validate correct kubernetes object structure", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-k8s-valid",
+				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestK8sValidation", "v1alpha1",
 					map[string]interface{}{
@@ -267,6 +282,7 @@ var _ = Describe("Validation", func() {
 
 			for _, kind := range validKinds {
 				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-kind-%s", rand.String(5)),
+					generator.WithReconcileSpec(reconcileSpec),
 					generator.WithSchema(
 						kind, "v1alpha1",
 						map[string]interface{}{
@@ -303,6 +319,7 @@ var _ = Describe("Validation", func() {
 
 			for _, kind := range invalidKinds {
 				rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-kind-%s", rand.String(5)),
+					generator.WithReconcileSpec(reconcileSpec),
 					generator.WithSchema(
 						kind, "v1alpha1",
 						map[string]interface{}{
@@ -320,6 +337,7 @@ var _ = Describe("Validation", func() {
 	Context("Proper Cleanup", func() {
 		It("should not panic when deleting an inactive ResourceGraphDefinition", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-cleanup",
+				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestCleanup", "v1alpha1",
 					map[string]interface{}{
@@ -350,7 +368,7 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
-})
+}
 
 func validResourceDef() map[string]interface{} {
 	return map[string]interface{}{

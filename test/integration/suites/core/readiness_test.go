@@ -34,6 +34,18 @@ import (
 )
 
 var _ = Describe("Readiness", func() {
+	DescribeTableSubtree("apply mode",
+		testReadiness,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testReadiness(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -60,6 +72,7 @@ var _ = Describe("Readiness", func() {
 	It(`should wait for deployment to have deployment.spec.replicas 
 		== deployment.status.availableReplicas before creating service`, func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-readiness",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestReadiness", "v1alpha1",
 				map[string]interface{}{
@@ -294,4 +307,4 @@ var _ = Describe("Readiness", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
-})
+}

@@ -21,6 +21,8 @@ import (
 
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
 type ResourceGraphDefinitionSpec struct {
+	Reconcile ResourceGraphDefinitionReconcileSpec `json:"reconcile,omitempty"`
+
 	// The schema of the resourcegraphdefinition, which includes the
 	// apiVersion, kind, spec, status, types, and some validation
 	// rules.
@@ -32,6 +34,39 @@ type ResourceGraphDefinitionSpec struct {
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
 }
+
+type ResourceGraphDefinitionReconcileSpec struct {
+	ApplyMode ApplyMode `json:"applyMode,omitempty"`
+}
+
+// ApplyMode defines the mode of reconciliation for resources by instances created through this definition.
+//
+// ApplyModeDeltaCSA ("DeltaCSA") represents ClientSideApply.
+// This mode makes kro dynamically detect changes to the resources in the controller during reconciliation.
+// It is less accurate than ServerSideApply, and will do diff computation in the controller.
+// This mode approximates change detection with a custom delta implementation.
+//
+// ApplyModeApplySetSSA ("ApplySetSSA") represents ServerSideApply using ApplySet.
+// When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
+// More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
+//
+// +kubebuilder:validation:Enum=ApplySetSSA;DeltaCSA
+// +kubebuilder:default=DeltaCSA
+// +kubebuilder:validation:Required
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="applyMode is immutable"
+type ApplyMode string
+
+const (
+	// ApplyModeDeltaCSA represents ClientSideApply.
+	// This mode makes kro dynamically detect changes to the resources in the controller during reconciliation.
+	// It is less accurate than ServerSideApply, and will do diff computation in the controller.
+	// This mode approximates change detection with a custom delta implementation.
+	ApplyModeDeltaCSA ApplyMode = "DeltaCSA"
+	// ApplyModeApplySetSSA represents ServerSideApply using ApplySet.
+	// When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
+	// More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
+	ApplyModeApplySetSSA ApplyMode = "ApplySetSSA"
+)
 
 // Schema represents the attributes that define an instance of
 // a resourcegraphdefinition.

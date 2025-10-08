@@ -41,6 +41,13 @@ func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOpti
 	return rgd
 }
 
+// WithReconcileSpec sets the reconcile spec of the ResourceGraphDefinition
+func WithReconcileSpec(spec krov1alpha1.ResourceGraphDefinitionReconcileSpec) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		rgd.Spec.Reconcile = spec
+	}
+}
+
 // WithSchema sets the definition and status of the ResourceGraphDefinition
 func WithSchema(kind, version string, spec, status map[string]interface{}) ResourceGraphDefinitionOption {
 	rawSpec, err := json.Marshal(spec)

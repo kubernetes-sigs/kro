@@ -25,11 +25,13 @@ import (
 
 func eksCluster(
 	namespace, name string,
+	reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec,
 ) (
 	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name, version string) *unstructured.Unstructured,
 ) {
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
+		generator.WithReconcileSpec(reconcileSpec),
 		generator.WithSchema(
 			"EKSCluster", "v1alpha1",
 			map[string]interface{}{

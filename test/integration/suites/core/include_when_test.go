@@ -35,6 +35,18 @@ import (
 )
 
 var _ = Describe("Conditions", func() {
+	DescribeTableSubtree("apply mode",
+		testConditions,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testConditions(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -61,6 +73,7 @@ var _ = Describe("Conditions", func() {
 	It("should not create deployment, service, and configmap "+
 		"due to condition deploymentEnabled == false", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-conditions",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
 				map[string]interface{}{
@@ -370,4 +383,4 @@ var _ = Describe("Conditions", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
-})
+}

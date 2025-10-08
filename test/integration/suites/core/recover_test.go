@@ -34,6 +34,18 @@ import (
 )
 
 var _ = Describe("Recovery", func() {
+	DescribeTableSubtree("apply mode",
+		testRecovery,
+		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
+		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
+		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
+		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+	)
+})
+
+func testRecovery(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -60,6 +72,7 @@ var _ = Describe("Recovery", func() {
 	It("should recover from invalid state and use latest valid configuration", func(ctx SpecContext) {
 		// Create initial valid ResourceGraphDefinition
 		rgd := generator.NewResourceGraphDefinition("test-recovery",
+			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestRecovery", "v1alpha1",
 				map[string]interface{}{
@@ -254,4 +267,4 @@ var _ = Describe("Recovery", func() {
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-})
+}

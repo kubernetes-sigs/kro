@@ -16,6 +16,9 @@ on:
 
 jobs:
   integration:
+    strategy:
+      matrix:
+        labels: [ "DeltaCSA", "ApplySetSSA" ]
     name: Integration Tests
     runs-on: ubuntu-latest
     
@@ -37,4 +40,4 @@ jobs:
         echo "KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS}" >> $GITHUB_ENV
 
     - name: Run integration tests
-      run: make test WHAT=integration
+      run: make test WHAT=integration INTEGRATION_LABEL_FILTER=${{ matrix.labels }}

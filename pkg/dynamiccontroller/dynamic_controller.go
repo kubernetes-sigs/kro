@@ -59,8 +59,8 @@ type Handler func(ctx context.Context, req ctrl.Request) error
 
 // ObjectIdentifiers holds the key and GVR of the object to reconcile.
 type ObjectIdentifiers struct {
-	NamespacedKey string
-	GVR           schema.GroupVersionResource
+	types.NamespacedName
+	GVR schema.GroupVersionResource
 }
 
 // registration tracks one parent GVR registration and its child handler IDs.
@@ -148,7 +148,7 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
-	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
+	return dc.gracefulShutdown()
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
@@ -210,8 +210,8 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 }
 
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) error {
-	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
-	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+	gvrKey := oi.GVR.String()
+	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "key", oi.NamespacedName)
 
 	startTime := time.Now()
 	defer func() {
@@ -219,10 +219,10 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
 		dc.log.V(1).Info("Finished syncing object",
-			"gvr", gvrKey, "namespacedKey", oi.NamespacedKey, "duration", duration)
+			"gvr", gvrKey, "key", oi.NamespacedName, "duration", duration)
 	}()
 
-	err := handler(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
+	err := handler(ctx, ctrl.Request{NamespacedName: oi.NamespacedName})
 	if err != nil {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
@@ -230,13 +230,16 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 }
 
 func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj interface{}, eventType string) {
-	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	mobj, err := meta.Accessor(obj)
 	if err != nil {
-		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
+		dc.log.Error(err, "Failed to get meta for object to enqueue", "eventType", eventType)
 		return
 	}
 
-	oi := ObjectIdentifiers{NamespacedKey: namespacedKey, GVR: parentGVR}
+	oi := ObjectIdentifiers{NamespacedName: types.NamespacedName{
+		Namespace: mobj.GetNamespace(),
+		Name:      mobj.GetName(),
+	}, GVR: parentGVR}
 	dc.log.V(1).Info("Enqueueing object", "objectIdentifiers", oi, "eventType", eventType)
 
 	informerEventsTotal.WithLabelValues(parentGVR.String(), eventType).Inc()
@@ -333,7 +336,7 @@ func (dc *DynamicController) ensureWatchLocked(
 	}
 
 	// Create per-GVR watch wrapper (informer created lazily on first handler)
-	w := internal.NewLazyInformer(dc.ctx, dc.client, gvr, dc.config.ResyncPeriod, nil)
+	w := internal.NewLazyInformer(dc.client, gvr, dc.config.ResyncPeriod, nil, dc.log)
 	dc.watches[gvr] = w
 	return w
 }
@@ -372,7 +375,7 @@ func (dc *DynamicController) reconcileParentLocked(
 	// create handler if missing
 	if reg.parentHandlerID == "" {
 		handlerID := "parent:" + parent.String()
-		if err := w.AddHandler(handlerID, cache.ResourceEventHandlerFuncs{
+		if err := w.AddHandler(dc.ctx, handlerID, cache.ResourceEventHandlerFuncs{
 			AddFunc:    func(obj interface{}) { dc.enqueueParent(parent, obj, "add") },
 			UpdateFunc: func(oldObj, newObj interface{}) { dc.updateFunc(parent, oldObj, newObj) },
 			DeleteFunc: func(obj interface{}) { dc.enqueueParent(parent, obj, "delete") },
@@ -426,7 +429,7 @@ func (dc *DynamicController) reconcileChildrenLocked(
 		}
 		w := dc.ensureWatchLocked(child)
 		handlerID := "child:" + parent.String() + "->" + child.String()
-		if err := w.AddHandler(handlerID, dc.handlerForChildGVR(parent, child)); err != nil {
+		if err := w.AddHandler(dc.ctx, handlerID, dc.handlerForChildGVR(parent, child)); err != nil {
 			return fmt.Errorf("add child handler %s: %w", child, err)
 		}
 		reg.childHandlerIDs[child] = handlerID
@@ -436,7 +439,7 @@ func (dc *DynamicController) reconcileChildrenLocked(
 	return nil
 }
 
-func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
+func (dc *DynamicController) gracefulShutdown() error {
 	dc.log.Info("Starting graceful shutdown")
 
 	dc.mu.Lock()
@@ -456,10 +459,6 @@ func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
 	case <-done:
 		dc.log.Info("Queue shut down, all watches stopped")
 		return nil
-	case <-time.After(timeout):
-		err := fmt.Errorf("timeout after %s during shutdown", timeout)
-		dc.log.Error(err, "Graceful shutdown timed out")
-		return err
 	}
 }
 

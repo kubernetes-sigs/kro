@@ -205,7 +205,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	assert.Equal(t, dc.queue.Len(), 2)
 	for dc.queue.Len() > 0 {
 		name, _ := dc.queue.Get()
-		_, ok := objs[name.NamespacedKey]
+		_, ok := objs[name.NamespacedName.String()]
 		assert.True(t, ok)
 	}
 }

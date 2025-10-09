@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/metadata"
@@ -28,6 +29,8 @@ import (
 )
 
 // LazyInformer manages a SharedIndexInformer per GVR with multiple handlers.
+// It lazily starts when the first handler is added and stops when the last is removed.
+// It can restart again after a full shutdown.
 type LazyInformer struct {
 	gvr    schema.GroupVersionResource
 	client metadata.Interface
@@ -40,27 +43,35 @@ type LazyInformer struct {
 
 	done   <-chan struct{}
 	cancel context.CancelFunc
+
+	log logr.Logger
 }
 
 func NewLazyInformer(
-	ctx context.Context,
 	client metadata.Interface,
 	gvr schema.GroupVersionResource,
 	resync time.Duration,
 	tweak metadatainformer.TweakListOptionsFunc,
+	logger logr.Logger,
 ) *LazyInformer {
-	ctx, cancel := context.WithCancel(ctx)
-	return &LazyInformer{
+	li := &LazyInformer{
 		gvr:      gvr,
 		client:   client,
 		resync:   resync,
 		tweak:    tweak,
 		handlers: make(map[string]cache.ResourceEventHandlerRegistration),
-		done:     ctx.Done(),
-		cancel:   cancel,
+		log:      logger.WithValues("gvr", gvr.String()),
 	}
+	return li
 }
 
+func (w *LazyInformer) resetContext(parent context.Context) {
+	ctx, cancel := context.WithCancel(parent)
+	w.done = ctx.Done()
+	w.cancel = cancel
+}
+
+// ensureInformer initializes informer if missing or after shutdown.
 func (w *LazyInformer) ensureInformer() {
 	if w.informer != nil {
 		return
@@ -70,27 +81,41 @@ func (w *LazyInformer) ensureInformer() {
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		w.tweak,
 	).Informer()
+
 	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
-		fmt.Printf("Watch error for %s: %v\n", w.gvr, err)
+		w.log.V(1).Error(err, "watch error for lazy informer", "gvr", w.gvr)
 	})
+
 	w.informer = inf
 }
 
 // AddHandler registers a new event handler and starts the informer if needed.
-func (w *LazyInformer) AddHandler(id string, h cache.ResourceEventHandler) error {
+func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.ResourceEventHandler) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// If informer was fully stopped, reset context before re-creating it.
+	if w.cancel == nil {
+		// recreate context
+		w.resetContext(ctx)
+	}
+
 	w.ensureInformer()
+
 	reg, err := w.informer.AddEventHandler(h)
 	if err != nil {
 		return err
 	}
 	w.handlers[id] = reg
 
-	if len(w.handlers) == 1 { // first handler triggers informer run
-		go w.informer.Run(w.done)
+	// Start informer if first handler
+	if len(w.handlers) == 1 {
+		go func(done <-chan struct{}, inf cache.SharedIndexInformer) {
+			inf.Run(done)
+		}(w.done, w.informer)
+
 		if !cache.WaitForCacheSync(w.done, w.informer.HasSynced) {
+			w.log.Error(fmt.Errorf("cache sync failed"), "lazy informer sync failure", "gvr", w.gvr)
 			w.cancel()
 			w.informer = nil
 			w.handlers = make(map[string]cache.ResourceEventHandlerRegistration)
@@ -109,9 +134,11 @@ func (w *LazyInformer) RemoveHandler(id string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	delete(w.handlers, id)
-	if err := w.informer.RemoveEventHandler(reg); err != nil {
-		return false, err
+	if w.informer != nil {
+		if err := w.informer.RemoveEventHandler(reg); err != nil {
+			return false, err
+		}
+		delete(w.handlers, id)
 	}
 
 	if len(w.handlers) == 0 {
@@ -122,6 +149,7 @@ func (w *LazyInformer) RemoveHandler(id string) (bool, error) {
 	return false, nil
 }
 
+// Informer returns the underlying SharedIndexInformer (may be nil).
 func (w *LazyInformer) Informer() cache.SharedIndexInformer {
 	w.mu.Lock()
 	defer w.mu.Unlock()

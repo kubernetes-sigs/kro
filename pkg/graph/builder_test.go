@@ -21,10 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 
-	"github.com/kro-run/kro/pkg/graph/emulator"
-	"github.com/kro-run/kro/pkg/graph/variable"
-	"github.com/kro-run/kro/pkg/testutil/generator"
-	"github.com/kro-run/kro/pkg/testutil/k8s"
+	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 

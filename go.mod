@@ -1,4 +1,4 @@
-module github.com/kro-run/kro
+module github.com/kubernetes-sigs/kro
 
 go 1.24.0
 
@@ -34,7 +34,6 @@ require (
 	cel.dev/expr v0.19.1 // indirect
 	github.com/B1NARY-GR0UP/nwa v0.5.2 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
-	github.com/awslabs/attribution-gen v0.0.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -110,5 +109,4 @@ require (
 
 tool (
 	github.com/B1NARY-GR0UP/nwa
-	github.com/awslabs/attribution-gen
 )

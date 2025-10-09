@@ -17,8 +17,8 @@ package commands
 import (
 	"github.com/spf13/cobra"
 
-	generate "github.com/kro-run/kro/cmd/kro/commands/generate"
-	validate "github.com/kro-run/kro/cmd/kro/commands/validate"
+	generate "github.com/kubernetes-sigs/kro/cmd/kro/commands/generate"
+	validate "github.com/kubernetes-sigs/kro/cmd/kro/commands/validate"
 )
 
 func AddCommands(root *cobra.Command) {

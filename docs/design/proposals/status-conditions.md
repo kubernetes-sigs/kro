@@ -20,10 +20,10 @@ and the understanding that they adhere to “abnormal-true” style conditions.
 Today the KRO project defaults status to have the shape defined in
 [meta v1 condition](https://pkg.go.dev/k8s.io/apimachinery/pkg/apis/meta/v1#Condition),
 and defaults to a single
-[]`InstanceSynced`](https://github.com/kro-run/kro/blob/b9d1822983c4dead2f6dae594041dae550f1847a/pkg/controller/instance/controller_status.go#L78)
+[]`InstanceSynced`](https://github.com/kubernetes-sigs/kro/blob/b9d1822983c4dead2f6dae594041dae550f1847a/pkg/controller/instance/controller_status.go#L78)
 condition, but has no concept of a top-level condition. It then exposes the
 state of this condition in
-[custom columns](https://github.com/kro-run/kro/blob/b9d1822983c4dead2f6dae594041dae550f1847a/pkg/graph/crd/defaults.go#L68-L73).
+[custom columns](https://github.com/kubernetes-sigs/kro/blob/b9d1822983c4dead2f6dae594041dae550f1847a/pkg/graph/crd/defaults.go#L68-L73).
 The user is able to create and map their own custom conditions in the provided
 schema inside of an instance of an RGD.
 

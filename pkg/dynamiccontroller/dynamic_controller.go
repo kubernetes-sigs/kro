@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/pkg/dynamiccontroller/internal"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -39,8 +38,9 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/internal"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // Config holds the configuration for DynamicController.
@@ -210,15 +210,15 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 }
 
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) error {
-	gvrKey := oi.GVR.String()
-	dc.log.V(1).Info("Syncing resourcegraphdefinition instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
+	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
 
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
-		dc.log.V(1).Info("Finished syncing resourcegraphdefinition instance request",
+		dc.log.V(1).Info("Finished syncing object",
 			"gvr", gvrKey, "namespacedKey", oi.NamespacedKey, "duration", duration)
 	}()
 
@@ -262,8 +262,8 @@ func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, o
 	dc.enqueueParent(parentGVR, newObj, "update")
 }
 
-// StartServingGVK registers parent and children via reconciliation.
-func (dc *DynamicController) StartServingGVK(
+// Register registers parent and children via reconciliation.
+func (dc *DynamicController) Register(
 	_ context.Context,
 	parent schema.GroupVersionResource,
 	instanceHandler Handler,
@@ -300,8 +300,8 @@ func (dc *DynamicController) StartServingGVK(
 	return nil
 }
 
-// StopServiceGVK clears parent and children and drops any queued items for the parent GVR.
-func (dc *DynamicController) StopServiceGVK(_ context.Context, parent schema.GroupVersionResource) error {
+// Deregister clears parent and children and drops any queued items for the parent GVR.
+func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) error {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 

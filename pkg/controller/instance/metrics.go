@@ -57,10 +57,6 @@ var (
 	)
 )
 
-func recordImpersonateError(namespace, sa string, category errorCategory) {
-	impersonationErrors.WithLabelValues(namespace, sa, string(category)).Inc()
-}
-
 func init() {
 	metrics.Registry.MustRegister(
 		impersonationTotal,

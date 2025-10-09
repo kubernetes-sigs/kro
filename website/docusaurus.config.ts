@@ -37,18 +37,19 @@ const config: Config = {
       tagName: "meta",
       attributes: {
         name: "go-import",
-        content: "kro.run/pkg git https://github.com/kro-run/kro",
+        content: "kro.run/pkg git https://github.com/kubernetes-sigs/kro",
       },
     },
     {
       tagName: "meta",
       attributes: {
         name: "go-source",
-        content: "kro.run/pkg git https://github.com/kro-run/kro https://github.com/kro-run/kro/tree/main{/dir} https://github.com/kro-run/kro/blob/main{/dir}/{file}#L{line}",
+        content:
+          "kro.run/pkg git https://github.com/kubernetes-sigs/kro https://github.com/kubernetes-sigs/kro/tree/main{/dir} https://github.com/kubernetes-sigs/kro/blob/main{/dir}/{file}#L{line}",
       },
     },
   ],
-  
+
   presets: [
     [
       "classic",
@@ -65,8 +66,7 @@ const config: Config = {
           // sidebarCollapsed: false,
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
-          editUrl:
-            "https://github.com/kro-run/kro/tree/main/website",
+          editUrl: "https://github.com/kubernetes-sigs/kro/tree/main/website",
         },
         blog: false,
         theme: {
@@ -128,7 +128,7 @@ const config: Config = {
           ],
         },
         {
-          href: "https://github.com/kro-run/kro",
+          href: "https://github.com/kubernetes-sigs/kro",
           position: "right",
           className: "header-github-link",
           "aria-label": "GitHub repository",
@@ -160,7 +160,7 @@ const config: Config = {
             },
             {
               label: "Contribution Guide",
-              href: "https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md",
+              href: "https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md",
             },
           ],
         },
@@ -169,7 +169,7 @@ const config: Config = {
           items: [
             {
               label: "GitHub",
-              href: "https://github.com/kro-run/kro",
+              href: "https://github.com/kubernetes-sigs/kro",
             },
             {
               label: "YouTube",

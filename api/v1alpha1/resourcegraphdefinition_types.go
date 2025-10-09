@@ -19,12 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-const (
-	// DefaultServiceAccountKey is the key to use for the default service account
-	// in the serviceAccounts map.
-	DefaultServiceAccountKey = "*"
-)
-
 // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
 type ResourceGraphDefinitionSpec struct {
 	// Reconcile defines the desired reconciliation settings for a ResourceGraphDefinition.
@@ -39,13 +33,6 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
-	// ServiceAccount configuration for controller impersonation.
-	// Key is the namespace, value is the service account name to use.
-	// Special key "*" defines the default service account for any
-	// namespace not explicitly mapped.
-	//
-	// +kubebuilder:validation:Optional
-	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
 
 type ResourceGraphDefinitionReconcileSpec struct {

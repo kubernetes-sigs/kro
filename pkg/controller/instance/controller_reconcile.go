@@ -29,10 +29,10 @@ import (
 
 	"sigs.k8s.io/release-utils/version"
 
-	"github.com/kro-run/kro/pkg/applyset"
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
-	"github.com/kro-run/kro/pkg/runtime"
+	"github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 const (

@@ -25,18 +25,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	instancectrl "github.com/kro-run/kro/pkg/controller/instance"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
 // 1. Processing the resource graph
 // 2. Ensuring CRDs are present
 // 3. Setting up and starting the microcontroller
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]string, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+) ([]string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
 
@@ -79,7 +82,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(ctx
 	}
 
 	// Setup and start microcontroller
-	controller := r.setupMicroController(processedRGD, rgd.Spec.DefaultServiceAccounts, graphExecLabeler)
+	controller := r.setupMicroController(processedRGD, graphExecLabeler)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	gvr := processedRGD.Instance.GetGroupVersionResource()
@@ -112,7 +115,6 @@ func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceG
 // setupMicroController creates a new controller instance with the required configuration
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
-	defaultSVCs map[string]string,
 	labeler metadata.Labeler,
 ) *instancectrl.Controller {
 	gvr := processedRGD.Instance.GetGroupVersionResource()
@@ -133,7 +135,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		processedRGD,
 		r.clientSet,
 		r.clientSet.RESTMapper(),
-		defaultSVCs,
 		labeler,
 	)
 }
@@ -184,7 +185,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	handler dynamiccontroller.Handler,
 	resourceGVRsToWatch []schema.GroupVersionResource,
 ) error {
-	err := r.dynamicController.StartServingGVK(ctx, *gvr, handler, resourceGVRsToWatch)
+	err := r.dynamicController.Register(ctx, *gvr, handler, resourceGVRsToWatch)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

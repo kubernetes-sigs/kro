@@ -64,6 +64,8 @@ type Config struct {
 	RateLimit int
 	// BurstLimit is the maximum number of events in a burst
 	BurstLimit int
+	// QueueShutdownTimeout is the maximum time to wait for the queue to drain before shutting down.
+	QueueShutdownTimeout time.Duration
 }
 
 type Handler func(ctx context.Context, req ctrl.Request) error
@@ -460,16 +462,26 @@ func (dc *DynamicController) gracefulShutdown() error {
 	}
 	dc.mu.Unlock()
 
-	done := make(chan struct{})
+	queueShutdownDone := make(chan struct{})
 	go func() {
 		dc.queue.ShutDown()
-		close(done)
+		close(queueShutdownDone)
 	}()
 
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if dc.config.QueueShutdownTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, dc.config.QueueShutdownTimeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+
 	select {
-	case <-done:
-		dc.log.Info("Queue shut down, all watches stopped")
+	case <-queueShutdownDone:
 		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("timeout waiting for queue to shutdown: %w", ctx.Err())
 	}
 }
 

@@ -43,16 +43,27 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
-// Config holds the configuration for DynamicController.
+// Config holds the configuration for DynamicController
 type Config struct {
-	Workers         int
-	ResyncPeriod    time.Duration
+	// Workers specifies the number of workers processing items from the queue
+	Workers int
+	// ResyncPeriod defines the interval at which the controller will re list
+	// the resources, even if there haven't been any changes.
+	ResyncPeriod time.Duration
+	// QueueMaxRetries is the maximum number of retries for an item in the queue
+	// will be retried before being dropped.
+	//
+	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
+	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
-	ShutdownTimeout time.Duration
-	MinRetryDelay   time.Duration
-	MaxRetryDelay   time.Duration
-	RateLimit       int
-	BurstLimit      int
+	// MinRetryDelay is the minimum delay before retrying an item in the queue
+	MinRetryDelay time.Duration
+	// MaxRetryDelay is the maximum delay before retrying an item in the queue
+	MaxRetryDelay time.Duration
+	// RateLimit is the maximum number of events processed per second
+	RateLimit int
+	// BurstLimit is the maximum number of events in a burst
+	BurstLimit int
 }
 
 type Handler func(ctx context.Context, req ctrl.Request) error

@@ -1,0 +1,51 @@
+---
+apiVersion: kro.run/v1alpha1
+kind: CompanyConfig
+metadata:
+  name: my-company-config
+spec:
+  name: my-company-cm
+  namespace: default
+  roles:
+    - name: CEO
+      seniority: Senior
+    - name: CFO
+      seniority: Senior
+    - name: Engineer
+      seniority: Senior
+    - name: Intern
+      seniority: Junior
+    - name: Marketer
+      seniority: Mid
+    - name: Social Media Manager
+      seniority: Mid
+  management:
+    - name: Mario
+      role:
+        name: CEO
+        seniority: Senior
+    - name: Luigi
+      role:
+        name: CFO
+        seniority: Senior
+  divisions:
+    - name: Engineering
+      employees:
+        - name: Peach
+          role:
+            name: Engineer
+            seniority: Senior
+        - name: Toad
+          role:
+            name: Intern
+            seniority: Junior
+    - name: Marketing
+      employees:
+        - name: Yoshi
+          role:
+            name: Marketer
+            seniority: Mid
+        - name: Donkey Kong
+          role:
+            name: Social Media Manager
+            seniority: Mid

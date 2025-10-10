@@ -15,12 +15,49 @@
 package main
 
 import (
+	"fmt"
+	"runtime/debug"
+
 	"github.com/go-logr/logr"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"github.com/tliron/glsp/server"
 	"k8s.io/client-go/rest"
 )
+
+func getVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	// Prefer the module version if it's set (and not a local dev build)
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	// Fall back to git info if available
+	var revision, modified string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+
+	if revision != "" {
+		version := fmt.Sprintf("git-%s", revision[:min(7, len(revision))])
+		if modified == "true" {
+			version += "-dirty"
+		}
+		return version
+	}
+
+	// Default for local or untagged builds
+	return "dev"
+}
 
 // kroServer represents the main KRO Language Server instance that implements
 // the Language Server Protocol (LSP) for KRO ResourceGraphDefinition files.
@@ -76,7 +113,7 @@ func (s *kroServer) Initialize(context *glsp.Context, params *protocol.Initializ
 		Capabilities: capabilities, // What features this server supports
 		ServerInfo: &protocol.InitializeResultServerInfo{
 			Name:    "Kro Language Server",
-			Version: stringPtr("0.0.1"),
+			Version: stringPtr(getVersion()),
 		},
 	}, nil
 }

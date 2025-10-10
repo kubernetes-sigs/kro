@@ -26,8 +26,7 @@ import (
 )
 
 var (
-	version = "0.0.1"
-	lsName  = "kro-language-server"
+	lsName = "kro-language-server"
 )
 
 // getKubernetesConfig attempts to create a Kubernetes client configuration
@@ -54,7 +53,7 @@ func main() {
 	zapLogger, _ := zap.NewDevelopment()
 	log := zapr.NewLogger(zapLogger)
 
-	log.Info("Starting server", "name", lsName, "version", version)
+	log.Info("Starting server", "name", lsName, "version", getVersion())
 
 	// Attempt to get Kubernetes cluster configuration for online validation
 	// If this returns nil, the LSP will operate in offline mode (basic validation only)

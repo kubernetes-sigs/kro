@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"time"
 
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -33,22 +32,6 @@ import (
 )
 
 var _ = Describe("CRD", func() {
-	DescribeTableSubtree("apply mode",
-		testCRD,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -75,7 +58,6 @@ func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		It("should create CRD when ResourceGraphDefinition is created", func(ctx SpecContext) {
 			// Create a simple ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd",
-				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestResource", "v1alpha1",
 					map[string]interface{}{
@@ -127,7 +109,6 @@ func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		It("should update CRD when ResourceGraphDefinition is updated", func(ctx SpecContext) {
 			// Create initial ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-update",
-				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestUpdate", "v1alpha1",
 					map[string]interface{}{
@@ -182,7 +163,6 @@ func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		It("should delete CRD when ResourceGraphDefinition is deleted", func(ctx SpecContext) {
 			// Create ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-delete",
-				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestDelete", "v1alpha1",
 					map[string]interface{}{
@@ -216,7 +196,6 @@ func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		It("should reconcile the ResourceGraphDefinition back when CRD is manually modified", func(ctx SpecContext) {
 			rgdName := "test-crd-watch"
 			rgd := generator.NewResourceGraphDefinition(rgdName,
-				generator.WithReconcileSpec(reconcileSpec),
 				generator.WithSchema(
 					"TestWatch", "v1alpha1",
 					map[string]interface{}{
@@ -287,4 +266,4 @@ func testCRD(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
-}
+})

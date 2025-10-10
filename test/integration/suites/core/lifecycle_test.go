@@ -33,22 +33,6 @@ import (
 )
 
 var _ = Describe("Update", func() {
-	DescribeTableSubtree("apply mode",
-		testUpdate,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testUpdate(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle updates to instance resources correctly", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -65,7 +49,6 @@ func testUpdate(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) 
 
 		// Create ResourceGraphDefinition for a simple deployment service
 		rgd := generator.NewResourceGraphDefinition("test-update",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestInstanceUpdate", "v1alpha1",
 				map[string]interface{}{
@@ -204,4 +187,4 @@ func testUpdate(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) 
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 	})
-}
+})

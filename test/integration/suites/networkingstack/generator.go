@@ -25,13 +25,11 @@ import (
 
 func networkingStack(
 	name string,
-	reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec,
 ) (
 	*krov1alpha1.ResourceGraphDefinition,
 	func(namespace, name string) *unstructured.Unstructured,
 ) {
 	resourcegraphdefinition := generator.NewResourceGraphDefinition(name,
-		generator.WithReconcileSpec(reconcileSpec),
 		generator.WithSchema(
 			"NetworkingStack", "v1alpha1",
 			map[string]interface{}{

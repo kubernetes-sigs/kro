@@ -60,8 +60,7 @@ Once set, `mode` cannot be changed.
 | **ClientSideDelta**                | Client delta–based reconciliation. kro computes differences between desired and observed resources inside the controller and applies updates directly. Lightweight and independent, but less precise and does not support pruning.                                                                                                    |
 | **ApplySet**                       | Server-side apply using [ApplySet](https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune). All resources are applied and pruned through an ApplySet that tracks ownership and performs SSA through the API server. Provides higher accuracy, conflict resolution, and managed field ownership. |
 
-**Default:** `ClientSideDelta`
-
+If not set explicitly in the `ResourceGraphDefinition`, the default mode can be controlled via the flag `--resource-graph-definition-default-reconcile-mode`
 
 :::note
 

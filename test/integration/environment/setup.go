@@ -159,6 +159,7 @@ func (e *Environment) setupController() error {
 		dc,
 		e.GraphBuilder,
 		1,
+		e.ControllerConfig.ReconcileConfig.Mode,
 	)
 
 	var err error

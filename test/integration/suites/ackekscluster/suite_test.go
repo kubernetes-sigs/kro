@@ -16,14 +16,11 @@ package ackekscluster_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
-	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -33,19 +30,33 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
 
 func TestEKSCluster(t *testing.T) {
+	defaultMode := krov1alpha1.ResourceGraphDefinitionReconcileMode(os.Getenv("KRO_DEFAULT_RGD_RECONCILE_MODE"))
 	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
+	BeforeSuite(func(ctx SpecContext) {
+		Expect(defaultMode).To(
+			Or(
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			), "KRO_DEFAULT_RGD_RECONCILE_MODE must be a valid and recognized reconcile mode",
+		)
+
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
+					Mode:                   defaultMode,
 				},
 			},
 		)
@@ -55,26 +66,10 @@ func TestEKSCluster(t *testing.T) {
 		Expect(env.Stop()).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "EKSCluster Suite")
+	RunSpecs(t, "EKSCluster Suite", Label(string(defaultMode)))
 }
 
 var _ = Describe("EKSCluster", func() {
-	DescribeTableSubtree("apply mode",
-		testEKS,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testEKS(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -87,7 +82,7 @@ func testEKS(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 
 		// Create ResourceGraphDefinition
-		rgd, genInstance := eksCluster(namespace, "test-eks-cluster", reconcileSpec)
+		rgd, genInstance := eksCluster(namespace, "test-eks-cluster")
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is created and becomes ready
@@ -498,4 +493,4 @@ func testEKS(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 		Expect(env.Client.Delete(ctx, ns)).To(Succeed())
 	})
 
-}
+})

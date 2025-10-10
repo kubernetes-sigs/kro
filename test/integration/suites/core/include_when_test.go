@@ -35,22 +35,6 @@ import (
 )
 
 var _ = Describe("Conditions", func() {
-	DescribeTableSubtree("apply mode",
-		testConditions,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testConditions(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -77,7 +61,6 @@ func testConditions(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSp
 	It("should not create deployment, service, and configmap "+
 		"due to condition deploymentEnabled == false", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-conditions",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestConditions", "v1alpha1",
 				map[string]interface{}{
@@ -387,4 +370,4 @@ func testConditions(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSp
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
-}
+})

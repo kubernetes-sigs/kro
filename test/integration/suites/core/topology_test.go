@@ -31,22 +31,6 @@ import (
 )
 
 var _ = Describe("Topology", func() {
-	DescribeTableSubtree("apply mode",
-		testTopology,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -71,7 +55,6 @@ func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 
 	It("should correctly order AWS resources in dependency graph", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestTopology", "v1alpha1",
 				map[string]interface{}{
@@ -161,9 +144,6 @@ func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 		)
 
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-		DeferCleanup(func(ctx SpecContext) {
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
-		})
 
 		// Verify ResourceGraphDefinition topology
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -198,7 +178,6 @@ func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 
 	It("should detect cyclic dependencies in AWS resource definitions", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-topology-cyclic",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestTopologyCyclic", "v1alpha1",
 				map[string]interface{}{
@@ -256,4 +235,4 @@ func testTopology(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-}
+})

@@ -18,7 +18,7 @@ jobs:
   integration:
     strategy:
       matrix:
-        labels: [ "ClientSideDelta", "ApplySet" ]
+        mode: [ "ClientSideDelta", "ApplySet" ]
     name: Integration Tests
     runs-on: ubuntu-latest
     
@@ -40,4 +40,4 @@ jobs:
         echo "KUBEBUILDER_ASSETS=${KUBEBUILDER_ASSETS}" >> $GITHUB_ENV
 
     - name: Run integration tests
-      run: make test WHAT=integration INTEGRATION_LABEL_FILTER=${{ matrix.labels }}
+      run: make test WHAT=integration KRO_DEFAULT_RGD_RECONCILE_MODE=${{ matrix.mode }}

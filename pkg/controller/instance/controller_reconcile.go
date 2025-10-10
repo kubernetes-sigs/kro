@@ -95,8 +95,8 @@ func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 	switch igr.reconcileConfig.Mode {
 	case v1alpha1.ResourceGraphDefinitionReconcileModeApplySet:
 		return igr.handleReconciliation(ctx, igr.reconcileInstanceApplySet)
-	case v1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta, "":
-		return igr.handleReconciliation(ctx, igr.reconcileInstanceCSA)
+	case v1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta:
+		return igr.handleReconciliation(ctx, igr.reconcileInstanceClientSideDelta)
 	default:
 		return fmt.Errorf("unsupported apply mode: %s", igr.reconcileConfig.Mode)
 	}
@@ -136,6 +136,19 @@ func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 	} else {
 		resourceState.State = ResourceStateSynced
 	}
+}
+
+// setupInstance prepares an instance for reconciliation by setting up necessary
+// labels and managed state.
+func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance *unstructured.Unstructured) error {
+	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
+	if err != nil {
+		return err
+	}
+	if patched != nil {
+		instance.Object = patched.Object
+	}
+	return nil
 }
 
 // handleInstanceDeletion manages the deletion of an instance and its resources
@@ -276,6 +289,51 @@ func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error 
 	return nil
 }
 
+// setManaged ensures the instance has the necessary finalizer and labels.
+func (igr *instanceGraphReconciler) setManaged(
+	ctx context.Context,
+	obj *unstructured.Unstructured,
+	_ types.UID,
+) (*unstructured.Unstructured, error) {
+	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj); exist {
+		return obj, nil
+	}
+
+	igr.log.V(1).Info("Setting managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
+
+	instancePatch := &unstructured.Unstructured{}
+	instancePatch.SetUnstructuredContent(map[string]interface{}{
+		"apiVersion": obj.GetAPIVersion(),
+		"kind":       obj.GetKind(),
+		"metadata": map[string]interface{}{
+			"name":      obj.GetName(),
+			"namespace": obj.GetNamespace(),
+			"labels":    obj.GetLabels(),
+		},
+	})
+
+	err := unstructured.SetNestedStringSlice(instancePatch.Object, obj.GetFinalizers(), "metadata", "finalizers")
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy existing finalizers to patch: %w", err)
+	}
+
+	if err := metadata.SetInstanceFinalizerUnstructured(instancePatch); err != nil {
+		return nil, fmt.Errorf("failed to set finalizer: %w", err)
+	}
+
+	igr.instanceLabeler.ApplyLabels(instancePatch)
+
+	updated, err := igr.client.Resource(igr.gvr).
+		Namespace(obj.GetNamespace()).
+		Apply(ctx, instancePatch.GetName(), instancePatch,
+			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update managed state: %w", err)
+	}
+
+	return updated, nil
+}
+
 // setUnmanaged removes the finalizer from the instance.
 func (igr *instanceGraphReconciler) setUnmanaged(
 	ctx context.Context,
@@ -347,62 +405,4 @@ func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) stri
 		"resourceID", resourceID,
 		"namespace", metav1.NamespaceDefault)
 	return metav1.NamespaceDefault
-}
-
-// setupInstance prepares an instance for reconciliation by setting up necessary
-// labels and managed state.
-func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance *unstructured.Unstructured) error {
-	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
-	if err != nil {
-		return err
-	}
-	if patched != nil {
-		instance.Object = patched.Object
-	}
-	return nil
-}
-
-// setManaged ensures the instance has the necessary finalizer and labels.
-func (igr *instanceGraphReconciler) setManaged(
-	ctx context.Context,
-	obj *unstructured.Unstructured,
-	_ types.UID,
-) (*unstructured.Unstructured, error) {
-	if exist, _ := metadata.HasInstanceFinalizerUnstructured(obj); exist {
-		return obj, nil
-	}
-
-	igr.log.V(1).Info("Setting managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
-
-	instancePatch := &unstructured.Unstructured{}
-	instancePatch.SetUnstructuredContent(map[string]interface{}{
-		"apiVersion": obj.GetAPIVersion(),
-		"kind":       obj.GetKind(),
-		"metadata": map[string]interface{}{
-			"name":      obj.GetName(),
-			"namespace": obj.GetNamespace(),
-			"labels":    obj.GetLabels(),
-		},
-	})
-
-	err := unstructured.SetNestedStringSlice(instancePatch.Object, obj.GetFinalizers(), "metadata", "finalizers")
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy existing finalizers to patch: %w", err)
-	}
-
-	if err := metadata.SetInstanceFinalizerUnstructured(instancePatch); err != nil {
-		return nil, fmt.Errorf("failed to set finalizer: %w", err)
-	}
-
-	igr.instanceLabeler.ApplyLabels(instancePatch)
-
-	updated, err := igr.client.Resource(igr.gvr).
-		Namespace(obj.GetNamespace()).
-		Apply(ctx, instancePatch.GetName(), instancePatch,
-			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
-	if err != nil {
-		return nil, fmt.Errorf("failed to update managed state: %w", err)
-	}
-
-	return updated, nil
 }

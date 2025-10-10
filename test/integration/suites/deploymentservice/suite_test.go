@@ -16,14 +16,10 @@ package deploymentservice_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
-	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/test/integration/environment"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,19 +30,34 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/release-utils/version"
+
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
 
 func TestDeploymentservice(t *testing.T) {
+	defaultMode := krov1alpha1.ResourceGraphDefinitionReconcileMode(os.Getenv("KRO_DEFAULT_RGD_RECONCILE_MODE"))
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
+		Expect(defaultMode).To(
+			Or(
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			), "KRO_DEFAULT_RGD_RECONCILE_MODE must be a valid and recognized reconcile mode",
+		)
+
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
+					Mode:                   defaultMode,
 				},
 			},
 		)
@@ -56,26 +67,10 @@ func TestDeploymentservice(t *testing.T) {
 		Expect(env.Stop()).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "DeploymentService Suite")
+	RunSpecs(t, "DeploymentService Suite", Label(string(defaultMode)))
 }
 
 var _ = Describe("DeploymentService", func() {
-	DescribeTableSubtree("apply mode",
-		testDeploymentService,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testDeploymentService(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
@@ -88,7 +83,7 @@ func testDeploymentService(reconcileSpec krov1alpha1.ResourceGraphDefinitionReco
 		Expect(env.Client.Create(ctx, ns)).To(Succeed())
 
 		// Create ResourceGraphDefinition
-		rgd, genInstance := deploymentService("test-deployment-service", reconcileSpec)
+		rgd, genInstance := deploymentService("test-deployment-service")
 		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is created and becomes ready
@@ -258,4 +253,4 @@ func testDeploymentService(reconcileSpec krov1alpha1.ResourceGraphDefinitionReco
 			return errors.IsNotFound(err)
 		}, 30*time.Second, time.Second).Should(BeTrue()) */
 	})
-}
+})

@@ -16,9 +16,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"go.uber.org/zap/zapcore"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,12 +31,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -45,9 +46,9 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -66,6 +67,7 @@ func main() {
 		probeAddr                                   string
 		allowCRDDeletion                            bool
 		resourceGraphDefinitionConcurrentReconciles int
+		resourceGraphDefinitionDefaultReconcileMode string
 		dynamicControllerConcurrentReconciles       int
 		// dynamic controller rate limiter parameters
 		minRetryDelay time.Duration
@@ -97,6 +99,14 @@ func main() {
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
 		"The number of resource graph definition reconciles to run in parallel",
+	)
+	flag.StringVar(&resourceGraphDefinitionDefaultReconcileMode,
+		"resource-graph-definition-default-reconcile-mode",
+		string(v1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+		fmt.Sprintf("default reconcile mode for resource graph definition instance resources. one of %s or %s.",
+			v1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
+			v1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
+		),
 	)
 	flag.IntVar(&dynamicControllerConcurrentReconciles,
 		"dynamic-controller-concurrent-reconciles", 1,
@@ -198,6 +208,7 @@ func main() {
 		dc,
 		resourceGraphDefinitionGraphBuilder,
 		resourceGraphDefinitionConcurrentReconciles,
+		v1alpha1.ResourceGraphDefinitionReconcileMode(resourceGraphDefinitionDefaultReconcileMode),
 	)
 	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
@@ -209,7 +220,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

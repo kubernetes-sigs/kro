@@ -34,22 +34,6 @@ import (
 )
 
 var _ = Describe("Readiness", func() {
-	DescribeTableSubtree("apply mode",
-		testReadiness,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testReadiness(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -76,7 +60,6 @@ func testReadiness(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpe
 	It(`should wait for deployment to have deployment.spec.replicas 
 		== deployment.status.availableReplicas before creating service`, func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-readiness",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestReadiness", "v1alpha1",
 				map[string]interface{}{
@@ -311,4 +294,4 @@ func testReadiness(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpe
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
-}
+})

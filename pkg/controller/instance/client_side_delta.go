@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-func (igr *instanceGraphReconciler) reconcileInstanceCSA(ctx context.Context) error {
+func (igr *instanceGraphReconciler) reconcileInstanceClientSideDelta(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 
 	// Set managed state and handle instance labels
@@ -41,7 +41,7 @@ func (igr *instanceGraphReconciler) reconcileInstanceCSA(ctx context.Context) er
 
 	// Reconcile resources in topological order
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		if err := igr.reconcileResourceCSA(ctx, resourceID); err != nil {
+		if err := igr.reconcileResourceClientSideDelta(ctx, resourceID); err != nil {
 			return err
 		}
 
@@ -55,7 +55,7 @@ func (igr *instanceGraphReconciler) reconcileInstanceCSA(ctx context.Context) er
 }
 
 // reconcileResource handles the reconciliation of a single resource within the instance
-func (igr *instanceGraphReconciler) reconcileResourceCSA(ctx context.Context, resourceID string) error {
+func (igr *instanceGraphReconciler) reconcileResourceClientSideDelta(ctx context.Context, resourceID string) error {
 	log := igr.log.WithValues("resourceID", resourceID)
 	resourceState := &ResourceState{State: ResourceStateInProgress}
 	igr.state.ResourceStates[resourceID] = resourceState
@@ -81,12 +81,12 @@ func (igr *instanceGraphReconciler) reconcileResourceCSA(ctx context.Context, re
 	}
 
 	// Handle resource reconciliation
-	return igr.handleResourceReconciliationCSA(ctx, resourceID, resource, resourceState)
+	return igr.handleResourceReconciliationClientSideDelta(ctx, resourceID, resource, resourceState)
 }
 
 // handleResourceReconciliation manages the reconciliation of a specific resource,
 // including creation, updates, and readiness checks.
-func (igr *instanceGraphReconciler) handleResourceReconciliationCSA(
+func (igr *instanceGraphReconciler) handleResourceReconciliationClientSideDelta(
 	ctx context.Context,
 	resourceID string,
 	resource *unstructured.Unstructured,
@@ -107,7 +107,7 @@ func (igr *instanceGraphReconciler) handleResourceReconciliationCSA(
 				resourceState.Err = fmt.Errorf("external resource not found: %w", err)
 				return igr.delayedRequeue(resourceState.Err)
 			}
-			return igr.handleResourceCreationCSA(ctx, rc, resource, resourceID, resourceState)
+			return igr.handleResourceCreationClientSideDelta(ctx, rc, resource, resourceID, resourceState)
 		}
 		resourceState.State = ResourceStateError
 		resourceState.Err = fmt.Errorf("failed to get resource: %w", err)
@@ -132,11 +132,11 @@ func (igr *instanceGraphReconciler) handleResourceReconciliationCSA(
 		return nil
 	}
 
-	return igr.updateResourceCSAWithDelta(ctx, rc, resource, observed, resourceID, resourceState)
+	return igr.updateResourceClientSideDelta(ctx, rc, resource, observed, resourceID, resourceState)
 }
 
 // handleResourceCreation manages the creation of a new resource
-func (igr *instanceGraphReconciler) handleResourceCreationCSA(
+func (igr *instanceGraphReconciler) handleResourceCreationClientSideDelta(
 	ctx context.Context,
 	rc dynamic.ResourceInterface,
 	resource *unstructured.Unstructured,
@@ -159,7 +159,7 @@ func (igr *instanceGraphReconciler) handleResourceCreationCSA(
 
 // updateResource handles updates to an existing resource, comparing the desired
 // and observed states and applying the necessary changes.
-func (igr *instanceGraphReconciler) updateResourceCSAWithDelta(
+func (igr *instanceGraphReconciler) updateResourceClientSideDelta(
 	ctx context.Context,
 	rc dynamic.ResourceInterface,
 	desired, observed *unstructured.Unstructured,

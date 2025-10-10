@@ -34,22 +34,6 @@ import (
 )
 
 var _ = Describe("Recovery", func() {
-	DescribeTableSubtree("apply mode",
-		testRecovery,
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
-		),
-		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
-			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
-			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
-		),
-	)
-})
-
-func testRecovery(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec) {
 	var (
 		namespace string
 	)
@@ -76,7 +60,6 @@ func testRecovery(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 	It("should recover from invalid state and use latest valid configuration", func(ctx SpecContext) {
 		// Create initial valid ResourceGraphDefinition
 		rgd := generator.NewResourceGraphDefinition("test-recovery",
-			generator.WithReconcileSpec(reconcileSpec),
 			generator.WithSchema(
 				"TestRecovery", "v1alpha1",
 				map[string]interface{}{
@@ -271,4 +254,4 @@ func testRecovery(reconcileSpec krov1alpha1.ResourceGraphDefinitionReconcileSpec
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
-}
+})

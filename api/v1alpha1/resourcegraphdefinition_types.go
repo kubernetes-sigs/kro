@@ -50,9 +50,10 @@ type ResourceGraphDefinitionReconcileSpec struct {
 // When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
 // More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
 //
+// If not set, default reconciliation behavior is defined by the controller.
+//
 // +kubebuilder:validation:Enum=ApplySet;ClientSideDelta
-// +kubebuilder:default=ClientSideDelta
-// +kubebuilder:validation:Required
+// +kubebuilder:validation:Optional
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="mode is immutable"
 type ResourceGraphDefinitionReconcileMode string
 

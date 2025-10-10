@@ -144,14 +144,14 @@ func (e *Environment) setupController() error {
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
 		dynamiccontroller.Config{
 			Workers:         3,
-			ResyncPeriod:    60 * time.Second,
+			ResyncPeriod:    0, // disabled resync
 			QueueMaxRetries: 20,
 			MinRetryDelay:   200 * time.Millisecond,
 			MaxRetryDelay:   1000 * time.Second,
 			RateLimit:       10,
 			BurstLimit:      100,
 		},
-		e.ClientSet.Dynamic())
+		e.ClientSet.Metadata())
 
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,

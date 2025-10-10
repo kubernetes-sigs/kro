@@ -34,7 +34,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -47,7 +47,7 @@ func init() {
 
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -114,8 +114,9 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
-	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
-		"interval at which the controller will re list resources even with no changes, in seconds")
+	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 0,
+		"interval at which the controller will re list resources even with no changes, in seconds. "+
+			"By default resync is disabled.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	// log level flags
@@ -182,7 +183,7 @@ func main() {
 		MaxRetryDelay:   maxRetryDelay,
 		RateLimit:       rateLimit,
 		BurstLimit:      burstLimit,
-	}, set.Dynamic())
+	}, set.Metadata())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig,
@@ -209,7 +210,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

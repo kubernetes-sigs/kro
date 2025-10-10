@@ -32,6 +32,8 @@ WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
 HELM_DIR = ./helm
 WHAT ?= unit
+# TODO(jakobmoellerdev): eventually we want to completely migrate off here
+KRO_DEFAULT_RGD_RECONCILE_MODE ?= ClientSideDelta
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -100,7 +102,11 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
+	KRO_DEFAULT_RGD_RECONCILE_MODE=$(KRO_DEFAULT_RGD_RECONCILE_MODE) \
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test -v ./test/integration/suites/... \
+		-coverprofile integration-cover.out \
+		-ginkgo.v
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else

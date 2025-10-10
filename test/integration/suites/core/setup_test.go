@@ -16,6 +16,7 @@ package core_test
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
@@ -30,14 +32,23 @@ import (
 var env *environment.Environment
 
 func TestCore(t *testing.T) {
+	defaultMode := krov1alpha1.ResourceGraphDefinitionReconcileMode(os.Getenv("KRO_DEFAULT_RGD_RECONCILE_MODE"))
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
+		Expect(defaultMode).To(
+			Or(
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			), "KRO_DEFAULT_RGD_RECONCILE_MODE must be a valid and recognized reconcile mode",
+		)
+
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 5 * time.Second,
+					Mode:                   defaultMode,
 				},
 				LogWriter: GinkgoWriter,
 			},
@@ -61,7 +72,7 @@ func TestCore(t *testing.T) {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "Core Suite")
+	RunSpecs(t, "Core Suite", Label(string(defaultMode)))
 }
 
 // Helper function to convert map to runtime.RawExtension

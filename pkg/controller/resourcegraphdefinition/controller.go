@@ -37,9 +37,9 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
@@ -58,6 +58,8 @@ type ResourceGraphDefinitionReconciler struct {
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
+
+	defaultReconcileMode v1alpha1.ResourceGraphDefinitionReconcileMode
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -66,6 +68,7 @@ func NewResourceGraphDefinitionReconciler(
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
 	maxConcurrentReconciles int,
+	defaultReconcileMode v1alpha1.ResourceGraphDefinitionReconcileMode,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
@@ -77,6 +80,7 @@ func NewResourceGraphDefinitionReconciler(
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,
+		defaultReconcileMode:    defaultReconcileMode,
 	}
 }
 

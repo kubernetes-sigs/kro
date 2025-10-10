@@ -16,6 +16,7 @@ package ackekscluster_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,14 +40,23 @@ import (
 var env *environment.Environment
 
 func TestEKSCluster(t *testing.T) {
+	defaultMode := krov1alpha1.ResourceGraphDefinitionReconcileMode(os.Getenv("KRO_DEFAULT_RGD_RECONCILE_MODE"))
 	RegisterFailHandler(Fail)
-	BeforeSuite(func() {
+	BeforeSuite(func(ctx SpecContext) {
+		Expect(defaultMode).To(
+			Or(
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			), "KRO_DEFAULT_RGD_RECONCILE_MODE must be a valid and recognized reconcile mode",
+		)
+
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
+					Mode:                   defaultMode,
 				},
 			},
 		)
@@ -56,7 +66,7 @@ func TestEKSCluster(t *testing.T) {
 		Expect(env.Stop()).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "EKSCluster Suite")
+	RunSpecs(t, "EKSCluster Suite", Label(string(defaultMode)))
 }
 
 var _ = Describe("EKSCluster", func() {

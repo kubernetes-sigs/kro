@@ -16,6 +16,7 @@ package deploymentservice_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -40,14 +41,23 @@ import (
 var env *environment.Environment
 
 func TestDeploymentservice(t *testing.T) {
+	defaultMode := krov1alpha1.ResourceGraphDefinitionReconcileMode(os.Getenv("KRO_DEFAULT_RGD_RECONCILE_MODE"))
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
+		Expect(defaultMode).To(
+			Or(
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+				BeEquivalentTo(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			), "KRO_DEFAULT_RGD_RECONCILE_MODE must be a valid and recognized reconcile mode",
+		)
+
 		var err error
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
+					Mode:                   defaultMode,
 				},
 			},
 		)
@@ -57,7 +67,7 @@ func TestDeploymentservice(t *testing.T) {
 		Expect(env.Stop()).NotTo(HaveOccurred())
 	})
 
-	RunSpecs(t, "DeploymentService Suite")
+	RunSpecs(t, "DeploymentService Suite", Label(string(defaultMode)))
 }
 
 var _ = Describe("DeploymentService", func() {

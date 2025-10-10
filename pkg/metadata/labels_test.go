@@ -65,6 +65,66 @@ func TestIsKROOwned(t *testing.T) {
 	}
 }
 
+func TestHasMatchingKROOwner(t *testing.T) {
+	cases := []struct {
+		name       string
+		aOwnerName string
+		aOwnerID   string
+		bOwnerName string
+		bOwnerID   string
+		expected   bool
+	}{
+		{
+			name:       "matching owners",
+			aOwnerName: "test-rgd",
+			aOwnerID:   "test-uid-123",
+			bOwnerName: "test-rgd",
+			bOwnerID:   "test-uid-123",
+			expected:   true,
+		},
+		{
+			name:       "different owner names",
+			aOwnerName: "test-rgd-a",
+			aOwnerID:   "test-uid-123",
+			bOwnerName: "test-rgd-b",
+			bOwnerID:   "test-uid-123",
+			expected:   false,
+		},
+		{
+			name:       "different owner IDs",
+			aOwnerName: "test-rgd",
+			aOwnerID:   "test-uid-123",
+			bOwnerName: "test-rgd",
+			bOwnerID:   "test-uid-456",
+			expected:   false,
+		},
+		{
+			name:     "no owner labels",
+			expected: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			labelsA := map[string]string{}
+			labelsB := map[string]string{}
+			if tc.aOwnerName != "" {
+				labelsA[ResourceGraphDefinitionNameLabel] = tc.aOwnerName
+				labelsA[ResourceGraphDefinitionIDLabel] = tc.aOwnerID
+			}
+			if tc.bOwnerName != "" {
+				labelsB[ResourceGraphDefinitionNameLabel] = tc.bOwnerName
+				labelsB[ResourceGraphDefinitionIDLabel] = tc.bOwnerID
+			}
+
+			metaA := metav1.ObjectMeta{Labels: labelsA}
+			metaB := metav1.ObjectMeta{Labels: labelsB}
+			result := HasMatchingKROOwner(metaA, metaB)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 func TestSetKROOwned(t *testing.T) {
 	cases := []struct {
 		name          string

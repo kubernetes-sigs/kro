@@ -3,6 +3,7 @@
   "displayName": "Kro Language Extension",
   "description": "Language support for Kro YAML files",
   "version": "0.0.1",
+  "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.75.0"
   },

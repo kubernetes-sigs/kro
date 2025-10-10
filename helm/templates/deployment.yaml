@@ -34,7 +34,7 @@ spec:
           securityContext:
             {{- toYaml .Values.deployment.securityContext | nindent 12 }}
           {{- if .Values.image.ko }}
-          image: "ko://github.com/kro-run/kro/cmd/controller"
+          image: "ko://github.com/kubernetes-sigs/kro/cmd/controller"
           {{- else }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           {{- end }}

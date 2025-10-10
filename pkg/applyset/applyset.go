@@ -29,8 +29,10 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,6 +118,10 @@ type Config struct {
 
 	// Log is used to inject the calling reconciler's logger
 	Log logr.Logger
+
+	// Concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
+	// If not provided, the default value is the number of objects in the applyset.
+	Concurrency int
 }
 
 /*
@@ -186,9 +192,10 @@ func New(
 				FieldManager: config.FieldManager,
 				Force:        true,
 			},
-			//deleteOptions: metav1.DeleteOptions{},
+			// deleteOptions: metav1.DeleteOptions{},
 		},
-		log: config.Log,
+		log:         config.Log,
+		concurrency: config.Concurrency,
 	}
 
 	gvk := parent.GroupVersionKind()
@@ -259,6 +266,10 @@ type applySet struct {
 	serverOptions
 
 	log logr.Logger
+
+	// concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
+	// If not provided, the default value is the number of objects in the applyset.
+	concurrency int
 }
 
 func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.RESTMapping) error {
@@ -544,19 +555,35 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 	if dryRun {
 		options.DryRun = []string{"All"}
 	}
-	for _, obj := range a.desired.objects {
 
+	concurrency := a.concurrency
+	if concurrency <= 0 {
+		concurrency = len(a.desired.objects)
+	}
+
+	eg, egctx := errgroup.WithContext(ctx)
+	eg.SetLimit(concurrency)
+
+	// protect concurrent access to write the apply results
+	var mu sync.Mutex
+
+	for _, obj := range a.desired.objects {
 		dynResource, err := a.resourceClient(obj)
 		if err != nil {
 			return results, err
 		}
-		lastApplied, err := dynResource.Apply(ctx, obj.GetName(), obj.Unstructured, options)
-		results.recordApplied(obj, lastApplied, err)
-		a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", lastApplied.GetResourceVersion(),
-			"error", err)
+		eg.Go(func() error {
+			lastApplied, err := dynResource.Apply(egctx, obj.GetName(), obj.Unstructured, options)
+			mu.Lock()
+			defer mu.Unlock()
+			results.recordApplied(obj, lastApplied, err)
+			a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", lastApplied.GetResourceVersion(),
+				"error", err)
+			return nil
+		})
 	}
 
-	return results, nil
+	return results, eg.Wait()
 }
 
 func (a *applySet) prune(ctx context.Context, results *ApplyResult, dryRun bool) (*ApplyResult, error) {

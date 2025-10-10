@@ -34,7 +34,7 @@ standardized and streamlined manner.
 
 <div align="center">
 
-![End user interface - Custom API](../../../images/architecture-diagrams/KRO-Dev-Interface.png)
+![End user interface - Custom API](/img/architecture/KRO-Dev-Interface.png)
 _Figure 1: End user interface - Custom API_
 
 </div>
@@ -56,7 +56,7 @@ handles the deployment and configuration of the required resources.
 
 <div align="center">
 
-![Platform Team Interface](../../../images/architecture-diagrams/KRO-Platform-Team.png)
+![Platform Team Interface](/img/architecture/KRO-Platform-Team.png)
 _Figure 2: ResourceGraphDefinition (RG) - Platform Team Interface_
 
 </div>
@@ -74,7 +74,7 @@ requirements.
 
 <div align="center">
 
-![ResourceGraphDefinition Instance](../../../images/architecture-diagrams/KRO-Instance.png)
+![ResourceGraphDefinition Instance](/img/architecture/KRO-Instance.png)
 _Figure 3: ResourceGraphDefinition Instance (RGI)_
 
 </div>
@@ -109,8 +109,8 @@ achieving consistency across deployment environments.
 
 We welcome questions, suggestions, and contributions from the community! To get
 involved, check out our
-[contributing guide](https://github.com/kro-run/kro/blob/main/CONTRIBUTING.md).
+[contributing guide](https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md).
 For bugs or feature requests, feel free to
-[submit an issue](https://github.com/kro-run/kro/issues). You’re also invited to
+[submit an issue](https://github.com/kubernetes-sigs/kro/issues). You’re also invited to
 join our
-[community](https://github.com/kro-run/kro?tab=readme-ov-file#community-participation).
+[community](https://github.com/kubernetes-sigs/kro?tab=readme-ov-file#community-participation).

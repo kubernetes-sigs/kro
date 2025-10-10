@@ -24,8 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	krocel "github.com/kro-run/kro/pkg/cel"
-	"github.com/kro-run/kro/pkg/graph/variable"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func Test_RuntimeWorkflow(t *testing.T) {

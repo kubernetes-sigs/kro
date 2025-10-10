@@ -29,8 +29,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/testutil/generator"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Recovery", func() {

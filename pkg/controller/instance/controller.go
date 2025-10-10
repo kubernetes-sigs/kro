@@ -26,9 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // ReconcileConfig holds configuration parameters for the reconciliation process.

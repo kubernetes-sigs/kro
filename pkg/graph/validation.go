@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 var (

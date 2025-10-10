@@ -43,7 +43,7 @@ The `spec` section of a ResourceGraphDefinition contains two main components:
   - Dependencies between resources
   - Conditions for inclusion
   - Readiness criteria
-  - [External References](#resourcegraphdefinition-more-about-resources)
+  - [External References](#using-externalref-to-reference-objects-outside-the-resourcegraphdefinition)
 
 This structure translates to YAML as follows:
 

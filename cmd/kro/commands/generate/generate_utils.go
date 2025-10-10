@@ -18,10 +18,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	kroclient "github.com/kro-run/kro/pkg/client"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"gopkg.in/yaml.v2"
 )
 

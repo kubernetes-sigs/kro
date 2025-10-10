@@ -30,10 +30,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
-	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kro-run/kro/test/integration/environment"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment

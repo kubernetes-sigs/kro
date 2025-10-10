@@ -32,7 +32,8 @@ WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
 HELM_DIR = ./helm
 WHAT ?= unit
-INTEGRATION_LABEL_FILTER ?= "DeltaCSA && ApplySetSSA"
+# TODO(jakobmoellerdev): eventually we want to completely migrate off here
+INTEGRATION_LABEL_FILTER ?= "ApplySet" # replace with ClientSideDelta if you want to test the previous delta mechanism
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))

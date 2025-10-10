@@ -62,24 +62,24 @@ spec:
             properties:
               reconcile:
                 properties:
-                  applyMode:
+                  mode:
                     description: |-
-                      ApplyMode defines the mode of reconciliation for resources by instances created through this definition.
+                      ResourceGraphDefinitionReconcileMode defines the mode of reconciliation for resources by instances created through this definition.
 
-                      ApplyModeDeltaCSA ("DeltaCSA") represents ClientSideApply.
+                      ResourceGraphDefinitionReconcileModeClientSideDelta ("ClientSideDelta") represents ClientSideApply.
                       This mode makes kro dynamically detect changes to the resources in the controller during reconciliation.
                       It is less accurate than ServerSideApply, and will do diff computation in the controller.
                       This mode approximates change detection with a custom delta implementation.
 
-                      ApplyModeApplySetSSA ("ApplySetSSA") represents ServerSideApply using ApplySet.
+                      ResourceGraphDefinitionReconcileModeApplySet ("ApplySet") represents ServerSideApply using ApplySet.
                       When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
                       More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
                     enum:
-                    - ApplySetSSA
-                    - DeltaCSA
+                    - ApplySet
+                    - ClientSideDelta
                     type: string
                     x-kubernetes-validations:
-                    - message: applyMode is immutable
+                    - message: mode is immutable
                       rule: self == oldSelf
                 type: object
               resources:

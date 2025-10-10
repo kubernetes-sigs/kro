@@ -36,36 +36,36 @@ type ResourceGraphDefinitionSpec struct {
 }
 
 type ResourceGraphDefinitionReconcileSpec struct {
-	ApplyMode ApplyMode `json:"applyMode,omitempty"`
+	Mode ResourceGraphDefinitionReconcileMode `json:"mode,omitempty"`
 }
 
-// ApplyMode defines the mode of reconciliation for resources by instances created through this definition.
+// ResourceGraphDefinitionReconcileMode defines the mode of reconciliation for resources by instances created through this definition.
 //
-// ApplyModeDeltaCSA ("DeltaCSA") represents ClientSideApply.
+// ResourceGraphDefinitionReconcileModeClientSideDelta ("ClientSideDelta") represents ClientSideApply.
 // This mode makes kro dynamically detect changes to the resources in the controller during reconciliation.
 // It is less accurate than ServerSideApply, and will do diff computation in the controller.
 // This mode approximates change detection with a custom delta implementation.
 //
-// ApplyModeApplySetSSA ("ApplySetSSA") represents ServerSideApply using ApplySet.
+// ResourceGraphDefinitionReconcileModeApplySet ("ApplySet") represents ServerSideApply using ApplySet.
 // When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
 // More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
 //
-// +kubebuilder:validation:Enum=ApplySetSSA;DeltaCSA
-// +kubebuilder:default=DeltaCSA
+// +kubebuilder:validation:Enum=ApplySet;ClientSideDelta
+// +kubebuilder:default=ClientSideDelta
 // +kubebuilder:validation:Required
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="applyMode is immutable"
-type ApplyMode string
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="mode is immutable"
+type ResourceGraphDefinitionReconcileMode string
 
 const (
-	// ApplyModeDeltaCSA represents ClientSideApply.
+	// ResourceGraphDefinitionReconcileModeClientSideDelta represents a local delta implementation.
 	// This mode makes kro dynamically detect changes to the resources in the controller during reconciliation.
 	// It is less accurate than ServerSideApply, and will do diff computation in the controller.
 	// This mode approximates change detection with a custom delta implementation.
-	ApplyModeDeltaCSA ApplyMode = "DeltaCSA"
-	// ApplyModeApplySetSSA represents ServerSideApply using ApplySet.
+	ResourceGraphDefinitionReconcileModeClientSideDelta ResourceGraphDefinitionReconcileMode = "ClientSideDelta"
+	// ResourceGraphDefinitionReconcileModeApplySet represents ServerSideApply using ApplySet.
 	// When this is set, all resources will be managed with an ApplySet based ServerSideApply implementation.
 	// More info: https://github.com/kubernetes/enhancements/tree/master/keps/sig-cli/3659-kubectl-apply-prune
-	ApplyModeApplySetSSA ApplyMode = "ApplySetSSA"
+	ResourceGraphDefinitionReconcileModeApplySet ResourceGraphDefinitionReconcileMode = "ApplySet"
 )
 
 // Schema represents the attributes that define an instance of

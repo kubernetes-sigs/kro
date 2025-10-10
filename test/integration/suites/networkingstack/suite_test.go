@@ -60,12 +60,16 @@ func TestNetworkingStack(t *testing.T) {
 var _ = Describe("NetworkingStack", func() {
 	DescribeTableSubtree("apply mode",
 		testNetworkingStack,
-		Entry(string(krov1alpha1.ApplyModeApplySetSSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-			ApplyMode: krov1alpha1.ApplyModeApplySetSSA,
-		}, Label(string(krov1alpha1.ApplyModeApplySetSSA))),
-		Entry(string(krov1alpha1.ApplyModeDeltaCSA), krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-			ApplyMode: krov1alpha1.ApplyModeDeltaCSA,
-		}, Label(string(krov1alpha1.ApplyModeDeltaCSA))),
+		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet),
+			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet,
+			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeApplySet)),
+		),
+		Entry(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta),
+			krov1alpha1.ResourceGraphDefinitionReconcileSpec{
+				Mode: krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta,
+			}, Label(string(krov1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta)),
+		),
 	)
 })
 

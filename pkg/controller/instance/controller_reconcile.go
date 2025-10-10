@@ -92,13 +92,13 @@ func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 		return igr.handleReconciliation(ctx, igr.handleInstanceDeletion)
 	}
 
-	switch igr.reconcileConfig.ApplyMode {
-	case v1alpha1.ApplyModeApplySetSSA:
-		return igr.handleReconciliation(ctx, igr.reconcileInstanceApplySetSSA)
-	case v1alpha1.ApplyModeDeltaCSA, "":
+	switch igr.reconcileConfig.Mode {
+	case v1alpha1.ResourceGraphDefinitionReconcileModeApplySet:
+		return igr.handleReconciliation(ctx, igr.reconcileInstanceApplySet)
+	case v1alpha1.ResourceGraphDefinitionReconcileModeClientSideDelta, "":
 		return igr.handleReconciliation(ctx, igr.reconcileInstanceCSA)
 	default:
-		return fmt.Errorf("unsupported apply mode: %s", igr.reconcileConfig.ApplyMode)
+		return fmt.Errorf("unsupported apply mode: %s", igr.reconcileConfig.Mode)
 	}
 }
 

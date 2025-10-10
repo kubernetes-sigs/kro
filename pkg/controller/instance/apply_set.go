@@ -32,8 +32,8 @@ var (
 	}
 )
 
-// reconcileInstanceApplySetSSA handles the reconciliation of an active instance
-func (igr *instanceGraphReconciler) reconcileInstanceApplySetSSA(ctx context.Context) error {
+// reconcileInstanceApplySet handles the reconciliation of an active instance
+func (igr *instanceGraphReconciler) reconcileInstanceApplySet(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 
 	// Set managed state and handle instance labels

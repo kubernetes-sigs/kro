@@ -74,7 +74,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
-	controller := r.setupMicroController(gvr, processedRGD, graphExecLabeler, rgd.Spec.Reconcile.ApplyMode)
+	controller := r.setupMicroController(gvr, processedRGD, graphExecLabeler, rgd.Spec.Reconcile.Mode)
 
 	log.V(1).Info("reconciling resource graph definition micro controller")
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
@@ -100,7 +100,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	gvr schema.GroupVersionResource,
 	processedRGD *graph.Graph,
 	labeler metadata.Labeler,
-	applyMode v1alpha1.ApplyMode,
+	mode v1alpha1.ResourceGraphDefinitionReconcileMode,
 ) *instancectrl.Controller {
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
 		"controller", gvr.Resource,
@@ -114,7 +114,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			DefaultRequeueDuration:    3 * time.Second,
 			DeletionGraceTimeDuration: 30 * time.Second,
 			DeletionPolicy:            "Delete",
-			ApplyMode:                 applyMode,
+			Mode:                      mode,
 		},
 		gvr,
 		processedRGD,

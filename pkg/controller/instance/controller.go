@@ -47,8 +47,8 @@ type ReconcileConfig struct {
 	// support.
 	DeletionPolicy string
 
-	// ApplyMode is the apply mode to use when creating resources in the graph.
-	ApplyMode v1alpha1.ApplyMode
+	// Mode is the apply mode to use when creating resources in the graph.
+	Mode v1alpha1.ResourceGraphDefinitionReconcileMode
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,

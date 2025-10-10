@@ -1,0 +1,71 @@
+{
+  "name": "kro-language-extension",
+  "displayName": "Kro Language Extension",
+  "description": "Language support for Kro YAML files",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:kro-yaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "kro-yaml",
+        "aliases": [
+          "Kro YAML",
+          "Kro"
+        ],
+        "extensions": [
+          ".yaml",
+          ".yml"
+        ],
+        "filenames": [
+          "Krofile"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Kro Language Server",
+      "properties": {
+        "kroLanguageServer.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Kro language server binary"
+        },
+        "kroLanguageServer.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  }
+}

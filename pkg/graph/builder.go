@@ -32,14 +32,14 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
-	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
+	"github.com/kubernetes-sigs/kro/simpleschema"
+	"github.com/kubernetes-sigs/kro/simpleschema/crd"
 )
 
 // NewBuilder creates a new GraphBuilder instance.

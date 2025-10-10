@@ -21,8 +21,10 @@ import (
 	"github.com/gobuffalo/flect"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+const (
+	KRODomainName = "kro.kubernetes.io"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
@@ -30,7 +32,7 @@ import (
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	crdGroup := group
 	if crdGroup == "" {
-		crdGroup = v1alpha1.KRODomainName
+		crdGroup = KRODomainName
 	}
 	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
 }
@@ -38,6 +40,10 @@ func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchema
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return &extv1.CustomResourceDefinition{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "CustomResourceDefinition",
+			APIVersion: "apiextensions.k8s.io/v1",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fmt.Sprintf("%s.%s", pluralKind, group),
 			OwnerReferences: nil, // Injecting owner references is the responsibility of the caller.

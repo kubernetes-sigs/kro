@@ -144,11 +144,15 @@ func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 // reconcileInstance handles the reconciliation of an active instance
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
 
 	// Set managed state and handle instance labels
 	if err := igr.setupInstance(ctx, instance); err != nil {
 		return fmt.Errorf("failed to setup instance: %w", err)
 	}
+
+	// Mark that the graph has been resolved (runtime is successfully created and resources are available)
+	mark.GraphResolved()
 
 	// Initialize resource states
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
@@ -248,19 +252,29 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
 	}
 
+	// All resources have been successfully reconciled
+	mark.ResourcesReady()
 	return nil
 }
 
 // setupInstance prepares an instance for reconciliation by setting up necessary
 // labels and managed state.
 func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance *unstructured.Unstructured) error {
+	mark := NewConditionsMarkerFor(instance)
+
 	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
 	if err != nil {
+		mark.InstanceNotManaged("failed to setup instance: %v", err)
 		return err
 	}
 	if patched != nil {
 		instance.Object = patched.Object
+		// Update runtime with the patched instance for condition management
+		igr.runtime.SetInstance(patched)
+		mark = NewConditionsMarkerFor(patched)
 	}
+
+	mark.InstanceManaged()
 	return nil
 }
 
@@ -268,14 +282,21 @@ func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance 
 // following the reverse topological order to respect dependencies.
 func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) error {
 	igr.log.V(1).Info("Beginning instance deletion process")
+	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
+
+	// Mark resources as being deleted
+	mark.ResourcesInProgress("deleting resources in reverse topological order")
 
 	// Initialize deletion state for all resources
 	if err := igr.initializeDeletionState(); err != nil {
+		mark.ResourcesNotReady("failed to initialize deletion state: %v", err)
 		return fmt.Errorf("failed to initialize deletion state: %w", err)
 	}
 
 	// Delete resources in reverse order
 	if err := igr.deleteResourcesInOrder(ctx); err != nil {
+		mark.ResourcesNotReady("failed to delete resources: %v", err)
 		return err
 	}
 
@@ -391,10 +412,14 @@ func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error 
 		}
 	}
 
-	// Remove finalizer from instance
+	// All resources are deleted, mark as ready for finalization
 	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
+
+	// Remove finalizer from instance
 	patched, err := igr.setUnmanaged(ctx, instance)
 	if err != nil {
+		mark.InstanceNotManaged("failed to remove instance finalizer: %v", err)
 		return fmt.Errorf("failed to remove instance finalizer: %w", err)
 	}
 

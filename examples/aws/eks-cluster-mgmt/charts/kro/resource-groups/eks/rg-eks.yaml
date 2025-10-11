@@ -98,7 +98,7 @@ spec:
     includeWhen:
       - ${schema.spec.vpc.create}
     readyWhen:
-    - ${vpc.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
+    - ${vpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
     template:
       apiVersion: kro.run/v1alpha1
       kind: Vpc
@@ -122,7 +122,7 @@ spec:
     includeWhen:
       - ${schema.spec.vpc.create}
     readyWhen:
-      - ${eksWithVpc.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
+      - ${eksWithVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
     template:
       apiVersion: kro.run/v1alpha1
       kind: EksClusterBasic
@@ -206,7 +206,7 @@ spec:
     includeWhen:
       - ${!schema.spec.vpc.create}
     readyWhen:
-      - ${eksExistingVpc.status.conditions.exists(x, x.type == 'InstanceSynced' && x.status == "True")} # Check on kro conditions
+      - ${eksExistingVpc.status.conditions.exists(x, x.type == 'Ready' && x.status == "True")} # Check on kro conditions
     template:
       apiVersion: kro.run/v1alpha1
       kind: EksClusterBasic

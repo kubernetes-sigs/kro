@@ -1,0 +1,19 @@
+kind: Example
+apiVersion: v1alpha1
+group: example.com
+scope: Namespaced
+spec:
+  name: 'string | required=true description="The name of the resource"'
+  count: 'integer | default=3'
+  enabled: 'boolean | default=true'
+  tags: 'map[string]string'
+status:
+  conditions: '[]condition | required=false'
+types:
+  condition:
+    type: 'string'
+    status: 'boolean'
+    reason: 'string'
+    message: 'string'
+    lastTransitionTime: 'string'
+

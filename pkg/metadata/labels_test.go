@@ -59,7 +59,7 @@ func TestIsKROOwned(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := metav1.ObjectMeta{Labels: tc.labels}
-			result := IsKROOwned(meta)
+			result := IsKROOwned(&meta)
 			assert.Equal(t, tc.expected, result)
 		})
 	}

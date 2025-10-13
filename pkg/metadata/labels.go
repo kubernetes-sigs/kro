@@ -48,8 +48,8 @@ const (
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
-func IsKROOwned(meta metav1.ObjectMeta) bool {
-	v, ok := meta.Labels[OwnedLabel]
+func IsKROOwned(meta metav1.Object) bool {
+	v, ok := meta.GetLabels()[OwnedLabel]
 	return ok && booleanFromString(v)
 }
 

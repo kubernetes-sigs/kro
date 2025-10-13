@@ -33,7 +33,7 @@ func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, er
 
 	restConfig := set.RESTConfig()
 
-	builder, err := graph.NewBuilder(restConfig)
+	builder, err := graph.NewBuilder(restConfig, set.HTTPClient())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create graph builder: %w", err)
 	}

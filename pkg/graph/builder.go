@@ -16,18 +16,20 @@ package graph
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types/ref"
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
-	"k8s.io/client-go/discovery"
+	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -45,9 +47,9 @@ import (
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(
-	clientConfig *rest.Config,
+	clientConfig *rest.Config, httpClient *http.Client,
 ) (*Builder, error) {
-	schemaResolver, dc, err := schemaresolver.NewCombinedResolver(clientConfig)
+	schemaResolver, dc, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
 	}
@@ -57,7 +59,7 @@ func NewBuilder(
 	rgBuilder := &Builder{
 		resourceEmulator: resourceEmulator,
 		schemaResolver:   schemaResolver,
-		discoveryClient:  dc,
+		restMapper:       restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(dc)),
 	}
 	return rgBuilder, nil
 }
@@ -95,7 +97,7 @@ type Builder struct {
 	// Maybe there is a better way, if anything probably there is a better way to
 	// validate the CEL expressions. To revisit.
 	resourceEmulator *emulator.Emulator
-	discoveryClient  discovery.DiscoveryInterface
+	restMapper       *restmapper.DeferredDiscoveryRESTMapper
 }
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
@@ -130,24 +132,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    CEL expressions.
 	// 4. Extract the CEL expressions from the resource + validate them.
 
-	namespacedResources := map[k8sschema.GroupKind]bool{}
-	apiResourceList, err := b.discoveryClient.ServerPreferredNamespacedResources()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve Kubernetes namespaced resources: %w", err)
-	}
-	for _, resourceList := range apiResourceList {
-		for _, r := range resourceList.APIResources {
-			gvk := k8sschema.FromAPIVersionAndKind(resourceList.GroupVersion, r.Kind)
-			namespacedResources[gvk.GroupKind()] = r.Namespaced
-		}
-	}
-
 	// we'll also store the resources in a map for easy access later.
 	resources := make(map[string]*Resource)
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
 		order := i
-		r, err := b.buildRGResource(rgResource, namespacedResources, order)
+		r, err := b.buildRGResource(rgResource, order)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
 		}
@@ -213,7 +203,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// in the instance resource.
 	// To do that, we need to isolate each resource
 	// and evaluate the CEL expressions in the context of the resource graph definition.
-	//This is done
+	// This is done
 	// by dry-running the CEL expressions against the emulated resources.
 	err = validateResourceCELExpressions(resources, instance)
 	if err != nil {
@@ -273,7 +263,6 @@ func (b *Builder) buildExternalRefResource(
 // from the schema.
 func (b *Builder) buildRGResource(
 	rgResource *v1alpha1.Resource,
-	namespacedResources map[k8sschema.GroupKind]bool,
 	order int,
 ) (*Resource, error) {
 	// 1. We need to unmarshal the resource into a map[string]interface{} to
@@ -356,7 +345,11 @@ func (b *Builder) buildRGResource(
 		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
 
-	_, isNamespaced := namespacedResources[gvk.GroupKind()]
+	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		b.restMapper.Reset()
+		return nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
+	}
 
 	// Note that at this point we don't inject the dependencies into the resource.
 	return &Resource{
@@ -368,7 +361,7 @@ func (b *Builder) buildRGResource(
 		variables:              resourceVariables,
 		readyWhenExpressions:   readyWhen,
 		includeWhenExpressions: includeWhen,
-		namespaced:             isNamespaced,
+		namespaced:             mapping.Scope.Name() == meta.RESTScopeNameNamespace,
 		order:                  order,
 		isExternalRef:          rgResource.ExternalRef != nil,
 	}, nil

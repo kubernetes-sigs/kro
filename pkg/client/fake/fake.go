@@ -16,6 +16,7 @@ package fake
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/kubernetes-sigs/kro/pkg/client"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -33,6 +34,7 @@ type FakeSet struct {
 	ApiExtensionsClient apiextensionsv1.ApiextensionsV1Interface
 	Config              *rest.Config
 	restMapper          meta.RESTMapper
+	HTTP                *http.Client
 }
 
 var _ client.SetInterface = (*FakeSet)(nil)
@@ -43,6 +45,10 @@ func NewFakeSet(dynamicClient dynamic.Interface) *FakeSet {
 		DynamicClient: NewJSONSafeDynamicClient(dynamicClient),
 		Config:        &rest.Config{},
 	}
+}
+
+func (f *FakeSet) HTTPClient() *http.Client {
+	return f.HTTP
 }
 
 // Kubernetes returns the standard Kubernetes clientset

@@ -15,11 +15,14 @@
 package graph
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -30,9 +33,10 @@ import (
 
 func TestGraphBuilder_Validation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
-		discoveryClient:  fakeDiscovery,
+		restMapper:       restMapper,
 		resourceEmulator: emulator.NewEmulator(),
 	}
 
@@ -466,9 +470,10 @@ func TestGraphBuilder_Validation(t *testing.T) {
 
 func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
-		discoveryClient:  fakeDiscovery,
+		restMapper:       restMapper,
 		resourceEmulator: emulator.NewEmulator(),
 	}
 
@@ -1049,9 +1054,10 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 
 func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
-		discoveryClient:  fakeDiscovery,
+		restMapper:       restMapper,
 		resourceEmulator: emulator.NewEmulator(),
 	}
 
@@ -1398,16 +1404,17 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 }
 
 func TestNewBuilder(t *testing.T) {
-	builder, err := NewBuilder(&rest.Config{})
+	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
 }
 
 func Test_ValidateOpenAPISchema(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
 		schemaResolver:   fakeResolver,
-		discoveryClient:  fakeDiscovery,
+		restMapper:       restMapper,
 		resourceEmulator: emulator.NewEmulator(),
 	}
 

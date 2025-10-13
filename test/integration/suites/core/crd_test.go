@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
@@ -189,6 +190,57 @@ var _ = Describe("CRD", func() {
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		})
+	})
+
+	Context("CRD Ownership Conflicts", func() {
+		It("should prevent multiple ResourceGraphDefinitions from managing the same CRD", func(ctx SpecContext) {
+			// Create first RGD
+			rgd1 := generator.NewResourceGraphDefinition("test-crd-owner-1",
+				generator.WithSchema(
+					"ConflictTest", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd1)).To(Succeed())
+
+			// Wait for CRD to be created by RGD1
+			crdName := "conflicttests.kro.run"
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(metadata.IsKROOwned(crd.ObjectMeta)).To(BeTrue())
+				g.Expect(crd.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal("test-crd-owner-1"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Create second RGD trying to manage the same CRD
+			rgd2 := generator.NewResourceGraphDefinition("test-crd-owner-2",
+				generator.WithSchema(
+					"ConflictTest", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+						"field2": "integer",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
+
+			// Verify RGD2 fails to reconcile due to ownership conflict
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-crd-owner-2"}, rgd2)
+				g.Expect(err).ToNot(HaveOccurred())
+				// RGD2 should remain in Inactive state due to CRD ownership conflict
+				g.Expect(rgd2.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, rgd1)).To(Succeed())
+			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
 		})
 	})
 

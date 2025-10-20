@@ -36,7 +36,7 @@ spec:
       ports: "[]integer"
 
       # Map type
-      env: "map[string]mytype"
+      env: "map[string]myType"
 
     # Custom Types
     types:

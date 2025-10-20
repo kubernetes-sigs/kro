@@ -83,7 +83,7 @@ sidebar_position: 100
    created by KRO instances. 
 
 
-   ![ArgoCD RGD tracked Instance](../../static/img/KRO-ArgoCD-Tracking.png)
+   ![ArgoCD RGD tracked Instance](/img/KRO-ArgoCD-Tracking.png)
    
    Note that the example shown above depicts ArgoCD's default resource tracking 
    via annotations. You may choose to use `annotation+label` or just `label` and 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -108,7 +109,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
-		Watches(
+		WatchesMetadata(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
 			builder.WithPredicates(predicate.Funcs{
@@ -129,17 +130,17 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
 // that owns the given CRD. It is used to trigger reconciliation when a CRD is updated.
 func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, obj client.Object) []reconcile.Request {
-	crd, ok := obj.(*extv1.CustomResourceDefinition)
-	if !ok {
+	mobj, err := meta.Accessor(obj)
+	if err != nil {
 		return nil
 	}
 
 	// Check if the CRD is owned by a ResourceGraphDefinition
-	if !metadata.IsKROOwned(crd.ObjectMeta) {
+	if !metadata.IsKROOwned(mobj) {
 		return nil
 	}
 
-	rgdName, ok := crd.Labels[metadata.ResourceGraphDefinitionNameLabel]
+	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
 	if !ok {
 		return nil
 	}

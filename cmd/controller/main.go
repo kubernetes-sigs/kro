@@ -25,6 +25,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -152,6 +153,9 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
+		Client: client.Options{
+			HTTPClient: set.HTTPClient(),
+		},
 		GracefulShutdownTimeout: &gracefulShutdownTimeout,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
@@ -186,7 +190,7 @@ func main() {
 	}, set.Metadata())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
-		restConfig,
+		restConfig, set.HTTPClient(),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")

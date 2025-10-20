@@ -34,7 +34,7 @@ standardized and streamlined manner.
 
 <div align="center">
 
-![End user interface - Custom API](../../../images/architecture-diagrams/KRO-Dev-Interface.png)
+![End user interface - Custom API](/img/architecture/KRO-Dev-Interface.png)
 _Figure 1: End user interface - Custom API_
 
 </div>
@@ -56,7 +56,7 @@ handles the deployment and configuration of the required resources.
 
 <div align="center">
 
-![Platform Team Interface](../../../images/architecture-diagrams/KRO-Platform-Team.png)
+![Platform Team Interface](/img/architecture/KRO-Platform-Team.png)
 _Figure 2: ResourceGraphDefinition (RG) - Platform Team Interface_
 
 </div>
@@ -74,7 +74,7 @@ requirements.
 
 <div align="center">
 
-![ResourceGraphDefinition Instance](../../../images/architecture-diagrams/KRO-Instance.png)
+![ResourceGraphDefinition Instance](/img/architecture/KRO-Instance.png)
 _Figure 3: ResourceGraphDefinition Instance (RGI)_
 
 </div>

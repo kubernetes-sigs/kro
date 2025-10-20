@@ -8,7 +8,7 @@
   text-align: center;
   position: relative;
   overflow: hidden;
-  background-image: url('@site/static/img/bg-large.png');
+  background-image: url("/img/bg-large.png");
   height: 420px;
   opacity: 0.1;
 }
@@ -76,26 +76,26 @@
   text-decoration: none;
 }
 
-[data-theme='dark'] .indexCtas a {
+[data-theme="dark"] .indexCtas a {
   background-color: var(--main-color-dark);
   border-color: var(--main-color-dark);
 }
 
-[data-theme='dark'] .indexCtas a:hover {
+[data-theme="dark"] .indexCtas a:hover {
   background-color: #fb8422;
   border-color: #fb8422;
   text-decoration: none;
 }
 
-[data-theme='dark'] .heroA {
+[data-theme="dark"] .heroA {
   background-image: linear-gradient(rgb(54, 54, 54), rgb(27, 27, 29));
 }
 
-[data-theme='dark'] .heroProjectTagline {
+[data-theme="dark"] .heroProjectTagline {
   color: #fff;
 }
 
-[data-theme='dark'] .heroProjectTaglineSubtitle {
+[data-theme="dark"] .heroProjectTaglineSubtitle {
   color: #fff;
 }
 

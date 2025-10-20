@@ -23,7 +23,11 @@ const config: Config = {
   projectName: "kro", // Usually your repo name.
 
   onBrokenLinks: "throw",
-  onBrokenMarkdownLinks: "warn",
+  markdown: {
+    hooks: {
+      onBrokenMarkdownLinks: "warn",
+    },
+  },
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
@@ -60,13 +64,16 @@ const config: Config = {
           sidebarPath: "./sidebars.ts",
           versions: {
             current: {
-              label: "latest",
+              label: "main",
             },
           },
           // sidebarCollapsed: false,
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl: "https://github.com/kubernetes-sigs/kro/tree/main/website",
+          disableVersioning: false,
+          includeCurrentVersion: true,
+          lastVersion: "0.4.1",
         },
         blog: false,
         theme: {
@@ -178,7 +185,8 @@ const config: Config = {
           ],
         },
       ],
-      copyright: "kro is a subproject of Kubernetes SIG Cloud Provider. Kubernetes is a CNCF graduated project."
+      copyright:
+        "kro is a subproject of Kubernetes SIG Cloud Provider. Kubernetes is a CNCF graduated project.",
     },
     /* announcementBar: {
       id: `beta announcement`,

@@ -16,6 +16,44 @@
 // managing multiple GroupVersionResources (GVRs) in a Kubernetes environment.
 // It implements a single controller capable of dynamically handling various
 // resource types concurrently, adapting to runtime changes without system restarts.
+//
+// Key features and design considerations:
+//
+//  1. Multi GVR management: It handles multiple resource types concurrently,
+//     creating and managing separate workflows for each.
+//
+//  2. Dynamic informer management: Creates and deletes informers on the fly
+//     for new resource types, allowing real time adaptation to changes in the
+//     cluster.
+//
+//  3. Minimal disruption: Operations on one resource type do not affect
+//     the performance or functionality of others.
+//
+//  4. Minimalism: Unlike controller-runtime, this implementation
+//     is tailored specifically for kro's needs, avoiding unnecessary
+//     dependencies and overhead.
+//
+//  5. Future Extensibility: It allows for future enhancements such as
+//     sharding and CEL cost aware leader election, which are not readily
+//     achievable with k8s.io/controller-runtime.
+//
+// Why not use k8s.io/controller-runtime:
+//
+//  1. Static nature: controller-runtime is optimized for statically defined
+//     controllers, however kro requires runtime creation and management
+//     of controllers for various GVRs.
+//
+//  2. Overhead reduction: by not including unused features like leader election
+//     and certain metrics, this implementation remains minimalistic and efficient.
+//
+//  3. Customization: this design allows for deep customization and
+//     optimization specific to kro's unique requirements for managing
+//     multiple GVRs dynamically.
+//
+// This implementation aims to provide a reusable, efficient, and flexible
+// solution for dynamic multi-GVR controller management in Kubernetes environments.
+//
+// NOTE(a-hilaly): Potentially we might open source this package for broader use cases.
 package dynamiccontroller
 
 import (
@@ -85,6 +123,18 @@ type registration struct {
 	childHandlerIDs map[schema.GroupVersionResource]string
 }
 
+// DynamicController (DC) is a single controller capable of managing multiple different
+// kubernetes resources (GVRs) in parallel. It can safely start watching new
+// resources and stop watching others at runtime - hence the term "dynamic". This
+// flexibility allows us to accept and manage various resources in a Kubernetes
+// cluster without requiring restarts or pod redeployments.
+//
+// It is mainly inspired by native Kubernetes controllers but designed for more
+// flexible and lightweight operation. DC serves as the core component of kro's
+// dynamic resource management system. Its primary purpose is to create and manage
+// "micro" controllers for custom resources defined by users at runtime (via the
+// ResourceGraphDefinition CRs).
+//
 // DynamicController manages all handlers and informers.
 // It uses two levels of locking:
 //

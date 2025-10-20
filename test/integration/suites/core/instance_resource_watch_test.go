@@ -45,9 +45,13 @@ var _ = Describe("Instance Resource Watch", func() {
 
 	DescribeTable("watch behavior on ConfigMap",
 		func(ctx SpecContext, reactive bool) {
+			var suffix = "Reactive"
+			if !reactive {
+				suffix = "Periodic"
+			}
 			rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-instance-resource-reconcile-%v", reactive),
 				generator.WithSchema(
-					"TestStatus", "v1alpha1",
+					"TestStatus"+suffix, "v1alpha1",
 					map[string]interface{}{
 						"field1": "string",
 					},
@@ -85,7 +89,7 @@ var _ = Describe("Instance Resource Watch", func() {
 
 			instance := &unstructured.Unstructured{}
 			instance.SetAPIVersion(krov1alpha1.GroupVersion.String())
-			instance.SetKind("TestStatus")
+			instance.SetKind("TestStatus" + suffix)
 			instance.SetName("test-instance")
 			instance.SetNamespace(namespace)
 			instance.Object["spec"] = map[string]interface{}{

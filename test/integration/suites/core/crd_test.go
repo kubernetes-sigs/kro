@@ -104,6 +104,25 @@ var _ = Describe("CRD", func() {
 				g.Expect(props["spec"].Properties["field2"].Default.Raw).To(Equal([]byte("42")))
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+			// Check ownership relationship
+			owners := crd.GetOwnerReferences()
+			ownerRefExists := false
+			for _, owner := range owners {
+				if owner.Controller != nil && *owner.Controller {
+					ownerRefExists = true
+					Expect(owner.Name).To(Equal(rgd.Name))
+					Expect(owner.Kind).To(Equal("ResourceGraphDefinition"))
+					Expect(owner.APIVersion).To(Equal(krov1alpha1.GroupVersion.String()))
+					Expect(owner.UID).To(Equal(rgd.UID))
+					Expect(owner.BlockOwnerDeletion).ToNot(BeNil())
+					Expect(*owner.BlockOwnerDeletion).To(BeTrue())
+					Expect(owner.Controller).ToNot(BeNil())
+					Expect(*owner.Controller).To(BeTrue())
+					break
+				}
+			}
+			Expect(ownerRefExists).To(BeTrue(), "CRD should be owned by ResourceGraphDefinition")
+
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 

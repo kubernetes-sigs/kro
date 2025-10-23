@@ -59,6 +59,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	crd := processedRGD.Instance.GetCRD()
 	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
+	if err := ctrl.SetControllerReference(rgd, crd, r.Scheme()); err != nil {
+		mark.KindUnready(err.Error())
+		return nil, nil, fmt.Errorf("failed to set controller reference of CRD: %w", err)
+	}
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")

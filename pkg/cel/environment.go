@@ -148,6 +148,30 @@ func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))
 }
 
+// CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
+// This is used for deep introspection of type structures when generating schemas.
+// The provider maps CEL type names to their full DeclType definitions with all fields.
+func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclTypeProvider {
+	if len(schemas) == 0 {
+		return nil
+	}
+
+	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
+	for name, schema := range schemas {
+		declType := openapi.SchemaDeclType(schema, false)
+		if declType != nil {
+			declType = declType.MaybeAssignTypeName(name)
+			declTypes = append(declTypes, declType)
+		}
+	}
+
+	if len(declTypes) == 0 {
+		return nil
+	}
+
+	return apiservercel.NewDeclTypeProvider(declTypes...)
+}
+
 // UntypedEnvironment creates a CEL environment without type declarations.
 //
 // This is theoretically cheaper to use as there are no Schema conversions

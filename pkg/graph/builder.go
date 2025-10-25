@@ -546,8 +546,9 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 	return instanceSchema, nil
 }
 
-// buildStatusSchema builds the status schema for the instance resource. The
-// status schema is inferred from the CEL expressions in the status field.
+// buildStatusSchema builds the status schema for the instance resource.
+// The status schema is inferred from the CEL expressions in the status field
+// using CEL type checking.
 func buildStatusSchema(
 	rgSchema *v1alpha1.Schema,
 	resources map[string]*Resource,
@@ -563,17 +564,74 @@ func buildStatusSchema(
 		return nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
 
-	// different from the instance spec, the status schema is inferred from the
-	// CEL expressions in the status field.
+	// Extract CEL expressions from the status field.
 	fieldDescriptors, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}
 
-	// For now, return a permissive schema that allows any fields.
-	statusSchema := &extv1.JSONSchemaProps{
-		Type:                 "object",
-		AdditionalProperties: &extv1.JSONSchemaPropsOrBool{Allows: true},
+	schemas := make(map[string]*spec.Schema)
+	for id, resource := range resources {
+		if resource.schema != nil {
+			schemas[id] = resource.schema
+		}
+	}
+
+	env, err := krocel.TypedEnvironment(schemas)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
+	}
+
+	provider := krocel.CreateDeclTypeProvider(schemas)
+
+	// Infer types for each status field expression using CEL type checking
+	statusTypeMap := make(map[string]*cel.Type)
+	for _, fieldDescriptor := range fieldDescriptors {
+		if len(fieldDescriptor.Expressions) == 1 {
+			expression := fieldDescriptor.Expressions[0]
+
+			parsedAST, issues := env.Parse(expression)
+			if issues != nil && issues.Err() != nil {
+				return nil, nil, fmt.Errorf("failed to parse status expression %q at path %q: %w",
+					expression, fieldDescriptor.Path, issues.Err())
+			}
+
+			checkedAST, issues := env.Check(parsedAST)
+			if issues != nil && issues.Err() != nil {
+				return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w",
+					expression, fieldDescriptor.Path, issues.Err())
+			}
+
+			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
+		} else {
+			for _, expression := range fieldDescriptor.Expressions {
+				parsedAST, issues := env.Parse(expression)
+				if issues != nil && issues.Err() != nil {
+					return nil, nil, fmt.Errorf("failed to parse status expression %q at path %q: %w",
+						expression, fieldDescriptor.Path, issues.Err())
+				}
+
+				checkedAST, issues := env.Check(parsedAST)
+				if issues != nil && issues.Err() != nil {
+					return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w",
+						expression, fieldDescriptor.Path, issues.Err())
+				}
+
+				outputType := checkedAST.OutputType()
+				// multiple expressions per field - all must be strings for now.
+				if err := validateExpressionType(outputType, []string{"string"}, expression, "status", fieldDescriptor.Path); err != nil {
+					return nil, nil, err
+				}
+			}
+			// All expressions are strings - result type is string
+			statusTypeMap[fieldDescriptor.Path] = cel.StringType
+		}
+	}
+
+	// convert the CEL types to OpenAPI schema - best effort.
+	statusSchema, err := schema.GenerateSchemaFromCELTypes(statusTypeMap, provider)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate status schema from CEL types: %w", err)
 	}
 
 	return statusSchema, fieldDescriptors, nil

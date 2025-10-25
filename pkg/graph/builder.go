@@ -20,7 +20,6 @@ import (
 	"slices"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/types/ref"
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -35,7 +34,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
-	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
@@ -58,12 +56,9 @@ func NewBuilder(
 		return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
 	}
 
-	resourceEmulator := emulator.NewEmulator()
-
 	rgBuilder := &Builder{
-		resourceEmulator: resourceEmulator,
-		schemaResolver:   schemaResolver,
-		restMapper:       rm,
+		schemaResolver: schemaResolver,
+		restMapper:     rm,
 	}
 	return rgBuilder, nil
 }
@@ -94,14 +89,7 @@ func NewBuilder(
 type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
-	// resourceEmulator is used to emulate the resources. This is used to validate
-	// the CEL expressions in the resources. Because looking up the CEL expressions
-	// isn't enough for kro to validate the expressions.
-	//
-	// Maybe there is a better way, if anything probably there is a better way to
-	// validate the CEL expressions. To revisit.
-	resourceEmulator *emulator.Emulator
-	restMapper       meta.RESTMapper
+	restMapper     meta.RESTMapper
 }
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
@@ -301,7 +289,6 @@ func (b *Builder) buildRGResource(
 		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
-	var emulatedResource *unstructured.Unstructured
 	var resourceVariables []*variable.ResourceField
 
 	// TODO(michaelhtm): CRDs are not supported for extraction currently
@@ -315,14 +302,6 @@ func (b *Builder) buildRGResource(
 			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.ID)
 		}
 	} else {
-
-		// 4. Emulate the resource, this is later used to verify the validity of the
-		//    CEL expressions.
-		emulatedResource, err = b.resourceEmulator.GenerateDummyCR(gvk, resourceSchema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate dummy CR for resource %s: %w", rgResource.ID, err)
-		}
-
 		// 5. Extract CEL fieldDescriptors from the schema.
 		fieldDescriptors, err := parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
@@ -359,7 +338,6 @@ func (b *Builder) buildRGResource(
 		id:                     rgResource.ID,
 		gvr:                    mapping.Resource,
 		schema:                 resourceSchema,
-		emulatedObject:         emulatedResource,
 		originalObject:         &unstructured.Unstructured{Object: resourceObject},
 		variables:              resourceVariables,
 		readyWhenExpressions:   readyWhen,
@@ -408,13 +386,6 @@ func (b *Builder) buildDependencyGraph(
 	for _, resource := range resources {
 		for _, resourceVariable := range resource.variables {
 			for _, expression := range resourceVariable.Expressions {
-				// We need to inspect the expression to understand how it relates to the
-				// resources defined in the resource graph definition.
-				err := validateCELExpressionContext(env, expression, resourceNames)
-				if err != nil {
-					return nil, fmt.Errorf("failed to validate expression context: %w", err)
-				}
-
 				// We need to extract the dependencies from the expression.
 				resourceDependencies, isStatic, err := extractDependencies(env, expression, resourceNames)
 				if err != nil {
@@ -479,15 +450,10 @@ func (b *Builder) buildInstanceResource(
 	overrideStatusFields := true
 	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
 
-	// Emulate the CRD
 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
 	instanceSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert JSON schema to spec schema: %w", err)
-	}
-	emulatedInstance, err := b.resourceEmulator.GenerateDummyCR(gvk, instanceSchema)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate dummy CR for instance: %w", err)
 	}
 
 	resourceNames := maps.Keys(resources)
@@ -498,11 +464,10 @@ func (b *Builder) buildInstanceResource(
 
 	// The instance resource has a set of variables that need to be resolved.
 	instance := &Resource{
-		id:             "instance",
-		gvr:            metadata.GVKtoGVR(gvk),
-		schema:         instanceSchema,
-		crd:            instanceCRD,
-		emulatedObject: emulatedInstance,
+		id:     "instance",
+		gvr:    metadata.GVKtoGVR(gvk),
+		schema: instanceSchema,
+		crd:    instanceCRD,
 	}
 
 	instanceStatusVariables := []*variable.ResourceField{}
@@ -593,94 +558,12 @@ func buildStatusSchema(
 		return nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}
 
-	// Inspection of the CEL expressions to infer the types of the status fields.
-	resourceNames := maps.Keys(resources)
-
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
-	}
-
-	// statusStructureParts := make([]schema.FieldDescriptor, 0, len(extracted))
-	statusDryRunResults := make(map[string][]ref.Val, len(fieldDescriptors))
-	for _, found := range fieldDescriptors {
-		// For each expression in the extracted `ExpressionField` we need to dry-run
-		// the expression to infer the type of the status field.
-		evals := []ref.Val{}
-		for _, expr := range found.Expressions {
-			// we need to inspect the expression to understand how it relates to the
-			// resources defined in the resource graph definition.
-			err := validateCELExpressionContext(env, expr, resourceNames)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to validate expression context: %w", err)
-			}
-
-			// resources is the context here.
-			value, err := dryRunExpression(env, expr, resources)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to dry-run expression: %w", err)
-			}
-
-			evals = append(evals, value)
-		}
-		statusDryRunResults[found.Path] = evals
-	}
-
-	statusSchema, err := schema.GenerateSchemaFromEvals(statusDryRunResults)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build JSON schema from status structure: %w", err)
+	// For now, return a permissive schema that allows any fields.
+	statusSchema := &extv1.JSONSchemaProps{
+		Type:                 "object",
+		AdditionalProperties: &extv1.JSONSchemaPropsOrBool{Allows: true},
 	}
 	return statusSchema, fieldDescriptors, nil
-}
-
-// validateCELExpressionContext validates the given CEL expression in the context
-// of the resources defined in the resource graph definition.
-func validateCELExpressionContext(env *cel.Env, expression string, resources []string) error {
-	inspector := ast.NewInspectorWithEnv(env, resources)
-
-	// The CEL expression is valid if it refers to the resources defined in the
-	// resource graph definition.
-	inspectionResult, err := inspector.Inspect(expression)
-	if err != nil {
-		return fmt.Errorf("failed to inspect expression: %w", err)
-	}
-	// make sure that the expression refers to the resources defined in the resource graph definition.
-	for _, resource := range inspectionResult.ResourceDependencies {
-		if !slices.Contains(resources, resource.ID) {
-			return fmt.Errorf("expression refers to unknown resource: %s", resource.ID)
-		}
-	}
-	return nil
-}
-
-// dryRunExpression executes the given CEL expression in the context of a set
-// of emulated resources. We could've called this function evaluateExpression,
-// but we chose to call it dryRunExpression to indicate that we are not
-// used for anything other than validating the expression and inspecting it
-func dryRunExpression(env *cel.Env, expression string, resources map[string]*Resource) (ref.Val, error) {
-	ast, issues := env.Compile(expression)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("failed to compile expression: %w", issues.Err())
-	}
-
-	// TODO(a-hilaly): thinking about a creating a library to hide this...
-	program, err := env.Program(ast)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create program: %w", err)
-	}
-
-	context := map[string]interface{}{}
-	for resourceName, resource := range resources {
-		if resource.emulatedObject != nil {
-			context[resourceName] = resource.emulatedObject.Object
-		}
-	}
-
-	output, _, err := program.Eval(context)
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate expression: %w", err)
-	}
-	return output, nil
 }
 
 // extractDependencies extracts the dependencies from the given CEL expression.
@@ -714,155 +597,10 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	return dependencies, isStatic, nil
 }
 
-// validateResourceCELExpressions tries to validate the CEL expressions in the
+// validateResourceCELExpressions validates the CEL expressions in the
 // resources against the resources defined in the resource graph definition.
 //
-// In this process, we pin a resource and evaluate the CEL expressions in the
-// context of emulated resources. Meaning that given 3 resources A, B, and C,
-// we evaluate A's CEL expressions against 2 emulated resources B and C. Then
-// we evaluate B's CEL expressions against 2 emulated resources A and C, and so
-// on.
+// WIP.....
 func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
-	resourceIDs := maps.Keys(resources)
-	// We also want to allow users to refer to the instance spec in their expressions.
-	resourceIDs = append(resourceIDs, "schema")
-
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceIDs))
-	if err != nil {
-		return fmt.Errorf("failed to create CEL environment: %w", err)
-	}
-	instanceEmulatedCopy := instance.emulatedObject.DeepCopy()
-	if instanceEmulatedCopy != nil && instanceEmulatedCopy.Object != nil {
-		delete(instanceEmulatedCopy.Object, "apiVersion")
-		delete(instanceEmulatedCopy.Object, "kind")
-		delete(instanceEmulatedCopy.Object, "status")
-	}
-
-	// create includeWhenContext
-	includeWhenContext := map[string]*Resource{}
-	// For now, we will only support the instance context for includeWhen expressions.
-	// With this decision, we will decide on creation time and update time
-	// If we'll be creating resources or not
-	includeWhenContext["schema"] = &Resource{
-		emulatedObject: &unstructured.Unstructured{
-			Object: instanceEmulatedCopy.Object,
-		},
-	}
-
-	// create expressionsContext
-	expressionContext := map[string]*Resource{}
-	// add instance spec to the context
-	expressionContext["schema"] = &Resource{
-		emulatedObject: &unstructured.Unstructured{
-			Object: instanceEmulatedCopy.Object,
-		},
-	}
-	// include all resources, and remove individual ones
-	// during the validation
-	// this is done to avoid having to create a new context for each resource
-	for resourceName, contextResource := range resources {
-		expressionContext[resourceName] = contextResource
-	}
-
-	for _, resource := range resources {
-		// exclude resource from the context
-		delete(expressionContext, resource.id)
-
-		err := ensureResourceExpressions(env, expressionContext, resource)
-		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
-		}
-
-		err = ensureReadyWhenExpressions(resource)
-		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s readyWhen expressions: %w", resource.id, err)
-		}
-
-		err = ensureIncludeWhenExpressions(env, includeWhenContext, resource)
-		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s includeWhen expressions: %w", resource.id, err)
-		}
-
-		// include the resource back to the context
-		expressionContext[resource.id] = resource
-	}
-
 	return nil
-}
-
-// ensureResourceExpressions validates the CEL expressions in the resource
-// against the resources defined in the resource graph definition.
-func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
-	// We need to validate the CEL expressions in the resource.
-	for _, resourceVariable := range resource.variables {
-		for _, expression := range resourceVariable.Expressions {
-			_, err := ensureExpression(env, expression, []string{resource.id}, context)
-			if err != nil {
-				return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
-			}
-		}
-	}
-	return nil
-}
-
-// ensureReadyWhenExpressions validates the readyWhen expressions in the resource
-// against the resources defined in the resource graph definition.
-func ensureReadyWhenExpressions(resource *Resource) error {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
-	for _, expression := range resource.readyWhenExpressions {
-		if err != nil {
-			return fmt.Errorf("failed to create CEL environment: %w", err)
-		}
-
-		resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
-		if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
-			// ignore apiVersion and kind from readyWhenExpression context
-			delete(resourceEmulatedCopy.Object, "apiVersion")
-			delete(resourceEmulatedCopy.Object, "kind")
-		}
-		context := map[string]*Resource{}
-		context[resource.id] = &Resource{
-			emulatedObject: resourceEmulatedCopy,
-		}
-
-		output, err := ensureExpression(env, expression, []string{resource.id}, context)
-		if err != nil {
-			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
-		}
-		if !krocel.IsBoolType(output) {
-			return fmt.Errorf("output of readyWhen expression %s can only be of type bool", expression)
-		}
-	}
-	return nil
-}
-
-// ensureIncludeWhenExpressions validates the includeWhen expressions in the resource
-func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
-	// We need to validate the CEL expressions in the resource.
-	for _, expression := range resource.includeWhenExpressions {
-		output, err := ensureExpression(env, expression, []string{resource.id}, context)
-		if err != nil {
-			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
-		}
-		if !krocel.IsBoolType(output) {
-			return fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression)
-		}
-	}
-	return nil
-}
-
-// ensureExpression validates the CEL expression in the context of the resources
-func ensureExpression(env *cel.Env, expression string, resources []string, context map[string]*Resource) (ref.Val, error) {
-	err := validateCELExpressionContext(env, expression, resources)
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate expression %s: %w", expression, err)
-	}
-
-	output, err := dryRunExpression(env, expression, context)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
-	}
-
-	return output, nil
-
 }

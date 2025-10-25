@@ -52,9 +52,9 @@ type InstanceState struct {
 }
 
 func (s *InstanceState) ResourceErrors() error {
-	errorsSeen := []error{}
+	var errorsSeen []error
 	for _, resourceState := range s.ResourceStates {
-		if resourceState.State == ResourceStateError {
+		if resourceState.Err != nil {
 			errorsSeen = append(errorsSeen, resourceState.Err)
 		}
 	}

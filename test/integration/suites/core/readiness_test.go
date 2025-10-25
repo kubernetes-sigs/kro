@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -234,12 +235,24 @@ var _ = Describe("Readiness", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify Service is not created yet
+		err := env.Client.Get(ctx, types.NamespacedName{
+			Name:      name,
+			Namespace: namespace,
+		}, &corev1.Service{})
+		Expect(err).To(MatchError(errors.IsNotFound, "service should not be created yet"))
+
+		// Expect instance state to be IN_PROGRESS
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      name,
 				Namespace: namespace,
-			}, &corev1.Service{})
-			g.Expect(err).To(MatchError(errors.IsNotFound, "service should not be created yet"))
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(status).To(Equal("IN_PROGRESS"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Patch the deployment to have available replicas in status
@@ -294,4 +307,131 @@ var _ = Describe("Readiness", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It(`should should wait for the last node in the DAG to be ready`, func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-readiness-tail",
+			generator.WithSchema(
+				"TestReadinessTail", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			// Job resource
+			generator.WithResource("job", map[string]interface{}{
+				"apiVersion": "batch/v1",
+				"kind":       "Job",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}",
+				},
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":  "sleep",
+									"image": "busybox",
+									"args":  []interface{}{"sleep", "3"},
+								},
+							},
+							"restartPolicy": "Never",
+						},
+					},
+				},
+			}, []string{"${job.status.completionTime != null}"}, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		// Verify ResourceGraphDefinition is created and becomes ready
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		instanceName := "test-readiness-tail"
+
+		// Create instance
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "TestReadinessTail",
+				"metadata": map[string]interface{}{
+					"name":      instanceName,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name": instanceName,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		// Check if instance is created
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Expect instance state to be IN_PROGRESS
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify Job is created now
+		job := &batchv1.Job{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, job)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify instance state is IN_PROGRESS consistently for 30seconds
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(status).To(Equal("IN_PROGRESS"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Patch job completionTime to simulate job completion
+		now := metav1.Now()
+		job.Status.CompletionTime = &now
+		Expect(env.Client.Status().Update(ctx, job)).To(Succeed())
+
+		// Verify instance is now marked as ACTIVE
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			status, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(status).To(Equal("ACTIVE"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Cleanup
+		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+	})
 })

@@ -25,8 +25,8 @@ spec:
             email: ${schema.spec.email}
             username: ${schema.spec.username}
             description: ${schema.spec.description}
-            tags: ${schema.spec.tags}
-            replicas: ${schema.spec.replicas}
+            tags: ${schema.spec.tags.join(",")}
+            replicas: ${string(schema.spec.replicas)}
 status:
   (conditions[?type == 'Ready']):
     - status: 'True'

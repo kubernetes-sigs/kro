@@ -220,6 +220,18 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
 
+	// Validate includeWhen expressions - they can only reference schema and must return bool
+	err = validateIncludeWhenExpressions(resources, schemas["schema"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate includeWhen expressions: %w", err)
+	}
+
+	// Validate readyWhen expressions - they can only reference their own resource and must return bool
+	err = validateReadyWhenExpressions(resources, schemas)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate readyWhen expressions: %w", err)
+	}
+
 	// Now that we have the instance resource, we can move into the next stage of
 	// building the resource graph definition. Understanding the relationships between the
 	// resources in the resource graph definition a.k.a the dependency graph.
@@ -771,6 +783,95 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 		"type mismatch in resource %q at path %q: expression %q returns type %q but expected %q",
 		resourceID, path, expression, outputType.String(), expectedType.String(),
 	)
+}
+
+// validateConditionExpression validates a single condition expression (includeWhen or readyWhen).
+// It parses, type-checks, and verifies the expression returns bool or optional_type(bool).
+func validateConditionExpression(env *cel.Env, expression, conditionType, resourceID string) error {
+	// Parse the expression
+	parsedAST, issues := env.Parse(expression)
+	if issues != nil && issues.Err() != nil {
+		return fmt.Errorf(
+			"failed to parse %s expression %q in resource %q: %w",
+			conditionType, expression, resourceID, issues.Err(),
+		)
+	}
+
+	// Type-check the expression
+	checkedAST, issues := env.Check(parsedAST)
+	if issues != nil && issues.Err() != nil {
+		return fmt.Errorf(
+			"failed to type-check %s expression %q in resource %q: %w",
+			conditionType, expression, resourceID, issues.Err(),
+		)
+	}
+
+	// Verify the expression returns bool or optional_type(bool)
+	outputType := checkedAST.OutputType()
+	if !krocel.IsBoolOrOptionalBool(outputType) {
+		return fmt.Errorf(
+			"%s expression %q in resource %q must return bool or optional_type(bool), but returns %q",
+			conditionType, expression, resourceID, outputType.String(),
+		)
+	}
+
+	return nil
+}
+
+// validateIncludeWhenExpressions validates that includeWhen expressions:
+// 1. Only reference the "schema" variable
+// 2. Return bool or optional_type(bool)
+func validateIncludeWhenExpressions(resources map[string]*Resource, schemaSpec *spec.Schema) error {
+	if schemaSpec == nil {
+		return nil
+	}
+
+	// Create a CEL environment with only "schema" available
+	env, err := krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemaSpec})
+	if err != nil {
+		return fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
+	}
+
+	for _, resource := range resources {
+		for _, expression := range resource.includeWhenExpressions {
+			if err := validateConditionExpression(env, expression, "includeWhen", resource.id); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateReadyWhenExpressions validates that readyWhen expressions:
+// 1. Only reference the resource they are attached to
+// 2. Return bool or optional_type(bool)
+func validateReadyWhenExpressions(resources map[string]*Resource, schemas map[string]*spec.Schema) error {
+	for _, resource := range resources {
+		if len(resource.readyWhenExpressions) == 0 {
+			continue
+		}
+
+		// Create a CEL environment with only this resource's schema available
+		resourceSchema := schemas[resource.id]
+		if resourceSchema == nil {
+			// If no schema is available, we can't validate - skip
+			continue
+		}
+
+		env, err := krocel.TypedEnvironment(map[string]*spec.Schema{resource.id: resourceSchema})
+		if err != nil {
+			return fmt.Errorf("failed to create CEL environment for readyWhen validation: %w", err)
+		}
+
+		for _, expression := range resource.readyWhenExpressions {
+			if err := validateConditionExpression(env, expression, "readyWhen", resource.id); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // getSchemaWithoutStatus returns a schema from the CRD with the status field removed.

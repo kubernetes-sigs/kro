@@ -83,3 +83,17 @@ func WouldMatchIfUnwrapped(outputType, expectedType *cel.Type) bool {
 	optionalExpected := cel.OptionalType(expectedType)
 	return optionalExpected.IsAssignableType(outputType)
 }
+
+// IsBoolOrOptionalBool checks if a CEL type is bool or optional_type(bool).
+// This is useful for validating condition expressions that must return boolean values.
+func IsBoolOrOptionalBool(t *cel.Type) bool {
+	// Check if it's a direct bool type
+	// Note: A.IsAssignableType(B) means "A accepts B", so we check if bool accepts t
+	if cel.BoolType.IsAssignableType(t) {
+		return true
+	}
+
+	// Check if it's optional_type(bool)
+	optionalBool := cel.OptionalType(cel.BoolType)
+	return optionalBool.IsAssignableType(t)
+}

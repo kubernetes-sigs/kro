@@ -588,6 +588,7 @@ func buildStatusSchema(
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
 		if len(fieldDescriptor.Expressions) == 1 {
+			// Single expression - must infer type from expression output
 			expression := fieldDescriptor.Expressions[0]
 
 			parsedAST, issues := env.Parse(expression)
@@ -685,7 +686,9 @@ func validateResourceCELExpressions(
 
 	for _, resource := range resources {
 		for _, resourceVariable := range resource.variables {
-			for _, expression := range resourceVariable.Expressions {
+			if len(resourceVariable.Expressions) == 1 {
+				expression := resourceVariable.Expressions[0]
+
 				parsedAST, issues := env.Parse(expression)
 				if issues != nil && issues.Err() != nil {
 					return fmt.Errorf(
@@ -706,10 +709,34 @@ func validateResourceCELExpressions(
 				if err := validateExpressionType(outputType, resourceVariable.ExpectedTypes, expression, resource.id, resourceVariable.Path); err != nil {
 					return err
 				}
+			} else if len(resourceVariable.Expressions) > 1 {
+				// multiple expressions - all must be strings for concatenation
+				for _, expression := range resourceVariable.Expressions {
+					parsedAST, issues := env.Parse(expression)
+					if issues != nil && issues.Err() != nil {
+						return fmt.Errorf(
+							"failed to parse expression %q in resource %q at path %q: %w",
+							expression, resource.id, resourceVariable.Path, issues.Err(),
+						)
+					}
+
+					checkedAST, issues := env.Check(parsedAST)
+					if issues != nil && issues.Err() != nil {
+						return fmt.Errorf(
+							"failed to type-check expression %q in resource %q at path %q: %w",
+							expression, resource.id, resourceVariable.Path, issues.Err(),
+						)
+					}
+
+					outputType := checkedAST.OutputType()
+					if err := validateExpressionType(outputType, []string{"string"}, expression, resource.id, resourceVariable.Path); err != nil {
+						return err
+					}
+				}
 			}
+
 		}
 	}
-
 	return nil
 }
 

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kro-metrics
+  namespace: default
+  labels:
+    app.kubernetes.io/instance: kro
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: kro
+spec:
+  selector:
+    app.kubernetes.io/name: kro
+    app.kubernetes.io/component: controller
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8078
+    protocol: TCP

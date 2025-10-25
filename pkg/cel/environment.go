@@ -95,41 +95,39 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	declarations = append(declarations, opts.customDeclarations...)
 
 	if len(opts.typedResources) > 0 {
+		// We need both a TypeProvider (for field resolution) and variable declarations.
+		// To avoid conflicts, we use different names for types vs variables:
+		//  - Types are registered with "__type_<name>" prefix (e.g "__type_schema")
+		//  - Variables use the original names (e.g "pod", "schema"...)
+
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
 
 		for name, schema := range opts.typedResources {
-			// Convert schema to DeclType using k8s openapi adaptor
 			declType := openapi.SchemaDeclType(schema, false)
 			if declType != nil {
-				declType = declType.MaybeAssignTypeName(name)
+				typeName := "__type_" + name
+				declType = declType.MaybeAssignTypeName(typeName)
+
+				// add type declaration
 				declTypes = append(declTypes, declType)
+
+				celType := declType.CelType()
+
+				// Add variable declaration
+				declarations = append(declarations, cel.Variable(name, celType))
 			}
 		}
 
 		if len(declTypes) > 0 {
-			provider := apiservercel.NewDeclTypeProvider(declTypes...)
+			baseProvider := apiservercel.NewDeclTypeProvider(declTypes...)
 
-			registry, err := types.NewRegistry()
+			registry := types.NewEmptyRegistry()
+			wrappedProvider, err := baseProvider.WithTypeProvider(registry)
 			if err != nil {
 				return nil, err
 			}
 
-			providerOptions, err := provider.EnvOptions(registry)
-			if err != nil {
-				return nil, err
-			}
-
-			// inject provider options
-			declarations = append(declarations, providerOptions...)
-
-			// inject variable declarations
-			for name, schema := range opts.typedResources {
-				declType := openapi.SchemaDeclType(schema, false)
-				if declType != nil {
-					declType = declType.MaybeAssignTypeName(name)
-					declarations = append(declarations, cel.Variable(name, declType.CelType()))
-				}
-			}
+			declarations = append(declarations, cel.CustomTypeProvider(wrappedProvider))
 		}
 	}
 
@@ -146,6 +144,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 // CEL expressions against OpenAPI schemas.
 func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))
+}
+
+// UntypedEnvironment creates a CEL environment without type declarations.
+//
+// This is theoretically cheaper to use as there are no Schema conversions
+// required. NOTE(a-hilaly): maybe use this for runtime? undecided.
+func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
+	return DefaultEnvironment(WithResourceIDs(resourceIDs))
 }
 
 // CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
@@ -170,12 +176,4 @@ func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclT
 	}
 
 	return apiservercel.NewDeclTypeProvider(declTypes...)
-}
-
-// UntypedEnvironment creates a CEL environment without type declarations.
-//
-// This is theoretically cheaper to use as there are no Schema conversions
-// required. NOTE(a-hilaly): maybe use this for runtime? undecided.
-func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
-	return DefaultEnvironment(WithResourceIDs(resourceIDs))
 }

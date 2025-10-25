@@ -201,11 +201,17 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 			schemas[id] = resource.schema
 		}
 	}
+
 	// include the instance spec schema in the context as "schema". This will let us
-	// validate expressions such as ${schema.spec.someField}
-	if instance.schema != nil {
-		schemas["schema"] = instance.schema
+	// validate expressions such as ${schema.spec.someField}.
+	//
+	// not that we only include the spec and metadata fields, instance status references
+	// are not allowed in RGDs (yet)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instance.crd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get schema without status: %w", err)
 	}
+	schemas["schema"] = schemaWithoutStatus
 
 	// Before getting into the dependency graph, we need to validate the CEL expressions
 	// in the resources using CEL type checking.
@@ -767,4 +773,21 @@ func validateExpressionType(outputType *cel.Type, expectedTypes []string, expres
 		"type mismatch in resource %q at path %q: expression %q returns type %q but expected one of %v",
 		resourceID, path, expression, outputTypeName, expectedTypes,
 	)
+}
+
+// getSchemaWithoutStatus returns a schema from the CRD with the status field removed.
+func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
+	crdCopy := crd.DeepCopy()
+
+	if len(crdCopy.Spec.Versions) != 1 || crdCopy.Spec.Versions[0].Schema == nil {
+		panic("Expected CRD to have exactly one version with schema defined")
+	}
+
+	openAPISchema := crdCopy.Spec.Versions[0].Schema.OpenAPIV3Schema
+
+	if openAPISchema.Properties != nil {
+		delete(openAPISchema.Properties, "status")
+	}
+
+	return schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
 }

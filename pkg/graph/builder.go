@@ -213,8 +213,21 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 	schemas["schema"] = schemaWithoutStatus
 
-	// Before getting into the dependency graph, we need to validate the CEL expressions
-	// in the resources using CEL type checking.
+	// First, build the dependency graph by inspecting CEL expressions.
+	// This extracts all resource dependencies and validates that:
+	// 1. All referenced resources are defined in the RGD
+	// 2. There are no unknown functions
+	// 3. The dependency graph is acyclic
+	//
+	// We do this BEFORE type checking so that undeclared resource errors
+	// are caught here with clear messages, rather than as CEL type errors.
+	dag, err := b.buildDependencyGraph(resources)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
+	}
+
+	// Now that we know all resources are properly declared and dependencies are valid,
+	// we can perform type checking on the CEL expressions.
 	err = validateResourceCELExpressions(resources, instance, schemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
@@ -230,23 +243,6 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	err = validateReadyWhenExpressions(resources, schemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate readyWhen expressions: %w", err)
-	}
-
-	// Now that we have the instance resource, we can move into the next stage of
-	// building the resource graph definition. Understanding the relationships between the
-	// resources in the resource graph definition a.k.a the dependency graph.
-	//
-	// The dependency graph is a directed acyclic graph that represents the
-	// relationships between the resources in the resource graph definition. The graph is
-	// used to determine the order in which the resources should be created in the
-	// cluster.
-	//
-	// The dependency graph is built by inspecting the CEL expressions in the
-	// resources and the instance resource, using a CEL AST (Abstract Syntax Tree)
-	// inspector.
-	dag, err := b.buildDependencyGraph(resources)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
 
 	topologicalOrder, err := dag.TopologicalSort()

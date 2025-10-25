@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -191,13 +192,24 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
 	}
 
+	// collect all OpenAPI schemas for CEL type checking. This map will be used to
+	// create a typed CEL environment that validates expressions against the actual
+	// resource schemas.
+	schemas := make(map[string]*spec.Schema)
+	for id, resource := range resources {
+		if resource.schema != nil {
+			schemas[id] = resource.schema
+		}
+	}
+	// include the instance spec schema in the context as "schema". This will let us
+	// validate expressions such as ${schema.spec.someField}
+	if instance.schema != nil {
+		schemas["schema"] = instance.schema
+	}
+
 	// Before getting into the dependency graph, we need to validate the CEL expressions
-	// in the instance resource.
-	// To do that, we need to isolate each resource
-	// and evaluate the CEL expressions in the context of the resource graph definition.
-	// This is done
-	// by dry-running the CEL expressions against the emulated resources.
-	err = validateResourceCELExpressions(resources, instance)
+	// in the resources using CEL type checking.
+	err = validateResourceCELExpressions(resources, instance, schemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
@@ -563,6 +575,7 @@ func buildStatusSchema(
 		Type:                 "object",
 		AdditionalProperties: &extv1.JSONSchemaPropsOrBool{Allows: true},
 	}
+
 	return statusSchema, fieldDescriptors, nil
 }
 
@@ -598,9 +611,75 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 }
 
 // validateResourceCELExpressions validates the CEL expressions in the
-// resources against the resources defined in the resource graph definition.
+// resources against other resources defined in the resource graph definition.
 //
-// WIP.....
-func validateResourceCELExpressions(resources map[string]*Resource, instance *Resource) error {
+// This function uses CEL type checking to validate that expressions reference
+// valid fields and return the expected types based on the OpenAPI schemas.
+func validateResourceCELExpressions(
+	resources map[string]*Resource,
+	instance *Resource,
+	schemas map[string]*spec.Schema,
+) error {
+	env, err := krocel.TypedEnvironment(schemas)
+	if err != nil {
+		return fmt.Errorf("failed to create typed CEL environment: %w", err)
+	}
+
+	for _, resource := range resources {
+		for _, resourceVariable := range resource.variables {
+			for _, expression := range resourceVariable.Expressions {
+				parsedAST, issues := env.Parse(expression)
+				if issues != nil && issues.Err() != nil {
+					return fmt.Errorf(
+						"failed to parse expression %q in resource %q at path %q: %w",
+						expression, resource.id, resourceVariable.Path, issues.Err(),
+					)
+				}
+
+				checkedAST, issues := env.Check(parsedAST)
+				if issues != nil && issues.Err() != nil {
+					return fmt.Errorf(
+						"failed to type-check expression %q in resource %q at path %q: %w",
+						expression, resource.id, resourceVariable.Path, issues.Err(),
+					)
+				}
+
+				outputType := checkedAST.OutputType()
+				if err := validateExpressionType(outputType, resourceVariable.ExpectedTypes, expression, resource.id, resourceVariable.Path); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
+}
+
+// validateExpressionType verifies that the CEL expression output type matches
+// one of the expected types. Returns an error if there is a type mismatch.
+func validateExpressionType(outputType *cel.Type, expectedTypes []string, expression, resourceID, path string) error {
+	if len(expectedTypes) == 0 {
+		return nil
+	}
+
+	outputTypeName := outputType.String()
+
+	for _, expectedType := range expectedTypes {
+		if outputTypeName == expectedType {
+			return nil
+		}
+		if expectedType == "any" {
+			return nil
+		}
+	}
+
+	if outputTypeName == "dyn" {
+		return nil
+	}
+
+	// Type mismatch - construct helpful error message. This will surface to users.
+	return fmt.Errorf(
+		"type mismatch in resource %q at path %q: expression %q returns type %q but expected one of %v",
+		resourceID, path, expression, outputTypeName, expectedTypes,
+	)
 }

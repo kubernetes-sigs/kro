@@ -17,7 +17,7 @@ package variable
 import (
 	"slices"
 
-	"k8s.io/kube-openapi/pkg/validation/spec"
+	"github.com/google/cel-go/cel"
 )
 
 // FieldDescriptor represents a field that contains CEL expressions in it. It
@@ -32,12 +32,10 @@ type FieldDescriptor struct {
 	Path string
 	// Expressions is a list of CEL expressions in the field.
 	Expressions []string
-	// ExpectedType is the expected type of the field.
-	ExpectedTypes []string
-	// ExpectedSchema is the expected schema of the field if it is a complex type.
-	// This is only set if the field is a OneShotCEL expression, and the schema
-	// is expected to be a complex type (object or array).
-	ExpectedSchema *spec.Schema
+	// ExpectedType is the expected CEL type of the field, derived from the OpenAPI schema.
+	// For single expressions, this is the schema's CEL type.
+	// For multiple expressions (string templates), this is always cel.StringType.
+	ExpectedType *cel.Type
 	// StandaloneExpression is true if the field contains a single CEL expression
 	// that is not part of a larger string. example: "${foo}" is a standalone expression
 	// but not "hello-${foo}" or "${foo}${bar}"

@@ -625,8 +625,7 @@ func buildStatusSchema(
 				}
 
 				outputType := checkedAST.OutputType()
-				// multiple expressions per field - all must be strings for now.
-				if err := validateExpressionType(outputType, []string{"string"}, expression, "status", fieldDescriptor.Path); err != nil {
+				if err := validateExpressionType(outputType, cel.StringType, expression, "status", fieldDescriptor.Path); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -712,7 +711,7 @@ func validateResourceCELExpressions(
 				}
 
 				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, resourceVariable.ExpectedTypes, expression, resource.id, resourceVariable.Path); err != nil {
+				if err := validateExpressionType(outputType, resourceVariable.ExpectedType, expression, resource.id, resourceVariable.Path); err != nil {
 					return err
 				}
 			} else if len(resourceVariable.Expressions) > 1 {
@@ -735,7 +734,7 @@ func validateResourceCELExpressions(
 					}
 
 					outputType := checkedAST.OutputType()
-					if err := validateExpressionType(outputType, []string{"string"}, expression, resource.id, resourceVariable.Path); err != nil {
+					if err := validateExpressionType(outputType, cel.StringType, expression, resource.id, resourceVariable.Path); err != nil {
 						return err
 					}
 				}
@@ -747,31 +746,30 @@ func validateResourceCELExpressions(
 }
 
 // validateExpressionType verifies that the CEL expression output type matches
-// one of the expected types. Returns an error if there is a type mismatch.
-func validateExpressionType(outputType *cel.Type, expectedTypes []string, expression, resourceID, path string) error {
-	if len(expectedTypes) == 0 {
+// the expected type. Returns an error if there is a type mismatch.
+func validateExpressionType(outputType, expectedType *cel.Type, expression, resourceID, path string) error {
+	if expectedType.IsAssignableType(outputType) {
 		return nil
 	}
 
-	outputTypeName := outputType.String()
-
-	for _, expectedType := range expectedTypes {
-		if outputTypeName == expectedType {
-			return nil
-		}
-		if expectedType == "any" {
-			return nil
-		}
+	// "dyn" is a special case. output type matches anything (x-kubernetes-int-or-string, etc)
+	if outputType.String() == "dyn" {
+		return nil
 	}
 
-	if outputTypeName == "dyn" {
-		return nil
+	// Check if unwrapping would fix the type mismatch - provide helpful error message
+	if krocel.WouldMatchIfUnwrapped(outputType, expectedType) {
+		return fmt.Errorf(
+			"type mismatch in resource %q at path %q: expression %q returns %q but field expects %q. "+
+				"Use .orValue(defaultValue) to unwrap the optional type, e.g., %s.orValue(\"\")",
+			resourceID, path, expression, outputType.String(), expectedType.String(), expression,
+		)
 	}
 
 	// Type mismatch - construct helpful error message. This will surface to users.
 	return fmt.Errorf(
-		"type mismatch in resource %q at path %q: expression %q returns type %q but expected one of %v",
-		resourceID, path, expression, outputTypeName, expectedTypes,
+		"type mismatch in resource %q at path %q: expression %q returns type %q but expected %q",
+		resourceID, path, expression, outputType.String(), expectedType.String(),
 	)
 }
 

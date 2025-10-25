@@ -225,29 +225,35 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
-
-	// Now that we know all resources are properly declared and dependencies are valid,
-	// we can perform type checking on the CEL expressions.
-	err = validateResourceCELExpressions(resources, instance, schemas)
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
-	}
-
-	// Validate includeWhen expressions - they can only reference schema and must return bool
-	err = validateIncludeWhenExpressions(resources, schemas["schema"])
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate includeWhen expressions: %w", err)
-	}
-
-	// Validate readyWhen expressions - they can only reference their own resource and must return bool
-	err = validateReadyWhenExpressions(resources, schemas)
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate readyWhen expressions: %w", err)
-	}
-
+	// Ensure the graph is acyclic and get the topological order of resources.
 	topologicalOrder, err := dag.TopologicalSort()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get topological order: %w", err)
+	}
+
+	// Now that we know all resources are properly declared and dependencies are valid,
+	// we can perform type checking on the CEL expressions.
+
+	// Create a typed CEL environment with all resource schemas for template expressions
+	templatesEnv, err := krocel.TypedEnvironment(schemas)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
+	}
+
+	// Create a CEL environment with only "schema" for includeWhen expressions
+	var schemaEnv *cel.Env
+	if schemas["schema"] != nil {
+		schemaEnv, err = krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemas["schema"]})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
+		}
+	}
+
+	// Validate all CEL expressions for each resource node
+	for _, resource := range resources {
+		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id]); err != nil {
+			return nil, fmt.Errorf("failed to validate node %q: %w", resource.id, err)
+		}
 	}
 
 	resourceGraphDefinition := &Graph{
@@ -315,7 +321,7 @@ func (b *Builder) buildRGResource(
 		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
-	var resourceVariables []*variable.ResourceField
+	var templateVariables []*variable.ResourceField
 
 	// TODO(michaelhtm): CRDs are not supported for extraction currently
 	// implement new logic specific to CRDs
@@ -334,7 +340,7 @@ func (b *Builder) buildRGResource(
 			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
 		for _, fieldDescriptor := range fieldDescriptors {
-			resourceVariables = append(resourceVariables, &variable.ResourceField{
+			templateVariables = append(templateVariables, &variable.ResourceField{
 				// Assume variables are static; we'll validate them later
 				Kind:            variable.ResourceVariableKindStatic,
 				FieldDescriptor: fieldDescriptor,
@@ -365,7 +371,7 @@ func (b *Builder) buildRGResource(
 		gvr:                    mapping.Resource,
 		schema:                 resourceSchema,
 		originalObject:         &unstructured.Unstructured{Object: resourceObject},
-		variables:              resourceVariables,
+		variables:              templateVariables,
 		readyWhenExpressions:   readyWhen,
 		includeWhenExpressions: includeWhen,
 		namespaced:             mapping.Scope.Name() == meta.RESTScopeNameNamespace,
@@ -410,8 +416,8 @@ func (b *Builder) buildDependencyGraph(
 	}
 
 	for _, resource := range resources {
-		for _, resourceVariable := range resource.variables {
-			for _, expression := range resourceVariable.Expressions {
+		for _, templateVariable := range resource.variables {
+			for _, expression := range templateVariable.Expressions {
 				// We need to extract the dependencies from the expression.
 				resourceDependencies, isStatic, err := extractDependencies(env, expression, resourceNames)
 				if err != nil {
@@ -420,14 +426,14 @@ func (b *Builder) buildDependencyGraph(
 
 				// Static until proven dynamic.
 				//
-				// This reads as: If the expression is dynamic and the resource variable is
-				// static, then we need to mark the resource variable as dynamic.
-				if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
-					resourceVariable.Kind = variable.ResourceVariableKindDynamic
+				// This reads as: If the expression is dynamic and the template variable is
+				// static, then we need to mark the template variable as dynamic.
+				if !isStatic && templateVariable.Kind == variable.ResourceVariableKindStatic {
+					templateVariable.Kind = variable.ResourceVariableKindDynamic
 				}
 
 				resource.addDependencies(resourceDependencies...)
-				resourceVariable.AddDependencies(resourceDependencies...)
+				templateVariable.AddDependencies(resourceDependencies...)
 				// We need to add the dependencies to the graph.
 				if err := directedAcyclicGraph.AddDependencies(resource.id, resourceDependencies); err != nil {
 					return nil, err
@@ -605,31 +611,17 @@ func buildStatusSchema(
 			// Single expression - must infer type from expression output
 			expression := fieldDescriptor.Expressions[0]
 
-			parsedAST, issues := env.Parse(expression)
-			if issues != nil && issues.Err() != nil {
-				return nil, nil, fmt.Errorf("failed to parse status expression %q at path %q: %w",
-					expression, fieldDescriptor.Path, issues.Err())
-			}
-
-			checkedAST, issues := env.Check(parsedAST)
-			if issues != nil && issues.Err() != nil {
-				return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w",
-					expression, fieldDescriptor.Path, issues.Err())
+			checkedAST, err := parseAndCheckCELExpression(env, expression)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 			}
 
 			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
 		} else {
 			for _, expression := range fieldDescriptor.Expressions {
-				parsedAST, issues := env.Parse(expression)
-				if issues != nil && issues.Err() != nil {
-					return nil, nil, fmt.Errorf("failed to parse status expression %q at path %q: %w",
-						expression, fieldDescriptor.Path, issues.Err())
-				}
-
-				checkedAST, issues := env.Check(parsedAST)
-				if issues != nil && issues.Err() != nil {
-					return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w",
-						expression, fieldDescriptor.Path, issues.Err())
+				checkedAST, err := parseAndCheckCELExpression(env, expression)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 				}
 
 				outputType := checkedAST.OutputType()
@@ -682,72 +674,70 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	return dependencies, isStatic, nil
 }
 
-// validateResourceCELExpressions validates the CEL expressions in the
-// resources against other resources defined in the resource graph definition.
-//
-// This function uses CEL type checking to validate that expressions reference
-// valid fields and return the expected types based on the OpenAPI schemas.
-func validateResourceCELExpressions(
-	resources map[string]*Resource,
-	instance *Resource,
-	schemas map[string]*spec.Schema,
-) error {
-	env, err := krocel.TypedEnvironment(schemas)
-	if err != nil {
-		return fmt.Errorf("failed to create typed CEL environment: %w", err)
+// validateNode validates all CEL expressions for a single resource node:
+// - Template expressions (resource field values)
+// - includeWhen expressions (conditional resource creation)
+// - readyWhen expressions (resource readiness conditions)
+func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema) error {
+	// Validate template expressions
+	if err := validateTemplateExpressions(templatesEnv, resource); err != nil {
+		return err
 	}
 
-	for _, resource := range resources {
-		for _, resourceVariable := range resource.variables {
-			if len(resourceVariable.Expressions) == 1 {
-				expression := resourceVariable.Expressions[0]
+	// Validate includeWhen expressions if present
+	if len(resource.includeWhenExpressions) > 0 {
+		if err := validateIncludeWhenExpressions(schemaEnv, resource); err != nil {
+			return err
+		}
+	}
 
-				parsedAST, issues := env.Parse(expression)
-				if issues != nil && issues.Err() != nil {
-					return fmt.Errorf(
-						"failed to parse expression %q in resource %q at path %q: %w",
-						expression, resource.id, resourceVariable.Path, issues.Err(),
-					)
-				}
+	// Validate readyWhen expressions if present
+	if len(resource.readyWhenExpressions) > 0 {
+		// Create a CEL environment with only this resource's schema available
+		resourceEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{resource.id: resourceSchema})
+		if err != nil {
+			return fmt.Errorf("failed to create CEL environment for readyWhen validation: %w", err)
+		}
 
-				checkedAST, issues := env.Check(parsedAST)
-				if issues != nil && issues.Err() != nil {
-					return fmt.Errorf(
-						"failed to type-check expression %q in resource %q at path %q: %w",
-						expression, resource.id, resourceVariable.Path, issues.Err(),
-					)
+		if err := validateReadyWhenExpressions(resourceEnv, resource); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateTemplateExpressions validates CEL template expressions for a single resource.
+// It type-checks that expressions reference valid fields and return the expected types
+// based on the OpenAPI schemas.
+func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
+	for _, templateVariable := range resource.variables {
+		if len(templateVariable.Expressions) == 1 {
+			// Single expression - validate against expected types
+			expression := templateVariable.Expressions[0]
+
+			checkedAST, err := parseAndCheckCELExpression(env, expression)
+			if err != nil {
+				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
+			}
+
+			outputType := checkedAST.OutputType()
+			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
+				return err
+			}
+		} else if len(templateVariable.Expressions) > 1 {
+			// Multiple expressions - all must be strings for concatenation
+			for _, expression := range templateVariable.Expressions {
+				checkedAST, err := parseAndCheckCELExpression(env, expression)
+				if err != nil {
+					return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
 				}
 
 				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, resourceVariable.ExpectedType, expression, resource.id, resourceVariable.Path); err != nil {
+				if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
 					return err
 				}
-			} else if len(resourceVariable.Expressions) > 1 {
-				// multiple expressions - all must be strings for concatenation
-				for _, expression := range resourceVariable.Expressions {
-					parsedAST, issues := env.Parse(expression)
-					if issues != nil && issues.Err() != nil {
-						return fmt.Errorf(
-							"failed to parse expression %q in resource %q at path %q: %w",
-							expression, resource.id, resourceVariable.Path, issues.Err(),
-						)
-					}
-
-					checkedAST, issues := env.Check(parsedAST)
-					if issues != nil && issues.Err() != nil {
-						return fmt.Errorf(
-							"failed to type-check expression %q in resource %q at path %q: %w",
-							expression, resource.id, resourceVariable.Path, issues.Err(),
-						)
-					}
-
-					outputType := checkedAST.OutputType()
-					if err := validateExpressionType(outputType, cel.StringType, expression, resource.id, resourceVariable.Path); err != nil {
-						return err
-					}
-				}
 			}
-
 		}
 	}
 	return nil
@@ -760,8 +750,8 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 		return nil
 	}
 
-	// "dyn" is a special case. output type matches anything (x-kubernetes-int-or-string, etc)
-	if outputType.String() == "dyn" {
+	// Check output is dynamic - always valid
+	if outputType.String() == cel.DynType.String() {
 		return nil
 	}
 
@@ -781,25 +771,29 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 	)
 }
 
+// parseAndCheckCELExpression parses and type-checks a CEL expression.
+// Returns the checked AST on success, or the raw CEL error on failure.
+// Callers should wrap the error with appropriate context.
+func parseAndCheckCELExpression(env *cel.Env, expression string) (*cel.Ast, error) {
+	parsedAST, issues := env.Parse(expression)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+
+	checkedAST, issues := env.Check(parsedAST)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+
+	return checkedAST, nil
+}
+
 // validateConditionExpression validates a single condition expression (includeWhen or readyWhen).
 // It parses, type-checks, and verifies the expression returns bool or optional_type(bool).
 func validateConditionExpression(env *cel.Env, expression, conditionType, resourceID string) error {
-	// Parse the expression
-	parsedAST, issues := env.Parse(expression)
-	if issues != nil && issues.Err() != nil {
-		return fmt.Errorf(
-			"failed to parse %s expression %q in resource %q: %w",
-			conditionType, expression, resourceID, issues.Err(),
-		)
-	}
-
-	// Type-check the expression
-	checkedAST, issues := env.Check(parsedAST)
-	if issues != nil && issues.Err() != nil {
-		return fmt.Errorf(
-			"failed to type-check %s expression %q in resource %q: %w",
-			conditionType, expression, resourceID, issues.Err(),
-		)
+	checkedAST, err := parseAndCheckCELExpression(env, expression)
+	if err != nil {
+		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expression, resourceID, err)
 	}
 
 	// Verify the expression returns bool or optional_type(bool)
@@ -817,56 +811,23 @@ func validateConditionExpression(env *cel.Env, expression, conditionType, resour
 // validateIncludeWhenExpressions validates that includeWhen expressions:
 // 1. Only reference the "schema" variable
 // 2. Return bool or optional_type(bool)
-func validateIncludeWhenExpressions(resources map[string]*Resource, schemaSpec *spec.Schema) error {
-	if schemaSpec == nil {
-		return nil
-	}
-
-	// Create a CEL environment with only "schema" available
-	env, err := krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemaSpec})
-	if err != nil {
-		return fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
-	}
-
-	for _, resource := range resources {
-		for _, expression := range resource.includeWhenExpressions {
-			if err := validateConditionExpression(env, expression, "includeWhen", resource.id); err != nil {
-				return err
-			}
+// validateIncludeWhenExpressions validates includeWhen expressions for a single resource.
+func validateIncludeWhenExpressions(env *cel.Env, resource *Resource) error {
+	for _, expression := range resource.includeWhenExpressions {
+		if err := validateConditionExpression(env, expression, "includeWhen", resource.id); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
-// validateReadyWhenExpressions validates that readyWhen expressions:
-// 1. Only reference the resource they are attached to
-// 2. Return bool or optional_type(bool)
-func validateReadyWhenExpressions(resources map[string]*Resource, schemas map[string]*spec.Schema) error {
-	for _, resource := range resources {
-		if len(resource.readyWhenExpressions) == 0 {
-			continue
-		}
-
-		// Create a CEL environment with only this resource's schema available
-		resourceSchema := schemas[resource.id]
-		if resourceSchema == nil {
-			// If no schema is available, we can't validate - skip
-			continue
-		}
-
-		env, err := krocel.TypedEnvironment(map[string]*spec.Schema{resource.id: resourceSchema})
-		if err != nil {
-			return fmt.Errorf("failed to create CEL environment for readyWhen validation: %w", err)
-		}
-
-		for _, expression := range resource.readyWhenExpressions {
-			if err := validateConditionExpression(env, expression, "readyWhen", resource.id); err != nil {
-				return err
-			}
+// validateReadyWhenExpressions validates readyWhen expressions for a single resource.
+func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
+	for _, expression := range resource.readyWhenExpressions {
+		if err := validateConditionExpression(env, expression, "readyWhen", resource.id); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
@@ -874,6 +835,7 @@ func validateReadyWhenExpressions(resources map[string]*Resource, schemas map[st
 func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	crdCopy := crd.DeepCopy()
 
+	// TODO(a-hilaly) expand this function when we start support CRD upgrades.
 	if len(crdCopy.Spec.Versions) != 1 || crdCopy.Spec.Versions[0].Schema == nil {
 		panic("Expected CRD to have exactly one version with schema defined")
 	}

@@ -842,9 +842,20 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 
 	openAPISchema := crdCopy.Spec.Versions[0].Schema.OpenAPIV3Schema
 
-	if openAPISchema.Properties != nil {
-		delete(openAPISchema.Properties, "status")
+	if openAPISchema.Properties == nil {
+		openAPISchema.Properties = make(map[string]extv1.JSONSchemaProps)
 	}
 
-	return schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
+	delete(openAPISchema.Properties, "status")
+
+	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
+	if err != nil {
+		return nil, err
+	}
+
+	if specSchema.Properties == nil {
+		specSchema.Properties = make(map[string]spec.Schema)
+	}
+	specSchema.Properties["metadata"] = schema.ObjectMetaSchema
+	return specSchema, nil
 }

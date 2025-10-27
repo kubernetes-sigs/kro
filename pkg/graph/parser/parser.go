@@ -278,8 +278,10 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 	if ok {
 		// For CEL expressions, get the CEL type from the schema
 		expectedType := getCelType(schema)
+		expr := strings.TrimPrefix(field, "${")
+		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions:          []string{strings.Trim(field, "${}")},
+			Expressions:          []string{expr},
 			ExpectedType:         expectedType,
 			Path:                 path,
 			StandaloneExpression: true,

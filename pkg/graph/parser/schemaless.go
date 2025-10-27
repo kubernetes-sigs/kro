@@ -58,8 +58,10 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			return nil, err
 		}
 		if ok {
+			expr := strings.TrimPrefix(field, "${")
+			expr = strings.TrimSuffix(expr, "}")
 			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-				Expressions:          []string{strings.Trim(field, "${}")},
+				Expressions:          []string{expr},
 				ExpectedType:         cel.DynType, // No schema, so we use dynamic type
 				Path:                 path,
 				StandaloneExpression: true,

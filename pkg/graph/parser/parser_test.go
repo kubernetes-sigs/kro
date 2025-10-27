@@ -1645,3 +1645,128 @@ func TestCollectTypesFromSubSchemas(t *testing.T) {
 		})
 	}
 }
+
+// TestEmptyBracesInExpressions tests the regression where strings.Trim() was
+// incorrectly stripping {} from expressions. This bug affected ternary expressions
+// with empty map literals like: condition ? value : {}
+func TestEmptyBracesInExpressions(t *testing.T) {
+	testCases := []struct {
+		name             string
+		resource         map[string]interface{}
+		schema           *spec.Schema
+		expectedExprPath string // Path where we expect to find the expression
+		expectedExpr     string // The exact expression we expect (without ${})
+	}{
+		{
+			name: "Ternary with empty map literal",
+			resource: map[string]interface{}{
+				"annotations": "${includeAnnotations ? annotations : {}}",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"annotations": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "annotations",
+			expectedExpr:     "includeAnnotations ? annotations : {}",
+		},
+		{
+			name: "Complex ternary with has() and empty map",
+			resource: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": "${has(schema.annotations) && includeAnnotations ? schema.annotations : {}}",
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"metadata": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"annotations": {
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											AdditionalProperties: &spec.SchemaOrBool{
+												Allows: true,
+												Schema: &spec.Schema{
+													SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "metadata.annotations",
+			expectedExpr:     "has(schema.annotations) && includeAnnotations ? schema.annotations : {}",
+		},
+		{
+			name: "Ternary with empty maps on both sides",
+			resource: map[string]interface{}{
+				"config": "${condition ? {} : {}}",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"config": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "config",
+			expectedExpr:     "condition ? {} : {}",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields, err := ParseResource(tc.resource, tc.schema)
+			if err != nil {
+				t.Fatalf("ParseResource() error = %v", err)
+			}
+
+			// Find the field descriptor for the expected path
+			found := false
+			for _, field := range fields {
+				if field.Path == tc.expectedExprPath {
+					found = true
+					if len(field.Expressions) != 1 {
+						t.Errorf("Expected 1 expression, got %d", len(field.Expressions))
+						continue
+					}
+					if field.Expressions[0] != tc.expectedExpr {
+						t.Errorf("Expression mismatch:\ngot:  %q\nwant: %q", field.Expressions[0], tc.expectedExpr)
+					}
+					if !field.StandaloneExpression {
+						t.Error("Expected StandaloneExpression to be true")
+					}
+				}
+			}
+			if !found {
+				t.Errorf("Expected to find field descriptor for path %q", tc.expectedExprPath)
+			}
+		})
+	}
+}

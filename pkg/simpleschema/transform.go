@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -84,8 +85,9 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 		// Add dependencies to the DAG and check for cycles
 		err := dagInstance.AddDependencies(k, dependencies)
 		if err != nil {
-			if cycleErr, isCycle := err.(*dag.CycleError[string]); isCycle {
-				return fmt.Errorf("failed to load type %s due to cyclic dependency. Please remove the cyclic dependency: %w", k, cycleErr)
+			var cycleErr *dag.CycleError[string]
+			if errors.As(err, &cycleErr) {
+				return fmt.Errorf("failed to load type %s due to cyclic dependency. Please remove the cyclic dependency: %w", k, err)
 			}
 			return err
 		}

@@ -79,6 +79,10 @@ func isSliceType(s string) bool {
 	return strings.HasPrefix(s, "[]")
 }
 
+func isObjectType(s string) bool {
+	return s == "object"
+}
+
 // parseMapType parses a map type string and returns the key and value types.
 func parseMapType(s string) (string, string, error) {
 	if !strings.HasPrefix(s, "map[") {

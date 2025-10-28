@@ -8,12 +8,19 @@ spec:
       Person:
         name: string
         role: "Role"
+        colleagues: "map[string]Role"
+        address:
+          street: string
+          city: string
+          state: string
+          zip: string
       Division:
         name: string
         employees: "[]Person"
       Role:
         name: string
         seniority: string
+        aliases: "[]string"
     spec:
       name: string
       namespace: string | default=default
@@ -37,5 +44,5 @@ spec:
             ${schema.spec.management.map(e, e.name + " (" + e.role.name + ")").join(", ")}
           divisions: |
             ${schema.spec.divisions.map(d, d.name + ": " + d.employees.map(e, e.name).join(", ")).join("\n")}
-          roles: |
-            ${schema.spec.roles.map(r, r.name + " (" + r.seniority + ")").join(", ")}
+          # roles: |
+          #   ${schema.spec.roles.map(r, r.name + " (" + r.seniority.join(", ") + ")").join(", ")}

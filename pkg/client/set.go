@@ -43,8 +43,8 @@ type SetInterface interface {
 	// RESTConfig returns a copy of the underlying REST config
 	RESTConfig() *rest.Config
 
-	// CRD returns a new CRDInterface instance
-	CRD(cfg CRDWrapperConfig) CRDInterface
+	// CRD returns a new CustomResourceDefinitionInterface instance
+	CRD() apiextensionsv1.CustomResourceDefinitionInterface
 
 	// WithImpersonation returns a new client that impersonates the given user
 	WithImpersonation(user string) (SetInterface, error)
@@ -166,13 +166,9 @@ func (c *Set) RESTMapper() meta.RESTMapper {
 	return c.restMapper
 }
 
-// CRD returns a new CRDInterface instance
-func (c *Set) CRD(cfg CRDWrapperConfig) CRDInterface {
-	if cfg.Client == nil {
-		cfg.Client = c.apiExtensionsV1
-	}
-
-	return newCRDWrapper(cfg)
+// CRD returns a new CustomResourceDefinitionInterface instance
+func (c *Set) CRD() apiextensionsv1.CustomResourceDefinitionInterface {
+	return c.apiExtensionsV1.CustomResourceDefinitions()
 }
 
 // WithImpersonation returns a new client that impersonates the given user

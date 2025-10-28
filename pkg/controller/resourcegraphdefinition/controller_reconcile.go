@@ -19,7 +19,11 @@ import (
 	"fmt"
 	"time"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -28,6 +32,11 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
+)
+
+const (
+	crdNotEstablishedRequeueDuration = 500 * time.Millisecond
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
@@ -62,15 +71,19 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+	established, err := r.reconcileResourceGraphDefinitionCRD(ctx, crd)
+	if err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
-	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
-		mark.KindUnready(err.Error())
-	} else {
-		mark.KindReady(crd.Status.AcceptedNames.Kind)
+	if !established {
+		log.V(1).Info("CRD not yet established, requeuing")
+
+		mark.KindUnready("CRD exists but not yet established")
+		// CRD establishment is async, requeue to check readiness
+		return processedRGD.TopologicalOrder, resourcesInfo, requeue.NeededAfter(nil, crdNotEstablishedRequeueDuration)
 	}
+	mark.KindReady(crd.Status.AcceptedNames.Kind)
 
 	// Setup and start microcontroller
 	gvr := processedRGD.Instance.GetGroupVersionResource()
@@ -153,12 +166,44 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 	}
 }
 
-// reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
-		return newCRDError(err)
+// reconcileResourceGraphDefinitionCRD checks if the CRD exists and is established, creating it if necessary
+// returns a boolean indicating if the CRD is established or not. If error is not nil, the CRD doesn't exist at all.
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) (bool, error) {
+	existing, err := r.clientSet.CRD().Get(ctx, crd.Name, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+
+		// CRD doesn't exist, create it
+		_, err = r.clientSet.CRD().Create(ctx, crd, metav1.CreateOptions{})
+		if err != nil {
+			return false, newCRDError(err)
+		}
+
+		// CRDs will need time to be established after creation
+		// We optimistically return not ready here; the next reconciliation loop
+		// will check readiness
+		return false, nil
 	}
-	return nil
+
+	// Verify ownership before attempting any updates
+	if err := r.verifyCRDOwnership(existing, crd); err != nil {
+		return false, newCRDError(err)
+	}
+
+	if !equality.Semantic.DeepEqual(existing.Spec, crd.Spec) {
+		// CRD exists, ensure it's up to date
+		_, err = r.clientSet.CRD().Update(ctx, crd, metav1.UpdateOptions{})
+		if err != nil {
+			return false, newCRDError(err)
+		}
+		// Spec update is async, requeue to check readiness
+		return false, nil
+	}
+
+	// CRD exists, check if it's ready (Established condition)
+	return isCRDEstablished(existing), nil
 }
 
 // reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
@@ -191,3 +236,28 @@ func (e *microControllerError) Unwrap() error { return e.err }
 func newGraphError(err error) error           { return &graphError{err} }
 func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
+
+func isCRDEstablished(crd *apiextensionsv1.CustomResourceDefinition) bool {
+	for _, cond := range crd.Status.Conditions {
+		if cond.Type == apiextensionsv1.Established && cond.Status == apiextensionsv1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyCRDOwnership checks that an existing CRD is owned by KRO and by the same
+// ResourceGraphDefinition that is attempting to update it. This prevents conflicts
+// where multiple ResourceGraphDefinitions try to manage the same CRD, or where a
+// CRD created outside of KRO is accidentally overwritten.
+func (r *ResourceGraphDefinitionReconciler) verifyCRDOwnership(existingCRD *v1.CustomResourceDefinition, newCRD *v1.CustomResourceDefinition) error {
+	if !metadata.IsKROOwned(&existingCRD.ObjectMeta) {
+		return fmt.Errorf("conflict detected: CRD %s already exists and is not owned by KRO", existingCRD.Name)
+	}
+
+	if !metadata.HasMatchingKROOwner(existingCRD.ObjectMeta, newCRD.ObjectMeta) {
+		return fmt.Errorf("conflict detected: CRD %s has ownership by another ResourceGraphDefinition", existingCRD.Name)
+	}
+
+	return nil
+}

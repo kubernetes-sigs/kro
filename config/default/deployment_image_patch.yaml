@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kro
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+        app.kubernetes.io/instance: kro
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/version: "0.4.1"
+        app.kubernetes.io/managed-by: kustomize
+        app.kubernetes.io/instance: kro

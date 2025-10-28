@@ -30,7 +30,17 @@ patches:
 # Protect the /metrics endpoint by putting it behind auth.
 # If you want your controller-manager to expose the /metrics
 # endpoint w/o any authn/z, please comment the following line.
-- path: manager_auth_proxy_patch.yaml
+- path: deployment_image_patch.yaml
+
+images:
+- name: ghcr.io/kro-run/kro/controller
+  newName: ghcr.io/kro-run/kro/controller
+  newTag: "0.4.1"
+
+commonLabels:
+  app.kubernetes.io/version: "0.4.1"
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/instance: kro
 
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml

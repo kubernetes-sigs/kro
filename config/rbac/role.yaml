@@ -1,32 +1,25 @@
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: manager-role
+  annotations:
+    kubernetes.io/description: |
+      This ClusterRole grants access for the kro controller.
+
+      The kro installation comes with enough for the controller to run, and start watching the relevant resources
+      (e.g. ResourceGraphDefinitions), but in order to allow kro to create and manage other types of resources you
+      must manually grant access to those separately.
+
+      The easiest way to accomplish this is to create a new ClusterRole with the label `rbac.kro.run/aggregate-to-controller: "true"`
+      which will be automatically aggregated into this one.
+  name: kro-cluster-role
+  labels:
+    app.kubernetes.io/instance: kro
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: kro
 rules:
 - apiGroups:
-  - kro.run
+  - "*"
   resources:
-  - resourcegraphdefinitions
+  - "*"
   verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - kro.run
-  resources:
-  - resourcegraphdefinitions/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - kro.run
-  resources:
-  - resourcegraphdefinitions/status
-  verbs:
-  - get
-  - patch
-  - update
+  - '*'

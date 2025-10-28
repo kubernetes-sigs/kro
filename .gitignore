@@ -40,3 +40,6 @@ TODO.*
 *.envrc*
 *kube-config.yaml*
 # package-lock.json
+
+# VSCode Debug cache files
+**/__debug*

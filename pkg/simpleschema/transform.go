@@ -24,6 +24,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 )
 
@@ -97,28 +98,25 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	// to be processed
 	orderedVertexes, err := dagInstance.TopologicalSort()
 	if err != nil {
-		return fmt.Errorf("failed to sort DAG: %w", err)
+		return fmt.Errorf("failed to get topological order for the types: %w", err)
 	}
 
 	// Build the pre-defined types from the sorted DAG
 	for _, vertex := range orderedVertexes {
-		objValueAtKey, ok := obj[vertex]
-		if !ok {
-			return fmt.Errorf("failed to assert type for vertex %s", vertex)
-		}
+		objValueAtKey, _ := obj[vertex]
 		objMap := map[string]interface{}{
 			vertex: objValueAtKey,
 		}
-		if schemaProps, err := t.buildOpenAPISchema(objMap); err == nil {
-			for propKey, properties := range schemaProps.Properties {
-				required := false
-				if slices.Contains(schemaProps.Required, propKey) {
-					required = true
-				}
-				t.preDefinedTypes[propKey] = predefinedType{Schema: properties, Required: required}
+		schemaProps, err := t.buildOpenAPISchema(objMap)
+		if err != nil {
+			return fmt.Errorf("failed to build pre-defined types schema : %w", err)
+		}
+		for propKey, properties := range schemaProps.Properties {
+			required := false
+			if slices.Contains(schemaProps.Required, propKey) {
+				required = true
 			}
-		} else {
-			return fmt.Errorf("failed to build schema props for %s: %w", vertex, err)
+			t.preDefinedTypes[propKey] = predefinedType{Schema: properties, Required: required}
 		}
 	}
 
@@ -136,7 +134,7 @@ var excludedTypes = map[string]struct{}{
 }
 
 func extractDependenciesFromMap(obj interface{}) []string {
-	var dependencies []string
+	dependencies := sets.Set[string]{}
 
 	// Use a recursive helper function to traverse the map and extract dependencies
 	var parseMap func(map[string]interface{})
@@ -149,7 +147,7 @@ func extractDependenciesFromMap(obj interface{}) []string {
 
 				// Filter out primitive types
 				if _, isExcluded := excludedTypes[trimmed]; !isExcluded {
-					dependencies = append(dependencies, trimmed)
+					dependencies.Insert(trimmed)
 				}
 			case map[string]interface{}:
 				// Recursively parse nested maps
@@ -169,19 +167,7 @@ func extractDependenciesFromMap(obj interface{}) []string {
 		parseMap(rootMap)
 	}
 
-	// Remove duplicates using a set
-	dependencySet := make(map[string]struct{})
-	for _, dep := range dependencies {
-		dependencySet[dep] = struct{}{}
-	}
-
-	// Convert the set back to a slice
-	result := make([]string, 0, len(dependencySet))
-	for dep := range dependencySet {
-		result = append(result, dep)
-	}
-
-	return result
+	return dependencies.UnsortedList()
 }
 
 // buildOpenAPISchema builds an OpenAPI schema from the given object

@@ -8,25 +8,45 @@ spec:
   roles:
     - name: CEO
       seniority: Senior
+      aliases: 
+      - SupremeChief
     - name: CFO
       seniority: Senior
+      aliases: 
+      - MoneyBoss
     - name: Engineer
       seniority: Senior
+      aliases: 
+      - Developer
     - name: Intern
       seniority: Junior
+      aliases: 
+      - Trainee
     - name: Marketer
       seniority: Mid
+      aliases: 
+      - Marketing Specialist
     - name: Social Media Manager
       seniority: Mid
+      aliases: 
+      - Social Media Specialist
   management:
     - name: Mario
       role:
         name: CEO
         seniority: Senior
+      colleagues: 
+        luigi:
+          name: Secretary
+          seniority: Mid
     - name: Luigi
       role:
         name: CFO
         seniority: Senior
+      colleagues: 
+        viktor:
+          name: Assistant
+          seniority: Mid
   divisions:
     - name: Engineering
       employees:
@@ -34,10 +54,19 @@ spec:
           role:
             name: Engineer
             seniority: Senior
+          colleagues: 
+            daisy:
+              name: Engineer
+              seniority: Mid
+              aliases: [DevOps]
         - name: Toad
           role:
             name: Intern
             seniority: Junior
+          colleagues: 
+            tony:
+              name: Intern
+              seniority: Junior
     - name: Marketing
       employees:
         - name: Yoshi

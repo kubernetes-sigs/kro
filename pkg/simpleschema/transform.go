@@ -81,10 +81,13 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 
 	// Build dependencies and construct the schema
 	for k, v := range obj {
-		dependencies := extractDependenciesFromMap(v)
+		dependencies, err := extractDependenciesFromMap(v)
+		if err != nil {
+			return fmt.Errorf("failed to extract dependencies for type %s: %w", k, err)
+		}
 
 		// Add dependencies to the DAG and check for cycles
-		err := dagInstance.AddDependencies(k, dependencies)
+		err = dagInstance.AddDependencies(k, dependencies)
 		if err != nil {
 			var cycleErr *dag.CycleError[string]
 			if errors.As(err, &cycleErr) {
@@ -123,51 +126,87 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	return nil
 }
 
-// Define the set of basic types as
-// defined in https://kro.run/docs/concepts/simple-schema#basic-types
-var excludedTypes = map[string]struct{}{
-	"string":  {},
-	"integer": {},
-	"bool":    {},
-	"float":   {},
-	"object":  {},
+func extractDependenciesFromMap(obj interface{}) (dependencies []string, err error) {
+	dependenciesSet := sets.Set[string]{}
+
+	// Extract dependencies using a helper function
+	if rootMap, ok := obj.(map[string]interface{}); ok {
+		err := parseMap(rootMap, dependenciesSet)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dependenciesSet.UnsortedList(), nil
 }
 
-func extractDependenciesFromMap(obj interface{}) []string {
-	dependencies := sets.Set[string]{}
-
-	// Use a recursive helper function to traverse the map and extract dependencies
-	var parseMap func(map[string]interface{})
-	parseMap = func(m map[string]interface{}) {
-		for _, value := range m {
-			switch v := value.(type) {
-			case string:
-				// Strip array prefixes like "[]"
-				trimmed := strings.TrimPrefix(v, "[]")
-
-				// Filter out primitive types
-				if _, isExcluded := excludedTypes[trimmed]; !isExcluded {
-					dependencies.Insert(trimmed)
-				}
-			case map[string]interface{}:
-				// Recursively parse nested maps
-				parseMap(v)
-			case []interface{}:
-				// Handle slices of types (e.g., []string or [][nested type])
-				for _, elem := range v {
-					if nestedMap, ok := elem.(map[string]interface{}); ok {
-						parseMap(nestedMap)
-					}
-				}
+func handleStringType(v string, dependencies sets.Set[string]) error {
+	// Check if the value is an atomic type
+	if isAtomicType(v) {
+		return nil
+	}
+	// Check if the value is a collection type
+	if isCollectionType(v) {
+		if isSliceType(v) {
+			// It is a slice, we add the type as dependency
+			elementType, err := parseSliceType(v)
+			if err != nil {
+				return fmt.Errorf("Failed to parse slice type %s: %w", v, err)
 			}
+			if !isAtomicType(elementType) {
+				dependencies.Insert(elementType)
+			}
+			return nil
+		} else if isMapType(v) {
+			keyType, valueType, err := parseMapType(v)
+			if err != nil {
+				return fmt.Errorf("Failed to parse map type %s: %w", v, err)
+			}
+			// Only strings are supported as map keys
+			if keyType != keyTypeString {
+				return fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
+			}
+			// If the value is not an atomic type, add to dependencies
+			if !isAtomicType(valueType) {
+				dependencies.Insert(strings.TrimPrefix(valueType, "[]"))
+			}
+			return nil
 		}
 	}
 
-	if rootMap, ok := obj.(map[string]interface{}); ok {
-		parseMap(rootMap)
+	// If the type is object, we do not add any dependency
+	// As unstructured objects are not validated https://kro.run/docs/concepts/simple-schema#unstructured-objects
+	if isObjectType(v) {
+		return nil
 	}
+	// At this point, we have a new custom type, we add it as dependency
+	dependencies.Insert(v)
+	return nil
+}
 
-	return dependencies.UnsortedList()
+func parseMap(m map[string]interface{}, dependencies sets.Set[string]) (err error) {
+
+	for _, value := range m {
+		switch v := value.(type) {
+		case map[string]interface{}:
+			// Recursively parse nested maps
+			if err := parseMap(v, dependencies); err != nil {
+				return err
+			}
+		case []interface{}:
+			// Handle slices of types (e.g., []string or [][nested type])
+			for key, elem := range v {
+				print(key)
+				if nestedMap, ok := elem.(map[string]interface{}); ok {
+					parseMap(nestedMap, dependencies)
+				} else {
+					return fmt.Errorf("unexpected type in slice: %T", elem)
+				}
+			}
+		case string:
+			handleStringType(v, dependencies)
+		}
+	}
+	return nil
 }
 
 // buildOpenAPISchema builds an OpenAPI schema from the given object
@@ -262,7 +301,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
 	}
 	if keyType != keyTypeString {
-		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
+		return nil, fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
 	}
 
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{

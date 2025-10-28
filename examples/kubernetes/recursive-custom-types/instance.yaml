@@ -1,4 +1,3 @@
----
 apiVersion: kro.run/v1alpha1
 kind: CompanyConfig
 metadata:

@@ -44,3 +44,6 @@ TODO.*
 node_modules/
 
 tools/lsp/client/out/
+
+# VSCode Debug cache files
+**/__debug*

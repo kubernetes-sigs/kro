@@ -140,27 +140,6 @@ func (e *Environment) initializeClients() error {
 }
 
 func (e *Environment) setupController() error {
-	dc := dynamiccontroller.NewDynamicController(
-		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
-		dynamiccontroller.Config{
-			Workers:         3,
-			ResyncPeriod:    0, // disabled resync
-			QueueMaxRetries: 20,
-			MinRetryDelay:   200 * time.Millisecond,
-			MaxRetryDelay:   1000 * time.Second,
-			RateLimit:       10,
-			BurstLimit:      100,
-		},
-		e.ClientSet.Metadata())
-
-	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
-		e.ClientSet,
-		e.ControllerConfig.AllowCRDDeletion,
-		dc,
-		e.GraphBuilder,
-		1,
-	)
-
 	var err error
 	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
@@ -173,6 +152,28 @@ func (e *Environment) setupController() error {
 	if err != nil {
 		return fmt.Errorf("creating manager: %w", err)
 	}
+	e.ClientSet.SetRESTMapper(e.CtrlManager.GetRESTMapper())
+
+	dc := dynamiccontroller.NewDynamicController(
+		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
+		dynamiccontroller.Config{
+			Workers:         3,
+			ResyncPeriod:    0, // disabled resync
+			QueueMaxRetries: 20,
+			MinRetryDelay:   200 * time.Millisecond,
+			MaxRetryDelay:   1000 * time.Second,
+			RateLimit:       10,
+			BurstLimit:      100,
+		},
+		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
+
+	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
+		e.ClientSet,
+		e.ControllerConfig.AllowCRDDeletion,
+		dc,
+		e.GraphBuilder,
+		1,
+	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {
 		return fmt.Errorf("adding dynamic controller to manager: %w", err)

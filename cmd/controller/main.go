@@ -187,7 +187,7 @@ func main() {
 		MaxRetryDelay:   maxRetryDelay,
 		RateLimit:       rateLimit,
 		BurstLimit:      burstLimit,
-	}, set.Metadata())
+	}, set.Metadata(), set.RESTMapper())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig, set.HTTPClient(),

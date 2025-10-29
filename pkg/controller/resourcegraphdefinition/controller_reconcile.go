@@ -185,7 +185,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	handler dynamiccontroller.Handler,
 	resourceGVRsToWatch []schema.GroupVersionResource,
 ) error {
-	err := r.dynamicController.Register(ctx, *gvr, handler, resourceGVRsToWatch)
+	err := r.dynamicController.Register(ctx, *gvr, handler, resourceGVRsToWatch...)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

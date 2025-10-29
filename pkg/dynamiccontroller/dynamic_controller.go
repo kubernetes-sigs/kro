@@ -150,6 +150,7 @@ type DynamicController struct {
 	log    logr.Logger
 
 	client k8smetadata.Interface
+	mapper meta.RESTMapper
 
 	// Map of active informers per GVR.
 	// Guarded by mu.
@@ -176,6 +177,7 @@ func NewDynamicController(
 	log logr.Logger,
 	config Config,
 	kubeClient k8smetadata.Interface,
+	mapper meta.RESTMapper,
 ) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
@@ -183,6 +185,7 @@ func NewDynamicController(
 		config:        config,
 		log:           logger,
 		client:        kubeClient,
+		mapper:        mapper,
 		watches:       make(map[schema.GroupVersionResource]*internal.LazyInformer),
 		registrations: make(map[schema.GroupVersionResource]*registration),
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
@@ -333,7 +336,7 @@ func (dc *DynamicController) Register(
 	_ context.Context,
 	parent schema.GroupVersionResource,
 	instanceHandler Handler,
-	resourceGVRsToWatch []schema.GroupVersionResource,
+	resourceGVRsToWatch ...schema.GroupVersionResource,
 ) error {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
@@ -357,7 +360,8 @@ func (dc *DynamicController) Register(
 	// kick reconciliation for existing parent objects
 	if w, ok := dc.watches[parent]; ok && !w.Informer().IsStopped() {
 		// Use informer cache if running to repopulate the queue.
-		for _, obj := range w.Informer().GetStore().List() {
+		objects := w.Informer().GetStore().List()
+		for _, obj := range objects {
 			dc.enqueueParent(parent, obj, "update")
 		}
 	}
@@ -556,7 +560,11 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 			return
 		}
 
-		parentGVK := metadata.GVRtoGVK(parent)
+		parentGVK, err := dc.mapper.KindFor(parent)
+		if err != nil {
+			dc.log.Error(err, "failed to get parent GVK", "parent", parent)
+			return
+		}
 		pom := &metav1.PartialObjectMetadata{}
 		pom.SetGroupVersionKind(parentGVK)
 		pom.SetName(name)

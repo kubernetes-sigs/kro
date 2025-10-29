@@ -110,19 +110,22 @@ func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.Resour
 
 	// Start informer if first handler
 	if len(w.handlers) == 1 {
-		go func(done <-chan struct{}, inf cache.SharedIndexInformer) {
-			inf.Run(done)
-		}(w.done, w.informer)
+		go w.run()
 
 		if !cache.WaitForCacheSync(w.done, w.informer.HasSynced) {
 			w.log.Error(fmt.Errorf("cache sync failed"), "lazy informer sync failure", "gvr", w.gvr)
 			w.cancel()
+			w.cancel = nil
 			w.informer = nil
 			w.handlers = make(map[string]cache.ResourceEventHandlerRegistration)
 			return fmt.Errorf("failed to sync informer for %s", w.gvr)
 		}
 	}
 	return nil
+}
+
+func (w *LazyInformer) run() {
+	w.informer.Run(w.done)
 }
 
 // RemoveHandler unregisters a handler. Returns true if informer was stopped.
@@ -143,6 +146,8 @@ func (w *LazyInformer) RemoveHandler(id string) (bool, error) {
 
 	if len(w.handlers) == 0 {
 		w.cancel()
+		<-w.done
+		w.cancel = nil
 		w.informer = nil
 		return true, nil
 	}

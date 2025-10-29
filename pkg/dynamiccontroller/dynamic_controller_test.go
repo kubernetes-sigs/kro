@@ -159,63 +159,60 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 	require.NoError(t, ctrl.Register(ctx, deployGVR, handler, secretGVR))
 
 	// Simulate Secret update triggering ConfigMap reconciliation
-	t.Run("child update", func(t *testing.T) {
-		// first propagate a modification (like adding a finalizer, without adding any ownership)
-		psecret.SetFinalizers(append(psecret.GetFinalizers(), "test"))
-		secretUpdates <- watch.Event{
-			Type:   watch.Modified,
-			Object: psecret,
-		}
-		psecret.SetLabels(map[string]string{
-			metadata.OwnedLabel:             "true",
-			metadata.InstanceLabel:          deploy.GetName(),
-			metadata.InstanceNamespaceLabel: deploy.GetNamespace(),
-		})
-		secretUpdates <- watch.Event{
-			Type:   watch.Modified,
-			Object: psecret,
-		}
-
-		// Wait for initial reconciliation of parent
-		require.Eventually(t, func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 1
-		}, 5*time.Second, 100*time.Millisecond)
+	// first propagate a modification (like adding a finalizer, without adding any ownership)
+	psecret.SetFinalizers(append(psecret.GetFinalizers(), "test"))
+	secretUpdates <- watch.Event{
+		Type:   watch.Modified,
+		Object: psecret,
+	}
+	psecret.SetLabels(map[string]string{
+		metadata.OwnedLabel:             "true",
+		metadata.InstanceLabel:          deploy.GetName(),
+		metadata.InstanceNamespaceLabel: deploy.GetNamespace(),
 	})
+	secretUpdates <- watch.Event{
+		Type:   watch.Modified,
+		Object: psecret,
+	}
 
-	t.Run("parent update", func(t *testing.T) {
-		pdeploy = pdeploy.DeepCopy()
-		pdeploy.SetGeneration(deploy.GetGeneration() + 1)
-		deploymentUpdates <- watch.Event{
-			Type:   watch.Modified,
-			Object: pdeploy,
-		}
-		// Wait for parent to reconcile again due to parent generation change
-		require.Eventually(t, func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 2
-		}, 5*time.Second, 100*time.Millisecond)
-	})
-
-	t.Run("final state", func(t *testing.T) {
+	// Wait for initial reconciliation of parent
+	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		assert.GreaterOrEqual(t, reconciled["default/test-configmap"], 2)
+		return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 1
+	}, 5*time.Second, 100*time.Millisecond)
 
-		_, registrationExists := ctrl.registrations[deployGVR]
-		assert.True(t, registrationExists)
-		_, watchExists := ctrl.watches[deployGVR]
-		assert.True(t, watchExists)
+	pdeploy = pdeploy.DeepCopy()
+	pdeploy.Labels = map[string]string{
+		"some-label": "some-value",
+	}
+	pdeploy.SetGeneration(deploy.GetGeneration() + 1)
+	deploymentUpdates <- watch.Event{
+		Type:   watch.Modified,
+		Object: pdeploy,
+	}
+	// Wait for parent to reconcile again due to parent generation change
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 2
+	}, 5*time.Second, 100*time.Millisecond)
 
-		// Deregister and verify cleanup
-		require.NoError(t, ctrl.Deregister(ctx, deployGVR))
-		_, registrationExists = ctrl.registrations[deployGVR]
-		assert.False(t, registrationExists)
-		_, watchExists = ctrl.watches[deployGVR]
-		assert.False(t, watchExists)
-	})
+	mu.Lock()
+	defer mu.Unlock()
+	assert.GreaterOrEqual(t, reconciled["default/test-configmap"], 2)
+
+	_, registrationExists := ctrl.registrations[deployGVR]
+	assert.True(t, registrationExists)
+	_, watchExists := ctrl.watches[deployGVR]
+	assert.True(t, watchExists)
+
+	// Deregister and verify cleanup
+	require.NoError(t, ctrl.Deregister(ctx, deployGVR))
+	_, registrationExists = ctrl.registrations[deployGVR]
+	assert.False(t, registrationExists)
+	_, watchExists = ctrl.watches[deployGVR]
+	assert.False(t, watchExists)
 }
 
 func TestNewDynamicController(t *testing.T) {

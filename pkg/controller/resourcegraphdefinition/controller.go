@@ -20,14 +20,11 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -109,50 +106,18 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
-		WatchesMetadata(
-			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
-			builder.WithPredicates(predicate.Funcs{
-				UpdateFunc: func(e event.UpdateEvent) bool {
-					return true
-				},
-				CreateFunc: func(e event.CreateEvent) bool {
-					return false
-				},
-				DeleteFunc: func(e event.DeleteEvent) bool {
-					return false
-				},
-			}),
-		).
-		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
-}
-
-// findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
-// that owns the given CRD. It is used to trigger reconciliation when a CRD is updated.
-func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, obj client.Object) []reconcile.Request {
-	mobj, err := meta.Accessor(obj)
-	if err != nil {
-		return nil
-	}
-
-	// Check if the CRD is owned by a ResourceGraphDefinition
-	if !metadata.IsKROOwned(mobj) {
-		return nil
-	}
-
-	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
-	if !ok {
-		return nil
-	}
-
-	// Return a reconcile request for the corresponding RGD
-	return []reconcile.Request{
-		{
-			NamespacedName: types.NamespacedName{
-				Name: rgdName,
+		Owns(&extv1.CustomResourceDefinition{}, builder.WithPredicates(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return true
 			},
-		},
-	}
+			CreateFunc: func(e event.CreateEvent) bool {
+				return false
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return false
+			},
+		}), builder.OnlyMetadata).
+		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
 func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {

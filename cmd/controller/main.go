@@ -115,8 +115,9 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
-	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
-		"interval at which the controller will re list resources even with no changes, in seconds")
+	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 0,
+		"interval at which the controller will re list resources even with no changes, in seconds. "+
+			"By default resync is disabled.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	// log level flags
@@ -186,7 +187,7 @@ func main() {
 		MaxRetryDelay:   maxRetryDelay,
 		RateLimit:       rateLimit,
 		BurstLimit:      burstLimit,
-	}, set.Dynamic())
+	}, set.Metadata(), set.RESTMapper())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
 		restConfig, set.HTTPClient(),

@@ -72,9 +72,7 @@ func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to create client set: %w", err)
 	}
 
-	restConfig := set.RESTConfig()
-
-	builder, err := graph.NewBuilder(restConfig)
+	builder, err := graph.NewBuilder(set.RESTConfig(), set.HTTPClient())
 	if err != nil {
 		return fmt.Errorf("failed to create graph builder: %w", err)
 	}

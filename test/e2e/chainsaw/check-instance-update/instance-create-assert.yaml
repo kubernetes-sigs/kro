@@ -11,11 +11,11 @@ spec:
   image: nginx:1.25
   replicas: 2
 status:
-  conditions:
-  - message: Instance reconciled successfully
-    observedGeneration: 1
-    reason: ReconciliationSucceeded
-    status: "True"
-    type: InstanceSynced
+  # filter conditions array to keep elements where `type == 'Ready'`
+  # and assert there's a single element matching the filter
+  # and that this element status is `True`
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+      observedGeneration: 1
   state: ACTIVE
 

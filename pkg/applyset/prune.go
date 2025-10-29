@@ -36,14 +36,6 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-const (
-	// This is set to an arbitrary number here for now.
-	// This ensures we are no unbounded when pruning many GVKs.
-	// Could be parameterized later on
-	// TODO (barney-s): Possible parameterization target
-	PruneGVKParallelizationLimit = 1
-)
-
 // PruneObject is an apiserver object that should be deleted as part of prune.
 type PruneObject struct {
 	*unstructured.Unstructured
@@ -124,7 +116,7 @@ func (a *applySet) findAllObjectsToPrune(
 		}
 	}
 
-	if PruneGVKParallelizationLimit <= 1 {
+	if a.concurrency <= 1 {
 		for i := range tasks {
 			task := tasks[i]
 			results, err := a.findObjectsToPrune(ctx, dynamicClient, visitedUIDs, task.namespace, task.restMapping)
@@ -135,7 +127,7 @@ func (a *applySet) findAllObjectsToPrune(
 		}
 	} else {
 		group, ctx := errgroup.WithContext(ctx)
-		group.SetLimit(PruneGVKParallelizationLimit)
+		group.SetLimit(a.concurrency)
 		for i := range tasks {
 			task := tasks[i]
 			group.Go(func() error {

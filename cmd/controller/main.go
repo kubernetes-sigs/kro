@@ -25,6 +25,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -34,7 +35,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -47,7 +48,7 @@ func init() {
 
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 type customLevelEnabler struct {
@@ -151,6 +152,9 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
+		Client: client.Options{
+			HTTPClient: set.HTTPClient(),
+		},
 		GracefulShutdownTimeout: &gracefulShutdownTimeout,
 		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          enableLeaderElection,
@@ -185,7 +189,7 @@ func main() {
 	}, set.Dynamic())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
-		restConfig,
+		restConfig, set.HTTPClient(),
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")
@@ -209,7 +213,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

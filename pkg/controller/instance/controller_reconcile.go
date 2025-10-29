@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -72,7 +73,11 @@ type instanceGraphReconciler struct {
 
 	// restMapper is a REST mapper for the Kubernetes API server
 	restMapper meta.RESTMapper
-
+	// rgd is a read-only reference to the Graph that the controller is
+	// managing instances for.
+	rgd *graph.Graph
+	// instance is the instance being reconciled
+	instance *unstructured.Unstructured
 	// runtime is the runtime representation of the ResourceGraphDefinition. It holds the
 	// information about the instance and its sub-resources, the CEL expressions
 	// their dependencies, and the resolved values... etc
@@ -93,8 +98,18 @@ type instanceGraphReconciler struct {
 // It manages the full lifecycle of the instance including creation, updates,
 // and deletion.
 func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
-	instance := igr.runtime.GetInstance()
 	igr.state = newInstanceState()
+
+	// Create runtime - if this fails, the defer in Controller.Reconcile handles status
+	rgRuntime, err := igr.rgd.NewGraphRuntime(igr.instance)
+	if err != nil {
+		mark := NewConditionsMarkerFor(igr.instance)
+		mark.GraphNotResolved("failed to create runtime resource graph definition: %v", err)
+		return fmt.Errorf("failed to create runtime resource graph definition: %w", err)
+	}
+	igr.runtime = rgRuntime
+
+	instance := igr.runtime.GetInstance()
 
 	// Handle instance deletion if marked for deletion
 	if !instance.GetDeletionTimestamp().IsZero() {
@@ -105,26 +120,12 @@ func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 	return igr.handleReconciliation(ctx, igr.reconcileInstance)
 }
 
-// handleReconciliation provides a common wrapper for reconciliation operations,
-// handling status updates and error management.
+// handleReconciliation provides a common wrapper for reconciliation operations.
+// Status updates are handled by the defer in Controller.Reconcile.
 func (igr *instanceGraphReconciler) handleReconciliation(
 	ctx context.Context,
 	reconcileFunc func(context.Context) error,
 ) error {
-	defer func() {
-		// Update instance state based on reconciliation result
-		igr.updateInstanceState()
-
-		// Prepare and patch status
-		status := igr.prepareStatus()
-		if err := igr.patchInstanceStatus(ctx, status); err != nil {
-			// Only log error if instance still exists
-			if !apierrors.IsNotFound(err) {
-				igr.log.Error(err, "Failed to patch instance status")
-			}
-		}
-	}()
-
 	igr.state.ReconcileErr = reconcileFunc(ctx)
 	return igr.state.ReconcileErr
 }
@@ -144,11 +145,14 @@ func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 // reconcileInstance handles the reconciliation of an active instance
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
 
 	// Set managed state and handle instance labels
 	if err := igr.setupInstance(ctx, instance); err != nil {
 		return fmt.Errorf("failed to setup instance: %w", err)
 	}
+
+	mark.GraphResolved()
 
 	// Initialize resource states
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
@@ -248,19 +252,29 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
 	}
 
+	// All resources have been successfully reconciled
+	mark.ResourcesReady()
 	return nil
 }
 
 // setupInstance prepares an instance for reconciliation by setting up necessary
 // labels and managed state.
 func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance *unstructured.Unstructured) error {
+	mark := NewConditionsMarkerFor(instance)
+
 	patched, err := igr.setManaged(ctx, instance, instance.GetUID())
 	if err != nil {
+		mark.InstanceNotManaged("failed to setup instance: %v", err)
 		return err
 	}
 	if patched != nil {
 		instance.Object = patched.Object
+		// Update runtime with the patched instance for condition management
+		igr.runtime.SetInstance(patched)
+		mark = NewConditionsMarkerFor(patched)
 	}
+
+	mark.InstanceManaged()
 	return nil
 }
 
@@ -268,14 +282,21 @@ func (igr *instanceGraphReconciler) setupInstance(ctx context.Context, instance 
 // following the reverse topological order to respect dependencies.
 func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) error {
 	igr.log.V(1).Info("Beginning instance deletion process")
+	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
+
+	// Mark resources as being deleted
+	mark.ResourcesInProgress("deleting resources in reverse topological order")
 
 	// Initialize deletion state for all resources
 	if err := igr.initializeDeletionState(); err != nil {
+		mark.ResourcesNotReady("failed to initialize deletion state: %v", err)
 		return fmt.Errorf("failed to initialize deletion state: %w", err)
 	}
 
 	// Delete resources in reverse order
 	if err := igr.deleteResourcesInOrder(ctx); err != nil {
+		mark.ResourcesNotReady("failed to delete resources: %v", err)
 		return err
 	}
 
@@ -391,10 +412,14 @@ func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error 
 		}
 	}
 
-	// Remove finalizer from instance
+	// All resources are deleted, mark as ready for finalization
 	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
+
+	// Remove finalizer from instance
 	patched, err := igr.setUnmanaged(ctx, instance)
 	if err != nil {
+		mark.InstanceNotManaged("failed to remove instance finalizer: %v", err)
 		return fmt.Errorf("failed to remove instance finalizer: %w", err)
 	}
 

@@ -26,11 +26,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,6 +118,10 @@ type Config struct {
 
 	// Log is used to inject the calling reconciler's logger
 	Log logr.Logger
+
+	// Concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
+	// If not provided, the default value is the number of objects in the applyset.
+	Concurrency int
 }
 
 /*
@@ -186,9 +192,10 @@ func New(
 				FieldManager: config.FieldManager,
 				Force:        true,
 			},
-			//deleteOptions: metav1.DeleteOptions{},
+			// deleteOptions: metav1.DeleteOptions{},
 		},
-		log: config.Log,
+		log:         config.Log,
+		concurrency: config.Concurrency,
 	}
 
 	gvk := parent.GroupVersionKind()
@@ -259,6 +266,10 @@ type applySet struct {
 	serverOptions
 
 	log logr.Logger
+
+	// concurrency is the maximum number of concurrent apply and prune operations in a single applyset.
+	// If not provided, the default value is the number of objects in the applyset.
+	concurrency int
 }
 
 func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.RESTMapping) error {
@@ -363,13 +374,21 @@ func (a *applySet) Add(ctx context.Context, obj ApplyableObject) (*unstructured.
 }
 
 // ID is the label value that we are using to identify this applyset.
-// Format: base64(sha256(<name>.<namespace>.<kind>.<apiVersion>)), using the URL safe encoding of RFC4648.
 func (a *applySet) ID() string {
+	return ID(a.parent)
+}
+
+// ID computes an apply set identifier for a given parent object.
+// Format: base64(sha256(<name>.<namespace>.<kind>.<apiVersion>)), using the URL safe encoding of RFC4648.
+func ID(parent interface {
+	metav1.Object
+	schema.ObjectKind
+}) string {
 	unencoded := strings.Join([]string{
-		a.parent.GetName(),
-		a.parent.GetNamespace(),
-		a.parent.GroupVersionKind().Kind,
-		a.parent.GroupVersionKind().Group,
+		parent.GetName(),
+		parent.GetNamespace(),
+		parent.GroupVersionKind().Kind,
+		parent.GroupVersionKind().Group,
 	}, ApplySetIDPartDelimiter)
 	hashed := sha256.Sum256([]byte(unencoded))
 	b64 := base64.RawURLEncoding.EncodeToString(hashed[:])
@@ -414,39 +433,12 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 
 	// Generate and append the desired labels to the parent labels
 	desiredLabels := a.desiredParentLabels()
-	labels := a.parent.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-	for k, v := range desiredLabels {
-		labels[k] = v
-	}
-
 	// Get the desired annotations and append them to the parent
 	desiredAnnotations, returnNamespaces, returnGKs := a.desiredParentAnnotations(mode == updateToSuperset)
-	annotations := a.parent.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	for k, v := range desiredAnnotations {
-		annotations[k] = v
-	}
 
 	options := metav1.ApplyOptions{
 		FieldManager: a.fieldManager + "-parent-labeller",
 		Force:        false,
-	}
-
-	// Convert labels to map[string]interface{} for the unstructured object
-	labelsMap := make(map[string]interface{})
-	for k, v := range labels {
-		labelsMap[k] = v
-	}
-
-	// Convert annotations to map[string]interface{} for the unstructured object
-	annotationsMap := make(map[string]interface{})
-	for k, v := range annotations {
-		annotationsMap[k] = v
 	}
 
 	parentPatch := &unstructured.Unstructured{}
@@ -454,15 +446,16 @@ func (a *applySet) updateParentLabelsAndAnnotations(
 		"apiVersion": a.parent.APIVersion,
 		"kind":       a.parent.Kind,
 		"metadata": map[string]interface{}{
-			"name":        a.parent.GetName(),
-			"namespace":   a.parent.GetNamespace(),
-			"labels":      labelsMap,
-			"annotations": annotationsMap,
+			"name":      a.parent.GetName(),
+			"namespace": a.parent.GetNamespace(),
 		},
 	})
+	parentPatch.SetAnnotations(desiredAnnotations)
+	parentPatch.SetLabels(desiredLabels)
 	// update parent in the cluster.
-	if !reflect.DeepEqual(original.GetLabels(), parentPatch.GetLabels()) ||
-		!reflect.DeepEqual(original.GetAnnotations(), parentPatch.GetAnnotations()) {
+
+	if !equality.Semantic.DeepEqual(original.GetLabels(), parentPatch.GetLabels()) ||
+		!equality.Semantic.DeepEqual(original.GetAnnotations(), parentPatch.GetAnnotations()) {
 		if _, err := a.parentClient.Apply(ctx, a.parent.GetName(), parentPatch, options); err != nil {
 			return nil, nil, fmt.Errorf("error updating parent %w", err)
 		}
@@ -544,19 +537,39 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 	if dryRun {
 		options.DryRun = []string{"All"}
 	}
-	for _, obj := range a.desired.objects {
 
+	concurrency := a.concurrency
+	if concurrency <= 0 {
+		concurrency = len(a.desired.objects)
+	}
+
+	eg, egctx := errgroup.WithContext(ctx)
+	eg.SetLimit(concurrency)
+
+	// protect concurrent access to write the apply results
+	var mu sync.Mutex
+
+	for _, obj := range a.desired.objects {
 		dynResource, err := a.resourceClient(obj)
 		if err != nil {
 			return results, err
 		}
-		lastApplied, err := dynResource.Apply(ctx, obj.GetName(), obj.Unstructured, options)
-		results.recordApplied(obj, lastApplied, err)
-		a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", lastApplied.GetResourceVersion(),
-			"error", err)
+		eg.Go(func() error {
+			lastApplied, err := dynResource.Apply(egctx, obj.GetName(), obj.Unstructured, options)
+			mu.Lock()
+			defer mu.Unlock()
+			results.recordApplied(obj, lastApplied, err)
+			var appliedRevision string
+			if lastApplied != nil {
+				appliedRevision = lastApplied.GetResourceVersion()
+			}
+			a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", appliedRevision,
+				"error", err)
+			return nil
+		})
 	}
 
-	return results, nil
+	return results, eg.Wait()
 }
 
 func (a *applySet) prune(ctx context.Context, results *ApplyResult, dryRun bool) (*ApplyResult, error) {

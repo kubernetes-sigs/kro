@@ -18,10 +18,9 @@ spec:
       jsonPath: .status.state
       name: State
       type: string
-    - description: Whether a ResourceGraphDefinition instance have all it's subresources
-        ready
-      jsonPath: .status.conditions[?(@.type=="InstanceSynced")].status
-      name: Synced
+    - description: Whether a ResourceGraphDefinition instance is ready
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
       type: string
     - description: Age of the resource
       jsonPath: .metadata.creationTimestamp

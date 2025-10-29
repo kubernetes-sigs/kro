@@ -17,6 +17,7 @@ package applyset
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -200,6 +201,8 @@ func TestApplySet_Apply(t *testing.T) {
 	_, err := aset.Add(context.Background(), configMap("test-cm", "default"))
 	assert.NoError(t, err)
 
+	expected := []string{"test-cm"}
+
 	dynamicClient.PrependReactor("patch", "configmaps", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
 		var appliedCM unstructured.Unstructured
 		patchAction := action.(k8stesting.PatchAction)
@@ -207,7 +210,7 @@ func TestApplySet_Apply(t *testing.T) {
 		err = json.Unmarshal(patchAction.GetPatch(), &appliedCM)
 		assert.NoError(t, err)
 		assert.NotNil(t, appliedCM)
-		assert.Equal(t, "test-cm", appliedCM.GetName())
+		assert.Contains(t, expected, appliedCM.GetName())
 		assert.Contains(t, appliedCM.GetLabels(), ApplysetPartOfLabel)
 		// The fake client needs to return the object that was applied.
 		return true, &appliedCM, nil
@@ -236,6 +239,70 @@ func TestApplySet_Apply(t *testing.T) {
 	assert.NoError(t, result.Errors())
 	assert.Equal(t, 1, result.DesiredCount)
 	assert.Len(t, result.AppliedObjects, 1)
+
+	t.Run("reapply with new object", func(t *testing.T) {
+		_, err := aset.Add(context.Background(), configMap("test-cm-2", "default"))
+		assert.NoError(t, err)
+		expected = append(expected, "test-cm-2")
+
+		result, err := aset.Apply(context.Background(), false)
+		assert.NoError(t, err)
+		assert.NoError(t, result.Errors())
+		assert.Equal(t, 2, result.DesiredCount)
+		assert.Len(t, result.AppliedObjects, 2)
+	})
+
+}
+
+func TestApplySet_UpdatesParentAnnotationsWithMultipleGroupKinds(t *testing.T) {
+	parent := parentObj(secretGVK, "parent-secret")
+
+	aset, dynamicClient := newTestApplySet(t, parent)
+
+	// Add two different GKs
+	_, err := aset.Add(context.Background(), configMap("cm-1", "default"))
+	assert.NoError(t, err)
+	_, err = aset.Add(context.Background(), foo("foo-1", "default"))
+	assert.NoError(t, err)
+
+	// Reactor for both GKs
+	dynamicClient.PrependReactor("patch", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		var obj unstructured.Unstructured
+		_ = json.Unmarshal(action.(k8stesting.PatchAction).GetPatch(), &obj)
+		return true, &obj, nil
+	})
+	dynamicClient.PrependReactor("patch", "foos", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		var obj unstructured.Unstructured
+		_ = json.Unmarshal(action.(k8stesting.PatchAction).GetPatch(), &obj)
+		return true, &obj, nil
+	})
+
+	// Capture and validate the parent update
+	dynamicClient.PrependReactor("patch", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(k8stesting.PatchAction)
+		assert.Equal(t, types.ApplyPatchType, patchAction.GetPatchType())
+
+		var parentPatch unstructured.Unstructured
+		err := json.Unmarshal(patchAction.GetPatch(), &parentPatch)
+		assert.NoError(t, err)
+
+		ann := parentPatch.GetAnnotations()
+		assert.NotNil(t, ann)
+		assert.Contains(t, ann, ApplySetGKsAnnotation)
+
+		// Expect both GKs (order not guaranteed)
+		gks := ann[ApplySetGKsAnnotation]
+		assert.True(t, strings.Contains(gks, "ConfigMap"))
+		assert.True(t, strings.Contains(gks, "Foo"))
+
+		return true, &parentPatch, nil
+	})
+
+	result, err := aset.Apply(context.Background(), false)
+	assert.NoError(t, err)
+	assert.NoError(t, result.Errors())
+	assert.Equal(t, 2, result.DesiredCount)
+	assert.Len(t, result.AppliedObjects, 2)
 }
 
 func TestApplySet_Prune(t *testing.T) {
@@ -516,7 +583,7 @@ func TestApplySet_PruneOldNamespace(t *testing.T) {
 		assert.Contains(t, parentPatch.GetLabels(), ApplySetParentIDLabel)
 		assert.Contains(t, parentPatch.GetAnnotations(), ApplySetAdditionalNamespacesAnnotation)
 		assert.Contains(t, parentPatch.GetAnnotations(), ApplySetGKsAnnotation)
-		//assert.Equal(t, parentPatch.GetAnnotations()[ApplySetAdditionalNamespacesAnnotation], "ns1,ns2,ns3,oldns1")
+		// assert.Equal(t, parentPatch.GetAnnotations()[ApplySetAdditionalNamespacesAnnotation], "ns1,ns2,ns3,oldns1")
 		assert.Equal(t, parentPatch.GetAnnotations()[ApplySetGKsAnnotation], "ConfigMap,Foo.foo.bar")
 
 		return true, &parentPatch, nil
@@ -587,7 +654,7 @@ func TestApplySet_PruneOldGVKs(t *testing.T) {
 		assert.Contains(t, parentPatch.GetAnnotations(), ApplySetAdditionalNamespacesAnnotation)
 		assert.Contains(t, parentPatch.GetAnnotations(), ApplySetGKsAnnotation)
 		assert.Equal(t, parentPatch.GetAnnotations()[ApplySetAdditionalNamespacesAnnotation], "ns1,ns2")
-		//assert.Equal(t, parentPatch.GetAnnotations()[ApplySetGKsAnnotation], "ConfigMap,Foo.foo.bar")
+		// assert.Equal(t, parentPatch.GetAnnotations()[ApplySetGKsAnnotation], "ConfigMap,Foo.foo.bar")
 
 		return true, &parentPatch, nil
 	})

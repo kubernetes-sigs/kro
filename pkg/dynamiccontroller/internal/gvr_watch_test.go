@@ -46,7 +46,7 @@ func TestLazyInformer_AddAndRemoveHandler(t *testing.T) {
 	defer cancel()
 
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, 10*time.Millisecond, nil, logger)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
 
 	// Adding first handler should start informer
 	err := li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})

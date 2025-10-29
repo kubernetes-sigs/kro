@@ -65,7 +65,7 @@ spec:
                   for a ResourceGraphDefinition.
                 properties:
                   instancePolicy:
-                    default: Periodic
+                    default: Reactive
                     description: |-
                       InstancePolicy defines the reconciliation policy for the instances
                       created from the ResourceGraphDefinition.

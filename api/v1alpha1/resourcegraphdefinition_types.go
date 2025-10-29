@@ -45,7 +45,7 @@ type ResourceGraphDefinitionReconcileSpec struct {
 	// responsible for the instance.
 	//
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default:=Periodic
+	// +kubebuilder:default:=Reactive
 	// +kubebuilder:validation:Enum=Periodic;Reactive
 	InstancePolicy ResourceGraphDefinitionInstancePolicy `json:"instancePolicy,omitempty"`
 }

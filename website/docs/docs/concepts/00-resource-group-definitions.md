@@ -164,6 +164,39 @@ etc.) automatically.
 kro continuously monitors your ResourceGraphDefinition for changes, updating the API and
 its behavior accordingly.
 
+## Deletion of ResourceGraphDefinitions
+
+Because **ResourceGraphDefinitions** are owners of **CustomResourceDefinitions** that get created to support Instances, 
+they are subject to the same lifecycle as CRDs, which makes them vulnerable to updates and accidental deletion. 
+When you delete a **ResourceGraphDefinition**, kro deletes the corresponding CRD and controller.
+
+That's why by default, **ResourceGraphDefinitions** are protected by a **ValidatingAdmissionPolicy**
+that will prevent you from accidentally deleting them. To allow deletion anyhow, you can set the `kro.run/allow-delete` annotation to `true` on the **ResourceGraphDefinition**.
+
+This may cause errors like below:
+
+```shell
+kubectl delete rgd simple-deployment-for-deletion-rgd
+> The resourcegraphdefinitions "simple-deployment-for-deletion-rgd" is invalid: 
+  ValidatingAdmissionPolicy 'allow-delete-resourcegraphdefinitions-with-annotation' with 
+  binding 'allow-delete-resourcegraphdefinitions-with-annotation-binding' denied request: Deletion denied. 
+  To proceed, set annotation 'kro.run/allow-delete: "true"'. 
+  Note: removing an RGD also deletes its CustomResourceDefinition and may cause data loss.
+```
+
+:::info
+
+When installing via HELM, one can customize the key of the annotation with `validation.admission.policy.rgd.annotation.key`
+You can disable the default ValidatingAdmissionPolicy by setting `config.allowCRDDeletion` to `true`
+
+:::
+
+:::warning
+
+When disabling this protection, you must ensure that you do not delete the CRD or controller manually without ensuring safe instance deletion.
+
+:::
+
 ## Instance Example
 
 After the **ResourceGraphDefinition** is validated and registered in the cluster, users

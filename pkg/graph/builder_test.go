@@ -24,7 +24,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 
-	"github.com/kubernetes-sigs/kro/pkg/graph/emulator"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
@@ -35,9 +34,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
-		schemaResolver:   fakeResolver,
-		restMapper:       restMapper,
-		resourceEmulator: emulator.NewEmulator(),
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
 	}
 
 	tests := []struct {
@@ -233,7 +231,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "failed to validate resource CEL expression",
+			errMsg:  "found unknown resources",
 		},
 		{
 			name: "valid VPC with valid conditional subnets",
@@ -434,8 +432,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"name": "string",
 					},
 					map[string]interface{}{
-						"abc": "${vpc.status.?unstructured.state}",
-						"cde": "${vpc.status.unstructured.?state}",
+						"state": "${vpc.status.?state}",
+						"vpcID": "${vpc.status.?vpcID}",
 					},
 				),
 				generator.WithResource("vpc", map[string]interface{}{
@@ -472,9 +470,8 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
-		schemaResolver:   fakeResolver,
-		restMapper:       restMapper,
-		resourceEmulator: emulator.NewEmulator(),
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
 	}
 
 	tests := []struct {
@@ -610,7 +607,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "undeclared reference to 'missingvpc'",
+			errMsg:  "found unknown resources",
 		},
 		{
 			name: "cyclic dependency",
@@ -1056,9 +1053,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
-		schemaResolver:   fakeResolver,
-		restMapper:       restMapper,
-		resourceEmulator: emulator.NewEmulator(),
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
 	}
 
 	tests := []struct {
@@ -1074,6 +1070,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					map[string]interface{}{
 						"replicas":         "integer | default=3",
 						"environment":      "string | default=dev",
+						"region":           "string | default=us-west-2",
 						"createMonitoring": "boolean | default=false",
 					},
 					nil,
@@ -1151,7 +1148,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 							"environment":  "${schema.spec.environment}",
 							"cluster":      "${cluster.metadata.name}",
 							"combined":     "${cluster.metadata.name}-${schema.spec.environment}",
-							"two.statics":  "${schema.spec.environment}-static-${schema.spec.replicas}",
+							"two.statics":  "${schema.spec.environment}-${schema.spec.region}",
 							"two.dynamics": "${vpc.metadata.name}-${cluster.status.ackResourceMetadata.arn}",
 						},
 					},
@@ -1166,8 +1163,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 										"value": "${cluster.status.ackResourceMetadata.arn}",
 									},
 									map[string]interface{}{
-										"name":  "REPLICAS",
-										"value": "${schema.spec.replicas}",
+										"name":  "REGION",
+										"value": "${schema.spec.region}",
 									},
 								},
 							},
@@ -1257,7 +1254,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"schema.spec.environment", "schema.spec.replicas"},
+						expressions:          []string{"schema.spec.environment", "schema.spec.region"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: false,
 					},
@@ -1275,7 +1272,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "spec.containers[0].env[1].value",
-						expressions:          []string{"schema.spec.replicas"},
+						expressions:          []string{"schema.spec.region"},
 						kind:                 variable.ResourceVariableKindStatic,
 						standaloneExpression: true,
 					},
@@ -1391,7 +1388,6 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
-		v.ExpectedSchema = nil
 		actualVars[i] = expectedVar{
 			path:                 v.Path,
 			expressions:          v.Expressions,
@@ -1401,6 +1397,390 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 	}
 
 	assert.ElementsMatch(t, expected, actualVars)
+}
+
+func TestGraphBuilder_CELTypeChecking(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+	}{
+		// Test 1: ObjectMeta field access validation
+		{
+			name: "valid access to metadata.name",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"podName": "${pod.metadata.name}",
+					},
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "test-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "nginx",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid access to metadata.labels",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name":   "test-subnet",
+						"labels": "${vpc.metadata.labels}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid access to metadata.annotations",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name":        "test-subnet",
+						"annotations": "${vpc.metadata.annotations}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid access to non-existent metadata field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"invalid": "${pod.metadata.nonExistentField}",
+					},
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "test-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "nginx",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "undefined field 'nonExistentField'",
+		},
+
+		// Test 2: readyWhen and includeWhen type checking
+		{
+			name: "readyWhen returning non-boolean type",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, []string{"${vpc.status.vpcID}"}, nil), // Returns string, not bool
+			},
+			wantErr: true,
+			errMsg:  "must return bool",
+		},
+		{
+			name: "includeWhen returning non-boolean type",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"count": "integer",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, []string{"${schema.spec.count}"}), // Returns integer, not bool
+			},
+			wantErr: true,
+			errMsg:  "must return bool",
+		},
+		{
+			name: "valid readyWhen with boolean expression",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, []string{"${vpc.status.state == 'available'}"}, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid includeWhen with boolean expression",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"enabled": "boolean",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, []string{"${schema.spec.enabled}"}),
+			},
+			wantErr: false,
+		},
+
+		// Test 3: Optional type handling
+		{
+			name: "valid optional type in status field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"state": "${vpc.status.?state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional type mismatch with helpful error",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"count": "integer",
+					},
+					map[string]interface{}{
+						"name": "${vpc.status.?state}", // state is string
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false, // optional string is assignable to string
+		},
+
+		// Test 5: Metadata field type mismatches
+		{
+			name: "using metadata.name as object instead of string",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "test-subnet",
+					},
+					"spec": map[string]interface{}{
+						"vpcID": "${vpc.metadata.name.field}", // name is string, not object
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "does not support field selection",
+		},
+		{
+			name: "using metadata.labels value with correct type",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+						"labels": map[string]interface{}{
+							"env": "prod",
+						},
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${vpc.metadata.labels['env']}-subnet", // Accessing map value
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-cel-types", tt.resourceGraphDefinitionOpts...)
+			_, err := builder.NewResourceGraphDefinition(rgd)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestNewBuilder(t *testing.T) {
@@ -1413,9 +1793,8 @@ func Test_ValidateOpenAPISchema(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
 	builder := &Builder{
-		schemaResolver:   fakeResolver,
-		restMapper:       restMapper,
-		resourceEmulator: emulator.NewEmulator(),
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
 	}
 
 	tests := []struct {

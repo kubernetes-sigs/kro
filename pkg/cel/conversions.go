@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 )
@@ -62,4 +63,37 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 // IsBoolType checks if the given ref.Val is of type BoolType
 func IsBoolType(v ref.Val) bool {
 	return v.Type() == types.BoolType
+}
+
+// WouldMatchIfUnwrapped checks if outputType would be assignable to expectedType
+// if we unwrapped the optional wrapper from outputType.
+// This detects the case where outputType is optional_type(T) and expectedType is T.
+func WouldMatchIfUnwrapped(outputType, expectedType *cel.Type) bool {
+	if outputType == nil || expectedType == nil {
+		return false
+	}
+
+	// If output is already assignable to expected, no mismatch
+	if expectedType.IsAssignableType(outputType) {
+		return false
+	}
+
+	// Check if wrapping expected in optional makes it match output
+	// If yes, then output is an optional version of expected
+	optionalExpected := cel.OptionalType(expectedType)
+	return optionalExpected.IsAssignableType(outputType)
+}
+
+// IsBoolOrOptionalBool checks if a CEL type is bool or optional_type(bool).
+// This is useful for validating condition expressions that must return boolean values.
+func IsBoolOrOptionalBool(t *cel.Type) bool {
+	// Check if it's a direct bool type
+	// Note: A.IsAssignableType(B) means "A accepts B", so we check if bool accepts t
+	if cel.BoolType.IsAssignableType(t) {
+		return true
+	}
+
+	// Check if it's optional_type(bool)
+	optionalBool := cel.OptionalType(cel.BoolType)
+	return optionalBool.IsAssignableType(t)
 }

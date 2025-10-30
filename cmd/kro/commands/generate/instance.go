@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kro-run/kro/cmd/kro/emulator"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -57,8 +59,21 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 	if err != nil {
 		return fmt.Errorf("failed to create resource graph definition: %w", err)
 	}
+	em := emulator.NewEmulator()
 
-	emulatedObj := rgdGraph.Instance.GetEmulatedObject()
+	crd := rgdGraph.Instance.GetCRD()
+	gvk := rgdGraph.Instance.GetCRD().GroupVersionKind()
+
+	s, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+	if err != nil {
+		return fmt.Errorf("failed to convert JSONSchemaProps to SpecSchema: %w", err)
+	}
+
+	emulatedObj, err := em.GenerateDummyCR(gvk, s)
+	if err != nil {
+		return fmt.Errorf("failed to generate dummy CR: %w", err)
+	}
+
 	emulatedObj.SetAnnotations(map[string]string{"kro.run/version": "dev"})
 
 	delete(emulatedObj.Object, "status")

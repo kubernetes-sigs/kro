@@ -141,6 +141,25 @@ func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 	}
 }
 
+// areDependenciesReady checks if all dependencies of a resource are ready
+func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool {
+	dependencies := igr.runtime.ResourceDescriptor(resourceID).GetDependencies()
+
+	for _, depID := range dependencies {
+		// Check if dependency is resolved
+		if _, state := igr.runtime.GetResource(depID); state != runtime.ResourceStateResolved {
+			return false
+		}
+
+		// Check if dependency satisfies its readyWhen conditions
+		if ready, _, err := igr.runtime.IsResourceReady(depID); err != nil || !ready {
+			return false
+		}
+	}
+
+	return true
+}
+
 // reconcileInstance handles the reconciliation of an active instance
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
@@ -190,6 +209,13 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		resource, state := igr.runtime.GetResource(resourceID)
 
 		if state != runtime.ResourceStateResolved {
+			unresolvedResourceID = resourceID
+			prune = false
+			break
+		}
+
+		// Check if all dependencies are ready
+		if !igr.areDependenciesReady(resourceID) {
 			unresolvedResourceID = resourceID
 			prune = false
 			break

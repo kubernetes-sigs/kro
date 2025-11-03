@@ -1,0 +1,100 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: rds-postgres.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: RDSPostgres
+    spec:
+      name: string
+      namespace: string | default="default"
+      vpcID: string
+      subnetIDs: "[]string"
+      instanceClass: string | default="db.t4g.micro"
+      allocatedStorage: integer | default=20
+      engineVersion: string | default="16.10"
+      dbName: string | default="postgres"
+      masterUsername: string | default="postgres"
+    status:
+      endpoint: ${dbinstance.status.endpoint.address}
+      secretName: ${password.metadata.name}
+      securityGroupId: ${securitygroup.status.id}
+
+  resources:
+  - id: password
+    readyWhen:
+      - ${has(password.data)}
+    template:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ${schema.spec.name}-postgres-password
+        namespace: ${schema.spec.namespace}
+      type: Opaque
+      data:
+        password: cG9zdGdyZXM= # postgres
+
+  - id: securitygroup
+    readyWhen:
+      - ${has(securitygroup.status.id)}
+    template:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: SecurityGroup
+      metadata:
+        name: ${schema.spec.name}-postgres-sg
+        namespace: ${schema.spec.namespace}
+      spec:
+        description: "PostgreSQL RDS security group"
+        name: ${schema.spec.name}-postgres-sg
+        vpcID: ${schema.spec.vpcID}
+        ingressRules:
+        - ipProtocol: tcp
+          ipRanges:
+          - cidrIP: "10.0.0.0/16"
+          fromPort: 5432
+          toPort: 5432
+
+  - id: subnetgroup
+    readyWhen:
+      - ${has(subnetgroup.status.ackResourceMetadata)}
+    template:
+      apiVersion: rds.services.k8s.aws/v1alpha1
+      kind: DBSubnetGroup
+      metadata:
+        name: ${schema.spec.name}-postgres-subnet-group
+        namespace: ${schema.spec.namespace}
+      spec:
+        description: "PostgreSQL RDS subnet group"
+        name: ${schema.spec.name}-postgres-subnet-group
+        subnetIDs: ${schema.spec.subnetIDs}
+
+  - id: dbinstance
+    readyWhen:
+      - ${dbinstance.status.dbInstanceStatus == "available"}
+      - ${has(dbinstance.status.endpoint)}
+    template:
+      apiVersion: rds.services.k8s.aws/v1alpha1
+      kind: DBInstance
+      metadata:
+        name: ${schema.spec.name}-postgres
+        namespace: ${schema.spec.namespace}
+      spec:
+        allocatedStorage: ${schema.spec.allocatedStorage}
+        dbInstanceClass: ${schema.spec.instanceClass}
+        dbInstanceIdentifier: ${schema.spec.name}-postgres
+        backupRetentionPeriod: 0
+        engine: postgres
+        engineVersion: ${schema.spec.engineVersion}
+        masterUsername: ${schema.spec.masterUsername}
+        dbSubnetGroupRef: 
+          from: 
+            name: ${schema.spec.name}-postgres-subnet-group
+        vpcSecurityGroupRefs:
+          - from: 
+              name: ${schema.spec.name}-postgres-sg
+        masterUserPassword:
+          namespace: ${schema.spec.namespace}
+          name: ${schema.spec.name}-postgres-password
+          key: password
+        dbName: ${schema.spec.dbName}

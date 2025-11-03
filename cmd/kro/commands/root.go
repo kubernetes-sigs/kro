@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ package commands
 import (
 	"github.com/spf13/cobra"
 
-	generate "github.com/kro-run/kro/cmd/kro/commands/generate"
-	validate "github.com/kro-run/kro/cmd/kro/commands/validate"
+	generate "github.com/kubernetes-sigs/kro/cmd/kro/commands/generate"
+	validate "github.com/kubernetes-sigs/kro/cmd/kro/commands/validate"
 )
 
 func AddCommands(root *cobra.Command) {

@@ -30,7 +30,7 @@ KRO (Kubernetes Resource Orchestrator) provides a way to define, deploy and mana
 
 ```bash
 export KRO_VERSION=$(curl -sL \
-    https://api.github.com/repos/kro-run/kro/releases/latest | \
+    https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
     jq -r '.tag_name | ltrimstr("v")'
   )
 helm install kro oci://ghcr.io/kro-run/kro/kro \

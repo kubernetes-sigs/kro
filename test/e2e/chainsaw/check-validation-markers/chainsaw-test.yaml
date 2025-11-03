@@ -1,0 +1,86 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-validation-markers
+spec:
+  description: |
+    Tests validation markers: pattern, minLength, maxLength, uniqueItems, minItems, and maxItems
+  steps:
+  - name: install-rgd
+    try:
+    #description: Install the RGD that creates an Instance CRD with validation markers
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD with validation markers
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-assert.yaml
+      description: Verify Instance CRD has validation constraints
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: create-valid-instance
+    try:
+    #description: Create instance with valid data that meets validation constraints
+    - apply:
+        file: valid-instance.yaml
+      description: Create ValidationTest Instance with valid data
+    - assert:
+        file: valid-instance-assert.yaml
+      description: Verify valid Instance state
+    - assert:
+        file: configmap-assert.yaml
+      description: Verify ConfigMap was created
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: test-invalid-min-items
+    try:
+    - error:
+        file: invalid-instance-min-items.yaml
+      description: Expect validation error for minItems violation (empty tags array)
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: test-invalid-max-items
+    try:
+    - error:
+        file: invalid-instance-max-items.yaml
+      description: Expect validation error for maxItems violation (too many tags)
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: test-invalid-array-limits
+    try:
+    - error:
+        file: invalid-instance-array-limits.yaml
+      description: Expect validation error for maxItems violations (too many tags and priorities)
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: test-invalid-priorities-max
+    try:
+    - error:
+        file: invalid-instance-priorities-max.yaml
+      description: Expect validation error for maxItems violation (too many priorities)
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

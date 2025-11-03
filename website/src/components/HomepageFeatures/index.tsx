@@ -18,7 +18,7 @@ const FeatureList: FeatureItem[] = [
     id: "benzene-ring-svgrepo-com",
     fill: "white",
     scale: 0.7,
-    Svg: require("@site/static/img/resources.svg").default,
+    Svg: require("/img/resources.svg").default,
     description: (
       <>
         Create powerful abstractions that encapsulate complex Kubernetes
@@ -29,7 +29,7 @@ const FeatureList: FeatureItem[] = [
   },
   {
     title: "Effortless Orchestration",
-    Svg: require("@site/static/img/qrcode.svg").default,
+    Svg: require("/img/qrcode.svg").default,
     id: "qr-code-svgrepo-com",
     fill: "a2",
     scale: 0.6,
@@ -46,7 +46,7 @@ const FeatureList: FeatureItem[] = [
     scale: 0.6,
     id: "scale-svgrepo-com",
     fill: "white",
-    Svg: require("@site/static/img/expand-arrows.svg").default,
+    Svg: require("/img/expand-arrows.svg").default,
     description: (
       <>
         kro effortlessly scales your resource management from simple deployments

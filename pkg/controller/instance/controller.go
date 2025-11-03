@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,21 +17,18 @@ package instance
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // ReconcileConfig holds configuration parameters for the reconciliation process.
@@ -87,8 +84,6 @@ type Controller struct {
 	// reconcileConfig holds the configuration parameters for the reconciliation
 	// process.
 	reconcileConfig ReconcileConfig
-	// defaultServiceAccounts is a map of service accounts to use for controller impersonation.
-	defaultServiceAccounts map[string]string
 }
 
 // NewController creates a new Controller instance.
@@ -98,27 +93,24 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	clientSet kroclient.SetInterface,
-	defaultServiceAccounts map[string]string,
+	restMapper meta.RESTMapper,
 	instanceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
-		log:                    log,
-		gvr:                    gvr,
-		clientSet:              clientSet,
-		rgd:                    rgd,
-		instanceLabeler:        instanceLabeler,
-		reconcileConfig:        reconcileConfig,
-		defaultServiceAccounts: defaultServiceAccounts,
+		log:             log,
+		gvr:             gvr,
+		clientSet:       clientSet,
+		rgd:             rgd,
+		instanceLabeler: instanceLabeler,
+		reconcileConfig: reconcileConfig,
 	}
 }
 
 // Reconcile is a handler function that reconciles the instance and its sub-resources.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
-	namespace, name := getNamespaceName(req)
+	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
 
-	log := c.log.WithValues("namespace", namespace, "name", name)
-
-	instance, err := c.clientSet.Dynamic().Resource(c.gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	instance, err := c.clientSet.Dynamic().Resource(c.gvr).Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("Instance not found, it may have been deleted")
@@ -127,145 +119,40 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		log.Error(err, "Failed to get instance")
 		return nil
 	}
-
-	// This is one of the main reasons why we're splitting the controller into
-	// two parts. The instantiator is responsible for creating a new runtime
-	// instance of the resource graph definition. The instance graph reconciler is responsible
-	// for reconciling the instance and its sub-resources, while keeping the same
-	// runtime object in it's fields.
-	rgRuntime, err := c.rgd.NewGraphRuntime(instance)
-	if err != nil {
-		return fmt.Errorf("failed to create runtime resource graph definition: %w", err)
-	}
-
 	instanceSubResourcesLabeler, err := metadata.NewInstanceLabeler(instance).Merge(c.instanceLabeler)
 	if err != nil {
 		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
 	}
 
-	// If possible, use a service account to create the execution client
-	// TODO(a-hilaly): client caching
-	executionClient, err := c.getExecutionClient(namespace)
-	if err != nil {
-		return fmt.Errorf("failed to create execution client: %w", err)
-	}
-
+	// Create the instance graph reconciler early so the defer can access it
 	instanceGraphReconciler := &instanceGraphReconciler{
 		log:                         log,
 		gvr:                         c.gvr,
-		client:                      executionClient,
-		runtime:                     rgRuntime,
+		client:                      c.clientSet.Dynamic(),
+		restMapper:                  c.clientSet.RESTMapper(),
+		rgd:                         c.rgd,
+		instance:                    instance,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
 		reconcileConfig:             c.reconcileConfig,
 		// Fresh instance state at each reconciliation loop.
 		state: newInstanceState(),
 	}
+
+	// Single defer to rule them all - handles status updates for ALL code paths
+	defer func() {
+		// Update instance state based on reconciliation result
+		instanceGraphReconciler.updateInstanceState()
+
+		// Prepare and patch status
+		status := instanceGraphReconciler.prepareStatus()
+		if err := instanceGraphReconciler.patchInstanceStatus(ctx, status); err != nil {
+			// Only log error if instance still exists
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "Failed to patch instance status")
+			}
+		}
+	}()
+
 	return instanceGraphReconciler.reconcile(ctx)
-}
-
-// getNamespaceName extracts the namespace and name from the request.
-func getNamespaceName(req ctrl.Request) (string, string) {
-	parts := strings.Split(req.Name, "/")
-	name := parts[len(parts)-1]
-	namespace := parts[0]
-	if namespace == "" {
-		namespace = metav1.NamespaceDefault
-	}
-	return namespace, name
-}
-
-// errorCategory helps classify different types of impersonation errors
-type errorCategory string
-
-const (
-	errorConfigCreate errorCategory = "config_create"
-	errorInvalidSA    errorCategory = "invalid_sa"
-	errorClientCreate errorCategory = "client_create"
-	errorPermissions  errorCategory = "permissions"
-)
-
-// getExecutionClient determines the execution client to use for the instance.
-// If the instance is created in a namespace of which a service account is specified,
-// the execution client will be created using the service account. If no service account
-// is specified for the namespace, the default client will be used.
-func (c *Controller) getExecutionClient(namespace string) (dynamic.Interface, error) {
-	// if no service accounts are specified, use the default client
-	if len(c.defaultServiceAccounts) == 0 {
-		c.log.V(1).Info("no service accounts configured, using default client")
-		return c.clientSet.Dynamic(), nil
-	}
-
-	timer := prometheus.NewTimer(impersonationDuration.WithLabelValues(namespace, ""))
-	defer timer.ObserveDuration()
-
-	// Check for namespace specific service account
-	if sa, ok := c.defaultServiceAccounts[namespace]; ok {
-		userName, err := getServiceAccountUserName(namespace, sa)
-		if err != nil {
-			c.handleImpersonateError(namespace, sa, err)
-			return nil, fmt.Errorf("invalid service account configuration: %w", err)
-		}
-
-		pivotedClient, err := c.clientSet.WithImpersonation(userName)
-		if err != nil {
-			c.handleImpersonateError(namespace, sa, err)
-			return nil, fmt.Errorf("failed to create impersonated client: %w", err)
-		}
-
-		impersonationTotal.WithLabelValues(namespace, sa, "success").Inc()
-		return pivotedClient.Dynamic(), nil
-	}
-
-	// Check for default service account (marked by "*")
-	if defaultSA, ok := c.defaultServiceAccounts[v1alpha1.DefaultServiceAccountKey]; ok {
-		userName, err := getServiceAccountUserName(namespace, defaultSA)
-		if err != nil {
-			c.handleImpersonateError(namespace, defaultSA, err)
-			return nil, fmt.Errorf("invalid default service account configuration: %w", err)
-		}
-
-		pivotedClient, err := c.clientSet.WithImpersonation(userName)
-		if err != nil {
-			c.handleImpersonateError(namespace, defaultSA, err)
-			return nil, fmt.Errorf("failed to create impersonated client with default SA: %w", err)
-		}
-
-		impersonationTotal.WithLabelValues(namespace, defaultSA, "success").Inc()
-		return pivotedClient.Dynamic(), nil
-	}
-
-	impersonationTotal.WithLabelValues(namespace, "", "default").Inc()
-	// Fallback to the default client
-	return c.clientSet.Dynamic(), nil
-}
-
-// handleImpersonateError logs the error and records the error in the metrics
-func (c *Controller) handleImpersonateError(namespace, sa string, err error) {
-	var category errorCategory
-	switch {
-	case strings.Contains(err.Error(), "forbidden"):
-		category = errorPermissions
-	case strings.Contains(err.Error(), "cannot get token"):
-		category = errorConfigCreate
-	default:
-		category = errorClientCreate
-	}
-	recordImpersonateError(namespace, sa, category)
-	c.log.Error(
-		err,
-		"failed to create impersonated client",
-		"namespace", namespace,
-		"serviceAccount", sa,
-		"errorCategory", category,
-	)
-}
-
-// getServiceAccountUserName builds the impersonate service account user name.
-// The format of the user name is "system:serviceaccount:<namespace>:<serviceaccount>"
-func getServiceAccountUserName(namespace, serviceAccount string) (string, error) {
-	if namespace == "" || serviceAccount == "" {
-		return "", fmt.Errorf("namespace and service account must be provided")
-	}
-	return fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccount), nil
 }

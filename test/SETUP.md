@@ -13,7 +13,7 @@ go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 Use `setup-envtest` to download the Kubebuilder assets:
 
 ```sh
-setup-envtest use <version> -p path
+setup-envtest use -p path <version> 
 ```
 
 Replace `<version>` with the Kubernetes version you want to test against, for

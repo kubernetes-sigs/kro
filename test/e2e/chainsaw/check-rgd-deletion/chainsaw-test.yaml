@@ -42,7 +42,16 @@ spec:
       podLogs:
         selector: app.kubernetes.io/instance=kro
         namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 20s # wait for the RGD to be deleted. Running the test with 5s is flaky (passes locally but fails in CI)
   - name: check-that-crd-is-deleted
     try:
     - error:
         file: instancecrd-assert.yaml        
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

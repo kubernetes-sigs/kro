@@ -1,7 +1,9 @@
-OCI_REPO ?= ghcr.io/kro-run/kro
+OCI_REPO ?= registry.k8s.io/kro
 
-HELM_IMAGE ?= ${OCI_REPO}
+HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
+
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -86,17 +88,21 @@ tt:
 	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
 
 .PHONY: fmt
-fmt: ## Run go fmt against code.
+fmt: go-generate ## Run go fmt against code and add licenses.
 	go fmt ./...
+
+.PHONY: go-generate
+go-generate: ## Run go generate against code.
+	go generate
 
 .PHONY: vet
 vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet ## Run tests. Use WHAT=unit or WHAT=integration
+test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	go test -v ./test/integration/suites/... -coverprofile integration-cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else
@@ -131,34 +137,6 @@ build: manifests generate fmt vet ## Build controller binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/controller/main.go
 
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
-# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-.PHONY: image-build
-image-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
-
-.PHONY: image-push
-image-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) push ${IMG}
-
-# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
-# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64
-.PHONY: docker-buildx
-image-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name project-v3-builder
-	$(CONTAINER_TOOL) buildx use project-v3-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm project-v3-builder
-	rm Dockerfile.cross
-
 ##@ Build Dependencies
 
 ## Location to install dependencies to
@@ -190,6 +168,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
+ENVTEST_VERSION ?= 1.31.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -215,31 +194,36 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 	test -s $(LOCALBIN)/controller-gen && $(LOCALBIN)/controller-gen --version | grep -q $(CONTROLLER_TOOLS_VERSION) || \
 	GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
 .PHONY: image
 build-image: ko ## Build the kro controller images using ko build
 	echo "Building kro image $(RELEASE_VERSION).."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
-		$(KO) build --bare github.com/kro-run/kro/cmd/controller \
+		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--local\
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
-publish-image: ko ## Publish the kro controller images to ghcr.io
+publish-image: ko ## Publish the kro controller images
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
-		$(KO) publish --bare github.com/kro-run/kro/cmd/controller \
+		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: package-helm
 package-helm: ## Package Helm chart
 	cp ./config/crd/bases/* helm/crds/
-	@sed -i '' 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
-	@sed -i '' 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
-	@sed -i '' 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
-	helm package helm
+	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
+	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
+	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+	${HELM} package helm
 
 .PHONY: publish-helm
 publish-helm: ## Helm publish
-	helm push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
+	${HELM} push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm
@@ -267,17 +251,17 @@ deploy-kind: ko
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
 .PHONY: ko-apply
 ko-apply: ko
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
 
 ## CLI
 .PHONY: cli
-cli: 
+cli:
 	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"

@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,8 +78,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // Config holds the configuration for DynamicController
@@ -94,10 +95,6 @@ type Config struct {
 	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
 	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
-	// ShutdownTimeout is the maximum duration to wait for the controller to
-	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving
-	// the controller enough time to finish processing any pending items.
-	ShutdownTimeout time.Duration
 	// MinRetryDelay is the minimum delay before retrying an item in the queue
 	MinRetryDelay time.Duration
 	// MaxRetryDelay is the maximum delay before retrying an item in the queue
@@ -209,7 +206,7 @@ func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
 }
 
 // Run starts the DynamicController.
-func (dc *DynamicController) Run(ctx context.Context) error {
+func (dc *DynamicController) Start(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
 	defer dc.queue.ShutDown()
 
@@ -224,17 +221,40 @@ func (dc *DynamicController) Run(ctx context.Context) error {
 	// Spin up workers.
 	//
 	// TODO(a-hilaly): Allow for dynamic scaling of workers.
+	var wg sync.WaitGroup
 	for i := 0; i < dc.config.Workers; i++ {
-		go wait.UntilWithContext(ctx, dc.worker, time.Second)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wait.UntilWithContext(ctx, dc.worker, time.Second)
+		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		dc.log.Info("Received shutdown signal, shutting down dynamic controller queue")
+		dc.queue.ShutDown()
+	}()
 
-	<-ctx.Done()
-	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
+	wg.Wait()
+	dc.log.Info("All workers have stopped")
+
+	// when shutting down, the context given to Start is already closed,
+	// and the expectation is that we block until the graceful shutdown is complete.
+	return dc.shutdown(context.Background())
 }
 
 // worker processes items from the queue.
 func (dc *DynamicController) worker(ctx context.Context) {
-	for dc.processNextWorkItem(ctx) {
+	for {
+		select {
+		case <-ctx.Done():
+			dc.log.Info("Dynamic controller worker received shutdown signal, stopping")
+			return
+		default:
+			dc.processNextWorkItem(ctx)
+		}
 	}
 }
 
@@ -289,14 +309,14 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 // syncFunc reconciles a single item.
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers) error {
 	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
-	dc.log.V(1).Info("Syncing resourcegraphdefinition instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
 
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
-		dc.log.V(1).Info("Finished syncing resourcegraphdefinition instance request",
+		dc.log.V(1).Info("Finished syncing object",
 			"gvr", gvrKey,
 			"namespacedKey", oi.NamespacedKey,
 			"duration", duration)
@@ -314,22 +334,29 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers)
 	if !ok {
 		return fmt.Errorf("invalid handler type for GVR: %s", gvrKey)
 	}
-	err := handlerFunc(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
+
+	nn := types.NamespacedName{}
+	if parts := strings.Split(oi.NamespacedKey, "/"); len(parts) == 1 {
+		nn.Name = parts[0]
+	} else {
+		nn.Namespace = parts[0]
+		nn.Name = parts[1]
+	}
+	err := handlerFunc(ctx, ctrl.Request{NamespacedName: nn})
 	if err != nil {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
 	return err
 }
 
-// gracefulShutdown performs a graceful shutdown of the controller.
-func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
+// shutdown performs a graceful shutdown of the controller.
+func (dc *DynamicController) shutdown(ctx context.Context) error {
 	dc.log.Info("Starting graceful shutdown")
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	var wg sync.WaitGroup
 	dc.informers.Range(func(key, value interface{}) bool {
+		k := key.(schema.GroupVersionResource)
+		dc.log.V(1).Info("Shutting down informer", "gvr", k.String())
 		wg.Add(1)
 		go func(informer *informerWrapper) {
 			defer wg.Done()
@@ -422,8 +449,8 @@ func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
 	dc.queue.Add(objectIdentifiers)
 }
 
-// StartServingGVK registers a new GVK to the informers map safely.
-func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
+// Register registers a new GVK to the informers map safely.
+func (dc *DynamicController) Register(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
 	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
 
 	_, exists := dc.informers.Load(gvr)
@@ -501,14 +528,14 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	return nil
 }
 
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
-func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
+// Deregister safely removes a GVK from the controller and cleans up associated resources.
+func (dc *DynamicController) Deregister(ctx context.Context, gvr schema.GroupVersionResource) error {
 	dc.log.Info("Unregistering GVK", "gvr", gvr)
 
 	// Retrieve the informer
 	informerObj, ok := dc.informers.Load(gvr)
 	if !ok {
-		dc.log.V(1).Info("GVK not registered, nothing to unregister", "gvr", gvr)
+		dc.log.V(1).Info("GVK not registered, nothing to deregister", "gvr", gvr)
 		return nil
 	}
 

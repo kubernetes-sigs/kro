@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -30,16 +31,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/dynamiccontroller"
-	"github.com/kro-run/kro/pkg/graph"
-	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
@@ -48,6 +49,7 @@ type ResourceGraphDefinitionReconciler struct {
 	// Client and instanceLogger are set with SetupWithManager
 
 	client.Client
+
 	instanceLogger logr.Logger
 
 	clientSet  kroclient.SetInterface
@@ -82,6 +84,7 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
@@ -106,7 +109,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
-		Watches(
+		WatchesMetadata(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
 			builder.WithPredicates(predicate.Funcs{
@@ -127,17 +130,17 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
 // that owns the given CRD. It is used to trigger reconciliation when a CRD is updated.
 func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, obj client.Object) []reconcile.Request {
-	crd, ok := obj.(*extv1.CustomResourceDefinition)
-	if !ok {
+	mobj, err := meta.Accessor(obj)
+	if err != nil {
 		return nil
 	}
 
 	// Check if the CRD is owned by a ResourceGraphDefinition
-	if !metadata.IsKROOwned(crd.ObjectMeta) {
+	if !metadata.IsKROOwned(mobj) {
 		return nil
 	}
 
-	rgdName, ok := crd.Labels[metadata.ResourceGraphDefinitionNameLabel]
+	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
 	if !ok {
 		return nil
 	}

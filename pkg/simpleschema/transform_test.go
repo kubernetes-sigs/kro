@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
@@ -374,6 +375,57 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "Object with unknown fields",
+			obj: map[string]interface{}{
+				"values": "object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with required marker",
+			obj: map[string]interface{}{
+				"values": "object | required=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+					},
+				},
+				Required: []string{"values"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Object with unknown fields in combination with default marker",
+			obj: map[string]interface{}{
+				"values": "object | default={\"a\": \"b\"}",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"values": {
+						Type:                   "object",
+						XPreserveUnknownFields: ptr.To(true),
+						Default:                &extv1.JSON{Raw: []byte("{\"a\": \"b\"}")},
+					},
+				},
+				Default: &extv1.JSON{Raw: []byte("{}")},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Simple string validation",
 			obj: map[string]interface{}{
 				"name": `string | validation="self.name != 'invalid'"`,
@@ -434,6 +486,73 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "Simple immutable field",
+			obj: map[string]interface{}{
+				"id": "string | immutable=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"id": {
+						Type: "string",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Simple immutable field with false value",
+			obj: map[string]interface{}{
+				"name": "string | immutable=false",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Immutable with other markers",
+			obj: map[string]interface{}{
+				"resourceId": `string | required=true immutable=true description="Unique resource identifier"`,
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"resourceId"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"resourceId": {
+						Type:        "string",
+						Description: "Unique resource identifier",
+						XValidations: []extv1.ValidationRule{
+							{
+								Rule:    "self == oldSelf",
+								Message: "field is immutable",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid immutable value",
+			obj: map[string]interface{}{
+				"id": "string | immutable=invalid",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
 			name: "Custom simple type (required)",
 			obj: map[string]interface{}{
 				"myValue": "myType",
@@ -474,6 +593,342 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Required: []string{"req_1"},
 			},
 			wantErr: false,
+		},
+		{
+			name: "String field with pattern validation",
+			obj: map[string]interface{}{
+				"email": "string | pattern=\"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\"",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"email": {
+						Type:    "string",
+						Pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "String field with minLength and maxLength",
+			obj: map[string]interface{}{
+				"username": "string | minLength=3 maxLength=20",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"username": {
+						Type:      "string",
+						MinLength: ptr.To(int64(3)),
+						MaxLength: ptr.To(int64(20)),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "String field with all validation markers",
+			obj: map[string]interface{}{
+				"code": "string | pattern=\"^[A-Z]{2}[0-9]{4}$\" minLength=6 maxLength=6 description=\"Country code format\"",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"code": {
+						Type:        "string",
+						Pattern:     "^[A-Z]{2}[0-9]{4}$",
+						MinLength:   ptr.To(int64(6)),
+						MaxLength:   ptr.To(int64(6)),
+						Description: "Country code format",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with uniqueItems true",
+			obj: map[string]interface{}{
+				"tags": "[]string | uniqueItems=true",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"tags": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+						XListType: ptr.To("set"),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with uniqueItems false",
+			obj: map[string]interface{}{
+				"comments": "[]string | uniqueItems=false",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"comments": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Complex object with multiple new validation markers",
+			obj: map[string]interface{}{
+				"user": map[string]interface{}{
+					"email":    "string | pattern=\"^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$\"",
+					"username": "string | minLength=3 maxLength=15 pattern=\"^[a-zA-Z0-9_]+$\"",
+					"roles":    "[]string | uniqueItems=true",
+					"tags":     "[]string | uniqueItems=false",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"user": {
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"email": {
+								Type:    "string",
+								Pattern: "^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$",
+							},
+							"username": {
+								Type:      "string",
+								Pattern:   "^[a-zA-Z0-9_]+$",
+								MinLength: ptr.To(int64(3)),
+								MaxLength: ptr.To(int64(15)),
+							},
+							"roles": {
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{Type: "string"},
+								},
+								XListType: ptr.To("set"),
+							},
+							"tags": {
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{Type: "string"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with minItems",
+			obj: map[string]interface{}{
+				"items": "[]string | minItems=2",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"items": {
+						Type:     "array",
+						MinItems: ptr.To(int64(2)),
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with maxItems",
+			obj: map[string]interface{}{
+				"tags": "[]string | maxItems=10",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"tags": {
+						Type:     "array",
+						MaxItems: ptr.To(int64(10)),
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with minItems and maxItems",
+			obj: map[string]interface{}{
+				"priorities": "[]integer | minItems=1 maxItems=5",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"priorities": {
+						Type:     "array",
+						MinItems: ptr.To(int64(1)),
+						MaxItems: ptr.To(int64(5)),
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "integer"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with all validation markers",
+			obj: map[string]interface{}{
+				"codes": "[]string | uniqueItems=true minItems=2 maxItems=8",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"codes": {
+						Type:     "array",
+						MinItems: ptr.To(int64(2)),
+						MaxItems: ptr.To(int64(8)),
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+						XListType: ptr.To("set"),
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array field with zero minItems",
+			obj: map[string]interface{}{
+				"optional": "[]string | minItems=0",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"optional": {
+						Type:     "array",
+						MinItems: ptr.To(int64(0)),
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{Type: "string"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid pattern regex",
+			obj: map[string]interface{}{
+				"invalid": "string | pattern=\"[unclosed\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Pattern marker on non-string type",
+			obj: map[string]interface{}{
+				"invalid": "integer | pattern=\"[0-9]+\"",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "MinLength marker on non-string type",
+			obj: map[string]interface{}{
+				"invalid": "integer | minLength=5",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "MaxLength marker on non-string type",
+			obj: map[string]interface{}{
+				"invalid": "boolean | maxLength=10",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "UniqueItems marker on non-array type",
+			obj: map[string]interface{}{
+				"invalid": "string | uniqueItems=true",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid minLength value",
+			obj: map[string]interface{}{
+				"invalid": "string | minLength=abc",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid maxLength value",
+			obj: map[string]interface{}{
+				"invalid": "string | maxLength=xyz",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid uniqueItems value",
+			obj: map[string]interface{}{
+				"invalid": "[]string | uniqueItems=invalid",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "MinItems marker on non-array type",
+			obj: map[string]interface{}{
+				"invalid": "string | minItems=5",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "MaxItems marker on non-array type",
+			obj: map[string]interface{}{
+				"invalid": "integer | maxItems=10",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid minItems value",
+			obj: map[string]interface{}{
+				"invalid": "[]string | minItems=abc",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Invalid maxItems value",
+			obj: map[string]interface{}{
+				"invalid": "[]string | maxItems=xyz",
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "Empty pattern value",
+			obj: map[string]interface{}{
+				"invalid": "string | pattern=\"\"",
+			},
+			want:    nil,
+			wantErr: true,
 		},
 	}
 

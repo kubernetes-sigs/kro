@@ -1,0 +1,16 @@
+apiVersion: kro.run/v1alpha1
+kind: ValidationTestApp
+metadata:
+  name: valid-test-app
+spec:
+  email: user@example.com
+  username: testuser123
+  tags:
+    - production
+    - frontend
+    - webapp
+  priorities:
+    - 1
+    - 3
+  description: A test application
+  replicas: 3

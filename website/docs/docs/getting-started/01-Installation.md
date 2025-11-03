@@ -30,7 +30,7 @@ Once authenticated, install kro using the Helm chart:
 Fetch the latest release version from GitHub
 ```sh
 export KRO_VERSION=$(curl -sL \
-    https://api.github.com/repos/kro-run/kro/releases/latest | \
+    https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
     jq -r '.tag_name | ltrimstr("v")'
   )
 ```
@@ -40,18 +40,11 @@ echo $KRO_VERSION
 ```
 Install kro using Helm
 ```
-helm install kro oci://ghcr.io/kro-run/kro/kro \
+helm install kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --create-namespace \
   --version=${KRO_VERSION}
 ```
-
-:::info[**Troubleshooting Helm Install**]
-Note that authentication is not required for pulling charts from public GHCR (GitHub Container Registry) repositories.
-
-Helm install download failures occur due to expired local credentials. To resolve this issue, clear your local credentials cache by running `helm registry logout ghcr.io` in your terminal, then retry the installation.
-
-:::
 
 ## Verifying the Installation
 
@@ -91,7 +84,7 @@ export KRO_VERSION=<new-version>
 
 Upgrade the controller
 ```
-helm upgrade kro oci://ghcr.io/kro-run/kro/kro \
+helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --version=${KRO_VERSION}
 ```

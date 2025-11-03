@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package commands
+package validate
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	kroclient "github.com/kro-run/kro/pkg/client"
-	"github.com/kro-run/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -72,9 +72,7 @@ func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to create client set: %w", err)
 	}
 
-	restConfig := set.RESTConfig()
-
-	builder, err := graph.NewBuilder(restConfig)
+	builder, err := graph.NewBuilder(set.RESTConfig(), set.HTTPClient())
 	if err != nil {
 		return fmt.Errorf("failed to create graph builder: %w", err)
 	}

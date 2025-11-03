@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
-	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/apis"
-	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/apis"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // setResourceGraphDefinitionStatus calculates the ResourceGraphDefinition status and updates it

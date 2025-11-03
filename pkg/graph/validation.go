@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 var (
@@ -46,19 +46,25 @@ var (
 		"externalReferences",
 		"graph",
 		"instance",
+		"item",
+		"items",
 		"kind",
+		"kro",
 		"metadata",
 		"namespace",
 		"object",
 		"resource",
 		"resourcegraphdefinition",
+		"resourceGraphDefinition",
 		"resources",
+		"root",
 		"runtime",
-		"serviceAccountName",
 		"schema",
+		"self",
+		"serviceAccountName",
 		"spec",
 		"status",
-		"kro",
+		"this",
 		"variables",
 		"vars",
 		"version",

@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
-	"github.com/kro-run/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 const (
@@ -48,9 +48,22 @@ const (
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
-func IsKROOwned(meta metav1.ObjectMeta) bool {
-	v, ok := meta.Labels[OwnedLabel]
+func IsKROOwned(meta metav1.Object) bool {
+	v, ok := meta.GetLabels()[OwnedLabel]
 	return ok && booleanFromString(v)
+}
+
+// HasMatchingKROOwner returns true if resources have the same RGD owner.
+// Note: The caller is responsible for ensuring that KRO labels exist on both
+// resources before calling this function.
+func HasMatchingKROOwner(a, b metav1.ObjectMeta) bool {
+	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
+	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]
+
+	bOwnerName := b.Labels[ResourceGraphDefinitionNameLabel]
+	bOwnerID := b.Labels[ResourceGraphDefinitionIDLabel]
+
+	return aOwnerName == bOwnerName && aOwnerID == bOwnerID
 }
 
 // SetKROOwned sets the OwnedLabel to true on the resource.

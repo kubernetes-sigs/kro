@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
-	"github.com/kro-run/kro/pkg/graph/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 )
 
 // fieldDescriptor represents a field in an OpenAPI schema. Typically this field

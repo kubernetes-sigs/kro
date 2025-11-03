@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/api/v1alpha1"
-	"github.com/kro-run/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
@@ -56,7 +56,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 // shutdownResourceGraphDefinitionMicroController stops the dynamic controller associated with the given GVR.
 // This ensures no new reconciliations occur for this resource type.
 func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {
-	if err := r.dynamicController.StopServiceGVK(ctx, *gvr); err != nil {
+	if err := r.dynamicController.Deregister(ctx, *gvr); err != nil {
 		return fmt.Errorf("error stopping service: %w", err)
 	}
 	return nil

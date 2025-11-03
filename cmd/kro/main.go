@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kro-run/kro/cmd/kro/commands"
+	"github.com/kubernetes-sigs/kro/cmd/kro/commands"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/util/homedir"
 )

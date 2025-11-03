@@ -163,7 +163,7 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 	psecret.SetFinalizers(append(psecret.GetFinalizers(), "test"))
 	secretUpdates <- watch.Event{
 		Type:   watch.Modified,
-		Object: psecret,
+		Object: psecret.DeepCopy(),
 	}
 	psecret.SetLabels(map[string]string{
 		metadata.OwnedLabel:             "true",
@@ -172,7 +172,7 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 	})
 	secretUpdates <- watch.Event{
 		Type:   watch.Modified,
-		Object: psecret,
+		Object: psecret.DeepCopy(),
 	}
 
 	// Wait for initial reconciliation of parent
@@ -189,7 +189,7 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 	pdeploy.SetGeneration(deploy.GetGeneration() + 1)
 	deploymentUpdates <- watch.Event{
 		Type:   watch.Modified,
-		Object: pdeploy,
+		Object: pdeploy.DeepCopy(),
 	}
 	// Wait for parent to reconcile again due to parent generation change
 	require.Eventually(t, func() bool {

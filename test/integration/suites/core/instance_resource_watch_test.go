@@ -15,10 +15,11 @@
 package core_test
 
 import (
-	"context"
 	"fmt"
 	"time"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -26,9 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Instance Resource Watch", func() {
@@ -43,99 +41,78 @@ var _ = Describe("Instance Resource Watch", func() {
 		})).To(Succeed())
 	})
 
-	DescribeTable("watch behavior on ConfigMap",
-		func(ctx SpecContext, reactive bool) {
-			var suffix = "Reactive"
-			if !reactive {
-				suffix = "Periodic"
+	It("watch behavior on Secret", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-instance-resource-reconcile-reactive",
+			generator.WithSchema(
+				"TestResourceWatch", "v1alpha1",
+				map[string]interface{}{
+					"field1": "string",
+				},
+				nil,
+			),
+			generator.WithResource("res1", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "static-configmap",
+				},
+				"data": map[string]interface{}{
+					"key": "${schema.spec.field1}",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.Conditions).To(Not(BeNil()))
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			for _, cond := range rgd.Status.Conditions {
+				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}
-			rgd := generator.NewResourceGraphDefinition(fmt.Sprintf("test-instance-resource-reconcile-%v", reactive),
-				generator.WithSchema(
-					"TestStatus"+suffix, "v1alpha1",
-					map[string]interface{}{
-						"field1": "string",
-					},
-					nil,
-				),
-				generator.WithResource("res1", map[string]interface{}{
-					"apiVersion": "v1",
-					"kind":       "ConfigMap",
-					"metadata": map[string]interface{}{
-						"name": "static-configmap",
-					},
-					"data": map[string]interface{}{
-						"key": "${schema.spec.field1}",
-					},
-				}, nil, nil),
-			)
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			if reactive {
-				rgd.Spec.Reconcile = &krov1alpha1.ResourceGraphDefinitionReconcileSpec{
-					InstancePolicy: krov1alpha1.ResourceGraphDefinitionInstancePolicyReactive,
-				}
-			}
+		instance := &unstructured.Unstructured{}
+		instance.SetAPIVersion(krov1alpha1.GroupVersion.String())
+		instance.SetKind("TestResourceWatch")
+		instance.SetName("test-instance")
+		instance.SetNamespace(namespace)
+		instance.Object["spec"] = map[string]interface{}{
+			"field1": "foo",
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: instance.GetNamespace(),
+			}, instance)).ToNot(HaveOccurred())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			Eventually(func(g Gomega, ctx context.Context) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.Conditions).To(Not(BeNil()))
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-				for _, cond := range rgd.Status.Conditions {
-					g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-				}
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		cfgMap := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      "static-configmap",
+				Namespace: namespace,
+			}, cfgMap)).ToNot(HaveOccurred())
+			g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", "foo"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			instance := &unstructured.Unstructured{}
-			instance.SetAPIVersion(krov1alpha1.GroupVersion.String())
-			instance.SetKind("TestStatus" + suffix)
-			instance.SetName("test-instance")
-			instance.SetNamespace(namespace)
-			instance.Object["spec"] = map[string]interface{}{
-				"field1": "foo",
-			}
-			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		time.Sleep(5 * time.Second)
+		cfgMap.Data["key"] = "updated"
+		Expect(env.Client.Update(ctx, cfgMap)).To(Succeed())
 
-			Eventually(func(g Gomega, ctx context.Context) {
-				g.Expect(env.Client.Get(ctx, types.NamespacedName{
-					Name:      instance.GetName(),
-					Namespace: instance.GetNamespace(),
-				}, instance)).ToNot(HaveOccurred())
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-			cfgMap := &corev1.ConfigMap{}
-			Eventually(func(g Gomega, ctx context.Context) {
-				g.Expect(env.Client.Get(ctx, types.NamespacedName{
-					Name:      "static-configmap",
-					Namespace: namespace,
-				}, cfgMap)).ToNot(HaveOccurred())
-				g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", "foo"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-			time.Sleep(5 * time.Second)
-			cfgMap.Data["key"] = "updated"
-			Expect(env.Client.Update(ctx, cfgMap)).To(Succeed())
-
-			var expectedKeyValue string
-			if reactive {
-				expectedKeyValue = "foo"
-			} else {
-				expectedKeyValue = "updated"
-			}
-
-			Eventually(func(g Gomega, ctx context.Context) {
-				err := env.Client.Get(ctx, types.NamespacedName{
-					Name:      "static-configmap",
-					Namespace: namespace,
-				}, cfgMap)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", expectedKeyValue))
-			}, 3*time.Second, time.Second).WithContext(ctx).Should(Succeed(),
-				"ConfigMap should be updated to reflect the instance reconcile due to watch on resources",
-			)
-		},
-		Entry("should not update when policy set to periodic", false),
-		Entry("should update when policy set to reactive", true),
-	)
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "static-configmap",
+				Namespace: namespace,
+			}, cfgMap)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(cfgMap.Data).To(HaveKeyWithValue("key", "updated"))
+		}, 3*time.Second, time.Second).WithContext(ctx).Should(Succeed(),
+			"ConfigMap should be updated to reflect the instance reconcile due to watch on resources",
+		)
+	})
 })

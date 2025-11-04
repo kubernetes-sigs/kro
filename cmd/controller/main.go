@@ -115,7 +115,7 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
-	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 0,
+	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
 		"interval at which the controller will re list resources even with no changes, in seconds. "+
 			"By default resync is disabled.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,

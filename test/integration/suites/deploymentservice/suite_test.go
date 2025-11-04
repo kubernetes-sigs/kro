@@ -191,6 +191,29 @@ var _ = Describe("DeploymentService", func() {
 			condition, found, _ := unstructured.NestedFieldNoCopy(instance.Object, "status", "unavailable")
 			g.Expect(found).To(BeFalse())
 			g.Expect(condition).To(BeNil())
+
+			// Validate Ready condition
+			statusConditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
+			g.Expect(found).To(BeTrue())
+			g.Expect(statusConditions).ToNot(BeEmpty())
+
+			// Find the Ready condition
+			var readyCondition map[string]interface{}
+			for _, condInterface := range statusConditions {
+				if cond, ok := condInterface.(map[string]interface{}); ok {
+					condType, _ := cond["type"].(string)
+					if condType == ctrlinstance.Ready {
+						readyCondition = cond
+						break
+					}
+				}
+			}
+
+			// Validate Ready condition
+			g.Expect(readyCondition).ToNot(BeNil(), "Ready condition should be present")
+			g.Expect(readyCondition["status"]).To(Equal("True"), "Ready condition should be True")
+			g.Expect(readyCondition["observedGeneration"]).To(Equal(instance.GetGeneration()),
+				"Ready observedGeneration should match instance generation")
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance

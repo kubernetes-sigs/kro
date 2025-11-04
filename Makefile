@@ -1,7 +1,9 @@
-OCI_REPO ?= ghcr.io/kro-run/kro
+OCI_REPO ?= registry.k8s.io/kro
 
-HELM_IMAGE ?= ${OCI_REPO}
+HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
+
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -206,7 +208,7 @@ build-image: ko ## Build the kro controller images using ko build
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish
-publish-image: ko ## Publish the kro controller images to ghcr.io
+publish-image: ko ## Publish the kro controller images
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
@@ -217,11 +219,11 @@ package-helm: ## Package Helm chart
 	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
 	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
 	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
-	helm package helm
+	${HELM} package helm
 
 .PHONY: publish-helm
 publish-helm: ## Helm publish
-	helm push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
+	${HELM} push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm
@@ -249,17 +251,17 @@ deploy-kind: ko
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
 .PHONY: ko-apply
 ko-apply: ko
-	helm template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
 
 ## CLI
 .PHONY: cli
-cli: 
+cli:
 	go build -o bin/kro cmd/kro/main.go
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"

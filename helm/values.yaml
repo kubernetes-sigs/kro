@@ -9,7 +9,7 @@ additionalLabels: {}
 
 image:
   # The location of the container image repository
-  repository: ghcr.io/kro-run/kro/controller
+  repository: registry.k8s.io/kro/kro
   # Overrides the image tag whose default is the chart appVersion.
   tag: ${VERSION}
   # Ignores the repository and tag settings and uses the controllers ko entrypoint.

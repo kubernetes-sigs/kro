@@ -119,33 +119,40 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
 		log.Error(err, "Failed to get instance")
 		return nil
 	}
-
-	// This is one of the main reasons why we're splitting the controller into
-	// two parts. The instantiator is responsible for creating a new runtime
-	// instance of the resource graph definition. The instance graph reconciler is responsible
-	// for reconciling the instance and its sub-resources, while keeping the same
-	// runtime object in it's fields.
-	rgRuntime, err := c.rgd.NewGraphRuntime(instance)
-	if err != nil {
-		return fmt.Errorf("failed to create runtime resource graph definition: %w", err)
-	}
-
 	instanceSubResourcesLabeler, err := metadata.NewInstanceLabeler(instance).Merge(c.instanceLabeler)
 	if err != nil {
 		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
 	}
 
+	// Create the instance graph reconciler early so the defer can access it
 	instanceGraphReconciler := &instanceGraphReconciler{
 		log:                         log,
 		gvr:                         c.gvr,
 		client:                      c.clientSet.Dynamic(),
 		restMapper:                  c.clientSet.RESTMapper(),
-		runtime:                     rgRuntime,
+		rgd:                         c.rgd,
+		instance:                    instance,
 		instanceLabeler:             c.instanceLabeler,
 		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
 		reconcileConfig:             c.reconcileConfig,
 		// Fresh instance state at each reconciliation loop.
 		state: newInstanceState(),
 	}
+
+	// Single defer to rule them all - handles status updates for ALL code paths
+	defer func() {
+		// Update instance state based on reconciliation result
+		instanceGraphReconciler.updateInstanceState()
+
+		// Prepare and patch status
+		status := instanceGraphReconciler.prepareStatus()
+		if err := instanceGraphReconciler.patchInstanceStatus(ctx, status); err != nil {
+			// Only log error if instance still exists
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "Failed to patch instance status")
+			}
+		}
+	}()
+
 	return instanceGraphReconciler.reconcile(ctx)
 }

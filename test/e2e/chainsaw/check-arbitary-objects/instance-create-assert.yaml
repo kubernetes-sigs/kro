@@ -21,10 +21,24 @@ spec:
       - item3
 status:
   conditions:
-  - message: Instance reconciled successfully
+  - message: instance is properly managed with finalizers and labels
     observedGeneration: 1
-    reason: ReconciliationSucceeded
+    reason: Managed
     status: "True"
-    type: InstanceSynced
+    type: InstanceManaged
+  - message: runtime graph created and all resources resolved
+    observedGeneration: 1
+    reason: Resolved
+    status: "True"
+    type: GraphResolved
+  - message: all resources are created and ready
+    observedGeneration: 1
+    reason: AllResourcesReady
+    status: "True"
+    type: ResourcesReady
+  - message: ""
+    observedGeneration: 1
+    reason: Ready
+    status: "True"
+    type: Ready
   state: ACTIVE
-

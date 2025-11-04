@@ -132,6 +132,11 @@ func TestLazyInformer_RecreateAfterStop(t *testing.T) {
 	require.True(t, stopped)
 	assert.Nil(t, li.Informer())
 
+	// second removal should be a noop
+	stopped, err = li.RemoveHandler("h1")
+	assert.NoError(t, err)
+	assert.False(t, stopped)
+
 	// Add again — recreate context and informer
 	// ignore internal sync failure, just check that informer and handler exist
 	_ = li.AddHandler(ctx, "h2", cache.ResourceEventHandlerFuncs{})

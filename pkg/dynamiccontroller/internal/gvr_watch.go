@@ -144,7 +144,8 @@ func (w *LazyInformer) RemoveHandler(id string) (bool, error) {
 		delete(w.handlers, id)
 	}
 
-	if len(w.handlers) == 0 {
+	// if we now have no handlers and we had a running informer, stop it.
+	if len(w.handlers) == 0 && w.informer != nil {
 		w.cancel()
 		<-w.done
 		w.cancel = nil

@@ -238,7 +238,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		if clusterObj != nil {
 			igr.runtime.SetResource(resourceID, clusterObj)
 			igr.updateResourceReadiness(resourceID)
-			// Synchronize runtime state after each resource
+			// Synchronize runtime state after each resource to re-evaluate CEL expressions
 			if _, err := igr.runtime.Synchronize(); err != nil {
 				return fmt.Errorf("failed to synchronize after apply/prune: %w", err)
 			}
@@ -252,6 +252,10 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			resourceState.State = ResourceStateError
 			resourceState.Err = applied.Error
 		} else {
+			// Update runtime with the applied resource
+			if applied.LastApplied != nil {
+				igr.runtime.SetResource(applied.ID, applied.LastApplied)
+			}
 			igr.updateResourceReadiness(applied.ID)
 		}
 	}

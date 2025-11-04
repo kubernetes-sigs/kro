@@ -90,9 +90,9 @@ var _ = Describe("Dependency Readiness", func() {
 				},
 				"data": map[string]interface{}{
 					"value": "${schema.spec.configA.data}",
-					"ready": "${schema.spec.configA.ready}",
+					"ready": "${string(schema.spec.configA.ready)}",
 				},
-			}, []string{"${configmapA.data.ready == \"true\"}"}, nil),
+			}, []string{"${configmapA.data.?ready.orValue(\"false\") == \"true\"}"}, nil),
 			// ConfigMap B - no dependencies, has readyWhen
 			generator.WithResource("configmapB", map[string]interface{}{
 				"apiVersion": "v1",
@@ -102,9 +102,9 @@ var _ = Describe("Dependency Readiness", func() {
 				},
 				"data": map[string]interface{}{
 					"value": "${schema.spec.configB.data}",
-					"ready": "${schema.spec.configB.ready}",
+					"ready": "${string(schema.spec.configB.ready)}",
 				},
-			}, []string{"${configmapB.data.ready == \"true\"}"}, nil),
+			}, []string{"${configmapB.data.?ready.orValue(\"false\") == \"true\"}"}, nil),
 			// Deployment - depends on both configmaps
 			generator.WithResource("deployment", map[string]interface{}{
 				"apiVersion": "apps/v1",
@@ -133,11 +133,11 @@ var _ = Describe("Dependency Readiness", func() {
 									"env": []interface{}{
 										map[string]interface{}{
 											"name":  "CONFIG_A",
-											"value": "${configmapA.data.value}",
+											"value": "${configmapA.data.?value.orValue(\"\")}",
 										},
 										map[string]interface{}{
 											"name":  "CONFIG_B",
-											"value": "${configmapB.data.value}",
+											"value": "${configmapB.data.?value.orValue(\"\")}",
 										},
 									},
 								},
@@ -243,11 +243,13 @@ var _ = Describe("Dependency Readiness", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify Deployment is NOT created yet (dependencies not ready)
-		err := env.Client.Get(ctx, types.NamespacedName{
-			Name:      instanceName,
-			Namespace: namespace,
-		}, &appsv1.Deployment{})
-		Expect(err).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, &appsv1.Deployment{})
+			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify instance state is IN_PROGRESS
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -263,21 +265,50 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(status).To(Equal("IN_PROGRESS"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		// Update ConfigMap A to be ready
-		configMapA.Data["ready"] = "true"
-		Expect(env.Client.Update(ctx, configMapA)).To(Succeed())
+		// Update instance spec to set ConfigMap A to ready
+		Eventually(func(g Gomega, ctx SpecContext) {
+			// Get fresh copy to avoid conflicts
+			freshInstance := &unstructured.Unstructured{}
+			freshInstance.SetGroupVersionKind(instance.GroupVersionKind())
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, freshInstance)
+			g.Expect(err).ToNot(HaveOccurred())
 
-		// Wait a bit and verify deployment is still NOT created (ConfigMap B not ready yet)
-		time.Sleep(5 * time.Second)
-		err = env.Client.Get(ctx, types.NamespacedName{
-			Name:      instanceName,
-			Namespace: namespace,
-		}, &appsv1.Deployment{})
-		Expect(err).To(MatchError(errors.IsNotFound, "deployment should still not be created"))
+			err = unstructured.SetNestedField(freshInstance.Object, true, "spec", "configA", "ready")
+			g.Expect(err).ToNot(HaveOccurred())
 
-		// Update ConfigMap B to be ready
-		configMapB.Data["ready"] = "true"
-		Expect(env.Client.Update(ctx, configMapB)).To(Succeed())
+			err = env.Client.Update(ctx, freshInstance)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 10*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+
+		// Verify deployment is still NOT created (ConfigMap B not ready yet)
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, &appsv1.Deployment{})
+			g.Expect(err).To(MatchError(errors.IsNotFound, "deployment should still not be created"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Update instance spec to set ConfigMap B to ready
+		Eventually(func(g Gomega, ctx SpecContext) {
+			// Get fresh copy to avoid conflicts
+			freshInstance := &unstructured.Unstructured{}
+			freshInstance.SetGroupVersionKind(instance.GroupVersionKind())
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, freshInstance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			err = unstructured.SetNestedField(freshInstance.Object, true, "spec", "configB", "ready")
+			g.Expect(err).ToNot(HaveOccurred())
+
+			err = env.Client.Update(ctx, freshInstance)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 10*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Now verify Deployment IS created (all dependencies are ready)
 		deployment := &appsv1.Deployment{}

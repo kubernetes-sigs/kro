@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -372,4 +373,144 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
+
+	It("should block dependent resources until readyWhen conditions are satisfied", func(ctx SpecContext) {
+		instanceName := "test-jobs-instance"
+		rgd := generator.NewResourceGraphDefinition("test-jobs",
+			generator.WithSchema(
+				"TestJobs", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			generator.WithResource("job1", map[string]interface{}{
+				"apiVersion": "batch/v1",
+				"kind":       "Job",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-job1",
+				},
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":    "sleeper",
+									"image":   "busybox",
+									"command": []interface{}{"sh", "-c", "echo 'Job 1 starting' && sleep 5 && echo 'Job 1 complete'"},
+								},
+							},
+							"restartPolicy": "Never",
+						},
+					},
+				},
+			}, []string{"${job1.status.?completionTime.orValue(null) != null}"}, nil),
+			generator.WithResource("job2", map[string]interface{}{
+				"apiVersion": "batch/v1",
+				"kind":       "Job",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-job2",
+					"annotations": map[string]interface{}{
+						"depends-on": "${job1.metadata.name}",
+					},
+				},
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":    "sleeper",
+									"image":   "busybox",
+									"command": []interface{}{"sh", "-c", "echo 'Job 2 starting' && sleep 1 && echo 'Job 2 complete'"},
+								},
+							},
+							"restartPolicy": "Never",
+						},
+					},
+				},
+			}, []string{"${job2.status.?completionTime.orValue(null) != null}"}, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			var readyCondition krov1alpha1.Condition
+			for _, cond := range createdRGD.Status.Conditions {
+				if cond.Type == resourcegraphdefinition.Ready {
+					readyCondition = cond
+				}
+			}
+			g.Expect(readyCondition).ToNot(BeNil())
+			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "TestJobs",
+				"metadata": map[string]interface{}{
+					"name":      instanceName,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name": "test-jobs",
+				},
+			},
+		}
+
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		job1 := &batchv1.Job{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-jobs-job1",
+				Namespace: namespace,
+			}, job1)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-jobs-job2",
+				Namespace: namespace,
+			}, &batchv1.Job{})
+			g.Expect(err).To(MatchError(errors.IsNotFound, "job2 should not be created while job1 is running"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		now := metav1.Now()
+		job1.Status.CompletionTime = &now
+		job1.Status.Succeeded = 1
+		Expect(env.Client.Status().Update(ctx, job1)).To(Succeed())
+
+		job2 := &batchv1.Job{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-jobs-job2",
+				Namespace: namespace,
+			}, job2)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		now = metav1.Now()
+		job2.Status.CompletionTime = &now
+		job2.Status.Succeeded = 1
+		Expect(env.Client.Status().Update(ctx, job2)).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instanceName,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	}, SpecTimeout(120*time.Second))
 })

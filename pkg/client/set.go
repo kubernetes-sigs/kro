@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/release-utils/version"
 )
@@ -137,6 +138,11 @@ func (c *Set) init() error {
 	}
 
 	c.apiExtensionsV1, err = apiextensionsv1.NewForConfigAndClient(c.config, c.httpClient)
+	if err != nil {
+		return err
+	}
+
+	c.restMapper, err = apiutil.NewDynamicRESTMapper(c.config, c.httpClient)
 	if err != nil {
 		return err
 	}

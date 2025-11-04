@@ -261,24 +261,29 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 	}
 
 	if err != nil {
+		mark.ResourcesNotReady("failed to reconcile the apply set: %v", err)
 		return igr.delayedRequeue(fmt.Errorf("failed to apply/prune resources: %w", err))
 	}
 
 	// Inspect resource states and return error if any resource is in error state
 	if err := igr.state.ResourceErrors(); err != nil {
+		mark.ResourcesNotReady("at least one resource reports an error: %v", err)
 		return igr.delayedRequeue(err)
 	}
 
 	if err := result.Errors(); err != nil {
+		mark.ResourcesNotReady("there was an error while reconciling resources in the apply set: %v", err)
 		return fmt.Errorf("failed to apply/prune resources: %w", err)
 	}
 
 	if unresolvedResourceID != "" {
+		mark.ResourcesInProgress("waiting for resource resolution: %s", unresolvedResourceID)
 		return igr.delayedRequeue(fmt.Errorf("unresolved resource: %s", unresolvedResourceID))
 	}
 
 	// If there are any cluster mutations, we need to requeue.
 	if result.HasClusterMutation() {
+		mark.ResourcesInProgress("reconciling cluster mutation after apply")
 		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
 	}
 

@@ -1696,11 +1696,40 @@ func Test_evaluateDynamicVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Build runtimeVariables from expressionsCache for the new implementation
+			runtimeVariables := make(map[string][]*expressionEvaluationState)
+			var topologicalOrder []string
+			
+			// Group expressions by their dependencies to simulate resource ownership
+			for _, expr := range tt.expressionsCache {
+				// Use first dependency as resource ID, or "test-resource" if no dependencies
+				resourceID := "test-resource"
+				if len(expr.Dependencies) > 0 {
+					resourceID = expr.Dependencies[0]
+				}
+				
+				runtimeVariables[resourceID] = append(runtimeVariables[resourceID], expr)
+				
+				// Add to topological order if not already present
+				found := false
+				for _, id := range topologicalOrder {
+					if id == resourceID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					topologicalOrder = append(topologicalOrder, resourceID)
+				}
+			}
+
 			rt := &ResourceGraphDefinitionRuntime{
 				instance: newTestResource(
 					withObject(map[string]interface{}{}),
 				),
 				expressionsCache:  tt.expressionsCache,
+				runtimeVariables:  runtimeVariables,
+				topologicalOrder:  topologicalOrder,
 				resolvedResources: tt.resolvedResources,
 			}
 
@@ -2549,13 +2578,19 @@ func Test_evaluateExpression(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evaluateExpression(env, tt.context, tt.expression)
+			got, details, err := evaluateExpression(env, tt.context, tt.expression)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if err == nil && !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("evaluateExpression() = %v, want %v", got, tt.want)
+			if err == nil {
+				if !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("evaluateExpression() = %v, want %v", got, tt.want)
+				}
+				// Verify cost tracking is enabled (details should not be nil for successful evaluations)
+				if details == nil {
+					t.Error("evaluateExpression() details = nil, expected cost tracking details")
+				}
 			}
 		})
 	}
@@ -2745,4 +2780,583 @@ func newTestResource(opts ...mockResourceOption) *mockResource {
 		opt(r)
 	}
 	return r
+}
+
+// TestCELMetrics tests the CEL cost tracking functionality
+func TestCELMetrics(t *testing.T) {
+	t.Run("RecordCELCost accumulates costs", func(t *testing.T) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celMetrics: CELMetrics{
+				CostPerResource: make(map[string]uint64),
+			},
+		}
+
+		// Record costs for different resources
+		rt.RecordCELCost("deployment", 10)
+		rt.RecordCELCost("service", 5)
+		rt.RecordCELCost("deployment", 15) // Additional cost for deployment
+
+		// Verify total cost
+		if rt.celMetrics.TotalCost != 30 {
+			t.Errorf("TotalCost = %d, want 30", rt.celMetrics.TotalCost)
+		}
+
+		// Verify per-resource costs
+		if rt.celMetrics.CostPerResource["deployment"] != 25 {
+			t.Errorf("deployment cost = %d, want 25", rt.celMetrics.CostPerResource["deployment"])
+		}
+		if rt.celMetrics.CostPerResource["service"] != 5 {
+			t.Errorf("service cost = %d, want 5", rt.celMetrics.CostPerResource["service"])
+		}
+	})
+
+	t.Run("GetCELMetrics returns current metrics", func(t *testing.T) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celMetrics: CELMetrics{
+				TotalCost: 100,
+				CostPerResource: map[string]uint64{
+					"resource1": 60,
+					"resource2": 40,
+				},
+			},
+		}
+
+		metrics := rt.GetCELMetrics()
+		if metrics.TotalCost != 100 {
+			t.Errorf("TotalCost = %d, want 100", metrics.TotalCost)
+		}
+		if metrics.CostPerResource["resource1"] != 60 {
+			t.Errorf("resource1 cost = %d, want 60", metrics.CostPerResource["resource1"])
+		}
+		if metrics.CostPerResource["resource2"] != 40 {
+			t.Errorf("resource2 cost = %d, want 40", metrics.CostPerResource["resource2"])
+		}
+	})
+
+	t.Run("ResetCELMetrics clears all metrics", func(t *testing.T) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celMetrics: CELMetrics{
+				TotalCost: 100,
+				CostPerResource: map[string]uint64{
+					"resource1": 60,
+					"resource2": 40,
+				},
+			},
+		}
+
+		rt.ResetCELMetrics()
+
+		if rt.celMetrics.TotalCost != 0 {
+			t.Errorf("TotalCost after reset = %d, want 0", rt.celMetrics.TotalCost)
+		}
+		if len(rt.celMetrics.CostPerResource) != 0 {
+			t.Errorf("CostPerResource after reset has %d entries, want 0", len(rt.celMetrics.CostPerResource))
+		}
+	})
+
+	t.Run("RecordCELCost initializes map if nil", func(t *testing.T) {
+		rt := &ResourceGraphDefinitionRuntime{}
+		// CostPerResource map is nil initially
+
+		rt.RecordCELCost("test-resource", 50)
+
+		if rt.celMetrics.TotalCost != 50 {
+			t.Errorf("TotalCost = %d, want 50", rt.celMetrics.TotalCost)
+		}
+		if rt.celMetrics.CostPerResource["test-resource"] != 50 {
+			t.Errorf("test-resource cost = %d, want 50", rt.celMetrics.CostPerResource["test-resource"])
+		}
+	})
+}
+
+// TestEvaluateExpressionCostTracking tests that CEL expression evaluation tracks costs
+func TestEvaluateExpressionCostTracking(t *testing.T) {
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"test"}))
+	if err != nil {
+		t.Fatalf("failed to create CEL environment: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		expression string
+		context    map[string]interface{}
+		wantErr    bool
+	}{
+		{
+			name:       "simple expression",
+			expression: "test.value + 10",
+			context: map[string]interface{}{
+				"test": map[string]interface{}{
+					"value": 5,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:       "complex expression",
+			expression: "test.items.map(i, i * 2).filter(i, i > 5)",
+			context: map[string]interface{}{
+				"test": map[string]interface{}{
+					"items": []interface{}{1, 2, 3, 4, 5},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:       "string concatenation",
+			expression: "test.firstName + ' ' + test.lastName",
+			context: map[string]interface{}{
+				"test": map[string]interface{}{
+					"firstName": "John",
+					"lastName":  "Doe",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, details, err := evaluateExpression(env, tt.context, tt.expression)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				// Verify that cost tracking is enabled
+				if details == nil {
+					t.Fatal("evaluateExpression() details is nil, expected cost tracking to be enabled")
+				}
+
+				// Verify that cost is tracked
+				cost := details.ActualCost()
+				if cost == nil {
+					t.Fatal("details.ActualCost() returned nil")
+				}
+
+				// Cost should be > 0 for any expression
+				if *cost == 0 {
+					t.Error("ActualCost() = 0, expected non-zero cost for expression evaluation")
+				}
+
+				t.Logf("Expression '%s' cost: %d", tt.expression, *cost)
+			}
+		})
+	}
+}
+
+// TestRuntimeCELCostIntegration tests CEL cost tracking in the runtime
+func TestRuntimeCELCostIntegration(t *testing.T) {
+	instance := newTestResource(
+		withObject(map[string]interface{}{
+			"spec": map[string]interface{}{
+				"name":     "test-app",
+				"replicas": int64(3),
+			},
+		}),
+	)
+
+	resources := map[string]Resource{
+		"deployment": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-deployment",
+				},
+				"spec": map[string]interface{}{
+					"replicas": "${schema.spec.replicas}",
+				},
+			}),
+			withVariables([]*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "metadata.name",
+						Expressions: []string{"schema.spec.name + '-deployment'"},
+					},
+					Dependencies: []string{},
+					Kind:         variable.ResourceVariableKindStatic,
+				},
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "spec.replicas",
+						Expressions: []string{"schema.spec.replicas"},
+					},
+					Dependencies: []string{},
+					Kind:         variable.ResourceVariableKindStatic,
+				},
+			}),
+		),
+	}
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment"})
+	if err != nil {
+		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
+	}
+
+	// Verify that costs were tracked during initialization
+	metrics := rt.GetCELMetrics()
+
+	if metrics.TotalCost == 0 {
+		t.Error("TotalCost = 0, expected non-zero cost after evaluating static variables")
+	}
+
+	// Verify schema costs were tracked
+	if metrics.CostPerResource["schema"] == 0 {
+		t.Error("schema cost = 0, expected non-zero cost for static variable evaluation")
+	}
+
+	t.Logf("Total CEL cost: %d", metrics.TotalCost)
+	t.Logf("Cost breakdown: %+v", metrics.CostPerResource)
+}
+
+// TestIsResourceReadyCostTracking tests that readyWhen expressions track costs
+func TestIsResourceReadyCostTracking(t *testing.T) {
+	instance := newTestResource(
+		withObject(map[string]interface{}{
+			"spec": map[string]interface{}{
+				"name": "test",
+			},
+		}),
+	)
+
+	resources := map[string]Resource{
+		"deployment": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"status": map[string]interface{}{
+					"readyReplicas": int64(3),
+				},
+			}),
+			withReadyExpressions([]string{"deployment.status.readyReplicas > 0"}),
+		),
+	}
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment"})
+	if err != nil {
+		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
+	}
+
+	// Set the deployment as resolved
+	deploymentObj := resources["deployment"].Unstructured()
+	rt.SetResource("deployment", deploymentObj)
+
+	// Check if resource is ready (this should track CEL cost)
+	initialMetrics := rt.GetCELMetrics()
+	initialCost := initialMetrics.TotalCost
+
+	ready, reason, err := rt.IsResourceReady("deployment")
+	if err != nil {
+		t.Fatalf("IsResourceReady() error = %v", err)
+	}
+	if !ready {
+		t.Errorf("IsResourceReady() = false, reason = %s, want true", reason)
+	}
+
+	// Verify cost was tracked
+	finalMetrics := rt.GetCELMetrics()
+	if finalMetrics.TotalCost <= initialCost {
+		t.Errorf("TotalCost did not increase after readyWhen evaluation, before: %d, after: %d",
+			initialCost, finalMetrics.TotalCost)
+	}
+
+	// Verify deployment-specific cost was tracked
+	if finalMetrics.CostPerResource["deployment"] == 0 {
+		t.Error("deployment cost = 0, expected non-zero cost for readyWhen evaluation")
+	}
+
+	t.Logf("ReadyWhen expression cost: %d", finalMetrics.CostPerResource["deployment"])
+}
+
+// TestReadyToProcessResourceCostTracking tests that includeWhen expressions track costs
+func TestReadyToProcessResourceCostTracking(t *testing.T) {
+	instance := newTestResource(
+		withObject(map[string]interface{}{
+			"spec": map[string]interface{}{
+				"enableFeature": true,
+			},
+		}),
+	)
+
+	resources := map[string]Resource{
+		"optional-resource": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+			}),
+			withIncludeWhenExpressions([]string{"schema.spec.enableFeature == true"}),
+		),
+	}
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"optional-resource"})
+	if err != nil {
+		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
+	}
+
+	// Get initial metrics
+	initialMetrics := rt.GetCELMetrics()
+
+	// ReadyToProcessResource should evaluate includeWhen and track cost
+	ready, err := rt.ReadyToProcessResource("optional-resource")
+	if err != nil {
+		t.Fatalf("ReadyToProcessResource() error = %v", err)
+	}
+	if !ready {
+		t.Error("ReadyToProcessResource() = false, want true")
+	}
+
+	// Verify cost was tracked
+	finalMetrics := rt.GetCELMetrics()
+	if finalMetrics.TotalCost <= initialMetrics.TotalCost {
+		t.Errorf("TotalCost did not increase after includeWhen evaluation, before: %d, after: %d",
+			initialMetrics.TotalCost, finalMetrics.TotalCost)
+	}
+
+	// Verify resource-specific cost was tracked
+	if finalMetrics.CostPerResource["optional-resource"] == 0 {
+		t.Error("optional-resource cost = 0, expected non-zero cost for includeWhen evaluation")
+	}
+
+	t.Logf("IncludeWhen expression cost: %d", finalMetrics.CostPerResource["optional-resource"])
+}
+
+// TestCELCostEndToEnd is a comprehensive end-to-end test that simulates a real ResourceGroup
+// with multiple resources and CEL expressions, tracking costs throughout the lifecycle
+func TestCELCostEndToEnd(t *testing.T) {
+	t.Log("=== Testing CEL Cost Tracking End-to-End ===")
+
+	// Create a realistic instance (ResourceGroup spec)
+	instance := newTestResource(
+		withObject(map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name":      "my-application",
+				"namespace": "default",
+			},
+			"spec": map[string]interface{}{
+				"appName":        "myapp",
+				"replicas":       int64(3),
+				"enableIngress":  true,
+				"enableService":  true,
+				"ingressEnabled": true,
+			},
+		}),
+	)
+
+	// Define resources with various CEL expressions
+	resources := map[string]Resource{
+		"deployment": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": "placeholder",
+				},
+				"spec": map[string]interface{}{
+					"replicas": int64(1),
+					"selector": map[string]interface{}{
+						"matchLabels": map[string]interface{}{
+							"app": "placeholder",
+						},
+					},
+				},
+			}),
+			withVariables([]*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "metadata.name",
+						Expressions: []string{"schema.spec.appName + '-deployment'"},
+					},
+					Kind: variable.ResourceVariableKindStatic,
+				},
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "spec.selector.matchLabels.app",
+						Expressions: []string{"schema.spec.appName"},
+					},
+					Kind: variable.ResourceVariableKindStatic,
+				},
+			}),
+			withReadyExpressions([]string{"deployment.status.readyReplicas > 0"}),
+		),
+		"service": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Service",
+				"metadata": map[string]interface{}{
+					"name": "placeholder",
+				},
+				"spec": map[string]interface{}{
+					"selector": map[string]interface{}{
+						"app": "placeholder",
+					},
+					"ports": []interface{}{
+						map[string]interface{}{
+							"port":       int64(80),
+							"targetPort": int64(8080),
+						},
+					},
+				},
+			}),
+			withVariables([]*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "metadata.name",
+						Expressions: []string{"schema.spec.appName + '-service'"},
+					},
+					Kind: variable.ResourceVariableKindStatic,
+				},
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "spec.selector.app",
+						Expressions: []string{"schema.spec.appName"},
+					},
+					Kind: variable.ResourceVariableKindStatic,
+				},
+			}),
+			withIncludeWhenExpressions([]string{"schema.spec.enableService == true"}),
+		),
+		"ingress": newTestResource(
+			withObject(map[string]interface{}{
+				"apiVersion": "networking.k8s.io/v1",
+				"kind":       "Ingress",
+				"metadata": map[string]interface{}{
+					"name": "placeholder",
+				},
+				"spec": map[string]interface{}{
+					"rules": []interface{}{},
+				},
+			}),
+			withVariables([]*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:        "metadata.name",
+						Expressions: []string{"schema.spec.appName + '-ingress'"},
+					},
+					Kind: variable.ResourceVariableKindStatic,
+				},
+			}),
+			withIncludeWhenExpressions([]string{"schema.spec.ingressEnabled == true"}),
+		),
+	}
+
+	topologicalOrder := []string{"deployment", "service", "ingress"}
+
+	t.Log("Step 1: Creating runtime and evaluating static variables...")
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, topologicalOrder)
+	if err != nil {
+		t.Fatalf("Failed to create runtime: %v", err)
+	}
+
+	// Check costs after initialization (static variables evaluated)
+	metrics := rt.GetCELMetrics()
+	t.Logf("✓ Initial CEL metrics after static evaluation:")
+	t.Logf("  - Total Cost: %d", metrics.TotalCost)
+	t.Logf("  - Cost per resource: %+v", metrics.CostPerResource)
+
+	if metrics.TotalCost == 0 {
+		t.Error("❌ Total cost should be > 0 after static variable evaluation")
+	}
+	if metrics.CostPerResource["schema"] == 0 {
+		t.Error("❌ Schema cost should be > 0 after static variable evaluation")
+	}
+
+	// Verify deployment is ready to be processed
+	t.Log("\nStep 2: Checking if deployment is ready to process...")
+	ready, err := rt.ReadyToProcessResource("deployment")
+	if err != nil {
+		t.Fatalf("Failed to check if deployment is ready: %v", err)
+	}
+	if !ready {
+		t.Error("❌ Deployment should be ready to process")
+	}
+	t.Log("✓ Deployment is ready to process")
+
+	// Check includeWhen for service
+	t.Log("\nStep 3: Checking if service should be included (includeWhen evaluation)...")
+	initialCost := rt.GetCELMetrics().TotalCost
+	ready, err = rt.ReadyToProcessResource("service")
+	if err != nil {
+		t.Fatalf("Failed to check if service is ready: %v", err)
+	}
+	if !ready {
+		t.Error("❌ Service should be included (enableService == true)")
+	}
+	afterIncludeCost := rt.GetCELMetrics().TotalCost
+	if afterIncludeCost <= initialCost {
+		t.Error("❌ Cost should increase after includeWhen evaluation")
+	}
+	t.Logf("✓ Service includeWhen evaluated, cost increased from %d to %d", initialCost, afterIncludeCost)
+
+	// Check includeWhen for ingress
+	t.Log("\nStep 4: Checking if ingress should be included...")
+	ready, err = rt.ReadyToProcessResource("ingress")
+	if err != nil {
+		t.Fatalf("Failed to check if ingress is ready: %v", err)
+	}
+	if !ready {
+		t.Error("❌ Ingress should be included (ingressEnabled == true)")
+	}
+	t.Log("✓ Ingress includeWhen evaluated")
+
+	// Simulate setting deployment in cluster and checking readiness
+	t.Log("\nStep 5: Simulating deployment in cluster and checking readyWhen...")
+	deploymentWithStatus := resources["deployment"].Unstructured().DeepCopy()
+	deploymentWithStatus.Object["status"] = map[string]interface{}{
+		"readyReplicas": int64(3),
+	}
+	rt.SetResource("deployment", deploymentWithStatus)
+
+	beforeReadyCost := rt.GetCELMetrics().TotalCost
+	isReady, reason, err := rt.IsResourceReady("deployment")
+	if err != nil {
+		t.Fatalf("Failed to check deployment readiness: %v", err)
+	}
+	if !isReady {
+		t.Errorf("❌ Deployment should be ready, got reason: %s", reason)
+	}
+	afterReadyCost := rt.GetCELMetrics().TotalCost
+	if afterReadyCost <= beforeReadyCost {
+		t.Error("❌ Cost should increase after readyWhen evaluation")
+	}
+	t.Logf("✓ Deployment is ready, readyWhen cost added: %d", afterReadyCost-beforeReadyCost)
+
+	// Final metrics summary
+	t.Log("\n=== Final CEL Metrics Summary ===")
+	finalMetrics := rt.GetCELMetrics()
+	t.Logf("Total Cost: %d", finalMetrics.TotalCost)
+	t.Logf("\nCost Breakdown:")
+	for resourceID, cost := range finalMetrics.CostPerResource {
+		t.Logf("  - %s: %d", resourceID, cost)
+	}
+
+	// Verify expected structure
+	t.Log("\n=== Verifying Status Structure (matches issue #190) ===")
+	statusExample := map[string]interface{}{
+		"celMetrics": map[string]interface{}{
+			"totalCost":       finalMetrics.TotalCost,
+			"costPerResource": finalMetrics.CostPerResource,
+		},
+	}
+	t.Logf("Status would contain: %+v", statusExample)
+
+	// Assertions
+	if finalMetrics.TotalCost == 0 {
+		t.Error("❌ Final total cost should be > 0")
+	}
+	if len(finalMetrics.CostPerResource) == 0 {
+		t.Error("❌ Should have per-resource cost breakdown")
+	}
+	if finalMetrics.CostPerResource["deployment"] == 0 {
+		t.Error("❌ Deployment should have tracked costs")
+	}
+	if finalMetrics.CostPerResource["service"] == 0 {
+		t.Error("❌ Service should have tracked costs (includeWhen)")
+	}
+	if finalMetrics.CostPerResource["ingress"] == 0 {
+		t.Error("❌ Ingress should have tracked costs (includeWhen)")
+	}
+
+	t.Log("\n✅ End-to-End CEL Cost Tracking Test PASSED!")
 }

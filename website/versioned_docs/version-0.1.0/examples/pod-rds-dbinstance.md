@@ -46,6 +46,6 @@ spec:
             - name: container1
               image: ${schema.spec.image}
               env:
-                - name: POSTGRESS_ENDPOINT
+                - name: POSTGRES_ENDPOINT
                   value: ${dbinstance.status.endpoint.address}
 ```

@@ -116,8 +116,7 @@ func main() {
 
 	// reconciler parameters
 	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
-		"interval at which the controller will re list resources even with no changes, in seconds. "+
-			"By default resync is disabled.")
+		"interval at which the controller will re list resources even with no changes, in seconds.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	// log level flags

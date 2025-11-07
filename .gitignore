@@ -41,11 +41,8 @@ TODO.*
 *kube-config.yaml*
 # package-lock.json
 
-<<<<<<< HEAD
 node_modules/
 
 tools/lsp/client/out/
-=======
 # VSCode Debug cache files
 **/__debug*
->>>>>>> 8d5ffd6 (implement other suggestions)

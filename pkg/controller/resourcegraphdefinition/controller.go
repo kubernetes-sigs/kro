@@ -155,7 +155,10 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 	}
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
+func (r *ResourceGraphDefinitionReconciler) Reconcile(
+	ctx context.Context,
+	o *v1alpha1.ResourceGraphDefinition,
+) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err

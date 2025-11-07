@@ -68,15 +68,11 @@ var _ = Describe("Readiness", func() {
 					"replicas": "integer",
 					"deployment": map[string]interface{}{
 						"includeAnnotations": "boolean | default=false",
-						"annotations": map[string]interface{}{
-							"app": "string | default=nginx",
-						},
+						"annotations":        "map[string]string",
 					},
 					"service": map[string]interface{}{
 						"includeAnnotations": "boolean | default=true",
-						"annotations": map[string]interface{}{
-							"app": "string | default=service",
-						},
+						"annotations":        "map[string]string",
 					},
 				},
 				nil,
@@ -86,9 +82,8 @@ var _ = Describe("Readiness", func() {
 				"apiVersion": "apps/v1",
 				"kind":       "Deployment",
 				"metadata": map[string]interface{}{
-					"name": "${schema.spec.name}",
-					"annotations": `${schema.spec.deployment.includeAnnotations == true
-								? schema.spec.deployment.annotations : null}`,
+					"name":        "${schema.spec.name}",
+					"annotations": `${schema.spec.deployment.includeAnnotations ? schema.spec.deployment.annotations : {}}`,
 				},
 				"spec": map[string]interface{}{
 					"replicas": "${schema.spec.replicas}",
@@ -124,9 +119,8 @@ var _ = Describe("Readiness", func() {
 				"apiVersion": "v1",
 				"kind":       "Service",
 				"metadata": map[string]interface{}{
-					"name": "${deployment.metadata.name}",
-					"annotations": `${schema.spec.service.includeAnnotations == true
-								? schema.spec.service.annotations : null}`,
+					"name":        "${deployment.metadata.name}",
+					"annotations": `${schema.spec.service.includeAnnotations ? schema.spec.service.annotations : {}}`,
 				},
 				"spec": map[string]interface{}{
 					"selector": map[string]interface{}{

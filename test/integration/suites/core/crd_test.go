@@ -75,7 +75,7 @@ var _ = Describe("CRD", func() {
 					},
 					"data": map[string]interface{}{
 						"key":  "value",
-						"key2": "${schema.spec.field2}",
+						"key2": "${string(schema.spec.field2)}",
 					},
 				}, nil, nil),
 			)

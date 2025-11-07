@@ -142,6 +142,25 @@ func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 	}
 }
 
+// areDependenciesReady checks if all dependencies of a resource are ready
+func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool {
+	dependencies := igr.runtime.ResourceDescriptor(resourceID).GetDependencies()
+
+	for _, depID := range dependencies {
+		// Check if dependency is resolved
+		if _, state := igr.runtime.GetResource(depID); state != runtime.ResourceStateResolved {
+			return false
+		}
+
+		// Check if dependency satisfies its readyWhen conditions
+		if ready, _, err := igr.runtime.IsResourceReady(depID); err != nil || !ready {
+			return false
+		}
+	}
+
+	return true
+}
+
 // reconcileInstance handles the reconciliation of an active instance
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
@@ -199,6 +218,13 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			break
 		}
 
+		// Check if all dependencies are ready
+		if !igr.areDependenciesReady(resourceID) {
+			unresolvedResourceID = resourceID
+			prune = false
+			break
+		}
+
 		applyable := applyset.ApplyableObject{
 			Unstructured: resource,
 			ID:           resourceID,
@@ -212,7 +238,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		if clusterObj != nil {
 			igr.runtime.SetResource(resourceID, clusterObj)
 			igr.updateResourceReadiness(resourceID)
-			// Synchronize runtime state after each resource
+			// Synchronize runtime state after each resource to re-evaluate CEL expressions
 			if _, err := igr.runtime.Synchronize(); err != nil {
 				return fmt.Errorf("failed to synchronize after apply/prune: %w", err)
 			}
@@ -226,29 +252,38 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			resourceState.State = ResourceStateError
 			resourceState.Err = applied.Error
 		} else {
+			// Update runtime with the applied resource
+			if applied.LastApplied != nil {
+				igr.runtime.SetResource(applied.ID, applied.LastApplied)
+			}
 			igr.updateResourceReadiness(applied.ID)
 		}
 	}
 
 	if err != nil {
+		mark.ResourcesNotReady("failed to reconcile the apply set: %v", err)
 		return igr.delayedRequeue(fmt.Errorf("failed to apply/prune resources: %w", err))
 	}
 
 	// Inspect resource states and return error if any resource is in error state
 	if err := igr.state.ResourceErrors(); err != nil {
+		mark.ResourcesNotReady("at least one resource reports an error: %v", err)
 		return igr.delayedRequeue(err)
 	}
 
 	if err := result.Errors(); err != nil {
+		mark.ResourcesNotReady("there was an error while reconciling resources in the apply set: %v", err)
 		return fmt.Errorf("failed to apply/prune resources: %w", err)
 	}
 
 	if unresolvedResourceID != "" {
+		mark.ResourcesInProgress("waiting for resource resolution: %s", unresolvedResourceID)
 		return igr.delayedRequeue(fmt.Errorf("unresolved resource: %s", unresolvedResourceID))
 	}
 
 	// If there are any cluster mutations, we need to requeue.
 	if result.HasClusterMutation() {
+		mark.ResourcesInProgress("reconciling cluster mutation after apply")
 		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
 	}
 

@@ -19,6 +19,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/cel-go/cel"
+	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -42,7 +44,7 @@ func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema)
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
-// from a resource. It uses a depthh first search to traverse the resource and
+// from a resource. It uses a depth first search to traverse the resource and
 // extract expressions from string fields
 func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
@@ -68,6 +70,24 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 	}
 }
 
+// getCelType converts an OpenAPI schema to a CEL type using the Kubernetes OpenAPI library.
+// This replaces manual type conversion with the library's schema-to-CEL type conversion.
+func getCelType(schema *spec.Schema) *cel.Type {
+	if schema == nil {
+		return cel.DynType
+	}
+
+	// Use the Kubernetes OpenAPI library to convert schema to CEL type
+	declType := openapi.SchemaDeclType(schema, false)
+	if declType == nil {
+		return cel.DynType
+	}
+
+	return declType.CelType()
+}
+
+// getExpectedTypes extracts the expected types from a schema for validation purposes.
+// This is used for non-CEL values to ensure proper type validation.
 func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 	// Handle extensions (like x-kubernetes-int-or-string)
 	if types, found := handleSchemaExtensions(schema); found {
@@ -88,8 +108,7 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Allows {
 		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
 		// in the future; just haven't really thought about it yet.
-		// Basically "any" means that the field can be of any type, and we have to check
-		// the ExpectedSchema field.
+		// Basically "any" means that the field can be of any type.
 		return []string{schemaTypeAny}, nil
 	}
 
@@ -257,10 +276,13 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 	}
 
 	if ok {
+		// For CEL expressions, get the CEL type from the schema
+		expectedType := getCelType(schema)
+		expr := strings.TrimPrefix(field, "${")
+		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions:          []string{strings.Trim(field, "${}")},
-			ExpectedTypes:        expectedTypes,
-			ExpectedSchema:       schema,
+			Expressions:          []string{expr},
+			ExpectedType:         expectedType,
 			Path:                 path,
 			StandaloneExpression: true,
 		}}, nil
@@ -275,36 +297,56 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 		return nil, err
 	}
 	if len(expressions) > 0 {
+		// String templates always produce strings
 		return []variable.FieldDescriptor{{
-			Expressions:   expressions,
-			ExpectedTypes: expectedTypes,
-			Path:          path,
+			Expressions:  expressions,
+			ExpectedType: cel.StringType,
+			Path:         path,
 		}}, nil
 	}
 	return nil, nil
 }
 
 func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
-	// perform type checks for scalar types
-	switch {
-	case slices.Contains(expectedTypes, "any"):
-		// Skip checks for expected == provided type
-	case slices.Contains(expectedTypes, "number"):
-		if !isNumber(field) {
-			return nil, fmt.Errorf("expected number type for path %s, got %T", path, field)
-		}
-	case slices.Contains(expectedTypes, "int"), slices.Contains(expectedTypes, "integer"):
-		if !isInteger(field) {
-			return nil, fmt.Errorf("expected integer type for path %s, got %T", path, field)
-		}
-	case slices.Contains(expectedTypes, "boolean"), slices.Contains(expectedTypes, "bool"):
-		if _, ok := field.(bool); !ok {
-			return nil, fmt.Errorf("expected boolean type for path %s, got %T", path, field)
-		}
-	default:
-		return nil, fmt.Errorf("unexpected type for path %s: %T, expectedTypes: [%s]", path, field, strings.Join(expectedTypes, ","))
+	// If "any" type is expected, skip validation
+	if slices.Contains(expectedTypes, "any") {
+		return nil, nil
 	}
-	return nil, nil
+
+	// Check if the value matches any of the expected types
+	actualType := getSchemaTypeName(field)
+	for _, expected := range expectedTypes {
+		switch expected {
+		case "number":
+			if isNumber(field) {
+				return nil, nil
+			}
+		case "int", "integer":
+			if isInteger(field) {
+				return nil, nil
+			}
+		case "boolean", "bool":
+			if _, ok := field.(bool); ok {
+				return nil, nil
+			}
+		}
+	}
+
+	// No match found - return error with all expected types
+	return nil, fmt.Errorf("expected %s type for path %s, got %s", strings.Join(expectedTypes, " or "), path, actualType)
+}
+
+// getSchemaTypeName converts a Go type to its OpenAPI schema type name
+func getSchemaTypeName(v interface{}) string {
+	switch v.(type) {
+	case bool:
+		return "boolean"
+	case int, int8, int16, int32, int64:
+		return "integer"
+	default:
+		// For other types (including float), use the Go type name
+		return fmt.Sprintf("%T", v)
+	}
 }
 
 func getFieldSchema(schema *spec.Schema, field string) (*spec.Schema, error) {

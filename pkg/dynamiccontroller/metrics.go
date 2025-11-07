@@ -28,6 +28,9 @@ func init() {
 		reconcileDuration,
 		gvrCount,
 		queueLength,
+		handlerCount,
+		handlerAttachTotal,
+		handlerDetachTotal,
 		handlerErrorsTotal,
 		informerSyncDuration,
 		informerEventsTotal,
@@ -63,7 +66,7 @@ var (
 	gvrCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_gvr_count",
-			Help: "Number of GVRs currently managed by the controller",
+			Help: "Number of Instance GVRs currently managed by the controller",
 		},
 	)
 	queueLength = prometheus.NewGauge(
@@ -72,6 +75,18 @@ var (
 			Help: "Current length of the workqueue",
 		},
 	)
+	handlerCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "dynamic_controller_handler_count_total",
+		Help: "Number of active handlers used for distributing events to instance controllers",
+	}, []string{"type"})
+	handlerAttachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dynamic_controller_handler_attach_total",
+		Help: "Total number of handler attachments by handler type",
+	}, []string{"type"})
+	handlerDetachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "dynamic_controller_handler_detach_total",
+		Help: "Total number of handler detachments by handler type",
+	}, []string{"type"})
 	handlerErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_handler_errors_total",

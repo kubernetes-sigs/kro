@@ -47,15 +47,6 @@ type Resource struct {
 	// This will contain all fields (and CEL expressions) as they were in the
 	// original object.
 	originalObject *unstructured.Unstructured
-	// emulatedObject is the object we'll use to emulate the resource during
-	// the graph building process. This object will contain the resolved values
-	// of the CEL expressions.
-	//
-	// NOTE(a-hilaly): Do we need to keep this object? we only need it when
-	// we're building the graph. We can remove it after the graph is built.
-	// Or... maybe we can keep a global cache to reduce the effort of rebuilding
-	// the graph every time.
-	emulatedObject *unstructured.Unstructured
 	// variables is a list of the variables found in the resource (CEL expressions).
 	variables []*variable.ResourceField
 	// dependencies is a list of the resources this resource depends on.
@@ -139,11 +130,6 @@ func (r *Resource) GetVariables() []*variable.ResourceField {
 // GetSchema returns the JSON schema of the resource.
 func (r *Resource) GetSchema() *spec.Schema {
 	return r.schema
-}
-
-// GetEmulatedObject returns the emulated object of the resource.
-func (r *Resource) GetEmulatedObject() *unstructured.Unstructured {
-	return r.emulatedObject
 }
 
 // GetReadyWhenExpressions returns the readyWhen expressions of the resource.

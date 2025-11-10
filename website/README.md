@@ -45,3 +45,18 @@ $ GIT_USER=<Your GitHub username> yarn deploy
 ```
 
 If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+
+### Versioning
+
+When a new kro controller version is released, you should also update/release the documentation:
+
+1. **Create a Docusaurus version**  
+    Remove the `v` prefix from your version (e.g., `v0.1.0` → `0.1.0`):
+
+    ```shell
+    version_number=${version#v}
+    npm run docusaurus docs:version $version_number
+    ```
+
+2. **Submit a Pull Request**  
+    Commit your changes and open a PR to publish the new versioned docs.

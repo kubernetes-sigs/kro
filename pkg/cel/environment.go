@@ -15,10 +15,16 @@
 package cel
 
 import (
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/ext"
+	"maps"
 
-	"github.com/kro-run/kro/pkg/cel/library"
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/ext"
+	apiservercel "k8s.io/apiserver/pkg/cel"
+	"k8s.io/apiserver/pkg/cel/openapi"
+	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 )
 
 // EnvOption is a function that modifies the environment options.
@@ -28,9 +34,19 @@ type EnvOption func(*envOptions)
 type envOptions struct {
 	// resourceIDs will be converted to CEL variable declarations
 	// of type 'any'.
-	//
-	// TODO(a-hilaly): Add support for custom types.
 	resourceIDs []string
+	// typedResources maps resource names to their OpenAPI schemas.
+	// These will be converted to typed CEL variables with field-level
+	// type checking enabled.
+	//
+	// Note that there is not a 1:1 mapping between CEL types and OpenAPI
+	// schemas. This is best effort conversion to enable type checking
+	// for field access in CEL expressions.
+	//
+	// Native CEL types (like int, bool, list, map) will be used where
+	// possible. OpenAPI's AnyOf, OneOf, and VendorExtensions features like
+	// x-kubernetes-int-or-string will fall back to dyn or any type.
+	typedResources map[string]*spec.Schema
 	// customDeclarations will be added to the CEL environment.
 	customDeclarations []cel.EnvOption
 }
@@ -46,6 +62,18 @@ func WithResourceIDs(ids []string) EnvOption {
 func WithCustomDeclarations(declarations []cel.EnvOption) EnvOption {
 	return func(opts *envOptions) {
 		opts.customDeclarations = append(opts.customDeclarations, declarations...)
+	}
+}
+
+// WithTypedResources adds typed resource declarations to the CEL environment.
+// This enables compile time type checking for field access in CEL expressions.
+func WithTypedResources(schemas map[string]*spec.Schema) EnvOption {
+	return func(opts *envOptions) {
+		if opts.typedResources == nil {
+			opts.typedResources = schemas
+		} else {
+			maps.Copy(opts.typedResources, schemas)
+		}
 	}
 }
 
@@ -66,9 +94,92 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 
 	declarations = append(declarations, opts.customDeclarations...)
 
+	if len(opts.typedResources) > 0 {
+		// We need both a TypeProvider (for field resolution) and variable declarations.
+		// To avoid conflicts, we use different names for types vs variables:
+		//  - Types are registered with "__type_<name>" prefix (e.g "__type_schema")
+		//  - Variables use the original names (e.g "pod", "schema"...)
+
+		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
+
+		for name, schema := range opts.typedResources {
+			declType := openapi.SchemaDeclType(schema, false)
+			if declType != nil {
+				typeName := "__type_" + name
+				declType = declType.MaybeAssignTypeName(typeName)
+
+				// add type declaration
+				declTypes = append(declTypes, declType)
+
+				celType := declType.CelType()
+
+				// Add variable declaration
+				declarations = append(declarations, cel.Variable(name, celType))
+			}
+		}
+
+		if len(declTypes) > 0 {
+			baseProvider := apiservercel.NewDeclTypeProvider(declTypes...)
+			// Enable recognition of CEL reserved keywords as field names
+			baseProvider.SetRecognizeKeywordAsFieldName(true)
+
+			registry := types.NewEmptyRegistry()
+			wrappedProvider, err := baseProvider.WithTypeProvider(registry)
+			if err != nil {
+				return nil, err
+			}
+
+			declarations = append(declarations, cel.CustomTypeProvider(wrappedProvider))
+		}
+	}
+
 	for _, name := range opts.resourceIDs {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
 
 	return cel.NewEnv(declarations...)
+}
+
+// TypedEnvironment creates a CEL environment with type checking enabled.
+//
+// This should be used during RGD build time (pkg/graph.Builder) to validate
+// CEL expressions against OpenAPI schemas.
+func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
+	return DefaultEnvironment(WithTypedResources(schemas))
+}
+
+// UntypedEnvironment creates a CEL environment without type declarations.
+//
+// This is theoretically cheaper to use as there are no Schema conversions
+// required. NOTE(a-hilaly): maybe use this for runtime? undecided.
+func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
+	return DefaultEnvironment(WithResourceIDs(resourceIDs))
+}
+
+// CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
+// This is used for deep introspection of type structures when generating schemas.
+// The provider maps CEL type names to their full DeclType definitions with all fields.
+func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclTypeProvider {
+	if len(schemas) == 0 {
+		return nil
+	}
+
+	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
+	for name, schema := range schemas {
+		declType := openapi.SchemaDeclType(schema, false)
+		if declType != nil {
+			declType = declType.MaybeAssignTypeName(name)
+			declTypes = append(declTypes, declType)
+		}
+	}
+
+	if len(declTypes) == 0 {
+		return nil
+	}
+
+	provider := apiservercel.NewDeclTypeProvider(declTypes...)
+	// Enable recognition of CEL reserved keywords as field names.
+	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
+	provider.SetRecognizeKeywordAsFieldName(true)
+	return provider
 }

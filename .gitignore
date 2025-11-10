@@ -29,7 +29,7 @@ rendered/
 
 kro-controller
 kro-chart*
-#kro-*
+kro-lsp
 cover.html
 .read
 .snapshots
@@ -40,3 +40,7 @@ TODO.*
 *.envrc*
 *kube-config.yaml*
 # package-lock.json
+
+node_modules/
+
+tools/lsp/client/out/

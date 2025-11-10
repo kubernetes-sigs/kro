@@ -17,12 +17,10 @@ spec:
       ingress:
         enabled: boolean | default=false
       serviceAccount: string | default=default
-      s3bucketName: string | default=""
     status:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas}
       url: ${ingress.status.loadBalancer.ingress[0].hostname}
-
   resources:
   - id: deployment
     readyWhen:
@@ -49,7 +47,7 @@ spec:
           spec:
             serviceAccountName: ${schema.spec.serviceAccount}
             containers:
-            - name: s3-demo
+            - name: webapp-demo
               image: ${schema.spec.image}
               imagePullPolicy: Always
               ports:
@@ -61,9 +59,6 @@ spec:
                 limits:
                   memory: "1Gi"
                   cpu: "1"
-              env:
-              - name: S3_BUCKET_NAME
-                value: ${schema.spec.s3bucketName}
             restartPolicy: Always
 
   - id: service

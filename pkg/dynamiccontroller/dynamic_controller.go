@@ -59,26 +59,36 @@ package dynamiccontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	k8smetadata "k8s.io/client-go/metadata"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kro-run/kro/pkg/metadata"
-	"github.com/kro-run/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/internal"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
+)
+
+const (
+	// eventTypeAdd is emitted to the queue when a new object was created
+	eventTypeAdd = "add"
+	// eventTypeUpdate is emitted to the queue when an existing object was updated
+	eventTypeUpdate = "update"
+	// eventTypeDelete is emitted to the queue when an existing object was deleted
+	eventTypeDelete = "delete"
 )
 
 // Config holds the configuration for DynamicController
@@ -94,10 +104,6 @@ type Config struct {
 	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
 	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
-	// ShutdownTimeout is the maximum duration to wait for the controller to
-	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving
-	// the controller enough time to finish processing any pending items.
-	ShutdownTimeout time.Duration
 	// MinRetryDelay is the minimum delay before retrying an item in the queue
 	MinRetryDelay time.Duration
 	// MaxRetryDelay is the maximum delay before retrying an item in the queue
@@ -106,6 +112,27 @@ type Config struct {
 	RateLimit int
 	// BurstLimit is the maximum number of events in a burst
 	BurstLimit int
+	// QueueShutdownTimeout is the maximum time to wait for the queue to drain before shutting down.
+	QueueShutdownTimeout time.Duration
+}
+
+// Handler is used to actually perform the reconciliation logic for an instance GVR and will operate
+// on a single instance of the resource received from the queue
+type Handler func(ctx context.Context, req ctrl.Request) error
+
+// ObjectIdentifiers holds the key and GVR of the object to reconcile.
+type ObjectIdentifiers struct {
+	types.NamespacedName
+	GVR schema.GroupVersionResource
+}
+
+// registration tracks one parent GVR registration and its child handler IDs.
+// Each parent may own one "parent handler" and multiple "child handlers".
+type registration struct {
+	parentGVR schema.GroupVersionResource
+
+	parentHandlerID string
+	childHandlerIDs map[schema.GroupVersionResource]string
 }
 
 // DynamicController (DC) is a single controller capable of managing multiple different
@@ -119,126 +146,111 @@ type Config struct {
 // dynamic resource management system. Its primary purpose is to create and manage
 // "micro" controllers for custom resources defined by users at runtime (via the
 // ResourceGraphDefinition CRs).
+//
+// DynamicController manages all handlers and informers.
+// It uses two levels of locking:
+//
+//  1. dc.mu protects *global maps* (watches and registrations).
+//     This ensures consistency when adding/removing GVRs or
+//     attaching/detaching children.
+//
+//  2. Each perGVRWatch has its own w.mu to protect *per-informer state*
+//     (handler map). This allows concurrent updates to
+//     different GVRs without blocking each other.
 type DynamicController struct {
+	// Parent run context, inherited by all informer stop contexts.
+	// It is set by Start and meant to be used to register the controller context with a global handler
+	// such as the controller-runtime manager.
+	ctx context.Context
+
+	// mu is a global mutex protecting watches and registrations.
+	// Required because StartServingGVK and StopServiceGVK may run concurrently,
+	// and because Run or gracefulShutdown may also traverse these maps.
+	mu sync.Mutex
+
+	// config is the controller configuration used to steer detailed enqueue behavior when events
+	// are received by the dynamic controllers watches and need to be propagated to the handlers.
 	config Config
 
-	// kubeClient is the dynamic client used to create the informers
-	kubeClient dynamic.Interface
-	// informers is a safe map of GVR to informers. Each informer is responsible
-	// for watching a specific GVR.
-	informers sync.Map
-
-	// handlers is a safe map of GVR to workflow operators. Each
-	// handler is responsible for managing a specific GVR.
-	handlers sync.Map
-
-	// queue is the workqueue used to process items
-	queue workqueue.TypedRateLimitingInterface[ObjectIdentifiers]
-
 	log logr.Logger
+
+	// client is the Kubernetes client used to create informers and list resources.
+	// DynamicController only operates on metadata information, because all actual reconciliations
+	// happen in the instance handlers that are managed with Register and Deregister.
+	client k8smetadata.Interface
+	// mapper is used to translate from GVRs (REST Resources that can be watched) to GVKs to properly
+	// propagate instance events to the handlers.
+	mapper meta.RESTMapper
+
+	// Map of active informers per GVR.
+	// No matter if an instance resource or a child resource is being watched,
+	// eventually, they will be handled by an internal.LazyInformer registered here.
+	// Guarded by mu.
+	watches map[schema.GroupVersionResource]*internal.LazyInformer
+	// Map of parent registrations per GVR.
+	// A registration is created for each parent GVR that is being watched.
+	// Each registration contains a list of child GVRs that are being watched for the parent.
+	// Any event that is received for a child GVR will be propagated through a labelled reference to the parent.
+	// Guarded by mu.
+	registrations map[schema.GroupVersionResource]*registration
+
+	// handlers is a Handler collection for each parent GVR, invoked for queued objects.
+	handlers sync.Map // map[schema.GroupVersionResource]Handler (thread-safe on its own)
+	// queue is the work queue used to process items received via watches.
+	// The queue is shared between all informers and is used to propagate events to the handlers.
+	queue workqueue.TypedRateLimitingInterface[ObjectIdentifiers]
 }
 
-type Handler func(ctx context.Context, req ctrl.Request) error
-
-type informerWrapper struct {
-	informer dynamicinformer.DynamicSharedInformerFactory
-	shutdown func()
-}
-
-// NewDynamicController creates a new DynamicController instance.
+// NewDynamicController creates a new DynamicController.
 func NewDynamicController(
 	log logr.Logger,
 	config Config,
-	kubeClient dynamic.Interface) *DynamicController {
+	kubeClient k8smetadata.Interface,
+	mapper meta.RESTMapper,
+) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
-	dc := &DynamicController{
-		config:     config,
-		kubeClient: kubeClient,
+	return &DynamicController{
+		config:        config,
+		log:           logger,
+		client:        kubeClient,
+		mapper:        mapper,
+		watches:       make(map[schema.GroupVersionResource]*internal.LazyInformer),
+		registrations: make(map[schema.GroupVersionResource]*registration),
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](config.MinRetryDelay, config.MaxRetryDelay),
 			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(config.RateLimit), config.BurstLimit)},
 		), workqueue.TypedRateLimitingQueueConfig[ObjectIdentifiers]{Name: "dynamic-controller-queue"}),
-		log: logger,
-		// pass version and pod id from env
+	}
+}
+
+// Start starts workers and blocks until ctx.Done().
+func (dc *DynamicController) Start(ctx context.Context) error {
+	if dc.ctx != nil {
+		return fmt.Errorf("already running")
 	}
 
-	return dc
-}
-
-// AllInformerHaveSynced checks if all registered informers have synced, returns
-// true if they have.
-func (dc *DynamicController) AllInformerHaveSynced() bool {
-	var allSynced bool
-	var informerCount int
-
-	// Unfortunately we can't know the number of informers in advance, so we need to
-	// iterate over all of them to check if they have synced.
-
-	dc.informers.Range(func(key, value interface{}) bool {
-		informerCount++
-		// possibly panic if the value is not a SharedIndexInformer
-		informer, ok := value.(cache.SharedIndexInformer)
-		if !ok {
-			dc.log.Error(nil, "Failed to cast informer", "key", key)
-			allSynced = false
-			return false
-		}
-		if !informer.HasSynced() {
-			allSynced = false
-			return false
-		}
-		return true
-	})
-
-	if informerCount == 0 {
-		return true
-	}
-	return allSynced
-}
-
-// WaitForInformerSync waits for all informers to sync or timeout
-func (dc *DynamicController) WaitForInformersSync(stopCh <-chan struct{}) bool {
-	dc.log.V(1).Info("Waiting for all informers to sync")
-	start := time.Now()
-	defer func() {
-		dc.log.V(1).Info("Finished waiting for informers to sync", "duration", time.Since(start))
-	}()
-
-	return cache.WaitForCacheSync(stopCh, dc.AllInformerHaveSynced)
-}
-
-// Run starts the DynamicController.
-func (dc *DynamicController) Run(ctx context.Context) error {
 	defer utilruntime.HandleCrash()
-	defer dc.queue.ShutDown()
 
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
 
-	// Wait for all informers to sync
-	if !dc.WaitForInformersSync(ctx.Done()) {
-		return fmt.Errorf("failed to sync informers")
-	}
+	dc.ctx = ctx
 
-	// Spin up workers.
-	//
-	// TODO(a-hilaly): Allow for dynamic scaling of workers.
+	// Workers.
 	for i := 0; i < dc.config.Workers; i++ {
 		go wait.UntilWithContext(ctx, dc.worker, time.Second)
 	}
 
 	<-ctx.Done()
-	return dc.gracefulShutdown(dc.config.ShutdownTimeout)
+	return dc.gracefulShutdown()
 }
 
-// worker processes items from the queue.
 func (dc *DynamicController) worker(ctx context.Context) {
 	for dc.processNextWorkItem(ctx) {
 	}
 }
 
-// processNextWorkItem processes a single item from the queue.
 func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	item, shutdown := dc.queue.Get()
 	if shutdown {
@@ -246,17 +258,25 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	}
 	defer dc.queue.Done(item)
 
+	// metric: queueLength
 	queueLength.Set(float64(dc.queue.Len()))
 
-	err := dc.syncFunc(ctx, item)
+	handler, ok := dc.handlers.Load(item.GVR)
+	if !ok {
+		// this can happen if the handler was removed and we still have items in flight in the queue.
+		dc.log.V(1).Info("handler for gvr no longer exists, dropping item", "item", item)
+		dc.queue.Forget(item)
+		return true
+	}
+
+	err := dc.syncFunc(ctx, item, handler.(Handler))
 	if err == nil || apierrors.IsNotFound(err) {
 		dc.queue.Forget(item)
 		return true
 	}
 
-	gvrKey := fmt.Sprintf("%s/%s/%s", item.GVR.Group, item.GVR.Version, item.GVR.Resource)
+	gvrKey := keyFromGVR(item.GVR)
 
-	// Handle requeues
 	switch typedErr := err.(type) {
 	case *requeue.NoRequeue:
 		dc.log.Error(typedErr, "Error syncing item, not requeuing", "item", item)
@@ -265,14 +285,12 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	case *requeue.RequeueNeeded:
 		dc.log.V(1).Info("Requeue needed", "item", item, "error", typedErr)
 		requeueTotal.WithLabelValues(gvrKey, "requeue").Inc()
-		dc.queue.Add(item) // Add without rate limiting
+		dc.queue.Add(item)
 	case *requeue.RequeueNeededAfter:
 		dc.log.V(1).Info("Requeue needed after delay", "item", item, "error", typedErr, "delay", typedErr.Duration())
 		requeueTotal.WithLabelValues(gvrKey, "requeue_after").Inc()
 		dc.queue.AddAfter(item, typedErr.Duration())
 	default:
-		// Arriving here means we have an unexpected error, we should requeue the item
-		// with rate limiting.
 		requeueTotal.WithLabelValues(gvrKey, "rate_limited").Inc()
 		if dc.queue.NumRequeues(item) < dc.config.QueueMaxRetries {
 			dc.log.Error(err, "Error syncing item, requeuing with rate limit", "item", item)
@@ -286,258 +304,372 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
-// syncFunc reconciles a single item.
-func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers) error {
-	gvrKey := fmt.Sprintf("%s/%s/%s", oi.GVR.Group, oi.GVR.Version, oi.GVR.Resource)
-	dc.log.V(1).Info("Syncing resourcegraphdefinition instance request", "gvr", gvrKey, "namespacedKey", oi.NamespacedKey)
+func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) error {
+	gvrKey := keyFromGVR(oi.GVR)
+	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "key", oi.NamespacedName)
 
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
 		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
 		reconcileTotal.WithLabelValues(gvrKey).Inc()
-		dc.log.V(1).Info("Finished syncing resourcegraphdefinition instance request",
-			"gvr", gvrKey,
-			"namespacedKey", oi.NamespacedKey,
-			"duration", duration)
+		dc.log.V(1).Info("Finished syncing object",
+			"gvr", gvrKey, "key", oi.NamespacedName, "duration", duration)
 	}()
 
-	genericHandler, ok := dc.handlers.Load(oi.GVR)
-	if !ok {
-		// NOTE(a-hilaly): this might mean that the GVR is not registered, or the workflow operator
-		// is not found. We should probably handle this in a better way.
-		return fmt.Errorf("no handler found for GVR: %s", gvrKey)
-	}
-
-	// this is worth a panic if it fails...
-	handlerFunc, ok := genericHandler.(Handler)
-	if !ok {
-		return fmt.Errorf("invalid handler type for GVR: %s", gvrKey)
-	}
-	err := handlerFunc(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: oi.NamespacedKey}})
+	err := handler(ctx, ctrl.Request{NamespacedName: oi.NamespacedName})
 	if err != nil {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
 	return err
 }
 
-// gracefulShutdown performs a graceful shutdown of the controller.
-func (dc *DynamicController) gracefulShutdown(timeout time.Duration) error {
+func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj interface{}, eventType string) {
+	mobj, err := meta.Accessor(obj)
+	if err != nil {
+		dc.log.Error(err, "Failed to get meta for object to enqueue", "eventType", eventType)
+		return
+	}
+
+	oi := ObjectIdentifiers{NamespacedName: types.NamespacedName{
+		Namespace: mobj.GetNamespace(),
+		Name:      mobj.GetName(),
+	}, GVR: parentGVR}
+	dc.log.V(1).Info("Enqueueing object", "objectIdentifiers", oi, "eventType", eventType)
+
+	informerEventsTotal.WithLabelValues(parentGVR.String(), eventType).Inc()
+	dc.queue.Add(oi)
+}
+
+func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, oldObj, newObj interface{}) {
+	newMeta, err := meta.Accessor(newObj)
+	if err != nil {
+		dc.log.Error(err, "failed to access new object meta")
+		return
+	}
+	oldMeta, err := meta.Accessor(oldObj)
+	if err != nil {
+		dc.log.Error(err, "failed to access old object meta")
+		return
+	}
+	if newMeta.GetGeneration() == oldMeta.GetGeneration() {
+		dc.log.V(2).Info("Skipping update due to unchanged generation",
+			"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
+		return
+	}
+	dc.enqueueParent(parentGVR, newObj, eventTypeUpdate)
+}
+
+// Register registers parent and children via reconciliation.
+func (dc *DynamicController) Register(
+	_ context.Context,
+	parent schema.GroupVersionResource,
+	instanceHandler Handler,
+	resourceGVRsToWatch ...schema.GroupVersionResource,
+) error {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+
+	reg, exists := dc.registrations[parent]
+	if !exists {
+		reg = &registration{
+			parentGVR:       parent,
+			childHandlerIDs: make(map[schema.GroupVersionResource]string),
+		}
+		dc.registrations[parent] = reg
+	}
+
+	if err := dc.reconcileParentLocked(parent, instanceHandler, reg); err != nil {
+		return err
+	}
+	if err := dc.reconcileChildrenLocked(parent, resourceGVRsToWatch, reg); err != nil {
+		return err
+	}
+
+	// kick reconciliation for existing parent objects
+	if w, ok := dc.watches[parent]; ok && !w.Informer().IsStopped() {
+		// Use informer cache if running to repopulate the queue.
+		objects := w.Informer().GetStore().List()
+		for _, obj := range objects {
+			dc.enqueueParent(parent, obj, "update")
+		}
+	}
+
+	dc.log.V(1).Info("Successfully registered GVR", "gvr", keyFromGVR(parent))
+	return nil
+}
+
+// Deregister clears parent and children and drops any queued items for the parent GVR.
+func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) error {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+
+	reg, exists := dc.registrations[parent]
+	if !exists {
+		return nil
+	}
+
+	gvrKey := keyFromGVR(parent)
+
+	if err := dc.reconcileChildrenLocked(parent, nil, reg); err != nil {
+		dc.log.Error(err, "failed to detach children", "parent", gvrKey)
+	}
+	if err := dc.reconcileParentLocked(parent, nil, reg); err != nil {
+		dc.log.Error(err, "failed to detach parent", "parent", gvrKey)
+	}
+
+	delete(dc.registrations, parent)
+
+	dc.log.V(1).Info("Successfully unregistered GVR", "gvr", gvrKey)
+	return nil
+}
+
+// ----- internal helpers -----
+
+func (dc *DynamicController) ensureWatchLocked(
+	gvr schema.GroupVersionResource,
+) *internal.LazyInformer {
+	if w, ok := dc.watches[gvr]; ok {
+		return w
+	}
+
+	// Create per-GVR watch wrapper (informer created lazily on first handler)
+	w := internal.NewLazyInformer(dc.client, gvr, dc.config.ResyncPeriod, nil, dc.log)
+	dc.watches[gvr] = w
+	return w
+}
+
+// reconcileParentLocked ensures a parent watch exists and has exactly one handler.
+// If instanceHandler is nil, the parent handler is removed.
+// Must be called with dc.mu held.
+func (dc *DynamicController) reconcileParentLocked(
+	parent schema.GroupVersionResource,
+	instanceHandler Handler,
+	reg *registration,
+) error {
+	if instanceHandler == nil {
+		if reg.parentHandlerID == "" {
+			return nil
+		}
+		// remove parent handler if present
+		if err := dc.removeHandlerLocked(parent, reg.parentHandlerID); err != nil {
+			return fmt.Errorf("removing parent handler %s: %w", parent, err)
+		}
+		reg.parentHandlerID = ""
+		dc.handlers.Delete(parent)
+
+		gvrCount.Dec()
+		handlerDetachTotal.WithLabelValues("parent").Inc()
+		handlerCount.WithLabelValues("parent").Dec()
+		dc.log.V(1).Info("Detached parent", "gvr", parent)
+		return nil
+	}
+
+	// ensure watch
+	w := dc.ensureWatchLocked(parent)
+
+	// create handler if missing
+	if reg.parentHandlerID == "" {
+		parentHandlerID := parentHandlerID(parent)
+		if err := w.AddHandler(dc.ctx, parentHandlerID, cache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeAdd) },
+			UpdateFunc: func(oldObj, newObj interface{}) { dc.updateFunc(parent, oldObj, newObj) },
+			DeleteFunc: func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeDelete) },
+		}); err != nil {
+			return fmt.Errorf("add parent handler %s: %w", parent, err)
+		}
+		reg.parentHandlerID = parentHandlerID
+
+		gvrCount.Inc()
+		handlerAttachTotal.WithLabelValues("parent").Inc()
+		handlerCount.WithLabelValues("parent").Inc()
+		dc.log.V(1).Info("Attached parent", "gvr", parent)
+	}
+
+	// always update latest handler
+	dc.handlers.Store(parent, instanceHandler)
+
+	return nil
+}
+
+// reconcileChildrenLocked ensures that reg.childHandlerIDs matches the desired set.
+// Must be called with dc.mu held.
+func (dc *DynamicController) reconcileChildrenLocked(
+	parent schema.GroupVersionResource,
+	desired []schema.GroupVersionResource,
+	reg *registration,
+) error {
+	desiredSet := make(map[schema.GroupVersionResource]struct{}, len(desired))
+	for _, g := range desired {
+		desiredSet[g] = struct{}{}
+	}
+
+	parentGVRKey := keyFromGVR(parent)
+
+	// remove obsolete
+	for child, childHandlerID := range reg.childHandlerIDs {
+		if _, keep := desiredSet[child]; keep {
+			continue
+		}
+		if err := dc.removeHandlerLocked(child, childHandlerID); err != nil {
+			return fmt.Errorf("removing child handler %s: %w", child, err)
+		}
+		delete(reg.childHandlerIDs, child)
+
+		childGVRKey := keyFromGVR(child)
+		handlerDetachTotal.WithLabelValues("child").Inc()
+		handlerCount.WithLabelValues("child").Dec()
+		dc.log.V(1).Info("Detached child", "parent", parentGVRKey, "gvr", childGVRKey)
+	}
+
+	// add missing
+	for child := range desiredSet {
+		if _, exists := reg.childHandlerIDs[child]; exists {
+			continue
+		}
+		w := dc.ensureWatchLocked(child)
+		childHandlerID := childHandlerID(parent, child)
+		if err := w.AddHandler(dc.ctx, childHandlerID, dc.handlerForChildGVR(parent, child)); err != nil {
+			return fmt.Errorf("add child handler %s: %w", child, err)
+		}
+		reg.childHandlerIDs[child] = childHandlerID
+
+		childGVRKey := keyFromGVR(child)
+		handlerAttachTotal.WithLabelValues("child").Inc()
+		handlerCount.WithLabelValues("child").Inc()
+		dc.log.V(1).Info("Attached child", "parent", parentGVRKey, "gvr", childGVRKey)
+	}
+
+	return nil
+}
+
+// removeHandlerLocked removes a handler with the specified ID for a given GroupVersionResource watch.
+// If the handler removal stops the watch, the corresponding GroupVersionResource entry is deleted from the watches map.
+// Returns an error if the handler removal fails.
+func (dc *DynamicController) removeHandlerLocked(gvr schema.GroupVersionResource, handlerID string) error {
+	w, ok := dc.watches[gvr]
+	if !ok {
+		// no watch means there cannot be a handler
+		return nil
+	}
+	stopped, err := w.RemoveHandler(handlerID)
+	if err != nil {
+		return fmt.Errorf("removing handler %s for watch on %s failed: %w", handlerID, gvr, err)
+	}
+	if stopped {
+		delete(dc.watches, gvr)
+	}
+	return nil
+}
+
+func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersionResource) cache.ResourceEventHandler {
+	parentGVRKey, childGVRKey := keyFromGVR(parent), keyFromGVR(child)
+	handle := func(obj interface{}, eventType string) {
+		objMeta, err := meta.Accessor(obj)
+		if err != nil {
+			dc.log.Error(err, "failed to get metadata accessor for object", "eventType", eventType)
+			return
+		}
+		lbls := objMeta.GetLabels()
+		owned, ok := lbls[metadata.OwnedLabel]
+		if !ok || owned != "true" {
+			return
+		}
+		name, ok := lbls[metadata.InstanceLabel]
+		if !ok {
+			return
+		}
+		namespace, ok := lbls[metadata.InstanceNamespaceLabel]
+		if !ok {
+			return
+		}
+
+		parentGVK, err := dc.mapper.KindFor(parent)
+		if err != nil {
+			dc.log.Error(err, "failed to get parent GVK", "parent", parentGVRKey)
+			return
+		}
+		pom := &metav1.PartialObjectMetadata{}
+		pom.SetGroupVersionKind(parentGVK)
+		pom.SetName(name)
+		pom.SetNamespace(namespace)
+
+		dc.log.V(1).Info("Child triggered parent reconciliation",
+			"parent", parentGVRKey,
+			"child", childGVRKey,
+			"eventType", eventType,
+			"childName", objMeta.GetName(),
+			"childNamespace", objMeta.GetNamespace(),
+			"targetName", name,
+			"targetNamespace", namespace,
+		)
+		dc.enqueueParent(parent, pom, eventType)
+	}
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { handle(obj, eventTypeAdd) },
+		UpdateFunc: func(oldObj, newObj interface{}) { handle(newObj, eventTypeUpdate) },
+		DeleteFunc: func(obj interface{}) { handle(obj, eventTypeDelete) },
+	}
+}
+
+func (dc *DynamicController) gracefulShutdown() error {
 	dc.log.Info("Starting graceful shutdown")
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	dc.mu.Lock()
+	for gvr, w := range dc.watches {
+		dc.log.V(1).Info("Stopping watch", "gvr", keyFromGVR(gvr))
+		w.Shutdown()
+	}
+	dc.mu.Unlock()
+
+	queueShutdownDone := make(chan struct{})
+	go func() {
+		dc.queue.ShutDown()
+		close(queueShutdownDone)
+	}()
+
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if dc.config.QueueShutdownTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, dc.config.QueueShutdownTimeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
 	defer cancel()
 
-	var wg sync.WaitGroup
-	dc.informers.Range(func(key, value interface{}) bool {
-		wg.Add(1)
-		go func(informer *informerWrapper) {
-			defer wg.Done()
-			informer.informer.Shutdown()
-		}(value.(*informerWrapper))
-		return true
-	})
-
-	// Wait for all informers to shut down or timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
 	select {
-	case <-done:
-		dc.log.Info("All informers shut down successfully")
+	case <-queueShutdownDone:
+		return nil
 	case <-ctx.Done():
-		dc.log.Error(ctx.Err(), "Timeout waiting for informers to shut down")
-		return ctx.Err()
+		return fmt.Errorf("timeout waiting for queue to shutdown: %w", ctx.Err())
 	}
-
-	return nil
 }
 
-// ObjectIdentifiers is a struct that holds the namespaced key and the GVR of the object.
-//
-// Since we are handling all the resources using the same handlerFunc, we need to know
-// what GVR we're dealing with - so that we can use the appropriate workflow operator.
-type ObjectIdentifiers struct {
-	// NamespacedKey is the namespaced key of the object. Typically in the format
-	// `namespace/name`.
-	NamespacedKey string
-	GVR           schema.GroupVersionResource
+// keyFromGVR returns a compact, allocation-efficient string key for the given
+// GroupVersionResource in the canonical "group/version/resource" format.
+// Unlike [schema.GroupVersionResource.String], it omits labels and avoids extra
+// allocations, making it suitable for use as map keys, metrics labels, and cache identifiers.
+func keyFromGVR(gvr schema.GroupVersionResource) string {
+	var b strings.Builder
+	if gvr.Group != "" {
+		b.WriteString(gvr.Group)
+	}
+	if gvr.Version != "" {
+		b.WriteRune('/')
+		b.WriteString(gvr.Version)
+	}
+	if gvr.Resource != "" {
+		b.WriteRune('/')
+		b.WriteString(gvr.Resource)
+	}
+	return b.String()
 }
 
-// updateFunc is the update event handler for the GVR informers
-func (dc *DynamicController) updateFunc(old, new interface{}) {
-	newObj, ok := new.(*unstructured.Unstructured)
-	if !ok {
-		dc.log.Error(nil, "failed to cast new object to unstructured")
-		return
-	}
-	oldObj, ok := old.(*unstructured.Unstructured)
-	if !ok {
-		dc.log.Error(nil, "failed to cast old object to unstructured")
-		return
-	}
-
-	if newObj.GetGeneration() == oldObj.GetGeneration() {
-		dc.log.V(2).Info("Skipping update due to unchanged generation",
-			"name", newObj.GetName(),
-			"namespace", newObj.GetNamespace(),
-			"generation", newObj.GetGeneration())
-		return
-	}
-
-	dc.enqueueObject(new, "update")
+func childHandlerID(parent schema.GroupVersionResource, child schema.GroupVersionResource) string {
+	return "child:" + keyFromGVR(parent) + "->" + keyFromGVR(child)
 }
 
-// enqueueObject adds an object to the workqueue
-func (dc *DynamicController) enqueueObject(obj interface{}, eventType string) {
-	namespacedKey, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-	if err != nil {
-		dc.log.Error(err, "Failed to get key for object", "eventType", eventType)
-		return
-	}
-
-	u, ok := obj.(*unstructured.Unstructured)
-	if !ok {
-		err := fmt.Errorf("object is not an Unstructured")
-		dc.log.Error(err, "Failed to cast object to Unstructured", "eventType", eventType, "namespacedKey", namespacedKey)
-		return
-	}
-
-	gvk := u.GroupVersionKind()
-	gvr := metadata.GVKtoGVR(gvk)
-
-	objectIdentifiers := ObjectIdentifiers{
-		NamespacedKey: namespacedKey,
-		GVR:           gvr,
-	}
-
-	dc.log.V(1).Info("Enqueueing object",
-		"objectIdentifiers", objectIdentifiers,
-		"eventType", eventType)
-
-	informerEventsTotal.WithLabelValues(gvr.String(), eventType).Inc()
-	dc.queue.Add(objectIdentifiers)
-}
-
-// StartServingGVK registers a new GVK to the informers map safely.
-func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.GroupVersionResource, handler Handler) error {
-	dc.log.V(1).Info("Registering new GVK", "gvr", gvr)
-
-	_, exists := dc.informers.Load(gvr)
-	if exists {
-		// Even thought the informer is already registered, we should still
-		// update the handler, as it might have changed.
-		dc.handlers.Store(gvr, handler)
-		// trigger reconciliation of the corresponding gvr's
-		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
-		}
-		for _, obj := range objs.Items {
-			dc.enqueueObject(&obj, "update")
-		}
-		return nil
-	}
-
-	// Create a new informer
-	gvkInformer := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
-		dc.kubeClient,
-		dc.config.ResyncPeriod,
-		// Maybe we can make this configurable in the future. Thinking that
-		// we might want to filter out some resources, by namespace or labels
-		"",
-		nil,
-	)
-	informer := gvkInformer.ForResource(gvr).Informer()
-
-	// Set up event handlers
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { dc.enqueueObject(obj, "add") },
-		UpdateFunc: dc.updateFunc,
-		DeleteFunc: func(obj interface{}) { dc.enqueueObject(obj, "delete") },
-	})
-	if err != nil {
-		dc.log.Error(err, "Failed to add event handler", "gvr", gvr)
-		return fmt.Errorf("failed to add event handler for GVR %s: %w", gvr, err)
-	}
-	if err := informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
-		dc.log.Error(err, "Watch error", "gvr", gvr)
-	}); err != nil {
-		dc.log.Error(err, "Failed to set watch error handler", "gvr", gvr)
-		return fmt.Errorf("failed to set watch error handler for GVR %s: %w", gvr, err)
-	}
-	dc.handlers.Store(gvr, handler)
-
-	informerContext := context.Background()
-	cancelableContext, cancel := context.WithCancel(informerContext)
-	// Start the informer
-	go func() {
-		dc.log.V(1).Info("Starting informer", "gvr", gvr)
-		// time.Sleep(5 * time.Millisecond)
-		informer.Run(cancelableContext.Done())
-	}()
-
-	dc.log.V(1).Info("Waiting for cache sync", "gvr", gvr)
-	startTime := time.Now()
-	// Wait for cache sync with a timeout
-	synced := cache.WaitForCacheSync(cancelableContext.Done(), informer.HasSynced)
-	syncDuration := time.Since(startTime)
-	informerSyncDuration.WithLabelValues(gvr.String()).Observe(syncDuration.Seconds())
-
-	if !synced {
-		cancel()
-		return fmt.Errorf("failed to sync informer cache for GVR %s", gvr)
-	}
-
-	dc.informers.Store(gvr, &informerWrapper{
-		informer: gvkInformer,
-		shutdown: cancel,
-	})
-	gvrCount.Inc()
-	dc.log.V(1).Info("Successfully registered GVK", "gvr", gvr)
-	return nil
-}
-
-// UnregisterGVK safely removes a GVK from the controller and cleans up associated resources.
-func (dc *DynamicController) StopServiceGVK(ctx context.Context, gvr schema.GroupVersionResource) error {
-	dc.log.Info("Unregistering GVK", "gvr", gvr)
-
-	// Retrieve the informer
-	informerObj, ok := dc.informers.Load(gvr)
-	if !ok {
-		dc.log.V(1).Info("GVK not registered, nothing to unregister", "gvr", gvr)
-		return nil
-	}
-
-	wrapper, ok := informerObj.(*informerWrapper)
-	if !ok {
-		return fmt.Errorf("invalid informer type for GVR: %s", gvr)
-	}
-
-	// Stop the informer
-	dc.log.V(1).Info("Stopping informer", "gvr", gvr)
-
-	// Cancel the context to stop the informer
-	wrapper.shutdown()
-	// Wait for the informer to shut down
-	wrapper.informer.Shutdown()
-
-	// Remove the informer from the map
-	dc.informers.Delete(gvr)
-
-	// Unregister the handler if any
-	dc.handlers.Delete(gvr)
-
-	gvrCount.Dec()
-	// Clean up any pending items in the queue for this GVR
-	// NOTE(a-hilaly): This is a bit heavy.. maybe we can find a better way to do this.
-	// Thinking that we might want to have a queue per GVR.
-	// dc.cleanupQueue(gvr)
-	// time.Sleep(1 * time.Second)
-	// isStopped := wrapper.informer.ForResource(gvr).Informer().IsStopped()
-	dc.log.V(1).Info("Successfully unregistered GVK", "gvr", gvr)
-	return nil
+func parentHandlerID(parent schema.GroupVersionResource) string {
+	handlerID := "parent:" + keyFromGVR(parent)
+	return handlerID
 }

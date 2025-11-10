@@ -16,10 +16,12 @@ package fake
 
 import (
 	"context"
+	"net/http"
 
-	"github.com/kro-run/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/client"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -31,6 +33,8 @@ type FakeSet struct {
 	KubernetesClient    kubernetes.Interface
 	ApiExtensionsClient apiextensionsv1.ApiextensionsV1Interface
 	Config              *rest.Config
+	restMapper          meta.RESTMapper
+	HTTP                *http.Client
 }
 
 var _ client.SetInterface = (*FakeSet)(nil)
@@ -41,6 +45,10 @@ func NewFakeSet(dynamicClient dynamic.Interface) *FakeSet {
 		DynamicClient: NewJSONSafeDynamicClient(dynamicClient),
 		Config:        &rest.Config{},
 	}
+}
+
+func (f *FakeSet) HTTPClient() *http.Client {
+	return f.HTTP
 }
 
 // Kubernetes returns the standard Kubernetes clientset
@@ -73,6 +81,14 @@ func (f *FakeSet) CRD(cfg client.CRDWrapperConfig) client.CRDInterface {
 // For testing, this just returns the same fake client
 func (f *FakeSet) WithImpersonation(user string) (client.SetInterface, error) {
 	return f, nil
+}
+
+func (f *FakeSet) RESTMapper() meta.RESTMapper {
+	return f.restMapper
+}
+
+func (f *FakeSet) SetRESTMapper(restMapper meta.RESTMapper) {
+	f.restMapper = restMapper
 }
 
 // FakeCRD is a fake implementation of CRDInterface for testing

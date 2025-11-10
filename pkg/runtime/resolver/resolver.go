@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kro-run/kro/pkg/graph/fieldpath"
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // ResolutionResult represents the result of resolving a single expression.
@@ -104,7 +104,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 	}
 
 	if field.StandaloneExpression {
-		resolvedValue, ok := r.data[strings.Trim(field.Expressions[0], "${}")]
+		resolvedValue, ok := r.data[field.Expressions[0]]
 		if !ok {
 			result.Error = fmt.Errorf("no data provided for expression: %s", field.Expressions[0])
 			return result
@@ -125,8 +125,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 
 		replaced := strValue
 		for _, expr := range field.Expressions {
-			key := strings.Trim(expr, "${}")
-			replacement, ok := r.data[key]
+			replacement, ok := r.data[expr]
 			if !ok {
 				result.Error = fmt.Errorf("no data provided for expression: %s", expr)
 				return result

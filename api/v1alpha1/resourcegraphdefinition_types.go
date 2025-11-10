@@ -52,13 +52,6 @@ type ResourceGraphDefinitionSpec struct {
 	//
 	// +kubebuilder:validation:Optional
 	Resources []*Resource `json:"resources,omitempty"`
-	// ServiceAccount configuration for controller impersonation.
-	// Key is the namespace, value is the service account name to use.
-	// Special key "*" defines the default service account for any
-	// namespace not explicitly mapped.
-	//
-	// +kubebuilder:validation:Optional
-	DefaultServiceAccounts map[string]string `json:"defaultServiceAccounts,omitempty"`
 }
 
 // Schema represents the attributes that define an instance of
@@ -225,7 +218,7 @@ func (o *ResourceGraphDefinition) SetConditions(conditions []Condition) {
 	o.Status.Conditions = conditions
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ResourceGraphDefinitionList contains a list of ResourceGraphDefinition
 type ResourceGraphDefinitionList struct {

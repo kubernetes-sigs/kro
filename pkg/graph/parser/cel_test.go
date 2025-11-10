@@ -167,6 +167,30 @@ func TestExtractExpressions(t *testing.T) {
 			want:    []string{},
 			wantErr: true,
 		},
+		{
+			name:    "Ternary with empty map literal",
+			input:   "${condition ? value : {}}",
+			want:    []string{"condition ? value : {}"},
+			wantErr: false,
+		},
+		{
+			name:    "Ternary with empty map on both sides",
+			input:   "${condition ? {} : {}}",
+			want:    []string{"condition ? {} : {}"},
+			wantErr: false,
+		},
+		{
+			name:    "Complex ternary with empty map (real world example)",
+			input:   "${schema.spec.deployment.includeAnnotations ? schema.spec.deployment.annotations : {}}",
+			want:    []string{"schema.spec.deployment.includeAnnotations ? schema.spec.deployment.annotations : {}"},
+			wantErr: false,
+		},
+		{
+			name:    "Ternary with has() and empty map",
+			input:   "${has(schema.annotations) && includeAnnotations ? schema.annotations : {}}",
+			want:    []string{"has(schema.annotations) && includeAnnotations ? schema.annotations : {}"},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

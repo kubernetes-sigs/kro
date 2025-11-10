@@ -7,5 +7,5 @@ data:
     email: user@example.com
     username: testuser123
     description: A test application
-    tags: [production frontend webapp]
+    tags: production,frontend,webapp
     replicas: 3

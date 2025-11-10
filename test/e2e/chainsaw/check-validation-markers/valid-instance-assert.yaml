@@ -12,6 +12,6 @@ spec:
   description: A test application
   replicas: 3
 status:
-  (conditions[?type == 'InstanceSynced']):
+  (conditions[?type == 'Ready']):
     - status: 'True'
   state: "ACTIVE"

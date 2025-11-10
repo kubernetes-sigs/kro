@@ -1,0 +1,9 @@
+# See https://cloud.google.com/cloud-build/docs/build-config
+options:
+  substitution_option: ALLOW_LOOSE
+  machineType: E2_HIGHCPU_32
+steps:
+- name: gcr.io/k8s-staging-test-infra/gcb-docker-gcloud:v20250513-9264efb079
+  entrypoint: dev/tasks/push-images
+  env:
+  - IMAGE_PREFIX=us-central1-docker.pkg.dev/k8s-staging-images/kro/

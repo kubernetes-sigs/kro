@@ -15,7 +15,6 @@
 package ackekscluster_test
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,10 +30,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
-	ctrlinstance "github.com/kro-run/kro/pkg/controller/instance"
-	"github.com/kro-run/kro/pkg/controller/resourcegraphdefinition"
-	"github.com/kro-run/kro/test/integration/environment"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
@@ -43,7 +42,7 @@ func TestEKSCluster(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error
-		env, err = environment.New(
+		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
@@ -61,8 +60,7 @@ func TestEKSCluster(t *testing.T) {
 }
 
 var _ = Describe("EKSCluster", func() {
-	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func() {
-		ctx := context.Background()
+	It("should handle complete lifecycle of ResourceGraphDefinition and Instance", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("test-%s", rand.String(5))
 
 		// Create namespace
@@ -79,7 +77,7 @@ var _ = Describe("EKSCluster", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rgd.Name,
 				Namespace: namespace,
@@ -121,20 +119,20 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := genInstance(namespace, "test-instance", "1.27")
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
 		// Check if the instance is created
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		roleGVK := schema.GroupVersionKind{
 			Group:   "iam.services.k8s.aws",
@@ -143,13 +141,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		clusterRole := &unstructured.Unstructured{}
 		clusterRole.SetGroupVersionKind(roleGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-role",
 				Namespace: namespace,
 			}, clusterRole)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		clusterRole.Object["status"] = map[string]interface{}{
 			"ackResourceMetadata": map[string]interface{}{
@@ -168,13 +166,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		vpc := &unstructured.Unstructured{}
 		vpc.SetGroupVersionKind(vpcGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-vpc",
 				Namespace: namespace,
 			}, vpc)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		vpc.Object["status"] = map[string]interface{}{
 			"vpcID": "vpc-12345",
@@ -189,7 +187,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 		igw := &unstructured.Unstructured{}
 		igw.SetGroupVersionKind(igwGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-igw",
 				Namespace: namespace,
@@ -199,7 +197,7 @@ var _ = Describe("EKSCluster", func() {
 			vpcID, found, _ := unstructured.NestedString(igw.Object, "spec", "vpc")
 			g.Expect(found).To(BeTrue())
 			g.Expect(vpcID).To(Equal("vpc-12345"))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		igw.Object["status"] = map[string]interface{}{
 			"internetGatewayID": "igw-12345",
@@ -214,13 +212,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		rt := &unstructured.Unstructured{}
 		rt.SetGroupVersionKind(rtGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-public-route-table",
 				Namespace: namespace,
 			}, rt)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		rt.Object["status"] = map[string]interface{}{
 			"routeTableID": "rtb-12345",
@@ -237,13 +235,13 @@ var _ = Describe("EKSCluster", func() {
 		// SubnetA
 		subnetA := &unstructured.Unstructured{}
 		subnetA.SetGroupVersionKind(subnetGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-public-subnet1",
 				Namespace: namespace,
 			}, subnetA)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		subnetA.Object["status"] = map[string]interface{}{
 			"subnetID": "subnet-a12345",
@@ -253,13 +251,13 @@ var _ = Describe("EKSCluster", func() {
 		// SubnetB
 		subnetB := &unstructured.Unstructured{}
 		subnetB.SetGroupVersionKind(subnetGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-public-subnet2",
 				Namespace: namespace,
 			}, subnetB)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		subnetB.Object["status"] = map[string]interface{}{
 			"subnetID": "subnet-b12345",
@@ -274,13 +272,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		cluster := &unstructured.Unstructured{}
 		cluster.SetGroupVersionKind(clusterGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
 			}, cluster)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		cluster.Object["status"] = map[string]interface{}{
 			"ackResourceMetadata": map[string]interface{}{
@@ -294,13 +292,13 @@ var _ = Describe("EKSCluster", func() {
 		// 8. Verify Admin Role
 		adminRole := &unstructured.Unstructured{}
 		adminRole.SetGroupVersionKind(roleGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-pia-role",
 				Namespace: namespace,
 			}, adminRole)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		adminRole.Object["status"] = map[string]interface{}{
 			"ackResourceMetadata": map[string]interface{}{
@@ -319,13 +317,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		eip := &unstructured.Unstructured{}
 		eip.SetGroupVersionKind(eipGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-eip",
 				Namespace: namespace,
 			}, eip)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		eip.Object["status"] = map[string]interface{}{
 			"allocationID": "eipalloc-12345",
@@ -340,13 +338,13 @@ var _ = Describe("EKSCluster", func() {
 		}
 		nat := &unstructured.Unstructured{}
 		nat.SetGroupVersionKind(natGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-natgateway1",
 				Namespace: namespace,
 			}, nat)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		nat.Object["status"] = map[string]interface{}{
 			"natGatewayID": "nat-12345",
@@ -356,13 +354,13 @@ var _ = Describe("EKSCluster", func() {
 		// 11. Verify Node Role
 		nodeRole := &unstructured.Unstructured{}
 		nodeRole.SetGroupVersionKind(roleGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-node-role",
 				Namespace: namespace,
 			}, nodeRole)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		nodeRole.Object["status"] = map[string]interface{}{
 			"ackResourceMetadata": map[string]interface{}{
@@ -381,16 +379,16 @@ var _ = Describe("EKSCluster", func() {
 		}
 		nodeGroup := &unstructured.Unstructured{}
 		nodeGroup.SetGroupVersionKind(nodeGroupGVK)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "kro-cluster-nodegroup",
 				Namespace: namespace,
 			}, nodeGroup)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify final instance status
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
@@ -406,7 +404,7 @@ var _ = Describe("EKSCluster", func() {
 			clusterARN, found, _ := unstructured.NestedString(instance.Object, "status", "clusterARN")
 			g.Expect(found).To(BeTrue())
 			g.Expect(clusterARN).To(Equal("arn:aws:eks:us-west-2:123456789012:cluster/test-instance"))
-		}, 20*time.Second, time.Second).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Before deletion, check version update
 		// Store resource versions
@@ -418,7 +416,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 
 		// Update cluster version
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
@@ -429,11 +427,11 @@ var _ = Describe("EKSCluster", func() {
 			spec["version"] = "1.28"
 			err = env.Client.Update(ctx, instance)
 			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).Should(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Wait and verify only cluster was updated
 		time.Sleep(5 * time.Second)
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega, ctx SpecContext) {
 
 			for key, latestResource := range latestResources {
 				kind := strings.Split(key, "/")[0]
@@ -448,38 +446,38 @@ var _ = Describe("EKSCluster", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 
 				if kind == "Cluster" {
-					Expect(obj.GetResourceVersion()).ToNot(Equal(latestResource.GetResourceVersion()),
+					g.Expect(obj.GetResourceVersion()).ToNot(Equal(latestResource.GetResourceVersion()),
 						"Cluster should be updated for version change")
 				} else {
-					Expect(obj.GetResourceVersion()).To(Equal(latestResource.GetResourceVersion()),
+					g.Expect(obj.GetResourceVersion()).To(Equal(latestResource.GetResourceVersion()),
 						"Resource %s should not be updated during version change", key)
 				}
 			}
-		}, 60*time.Second, time.Second).Should(Succeed())
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 
 		// Verify instance and all its resources are deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
 			}, instance)
-			return errors.IsNotFound(err)
-		}, 60*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete ResourceGraphDefinition
 		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
 		// Verify ResourceGraphDefinition is deleted
-		Eventually(func() bool {
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      rgd.Name,
 				Namespace: namespace,
 			}, &krov1alpha1.ResourceGraphDefinition{})
-			return errors.IsNotFound(err)
-		}, 20*time.Second, time.Second).Should(BeTrue())
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Cleanup namespace
 		Expect(env.Client.Delete(ctx, ns)).To(Succeed())

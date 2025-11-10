@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+if [[ -z ${IMAGE_PREFIX:-} ]]; then
+  echo "IMAGE_PREFIX is not set"
+  exit 1
+fi
+
+if [[ -z ${IMAGE_TAG:-} ]]; then
+  # Use a tag if the current commit is a tag, otherwise use a date+git-hash tag
+  if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
+    IMAGE_TAG=$(git describe --exact-match --tags HEAD)
+  else
+    IMAGE_TAG="$(date +v%Y%m%d)-$(git rev-parse --short HEAD)"
+  fi
+fi
+echo "Using IMAGE_TAG=${IMAGE_TAG}"
+
+if [[ -z ${HELM_IMAGE:-} ]]; then
+  echo "HELM_IMAGE is not set"
+  HELM_IMAGE=${IMAGE_PREFIX}charts
+fi
+echo "Using HELM_IMAGE=${HELM_IMAGE}"
+
+# build first, technically this is not needed as publish does a build too
+RELEASE_VERSION=${IMAGE_TAG} OCI_REPO=${IMAGE_PREFIX%/} make build-image
+
+# we are also pushing the helm chart, build it first
+RELEASE_VERSION=${IMAGE_TAG} HELM_IMAGE=${HELM_IMAGE} make package-helm
+
+
+# Do the actual publish
+RELEASE_VERSION=${IMAGE_TAG} OCI_REPO=${IMAGE_PREFIX%/} make publish-image
+RELEASE_VERSION=${IMAGE_TAG} HELM_IMAGE=${HELM_IMAGE} make publish-helm

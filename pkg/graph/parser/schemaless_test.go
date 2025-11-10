@@ -18,7 +18,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func areEqualExpressionFields(a, b []variable.FieldDescriptor) bool {
@@ -31,7 +31,6 @@ func areEqualExpressionFields(a, b []variable.FieldDescriptor) bool {
 
 	for i := range a {
 		if !equalStrings(a[i].Expressions, b[i].Expressions) ||
-			!areEqualSlices(a[i].ExpectedTypes, b[i].ExpectedTypes) ||
 			a[i].Path != b[i].Path ||
 			a[i].StandaloneExpression != b[i].StandaloneExpression {
 			return false
@@ -86,7 +85,6 @@ func TestParseSchemalessResource(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"resource.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "field",
 					StandaloneExpression: true,
 				},
@@ -103,7 +101,6 @@ func TestParseSchemalessResource(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"nested.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "outer.inner",
 					StandaloneExpression: true,
 				},
@@ -121,13 +118,11 @@ func TestParseSchemalessResource(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"array[0]"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "array[0]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array[1]"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "array[1]",
 					StandaloneExpression: true,
 				},
@@ -141,9 +136,8 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			want: []variable.FieldDescriptor{
 				{
-					Expressions:   []string{"expr1", "expr2"},
-					ExpectedTypes: []string{"any"},
-					Path:          "field",
+					Expressions: []string{"expr1", "expr2"},
+					Path:        "field",
 				},
 			},
 			wantErr: false,
@@ -164,13 +158,11 @@ func TestParseSchemalessResource(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"string.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "string",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "nested.array[0]",
 					StandaloneExpression: true,
 				},
@@ -228,7 +220,6 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"deeply.nested.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "level1.level2.level3.level4",
 					StandaloneExpression: true,
 				},
@@ -250,13 +241,11 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"expr1"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "array[0]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr2"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "array[3].nested",
 					StandaloneExpression: true,
 				},
@@ -272,13 +261,11 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{""},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "empty1",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"    "},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "empty2",
 					StandaloneExpression: true,
 				},
@@ -322,36 +309,30 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			want: []variable.FieldDescriptor{
 				{
 					Expressions:          []string{"string.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "string",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"array.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "nested.array[0]",
 					StandaloneExpression: true,
 				},
 				{
-					Expressions:   []string{"expr1", "expr2"},
-					ExpectedTypes: []string{"any"},
-					Path:          "complex.field",
+					Expressions: []string{"expr1", "expr2"},
+					Path:        "complex.field",
 				},
 				{
 					Expressions:          []string{"nested.value"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "complex.nested.inner",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr4"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "complex.array[1]",
 					StandaloneExpression: true,
 				},
 				{
 					Expressions:          []string{"expr5"},
-					ExpectedTypes:        []string{"any"},
 					Path:                 "complex.array[2]",
 					StandaloneExpression: true,
 				},

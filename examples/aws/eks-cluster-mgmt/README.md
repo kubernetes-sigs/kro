@@ -24,7 +24,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
 
    ```sh
    export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account) # Or update to the AWS account to use for your management cluster
-   export KRO_REPO_URL="https://github.com/kro-run/kro.git"
+   export KRO_REPO_URL="https://github.com/kubernetes-sigs/kro.git"
    export WORKING_REPO="eks-cluster-mgmt" # Try to keep this default name as it's referenced in terraform and gitops configs
    export TF_VAR_FILE="terraform.tfvars" # the name of terraform configuration file to use
    ```

@@ -16,17 +16,22 @@ package client
 
 import (
 	"fmt"
+	"net/http"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/release-utils/version"
 )
 
 // SetInterface provides a unified interface for different Kubernetes clients
 type SetInterface interface {
+	HTTPClient() *http.Client
 
 	// Kubernetes returns the standard Kubernetes clientset
 	Kubernetes() kubernetes.Interface
@@ -45,6 +50,9 @@ type SetInterface interface {
 
 	// WithImpersonation returns a new client that impersonates the given user
 	WithImpersonation(user string) (SetInterface, error)
+
+	RESTMapper() meta.RESTMapper
+	SetRESTMapper(restMapper meta.RESTMapper)
 }
 
 // Set provides a unified interface for different Kubernetes clients
@@ -52,7 +60,11 @@ type Set struct {
 	config          *rest.Config
 	kubernetes      *kubernetes.Clientset
 	dynamic         *dynamic.DynamicClient
+	metadata        metadata.Interface
 	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
+	// restMapper is a REST mapper for the Kubernetes API server
+	restMapper meta.RESTMapper
+	httpClient *http.Client
 }
 
 var _ SetInterface = (*Set)(nil)
@@ -105,22 +117,32 @@ func (c *Set) init() error {
 	var err error
 
 	// share http client between all k8s clients
-	sharedHttpClient, err := rest.HTTPClientFor(c.config)
+	c.httpClient, err = rest.HTTPClientFor(c.config)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	c.kubernetes, err = kubernetes.NewForConfigAndClient(c.config, sharedHttpClient)
+	c.kubernetes, err = kubernetes.NewForConfigAndClient(c.config, c.httpClient)
 	if err != nil {
 		return err
 	}
 
-	c.dynamic, err = dynamic.NewForConfigAndClient(c.config, sharedHttpClient)
+	c.metadata, err = metadata.NewForConfigAndClient(c.config, c.httpClient)
 	if err != nil {
 		return err
 	}
 
-	c.apiExtensionsV1, err = apiextensionsv1.NewForConfigAndClient(c.config, sharedHttpClient)
+	c.dynamic, err = dynamic.NewForConfigAndClient(c.config, c.httpClient)
+	if err != nil {
+		return err
+	}
+
+	c.apiExtensionsV1, err = apiextensionsv1.NewForConfigAndClient(c.config, c.httpClient)
+	if err != nil {
+		return err
+	}
+
+	c.restMapper, err = apiutil.NewDynamicRESTMapper(c.config, c.httpClient)
 	if err != nil {
 		return err
 	}
@@ -128,9 +150,18 @@ func (c *Set) init() error {
 	return nil
 }
 
+func (c *Set) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
 // Kubernetes returns the standard Kubernetes clientset
 func (c *Set) Kubernetes() kubernetes.Interface {
 	return c.kubernetes
+}
+
+// Metadata returns the metadata client
+func (c *Set) Metadata() metadata.Interface {
+	return c.metadata
 }
 
 // Dynamic returns the dynamic client
@@ -148,6 +179,11 @@ func (c *Set) RESTConfig() *rest.Config {
 	return rest.CopyConfig(c.config)
 }
 
+// RESTMapper returns the REST mapper
+func (c *Set) RESTMapper() meta.RESTMapper {
+	return c.restMapper
+}
+
 // CRD returns a new CRDInterface instance
 func (c *Set) CRD(cfg CRDWrapperConfig) CRDInterface {
 	if cfg.Client == nil {
@@ -163,4 +199,9 @@ func (c *Set) WithImpersonation(user string) (SetInterface, error) {
 		RestConfig:      c.config,
 		ImpersonateUser: user,
 	})
+}
+
+// SetRESTMapper sets the REST mapper for the client
+func (c *Set) SetRESTMapper(restMapper meta.RESTMapper) {
+	c.restMapper = restMapper
 }

@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	krov1alpha1 "github.com/kro-run/kro/api/v1alpha1"
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 // ResourceGraphDefinitionOption is a functional option for ResourceGraphDefinition

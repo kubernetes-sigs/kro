@@ -14,6 +14,8 @@
 
 package instance
 
+import "errors"
+
 const (
 	InstanceStateInProgress = "IN_PROGRESS"
 	InstanceStateFailed     = "FAILED"
@@ -47,4 +49,14 @@ type InstanceState struct {
 	ResourceStates map[string]*ResourceState
 	// Any error encountered during reconciliation
 	ReconcileErr error
+}
+
+func (s *InstanceState) ResourceErrors() error {
+	var errorsSeen []error
+	for _, resourceState := range s.ResourceStates {
+		if resourceState.Err != nil {
+			errorsSeen = append(errorsSeen, resourceState.Err)
+		}
+	}
+	return errors.Join(errorsSeen...)
 }

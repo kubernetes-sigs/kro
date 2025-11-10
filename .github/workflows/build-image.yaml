@@ -1,0 +1,44 @@
+name: Build Image
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - .github/workflows/build-image.yaml
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - .github/workflows/build-image.yaml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install Dependencies
+        run: |
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.2.1
+          go install github.com/google/ko@latest
+
+      - name: Build Image
+        if: github.event_name == 'pull_request'
+        run: |
+          RELEASE_VERSION=dev-ci make build-image

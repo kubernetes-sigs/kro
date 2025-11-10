@@ -22,7 +22,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
-	"github.com/kro-run/kro/pkg/graph/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 )
 
 // fieldDescriptor represents a field in an OpenAPI schema. Typically this field

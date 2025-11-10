@@ -16,12 +16,25 @@ package parser
 
 import (
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
+
+// newSchema creates a spec.Schema with properly initialized VendorExtensible
+// to avoid nil pointer panics in the OpenAPI library
+func newSchema(props spec.SchemaProps) spec.Schema {
+	return spec.Schema{
+		SchemaProps: props,
+		VendorExtensible: spec.VendorExtensible{
+			Extensions: spec.Extensions{},
+		},
+	}
+}
 
 func TestParseResource(t *testing.T) {
 	t.Run("Simple resource with various types", func(t *testing.T) {
@@ -131,21 +144,21 @@ func TestParseResource(t *testing.T) {
 		}
 
 		expectedExpressions := []variable.FieldDescriptor{
-			{Path: "stringField", Expressions: []string{"string.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "intField", Expressions: []string{"int.value"}, ExpectedTypes: []string{"integer"}, StandaloneExpression: true},
-			{Path: "boolField", Expressions: []string{"bool.value"}, ExpectedTypes: []string{"boolean"}, StandaloneExpression: true},
-			{Path: "nestedObject.nestedString", Expressions: []string{"nested.string"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, ExpectedTypes: []string{"string"}, StandaloneExpression: false},
-			{Path: "simpleArray[0]", Expressions: []string{"array[0]"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "simpleArray[1]", Expressions: []string{"array[1]"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "mapField.key1", Expressions: []string{"map.key1"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "mapField.key2", Expressions: []string{"map.key2"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "specialCharacters.simpleAnnotation", Expressions: []string{"simpleannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, ExpectedTypes: []string{"string"}, StandaloneExpression: true},
+			{Path: "stringField", Expressions: []string{"string.value"}, StandaloneExpression: true},
+			{Path: "intField", Expressions: []string{"int.value"}, StandaloneExpression: true},
+			{Path: "boolField", Expressions: []string{"bool.value"}, StandaloneExpression: true},
+			{Path: "nestedObject.nestedString", Expressions: []string{"nested.string"}, StandaloneExpression: true},
+			{Path: "nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, StandaloneExpression: false},
+			{Path: "simpleArray[0]", Expressions: []string{"array[0]"}, StandaloneExpression: true},
+			{Path: "simpleArray[1]", Expressions: []string{"array[1]"}, StandaloneExpression: true},
+			{Path: "mapField.key1", Expressions: []string{"map.key1"}, StandaloneExpression: true},
+			{Path: "mapField.key2", Expressions: []string{"map.key2"}, StandaloneExpression: true},
+			{Path: "specialCharacters.simpleAnnotation", Expressions: []string{"simpleannotation"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, StandaloneExpression: true},
+			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, StandaloneExpression: true},
+			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, StandaloneExpression: true},
+			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, StandaloneExpression: true},
 		}
 
 		expressions, err := ParseResource(resource, schema)
@@ -153,12 +166,36 @@ func TestParseResource(t *testing.T) {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
 
-		if !areEqualExpressionFields(expressions, expectedExpressions) {
-			for i, expr := range expressions {
-				t.Logf("Got %d: %+v", i, expr)
+		// sort both slices to ensure consistent ordering
+		sort.Slice(expressions, func(i, j int) bool { return expressions[i].Path < expressions[j].Path })
+		sort.Slice(expectedExpressions, func(i, j int) bool { return expectedExpressions[i].Path < expectedExpressions[j].Path })
+
+		// first check the length
+		if len(expressions) != len(expectedExpressions) {
+			t.Fatalf("Expected %d expressions, got %d", len(expectedExpressions), len(expressions))
+		}
+
+		// compare each expression individually for better error messages
+		for i := range expectedExpressions {
+			expected := expectedExpressions[i]
+			actual := expressions[i]
+
+			if actual.Path != expected.Path {
+				t.Errorf("Expression[%d] path mismatch:\n  got:  %s\n  want: %s", i, actual.Path, expected.Path)
 			}
-			for i, expr := range expectedExpressions {
-				t.Logf("Want %d: %+v", i, expr)
+
+			if !equalStrings(actual.Expressions, expected.Expressions) {
+				t.Errorf(
+					"Expression[%d] expressions mismatch for path %s:\n  got:  %v\n  want: %v",
+					i, expected.Path, actual.Expressions, expected.Expressions,
+				)
+			}
+
+			if actual.StandaloneExpression != expected.StandaloneExpression {
+				t.Errorf(
+					"Expression[%d] StandaloneExpression mismatch for path %s:\n  got:  %v\n  want: %v",
+					i, expected.Path, actual.StandaloneExpression, expected.StandaloneExpression,
+				)
 			}
 		}
 	})
@@ -186,10 +223,11 @@ func TestParseResource(t *testing.T) {
 
 func TestTypeMismatches(t *testing.T) {
 	testCases := []struct {
-		name     string
-		resource map[string]interface{}
-		schema   *spec.Schema
-		wantErr  bool
+		name          string
+		resource      map[string]interface{}
+		schema        *spec.Schema
+		wantErr       bool
+		expectedError string
 	}{
 		{
 			name: "String instead of integer",
@@ -204,7 +242,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected integer type for path intField, got string",
 		},
 		{
 			name: "Integer instead of string",
@@ -219,7 +258,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected string type for path stringField, got integer",
 		},
 		{
 			name: "Boolean instead of number",
@@ -234,7 +274,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected number type for path numberField, got boolean",
 		},
 		{
 			name: "Array instead of object",
@@ -249,7 +290,8 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected object type for path objectField, got array",
 		},
 		{
 			name: "Object instead of array",
@@ -264,7 +306,46 @@ func TestTypeMismatches(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "expected array type for path arrayField, got object",
+		},
+		{
+			name: "Nested field type mismatch - string instead of number at 3 levels",
+			resource: map[string]interface{}{
+				"level1": map[string]interface{}{
+					"level2": map[string]interface{}{
+						"numberField": "not-a-number",
+					},
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"level1": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"level2": {
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											Properties: map[string]spec.Schema{
+												"numberField": {
+													SchemaProps: spec.SchemaProps{
+														Type: []string{"number"},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:       true,
+			expectedError: "expected number type for path level1.level2.numberField, got string",
 		},
 		{
 			name: "Nil schema",
@@ -307,7 +388,8 @@ func TestTypeMismatches(t *testing.T) {
 					Type: []string{},
 				},
 			},
-			wantErr: true,
+			wantErr:       true,
+			expectedError: "schema at path  has no valid type, OneOf, AnyOf, or AdditionalProperties",
 		},
 		{
 			name: "Valid types (no mismatch)",
@@ -366,6 +448,9 @@ func TestTypeMismatches(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ParseResource() error = %v, wantErr %v", err, tc.wantErr)
 			}
+			if err != nil && tc.expectedError != "" && !strings.Contains(err.Error(), tc.expectedError) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.expectedError)
+			}
 		})
 	}
 }
@@ -387,57 +472,46 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		},
 	}
 
-	stringFieldSchema := spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"string"}}}
-	objectFieldSchema := spec.Schema{
-		SchemaProps: spec.SchemaProps{
-			Type: []string{"object"},
-			Properties: map[string]spec.Schema{
-				"key1": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
-				"key2": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
-			},
+	stringFieldSchema := newSchema(spec.SchemaProps{Type: []string{"string"}})
+	objectFieldSchema := newSchema(spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"key1": newSchema(spec.SchemaProps{Type: []string{"string"}}),
+			"key2": newSchema(spec.SchemaProps{Type: []string{"integer"}}),
 		},
-	}
-	nestedObjectFieldSchema := spec.Schema{
-		SchemaProps: spec.SchemaProps{
-			Type: []string{"object"},
-			Properties: map[string]spec.Schema{
-				"nestedString": {
-					SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+	})
+	nestedObjectFieldSchema := newSchema(spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"nestedString": newSchema(spec.SchemaProps{Type: []string{"string"}}),
+			"nestedObject": newSchema(spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"deepNested": newSchema(spec.SchemaProps{Type: []string{"string"}}),
 				},
-				"nestedObject": {
-					SchemaProps: spec.SchemaProps{
-						Type: []string{"object"},
-						Properties: map[string]spec.Schema{
-							"deepNested": {
-								SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-							},
-						},
-					},
-				},
-			},
+			}),
 		},
-	}
-	arrayFieldSchema := spec.Schema{
-		SchemaProps: spec.SchemaProps{
-			Type: []string{"array"},
-			Items: &spec.SchemaOrArray{
-				Schema: &spec.Schema{
-					SchemaProps: spec.SchemaProps{
-						Type: []string{"object"},
-						Properties: map[string]spec.Schema{
-							"objectInArray": {
-								SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-							},
-						},
-						AdditionalProperties: &spec.SchemaOrBool{Allows: true},
-					},
+	})
+	arrayFieldItemSchema := newSchema(spec.SchemaProps{
+		Type: []string{"object"},
+		Properties: map[string]spec.Schema{
+			"objectInArray": newSchema(spec.SchemaProps{Type: []string{"string"}}),
+		},
+		AdditionalProperties: &spec.SchemaOrBool{
+			Allows: true,
+			Schema: &spec.Schema{
+				VendorExtensible: spec.VendorExtensible{
+					Extensions: spec.Extensions{},
 				},
 			},
 		},
-	}
-	nestedObjectNestedStringSchema := nestedObjectFieldSchema.Properties["nestedString"]
-	deepNestedSchema := nestedObjectFieldSchema.Properties["nestedObject"].Properties["deepNested"]
-	objectInArraySchema := arrayFieldSchema.Items.Schema.Properties["objectInArray"]
+	})
+	arrayFieldSchema := newSchema(spec.SchemaProps{
+		Type: []string{"array"},
+		Items: &spec.SchemaOrArray{
+			Schema: &arrayFieldItemSchema,
+		},
+	})
 
 	schema := &spec.Schema{
 		SchemaProps: spec.SchemaProps{
@@ -449,6 +523,9 @@ func TestParseWithExpectedSchema(t *testing.T) {
 				"arrayField":        arrayFieldSchema,
 			},
 		},
+		VendorExtensible: spec.VendorExtensible{
+			Extensions: spec.Extensions{},
+		},
 	}
 
 	expressions, err := ParseResource(resource, schema)
@@ -457,12 +534,12 @@ func TestParseWithExpectedSchema(t *testing.T) {
 	}
 
 	expectedExpressions := map[string]variable.FieldDescriptor{
-		"stringField":                               {Path: "stringField", Expressions: []string{"string.value"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &stringFieldSchema, StandaloneExpression: true},
-		"objectField":                               {Path: "objectField", Expressions: []string{"object.value"}, ExpectedTypes: []string{"object"}, ExpectedSchema: &objectFieldSchema, StandaloneExpression: true},
-		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: []string{"nested.string"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &nestedObjectNestedStringSchema, StandaloneExpression: true},
-		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &deepNestedSchema, StandaloneExpression: true},
-		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: []string{"array[0]"}, ExpectedTypes: []string{"object"}, ExpectedSchema: arrayFieldSchema.Items.Schema, StandaloneExpression: true},
-		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, ExpectedTypes: []string{"string"}, ExpectedSchema: &objectInArraySchema, StandaloneExpression: true},
+		"stringField":                               {Path: "stringField", Expressions: []string{"string.value"}, StandaloneExpression: true},
+		"objectField":                               {Path: "objectField", Expressions: []string{"object.value"}, StandaloneExpression: true},
+		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: []string{"nested.string"}, StandaloneExpression: true},
+		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, StandaloneExpression: true},
+		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: []string{"array[0]"}, StandaloneExpression: true},
+		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, StandaloneExpression: true},
 	}
 
 	if len(expressions) != len(expectedExpressions) {
@@ -479,16 +556,8 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		if !reflect.DeepEqual(expr.Expressions, expected.Expressions) {
 			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, expected.Expressions, expr.Expressions)
 		}
-		if !areEqualSlices(expr.ExpectedTypes, expected.ExpectedTypes) {
-			t.Errorf("Path %s: expected type %s, got %s", expr.Path, expected.ExpectedTypes, expr.ExpectedTypes)
-		}
 		if expr.StandaloneExpression != expected.StandaloneExpression {
 			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.StandaloneExpression, expr.StandaloneExpression)
-		}
-		if !reflect.DeepEqual(expr.ExpectedSchema, expected.ExpectedSchema) {
-			t.Errorf("Path %s: schema mismatch", expr.Path)
-			t.Errorf("Expected schema: %+v", expected.ExpectedSchema)
-			t.Errorf("Got schema: %+v", expr.ExpectedSchema)
 		}
 
 		// remove the matched expression from the map
@@ -531,7 +600,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      42,
-			expectedError: "unexpected type for path : int, expectedTypes: [string]",
+			expectedError: "expected string type for path , got integer",
 		},
 		{
 			name: "Type mismatch: object/array",
@@ -541,7 +610,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      []interface{}{"test"},
-			expectedError: "expected array type for path , got [test]",
+			expectedError: "expected object type for path , got array",
 		},
 		{
 			name: "Type mismatch: bool/string",
@@ -551,7 +620,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      "true",
-			expectedError: "expected string type or AdditionalProperties for path , got true",
+			expectedError: "expected boolean type for path , got string",
 		},
 		{
 			name: "Type mismatch integer/float",
@@ -571,7 +640,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      true,
-			expectedError: "expected number type for path , got bool",
+			expectedError: "expected number type for path , got boolean",
 		},
 		{
 			name: "Type mismatch: array/object",
@@ -588,7 +657,7 @@ func TestParserEdgeCases(t *testing.T) {
 				},
 			},
 			resource:      map[string]interface{}{"key": "value"},
-			expectedError: "expected object type or AdditionalProperties allowed for path , got map[key:value]",
+			expectedError: "expected array type for path , got object",
 		},
 		{
 			name: "unknown property for object ..",
@@ -729,22 +798,24 @@ func TestJoinPathAndFieldName(t *testing.T) {
 
 func TestPartScalerTypesShortSpecTypes(t *testing.T) {
 	tests := []struct {
-		name          string
-		shortSpecType []string
-		field         interface{}
+		name   string
+		schema *spec.Schema
+		field  interface{}
 	}{
-		{"int short type for integer", []string{"int"}, 42},
-		{"bool short type for boolean", []string{"bool"}, true},
+		{"int short type for integer", &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"int"}}}, 42},
+		{"bool short type for boolean", &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"bool"}}}, true},
 	}
-
-	dummySchema := &spec.Schema{}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseScalarTypes(tt.field, dummySchema, "spec.someitem", tt.shortSpecType)
+			expectedTypes, err := getExpectedTypes(tt.schema)
 			if err != nil {
-				t.Errorf("Expected %T resolved for %s, but got error: %s",
-					tt.field, tt.shortSpecType, err.Error())
+				t.Fatalf("getExpectedTypes() error = %v", err)
+			}
+			_, err = parseScalarTypes(tt.field, tt.schema, "spec.someitem", expectedTypes)
+			if err != nil {
+				t.Errorf("Expected %T resolved for %v, but got error: %s",
+					tt.field, tt.schema.Type, err.Error())
 			}
 		})
 	}
@@ -796,7 +867,7 @@ func TestXKubernetesIntOrString(t *testing.T) {
 				"myField": true,
 			},
 			wantErr:    true,
-			wantErrMsg: "expected integer type for path myField, got bool",
+			wantErrMsg: "expected string or integer type for path myField, got boolean",
 		},
 	}
 
@@ -877,7 +948,7 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 					},
 				},
 				wantErr:       true,
-				expectedError: "expected integer type for path outerObject.nestedField, got bool",
+				expectedError: "expected string or integer type for path outerObject.nestedField, got boolean",
 			},
 		}
 
@@ -969,7 +1040,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 				"field": true,
 			},
 			wantErr:       true,
-			expectedError: "expected integer type for path field, got bool",
+			expectedError: "expected string or integer type for path field, got boolean",
 		},
 		{
 			name: "Valid AnyOf - matches one schema (string)",
@@ -1036,7 +1107,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 				"field": true,
 			},
 			wantErr:       true,
-			expectedError: "expected integer type for path field, got bool",
+			expectedError: "expected string or integer type for path field, got boolean",
 		},
 		{
 			name: "Nested OneOf - valid nested schema (string)",
@@ -1099,7 +1170,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 				},
 			},
 			wantErr:       true,
-			expectedError: "expected integer type for path nestedField.innerField, got bool",
+			expectedError: "expected string or integer type for path nestedField.innerField, got boolean",
 		},
 	}
 
@@ -1190,7 +1261,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		expected := variable.FieldDescriptor{
 			Path:                 "networkRef.name",
 			Expressions:          []string{"network.metadata.name"},
-			ExpectedTypes:        []string{"string"},
 			StandaloneExpression: true,
 		}
 
@@ -1200,10 +1270,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 
 		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
 			t.Errorf("Expressions mismatch: got %v, want %v", expressions[0].Expressions, expected.Expressions)
-		}
-
-		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
-			t.Errorf("ExpectedTypes mismatch: got %v, want %v", expressions[0].ExpectedTypes, expected.ExpectedTypes)
 		}
 
 		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
@@ -1284,7 +1350,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		expected := variable.FieldDescriptor{
 			Path:                 "networkRef.external",
 			Expressions:          []string{"network.selfLink"},
-			ExpectedTypes:        []string{"string"},
 			StandaloneExpression: true,
 		}
 
@@ -1293,9 +1358,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
 			t.Errorf("Expected expressions %v, got %v", expected.Expressions, expressions[0].Expressions)
-		}
-		if !reflect.DeepEqual(expressions[0].ExpectedTypes, expected.ExpectedTypes) {
-			t.Errorf("Expected types %v, got %v", expected.ExpectedTypes, expressions[0].ExpectedTypes)
 		}
 
 		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
@@ -1332,7 +1394,6 @@ func TestPreserveUnknownFields(t *testing.T) {
 				{
 					Path:                 "spec.template",
 					Expressions:          []string{"template.value"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: true,
 				},
 			},
@@ -1363,7 +1424,6 @@ func TestPreserveUnknownFields(t *testing.T) {
 				{
 					Path:                 "spec.template.nested[0].key",
 					Expressions:          []string{"template.value"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: true,
 				},
 			},
@@ -1431,25 +1491,21 @@ func TestPreserveUnknownFields(t *testing.T) {
 				{
 					Path:                 "program.resources.app.properties.spec.name",
 					Expressions:          []string{"schema.spec.name"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: true,
 				},
 				{
 					Path:                 "program.resources.app.properties.spec.region",
 					Expressions:          []string{"schema.spec.region"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: true,
 				},
 				{
 					Path:                 "program.resources.app.properties.spec.services[0].name",
 					Expressions:          []string{"schema.spec.name"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: false,
 				},
 				{
 					Path:                 "program.resources.app.properties.spec.services[0].instanceCount",
 					Expressions:          []string{"schema.spec.instanceCount"},
-					ExpectedTypes:        []string{"any"},
 					StandaloneExpression: true,
 				},
 			},
@@ -1500,9 +1556,6 @@ func TestPreserveUnknownFields(t *testing.T) {
 
 					if !reflect.DeepEqual(actualExpr.Expressions, expectedExpr.Expressions) {
 						t.Errorf("Path %s: expected expressions %v, got %v", path, expectedExpr.Expressions, actualExpr.Expressions)
-					}
-					if !reflect.DeepEqual(actualExpr.ExpectedTypes, expectedExpr.ExpectedTypes) {
-						t.Errorf("Path %s: expected types %v, got %v", path, expectedExpr.ExpectedTypes, actualExpr.ExpectedTypes)
 					}
 					if actualExpr.StandaloneExpression != expectedExpr.StandaloneExpression {
 						t.Errorf("Path %s: expected StandaloneExpression %v, got %v", path, expectedExpr.StandaloneExpression, actualExpr.StandaloneExpression)
@@ -1588,6 +1641,131 @@ func TestCollectTypesFromSubSchemas(t *testing.T) {
 			gotTypes := collectTypesFromSubSchemas(tc.subSchemas)
 			if !areEqualSlices(gotTypes, tc.wantTypes) {
 				t.Errorf("collectTypesFromSubSchemas() = %v, want %v", gotTypes, tc.wantTypes)
+			}
+		})
+	}
+}
+
+// TestEmptyBracesInExpressions tests the regression where strings.Trim() was
+// incorrectly stripping {} from expressions. This bug affected ternary expressions
+// with empty map literals like: condition ? value : {}
+func TestEmptyBracesInExpressions(t *testing.T) {
+	testCases := []struct {
+		name             string
+		resource         map[string]interface{}
+		schema           *spec.Schema
+		expectedExprPath string // Path where we expect to find the expression
+		expectedExpr     string // The exact expression we expect (without ${})
+	}{
+		{
+			name: "Ternary with empty map literal",
+			resource: map[string]interface{}{
+				"annotations": "${includeAnnotations ? annotations : {}}",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"annotations": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "annotations",
+			expectedExpr:     "includeAnnotations ? annotations : {}",
+		},
+		{
+			name: "Complex ternary with has() and empty map",
+			resource: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": "${has(schema.annotations) && includeAnnotations ? schema.annotations : {}}",
+				},
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"metadata": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								Properties: map[string]spec.Schema{
+									"annotations": {
+										SchemaProps: spec.SchemaProps{
+											Type: []string{"object"},
+											AdditionalProperties: &spec.SchemaOrBool{
+												Allows: true,
+												Schema: &spec.Schema{
+													SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "metadata.annotations",
+			expectedExpr:     "has(schema.annotations) && includeAnnotations ? schema.annotations : {}",
+		},
+		{
+			name: "Ternary with empty maps on both sides",
+			resource: map[string]interface{}{
+				"config": "${condition ? {} : {}}",
+			},
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"config": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+							},
+						},
+					},
+				},
+			},
+			expectedExprPath: "config",
+			expectedExpr:     "condition ? {} : {}",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields, err := ParseResource(tc.resource, tc.schema)
+			if err != nil {
+				t.Fatalf("ParseResource() error = %v", err)
+			}
+
+			// Find the field descriptor for the expected path
+			found := false
+			for _, field := range fields {
+				if field.Path == tc.expectedExprPath {
+					found = true
+					if len(field.Expressions) != 1 {
+						t.Errorf("Expected 1 expression, got %d", len(field.Expressions))
+						continue
+					}
+					if field.Expressions[0] != tc.expectedExpr {
+						t.Errorf("Expression mismatch:\ngot:  %q\nwant: %q", field.Expressions[0], tc.expectedExpr)
+					}
+					if !field.StandaloneExpression {
+						t.Error("Expected StandaloneExpression to be true")
+					}
+				}
+			}
+			if !found {
+				t.Errorf("Expected to find field descriptor for path %q", tc.expectedExprPath)
 			}
 		})
 	}

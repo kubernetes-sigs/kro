@@ -38,7 +38,9 @@ func ParseConditionExpressions(conditions []string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("only standalone expressions are allowed")
 		}
-		expressions = append(expressions, strings.Trim(e, "${}"))
+		expr := strings.TrimPrefix(e, "${")
+		expr = strings.TrimSuffix(expr, "}")
+		expressions = append(expressions, expr)
 	}
 
 	return expressions, nil

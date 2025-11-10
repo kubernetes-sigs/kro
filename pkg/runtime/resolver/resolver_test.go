@@ -21,7 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/kro-run/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestGetValueFromPath(t *testing.T) {
@@ -662,4 +662,133 @@ func TestResolver(t *testing.T) {
 	assert.Equal(t, summary.TotalExpressions, 1)
 	assert.Equal(t, summary.ResolvedExpressions, 1)
 	assert.Equal(t, "resolved-done", summary.Results[0].Replaced)
+}
+
+// TestResolveFieldWithEmptyBraces tests the regression where strings.Trim() was
+// incorrectly stripping {} from expressions. This affected ternary CEL expressions
+// that end with empty maps like: condition ? value : {}
+func TestResolveFieldWithEmptyBraces(t *testing.T) {
+	tests := []struct {
+		name     string
+		resource map[string]interface{}
+		data     map[string]interface{}
+		field    variable.FieldDescriptor
+		want     ResolutionResult
+	}{
+		{
+			name: "standalone expression ending with empty braces",
+			resource: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"annotations": "${includeAnnotations ? annotations : {}}",
+				},
+			},
+			data: map[string]interface{}{
+				"includeAnnotations ? annotations : {}": map[string]interface{}{},
+			},
+			field: variable.FieldDescriptor{
+				Path:                 "metadata.annotations",
+				Expressions:          []string{"includeAnnotations ? annotations : {}"},
+				StandaloneExpression: true,
+			},
+			want: ResolutionResult{
+				Path:     "metadata.annotations",
+				Original: "[includeAnnotations ? annotations : {}]",
+				Resolved: true,
+				Replaced: map[string]interface{}{},
+			},
+		},
+		{
+			name: "complex expression with has() and empty braces",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"config": "${has(schema.config) && includeConfig ? schema.config : {}}",
+				},
+			},
+			data: map[string]interface{}{
+				"has(schema.config) && includeConfig ? schema.config : {}": map[string]interface{}{
+					"key": "value",
+				},
+			},
+			field: variable.FieldDescriptor{
+				Path:                 "spec.config",
+				Expressions:          []string{"has(schema.config) && includeConfig ? schema.config : {}"},
+				StandaloneExpression: true,
+			},
+			want: ResolutionResult{
+				Path:     "spec.config",
+				Original: "[has(schema.config) && includeConfig ? schema.config : {}]",
+				Resolved: true,
+				Replaced: map[string]interface{}{
+					"key": "value",
+				},
+			},
+		},
+		{
+			name: "expression with empty braces on both sides",
+			resource: map[string]interface{}{
+				"data": map[string]interface{}{
+					"field": "${condition ? {} : {}}",
+				},
+			},
+			data: map[string]interface{}{
+				"condition ? {} : {}": map[string]interface{}{},
+			},
+			field: variable.FieldDescriptor{
+				Path:                 "data.field",
+				Expressions:          []string{"condition ? {} : {}"},
+				StandaloneExpression: true,
+			},
+			want: ResolutionResult{
+				Path:     "data.field",
+				Original: "[condition ? {} : {}]",
+				Resolved: true,
+				Replaced: map[string]interface{}{},
+			},
+		},
+		{
+			name: "string template with expression ending in braces",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"value": "prefix-${expr ? value : {}}-suffix",
+				},
+			},
+			data: map[string]interface{}{
+				"expr ? value : {}": "resolved",
+			},
+			field: variable.FieldDescriptor{
+				Path:        "spec.value",
+				Expressions: []string{"expr ? value : {}"},
+			},
+			want: ResolutionResult{
+				Path:     "spec.value",
+				Original: "[expr ? value : {}]",
+				Resolved: true,
+				Replaced: "prefix-resolved-suffix",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewResolver(tt.resource, tt.data)
+			got := r.resolveField(tt.field)
+
+			assert.Equal(t, tt.want.Path, got.Path)
+			assert.Equal(t, tt.want.Original, got.Original)
+			assert.Equal(t, tt.want.Resolved, got.Resolved)
+			assert.Equal(t, tt.want.Replaced, got.Replaced)
+
+			if tt.want.Error != nil {
+				assert.EqualError(t, got.Error, tt.want.Error.Error())
+			} else {
+				assert.NoError(t, got.Error)
+			}
+
+			if tt.want.Resolved {
+				value, err := r.getValueFromPath(tt.field.Path)
+				assert.NoError(t, err)
+				assert.Equal(t, tt.want.Replaced, value)
+			}
+		})
+	}
 }

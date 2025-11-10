@@ -829,6 +829,24 @@ func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
 	return nil
 }
 
+// unrequireStatus modifies the schema to ensure "status" is not in the required fields list.
+// This prevents CEL type-checking from treating status as a required field, which would incorrectly
+// fail validation when status is legitimately absent (e.g., resources that haven't reconciled yet).
+func unrequireStatus(s *spec.Schema) {
+	if s == nil || len(s.Required) == 0 {
+		return
+	}
+
+	// Remove "status" from required fields if present
+	required := make([]string, 0, len(s.Required))
+	for _, field := range s.Required {
+		if field != "status" {
+			required = append(required, field)
+		}
+	}
+	s.Required = required
+}
+
 // getInstanceSchema returns a schema from the CRD including spec, status, and metadata fields.
 // This schema is used for CEL expression validation, allowing references to instance fields like
 // ${schema.spec.field}, ${schema.status.field}, and ${schema.metadata.name}.
@@ -855,5 +873,11 @@ func getInstanceSchema(crd *extv1.CustomResourceDefinition) (*spec.Schema, error
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
 	specSchema.Properties["metadata"] = schema.ObjectMetaSchema
+
+	// Unrequire status before type-checking. This allows CEL expressions
+	// in dependent resources to reference instance status (e.g., ${schema.status.endpoint})
+	// without validation errors when the instance status hasn't been populated yet.
+	unrequireStatus(specSchema)
+
 	return specSchema, nil
 }

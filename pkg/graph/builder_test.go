@@ -1767,7 +1767,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid schema.status field reference",
+			name: "resource references instance status field (string)",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Application", "v1alpha1",
@@ -1797,6 +1797,127 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 					"spec": map[string]interface{}{
 						"cidrBlock": "10.0.1.0/24",
 						"vpcID":     "${schema.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "resource references instance status field (nested object)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"NetworkApp", "v1alpha1",
+					map[string]interface{}{
+						"vpcName": "string",
+					},
+					map[string]interface{}{
+						"vpcState": "${vpc.status.state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.vpcName}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("securitygroup", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "SecurityGroup",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.vpcName}-sg",
+					},
+					"spec": map[string]interface{}{
+						"description": "VPC state is: ${schema.status.vpcState}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple resources reference same instance status field",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Application", "v1alpha1",
+					map[string]interface{}{
+						"region": "string",
+					},
+					map[string]interface{}{
+						"primaryVPCID": "${vpc.status.vpcID}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "primary-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet1", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "subnet-1",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${schema.status.primaryVPCID}",
+					},
+				}, nil, nil),
+				generator.WithResource("subnet2", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "subnet-2",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.2.0/24",
+						"vpcID":     "${schema.status.primaryVPCID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "resource references instance status field (boolean computed)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Application", "v1alpha1",
+					map[string]interface{}{
+						"region": "string",
+					},
+					map[string]interface{}{
+						"vpcReady": "${vpc.status.state == 'available'}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "app-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "conditional-subnet",
+						"labels": map[string]interface{}{
+							"vpc-ready": "${schema.status.vpcReady ? 'true' : 'false'}",
+						},
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${vpc.status.vpcID}",
 					},
 				}, nil, nil),
 			},

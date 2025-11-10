@@ -202,16 +202,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		}
 	}
 
-	// include the instance spec schema in the context as "schema". This will let us
-	// validate expressions such as ${schema.spec.someField}.
-	//
-	// not that we only include the spec and metadata fields, instance status references
-	// are not allowed in RGDs (yet)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instance.crd)
+	// include the instance schema in the context as "schema". This will let us
+	// validate expressions such as ${schema.spec.someField}, ${schema.metadata.name},
+	// and ${schema.status.someField}.
+	instanceSchema, err := getInstanceSchema(instance.crd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
+		return nil, fmt.Errorf("failed to get instance schema: %w", err)
 	}
-	schemas["schema"] = schemaWithoutStatus
+	schemas["schema"] = instanceSchema
 
 	// First, build the dependency graph by inspecting CEL expressions.
 	// This extracts all resource dependencies and validates that:
@@ -831,8 +829,10 @@ func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
 	return nil
 }
 
-// getSchemaWithoutStatus returns a schema from the CRD with the status field removed.
-func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
+// getInstanceSchema returns a schema from the CRD including spec, status, and metadata fields.
+// This schema is used for CEL expression validation, allowing references to instance fields like
+// ${schema.spec.field}, ${schema.status.field}, and ${schema.metadata.name}.
+func getInstanceSchema(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	crdCopy := crd.DeepCopy()
 
 	// TODO(a-hilaly) expand this function when we start support CRD upgrades.
@@ -845,8 +845,6 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	if openAPISchema.Properties == nil {
 		openAPISchema.Properties = make(map[string]extv1.JSONSchemaProps)
 	}
-
-	delete(openAPISchema.Properties, "status")
 
 	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
 	if err != nil {

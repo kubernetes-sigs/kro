@@ -1766,6 +1766,42 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid schema.status field reference",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Application", "v1alpha1",
+					map[string]interface{}{
+						"region": "string",
+					},
+					map[string]interface{}{
+						"vpcID": "${vpc.status.vpcID}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "app-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "app-subnet",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${schema.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -56,7 +56,7 @@ type customLevelEnabler struct {
 }
 
 func (c customLevelEnabler) Enabled(lvl zapcore.Level) bool {
-	return -int(lvl) <= c.level
+	return int(lvl) >= c.level
 }
 
 func main() {
@@ -120,7 +120,7 @@ func main() {
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
 	// log level flags
-	flag.IntVar(&logLevel, "log-level", 10, "The log level verbosity. 0 is the least verbose, 5 is the most verbose.")
+	flag.IntVar(&logLevel, "log-level", 0, "The log level verbosity. Lower values reduce verbosity (e.g., -1=debug, 0=info, 1=warn, 2=error).")
 	// qps and burst
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,

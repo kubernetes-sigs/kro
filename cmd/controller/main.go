@@ -51,10 +51,14 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// customLevelEnabler wraps an int to implement zapcore.LevelEnabler.
+// This allows us to accept a log level as an integer flag on the command line.
 type customLevelEnabler struct {
 	level int
 }
 
+// Because we have a customLevelEnabler, we must implement the Enabled method to
+// satisfy the zapcore.LevelEnabler interface.
 func (c customLevelEnabler) Enabled(lvl zapcore.Level) bool {
 	return int(lvl) >= c.level
 }

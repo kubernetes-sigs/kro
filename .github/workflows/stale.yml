@@ -1,0 +1,64 @@
+name: "Close stale issues and PRs"
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # Token for the repository
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          # Issues configuration
+          stale-issue-message: |
+            This issue has been automatically marked as stale because it has not had recent activity. 
+            It will be closed if no further activity occurs within 7 days. 
+            If this issue is still relevant, please leave a comment to keep it open.
+            Thank you for your contributions! 🙏
+
+          close-issue-message: |
+            This issue has been automatically closed due to inactivity. 
+            If you believe this issue is still relevant, please feel free to reopen it or create a new issue with updated information.
+            Thank you for your understanding! 🚀
+
+          # Pull requests configuration
+          stale-pr-message: |
+            This pull request has been automatically marked as stale because it has not had recent activity.
+            It will be closed if no further activity occurs within 7 days.
+            If this PR is still relevant, please leave a comment or push new commits to keep it open.
+            Thank you for your contribution! 🙏
+
+          close-pr-message: |
+            This pull request has been automatically closed due to inactivity.
+            If you would like to continue working on this, please feel free to reopen it or create a new PR.
+            Thank you for your contribution! 🚀
+
+          # Timing configuration
+          days-before-stale: 45 # Mark as stale after 30 days of inactivity
+          days-before-close: 10 # Close after 7 additional days of being stale
+
+          # Labels
+          stale-issue-label: "stale"
+          stale-pr-label: "stale"
+          exempt-issue-labels: "pinned,security,bug,enhancement,help-wanted,good-first-issue"
+          exempt-pr-labels: "pinned,security,work-in-progress,wip"
+
+          # Additional options
+          operations-per-run: 100 # Max operations per run to avoid API limits
+          remove-stale-when-updated: true # Remove stale label when there's new activity
+          debug-only: false # Set to true for testing without actually closing
+
+          # Only process issues/PRs (set to false to disable either)
+          enable-statistics: true
+          only-labels: "" # Only process items with these labels (empty = all)
+          any-of-labels: "" # Process items with any of these labels

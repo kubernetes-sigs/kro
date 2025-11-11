@@ -221,8 +221,8 @@ func TestExtractSchemaFromDeclTypeWithCycleDetection(t *testing.T) {
 			name: "no cycle - simple object",
 			setupDeclType: func() *apiservercel.DeclType {
 				schema := &spec.Schema{}
-				schema.SchemaProps.Type = []string{"object"}
-				schema.SchemaProps.Properties = map[string]spec.Schema{
+				schema.Type = []string{"object"}
+				schema.Properties = map[string]spec.Schema{
 					"name":  {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 					"value": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
 				}
@@ -249,8 +249,8 @@ func TestExtractSchemaFromDeclTypeWithCycleDetection(t *testing.T) {
 			name: "cycle detected - error out",
 			setupDeclType: func() *apiservercel.DeclType {
 				schema := &spec.Schema{}
-				schema.SchemaProps.Type = []string{"object"}
-				schema.SchemaProps.Properties = map[string]spec.Schema{
+				schema.Type = []string{"object"}
+				schema.Properties = map[string]spec.Schema{
 					"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 				}
 				return openapi.SchemaDeclType(schema, false).MaybeAssignTypeName("CyclicType")

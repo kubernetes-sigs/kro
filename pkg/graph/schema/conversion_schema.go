@@ -73,7 +73,7 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 	}
 
 	if len(props.Type) > 0 {
-		schema.SchemaProps.Type = []string{props.Type}
+		schema.Type = []string{props.Type}
 	}
 
 	if props.Items != nil {

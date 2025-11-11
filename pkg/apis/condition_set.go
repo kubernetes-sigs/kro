@@ -269,7 +269,7 @@ func findMostUnhealthy(deps []v1alpha1.Condition) (v1alpha1.Condition, bool) {
 			return true // non-nil comes before nil (opposite of Before)
 		}
 
-		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
+		return deps[i].LastTransitionTime.After(deps[j].LastTransitionTime.Time)
 	})
 
 	// First check the conditions with Status == False.
@@ -316,7 +316,7 @@ func (c ConditionSet) findUnhealthyDependents() []v1alpha1.Condition {
 			return true // non-nil comes before nil (opposite of Before)
 		}
 
-		return deps[i].LastTransitionTime.Time.After(deps[j].LastTransitionTime.Time)
+		return deps[i].LastTransitionTime.After(deps[j].LastTransitionTime.Time)
 	})
 	return deps
 }

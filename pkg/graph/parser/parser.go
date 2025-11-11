@@ -196,7 +196,7 @@ func validateSchema(schema *spec.Schema, path string) error {
 
 func parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
-	if len(schema.VendorExtensible.Extensions) > 0 {
+	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
 		// this field using the schemaless parser. This allows us to extract CEL expressions from
 		// fields that don't have a strict schema definition, while still preserving any unknown
@@ -233,7 +233,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 
 func parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
-	if len(schema.VendorExtensible.Extensions) > 0 {
+	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
 		// this field using the schemaless parser. This allows us to extract CEL expressions from
 		// fields that don't have a strict schema definition, while still preserving any unknown
@@ -419,7 +419,7 @@ func joinPathAndFieldName(path, fieldName string) string {
 
 // hasStructuralSchemaMarkerEnabled checks if a schema has a specific marker enabled.
 func hasStructuralSchemaMarkerEnabled(schema *spec.Schema, marker string) bool {
-	if ext, ok := schema.VendorExtensible.Extensions[marker]; ok {
+	if ext, ok := schema.Extensions[marker]; ok {
 		if enabled, ok := ext.(bool); ok && enabled {
 			return true
 		}

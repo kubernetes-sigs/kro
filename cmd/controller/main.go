@@ -19,7 +19,6 @@ import (
 	"os"
 	"time"
 
-	"go.uber.org/zap/zapcore"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -51,18 +50,6 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-// customLevelEnabler wraps an int to implement zapcore.LevelEnabler.
-// This allows us to accept a log level as an integer flag on the command line.
-type customLevelEnabler struct {
-	level int
-}
-
-// Because we have a customLevelEnabler, we must implement the Enabled method to
-// satisfy the zapcore.LevelEnabler interface.
-func (c customLevelEnabler) Enabled(lvl zapcore.Level) bool {
-	return int(lvl) >= c.level
-}
-
 func main() {
 	var (
 		metricsAddr                                 string
@@ -82,9 +69,8 @@ func main() {
 		queueMaxRetries         int
 		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
-		logLevel int
-		qps      float64
-		burst    int
+		qps   float64
+		burst int
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -123,22 +109,19 @@ func main() {
 		"interval at which the controller will re list resources even with no changes, in seconds.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
 		"maximum number of retries for an item in the queue will be retried before being dropped")
-	// log level flags
-	flag.IntVar(&logLevel, "log-level", 0, "The log level verbosity. Lower values reduce verbosity (e.g., -1=debug, 0=info, 1=warn, 2=error).")
 	// qps and burst
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,
 		"The number of requests that can be stored for processing before the server starts enforcing the QPS limit")
 
-	flag.Parse()
-
 	opts := zap.Options{
 		Development: true,
-		Level:       customLevelEnabler{level: logLevel},
-		TimeEncoder: zapcore.ISO8601TimeEncoder,
 	}
-	rootLogger := zap.New(zap.UseFlagOptions(&opts))
+	opts.BindFlags(flag.CommandLine)
 
+	flag.Parse()
+
+	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
 
 	set, err := kroclient.NewSet(kroclient.Config{
@@ -175,7 +158,6 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		LeaderElectionReleaseOnCancel: false,
-		Logger:                        rootLogger,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

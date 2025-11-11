@@ -310,7 +310,7 @@ func TestApplySet_Prune(t *testing.T) {
 
 	// This CM will be pruned
 	pruneCM := configMap("prune-cm", "default")
-	pruneCM.Unstructured.SetLabels(map[string]string{
+	pruneCM.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM)
@@ -437,11 +437,11 @@ func TestApplySet_PruneMultiNamespace(t *testing.T) {
 
 	// These CMs will be pruned
 	pruneCM1 := configMap("prune-cm", "ns1")
-	pruneCM1.Unstructured.SetLabels(map[string]string{
+	pruneCM1.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	pruneCM2 := configMap("prune-cm", "ns2")
-	pruneCM2.Unstructured.SetLabels(map[string]string{
+	pruneCM2.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM1, pruneCM2)
@@ -501,7 +501,7 @@ func TestApplySet_PruneMultiNamespace(t *testing.T) {
 		return true, &parentPatch, nil
 	})
 
-	var pruned int = 0
+	var pruned = 0
 	dynamicClient.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
 		deleteAction := action.(k8stesting.DeleteAction)
 		assert.Equal(t, "prune-cm", deleteAction.GetName())
@@ -525,11 +525,11 @@ func TestApplySet_PruneOldNamespace(t *testing.T) {
 
 	// CM in old namespace should be pruned
 	pruneCM1 := configMap("prune-cm", "oldns1")
-	pruneCM1.Unstructured.SetLabels(map[string]string{
+	pruneCM1.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	pruneCM2 := configMap("prune-cm", "ns2")
-	pruneCM2.Unstructured.SetLabels(map[string]string{
+	pruneCM2.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM1, pruneCM2)
@@ -589,7 +589,7 @@ func TestApplySet_PruneOldNamespace(t *testing.T) {
 		return true, &parentPatch, nil
 	})
 
-	var pruned int = 0
+	var pruned = 0
 	dynamicClient.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
 		deleteAction := action.(k8stesting.DeleteAction)
 		assert.Equal(t, "prune-cm", deleteAction.GetName())
@@ -613,7 +613,7 @@ func TestApplySet_PruneOldGVKs(t *testing.T) {
 
 	// Foo type should be pruned
 	pruneFoo := foo("prune-foo", "ns1")
-	pruneFoo.Unstructured.SetLabels(map[string]string{
+	pruneFoo.SetLabels(map[string]string{
 		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneFoo)
@@ -659,7 +659,7 @@ func TestApplySet_PruneOldGVKs(t *testing.T) {
 		return true, &parentPatch, nil
 	})
 
-	var pruned int = 0
+	var pruned = 0
 	dynamicClient.PrependReactor("delete", "foos", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
 		deleteAction := action.(k8stesting.DeleteAction)
 		assert.Equal(t, "prune-foo", deleteAction.GetName())

@@ -130,7 +130,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 				result.Error = fmt.Errorf("no data provided for expression: %s", expr)
 				return result
 			}
-			replaced = strings.Replace(replaced, "${"+expr+"}", fmt.Sprintf("%v", replacement), -1)
+			replaced = strings.ReplaceAll(replaced, "${"+expr+"}", fmt.Sprintf("%v", replacement))
 		}
 
 		err = r.setValueAtPath(field.Path, replaced)

@@ -10,4 +10,8 @@ cd ${REPO_ROOT}
 # Build
 go build cmd
 
-make test-e2e-kind
+mkdir -p ./bin
+curl -Lo ./bin/kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
+chmod +x ./bin/kind
+
+make test-e2e-kind KIND=./bin/kind

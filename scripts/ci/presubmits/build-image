@@ -10,4 +10,4 @@ cd ${REPO_ROOT}
 # Build
 go build cmd
 
-make build-image
+make build-image KO_LOCAL=false

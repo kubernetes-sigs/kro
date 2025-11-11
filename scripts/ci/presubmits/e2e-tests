@@ -10,4 +10,6 @@ cd ${REPO_ROOT}
 # Build
 go build cmd
 
-make test-e2e-kind
+# we currently cannot run e2e tests without kind available
+echo "E2E tests are currently skipped"
+# make test-e2e-kind

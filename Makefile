@@ -7,6 +7,7 @@ HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
+KO_LOCAL ?= true
 export KIND_CLUSTER_NAME ?= kro
 
 GIT_TAG ?= dirty-tag
@@ -204,7 +205,7 @@ build-image: ko ## Build the kro controller images using ko build
 	echo "Building kro image $(RELEASE_VERSION).."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
-		--local\
+		--local=$(KO_LOCAL) \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish

@@ -205,7 +205,7 @@ build-image: ko ## Build the kro controller images using ko build
 	echo "Building kro image $(RELEASE_VERSION).."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
-		--local=$(KO_LOCAL) \
+		$(if $(filter true,$(KO_LOCAL)),--local,--oci-layout-path rendered/oci/layout) \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
 .PHONY: publish

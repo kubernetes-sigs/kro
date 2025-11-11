@@ -33,6 +33,10 @@ linters:
       - third_party$
       - builtin$
       - examples$
+  settings:
+    staticcheck:
+      checks:
+        - -QF1008
 formatters:
   enable:
     - gofmt

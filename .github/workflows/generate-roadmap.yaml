@@ -14,41 +14,42 @@ jobs:
       issues: read
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Install jq 
-        run: sudo apt-get update && sudo apt-get install -y jq
+    - name: Configure Git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Generate roadmap
-        run: bash scripts/generate-roadmap.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Pull latest changes
+      run: |
+        git fetch origin ${{ github.ref_name }}
+        git pull --rebase origin ${{ github.ref_name }}
 
-      - name: Check for changes
-        id: changes
-        run: |
-          git add website/docs/roadmap/roadmap.md
-          
-          if git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "✅ No changes to roadmap"
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "📝 Roadmap has been updated"
-          fi
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Commit and push changes
-        if: steps.changes.outputs.changed == 'true'
-        run: |
+    - name: Generate roadmap
+      run: bash scripts/generate-roadmap.sh
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          git pull --rebase origin ${{ github.ref_name }}
-          
-          # # Commit and push
-          git commit -m "docs: update roadmap" \
-                     -m "Auto-generated from GitHub issues" \
-                     -m "Triggered by: ${{ github.event_name }}"
-          git push
+    - name: Check for changes
+      id: changes
+      run: |
+        git add website/docs/roadmap/roadmap.md
+        if git diff --cached --quiet; then
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "✅ No changes to roadmap"
+        else
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "📝 Roadmap has been updated"
+        fi
 
+    - name: Commit and push changes
+      if: steps.changes.outputs.changed == 'true'
+      run: |
+        git commit -m "docs: update roadmap" \
+                    -m "Auto-generated from GitHub issues" \
+                    -m "Triggered by: ${{ github.event_name }}"
+        git push origin ${{ github.ref_name }}

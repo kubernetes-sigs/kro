@@ -46,10 +46,10 @@ jobs:
           echo "📝 Roadmap has been updated"
         fi
 
-    # - name: Commit and push changes
-    #   if: steps.changes.outputs.changed == 'true'
-    #   run: |
-        # git commit -m "docs: update roadmap" \
-        #             -m "Auto-generated from GitHub issues" \
-        #             -m "Triggered by: ${{ github.event_name }}"
-        # git push origin ${{ github.ref_name }}
+    - name: Commit and push changes
+      if: steps.changes.outputs.changed == 'true'
+      run: |
+        git commit -m "docs: update roadmap" \
+                    -m "Auto-generated from GitHub issues" \
+                    -m "Triggered by: ${{ github.event_name }}"
+        git push origin ${{ github.ref_name }}

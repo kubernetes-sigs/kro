@@ -33,7 +33,6 @@ fi
 # === Filter roadmap-related issues ===
 filtered=$(echo "$response" | jq '[.[] | select(.labels and any(.labels[]?.name;
   . == "roadmap-item" or
-  . == "priority/mega-issue" or
   . == "priority/critical-urgent" or
   . == "priority/important-soon" or
   . == "kind/feature" or
@@ -46,7 +45,7 @@ filtered=$(echo "$response" | jq '[.[] | select(.labels and any(.labels[]?.name;
 count=$(echo "$filtered" | jq 'length')
 echo "Found $count roadmap-related issues"
 
-# === Categorize Issues (safe temp file version) ===
+# === Categorize Issues  ===
 tmp_filtered=$(mktemp)
 tmp_in_progress=$(mktemp)
 tmp_planned=$(mktemp)
@@ -54,11 +53,10 @@ tmp_community=$(mktemp)
 
 echo "$filtered" > "$tmp_filtered"
 
-# In Progress = assigned OR priority/mega-issue OR critical-urgent OR important-soon
+# In Progress = assigned OR critical-urgent OR important-soon
 jq '[.[] | select(
   (.assignee != null)
   or any(.labels[]?.name;
-    . == "priority/mega-issue" or
     . == "priority/critical-urgent" or
     . == "priority/important-soon"
   )
@@ -83,7 +81,6 @@ jq --slurpfile in_progress "$tmp_in_progress" --slurpfile planned "$tmp_planned"
   )]
 ' "$tmp_filtered" > "$tmp_community"
 
-# Load back into variables for later use
 in_progress=$(cat "$tmp_in_progress")
 planned=$(cat "$tmp_planned")
 community=$(cat "$tmp_community")

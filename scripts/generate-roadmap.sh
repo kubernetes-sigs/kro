@@ -34,18 +34,64 @@ fi
 filtered=$(echo "$response" | jq '[.[] | select(.labels and any(.labels[]?.name;
   . == "roadmap-item" or
   . == "priority/mega-issue" or
+  . == "priority/critical-urgent" or
+  . == "priority/important-soon" or
   . == "kind/feature" or
   . == "kind/proposal" or
   . == "needs/community-input" or
   . == "discussion" or
-  startswith("area/") ))]')
+  startswith("area/")
+))]')
 
 count=$(echo "$filtered" | jq 'length')
 echo "Found $count roadmap-related issues"
 
-in_progress=$(echo "$filtered" | jq '[.[] | select(any(.labels[]?.name; . == "priority/mega-issue"))]')
-planned=$(echo "$filtered" | jq '[.[] | select(any(.labels[]?.name; . == "kind/feature"))]')
-community=$(echo "$filtered" | jq '[.[] | select(any(.labels[]?.name; . == "needs/community-input" or . == "kind/proposal" or . == "discussion"))]')
+# === Categorize Issues (safe temp file version) ===
+tmp_filtered=$(mktemp)
+tmp_in_progress=$(mktemp)
+tmp_planned=$(mktemp)
+tmp_community=$(mktemp)
+
+echo "$filtered" > "$tmp_filtered"
+
+# In Progress = assigned OR priority/mega-issue OR critical-urgent OR important-soon
+jq '[.[] | select(
+  (.assignee != null)
+  or any(.labels[]?.name;
+    . == "priority/mega-issue" or
+    . == "priority/critical-urgent" or
+    . == "priority/important-soon"
+  )
+)]' "$tmp_filtered" > "$tmp_in_progress"
+
+# Planned = kind/feature but not in in_progress
+jq --slurpfile in_progress "$tmp_in_progress" '
+  [.[] | select(
+    any(.labels[]?.name; . == "kind/feature") and
+    (.id as $id | $in_progress[0] | map(.id) | index($id) | not)
+  )]
+' "$tmp_filtered" > "$tmp_planned"
+
+# Community input = proposals/discussions excluding previous groups
+jq --slurpfile in_progress "$tmp_in_progress" --slurpfile planned "$tmp_planned" '
+  [.[] | select(
+    any(.labels[]?.name; . == "needs/community-input" or . == "kind/proposal" or . == "discussion") and
+    (.id as $id |
+      ($in_progress[0] | map(.id) | index($id) | not) and
+      ($planned[0] | map(.id) | index($id) | not)
+    )
+  )]
+' "$tmp_filtered" > "$tmp_community"
+
+# Load back into variables for later use
+in_progress=$(cat "$tmp_in_progress")
+planned=$(cat "$tmp_planned")
+community=$(cat "$tmp_community")
+
+# Clean up
+rm -f "$tmp_filtered" "$tmp_in_progress" "$tmp_planned" "$tmp_community"
+# Community coordination
+comm_coord=$(echo "$filtered" | jq '[.[] | select(any(.labels[]?.name; startswith("committee/") or startswith("area/community-")))]')
 
 render_grouped() {
   local input_json="$1"
@@ -81,11 +127,11 @@ _Last updated: $(date -u +"%Y-%m-%d %H:%M:%SZ")_
 
 Kro’s roadmap highlights **active initiatives**, **planned features**, and **proposal areas open for feedback**.
 
-This file is auto-generated from [GitHub issues](https://github.com/${REPO}/issues) labeled with \`roadmap-item\`, \`kind/feature\`, \`priority/mega-issue\`, \`needs/community-input\`, or \`area/*\`.
+This file is auto-generated from [GitHub issues](https://github.com/${REPO}/issues) labeled with \`roadmap-item\`, \`priority/*\`, \`kind/feature\`, \`needs/community-input\`, or \`area/*\`.
 
 ---
 
-## In Progress (Major initiatives)
+## In Progress (Assigned, Critical, or Major Initiatives)
 
 EOF
 
@@ -123,7 +169,6 @@ else
   echo "_No open proposal discussions at the moment._"
 fi
 
-comm_coord=$(echo "$filtered" | jq '[.[] | select(any(.labels[]?.name; startswith("committee/") or startswith("area/community-")))]')
 if [[ $(echo "$comm_coord" | jq 'length') -gt 0 ]]; then
   cat <<'EOF'
 
@@ -150,7 +195,6 @@ EOF
   '
 fi
 
-# === Updated Community Participation Section with Links ===
 cat <<'EOF'
 
 
@@ -169,10 +213,10 @@ Development and discussion is coordinated in the [**Kubernetes Slack**](https://
 
 **Please join our community meeting**:
 
-- **Cadence:** Every other Wednesday
-- **Time:** 9:00 AM PT (Pacific Time) — [Convert to your local timezone](https://dateful.com/time-zone-converter?t=9%3A00&tz=PT%20%28Pacific%20Time%29)
-- **Agenda:** [Public Google Doc](https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit?tab=t.0)
-- **Join:** [Zoom Meeting](https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1)
+- **Cadence:** Every other Wednesday  
+- **Time:** 9:00 AM PT (Pacific Time) — [Convert to your local timezone](https://dateful.com/time-zone-converter?t=9%3A00&tz=PT%20%28Pacific%20Time%29)  
+- **Agenda:** [Public Google Doc](https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit?tab=t.0)  
+- **Join:** [Zoom Meeting](https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1)  
 - **Recordings:** [YouTube Channel](https://www.youtube.com/channel/UCUlcI3NYq9ehl5wsdfbJzSA)
 
 ---
@@ -183,3 +227,4 @@ EOF
 } > "$OUT_FILE"
 
 echo "Roadmap written to $OUT_FILE"
+

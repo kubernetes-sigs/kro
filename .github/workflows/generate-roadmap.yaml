@@ -1,0 +1,54 @@
+name: Update Roadmap
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # every Sunday at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  update-roadmap:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      issues: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq 
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Generate roadmap
+        run: bash scripts/generate-roadmap.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add website/docs/roadmap/roadmap.md
+          
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "✅ No changes to roadmap"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "📝 Roadmap has been updated"
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git pull --rebase origin ${{ github.ref_name }}
+          
+          # # Commit and push
+          git commit -m "docs: update roadmap" \
+                     -m "Auto-generated from GitHub issues" \
+                     -m "Triggered by: ${{ github.event_name }}"
+          git push
+

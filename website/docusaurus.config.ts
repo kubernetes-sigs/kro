@@ -119,6 +119,14 @@ const config: Config = {
           position: "left",
           label: "API Reference",
         }, */
+        
+        // Uncomment when ready to release
+        // {
+        //   type: "docSidebar",
+        //   sidebarId: "roadmapSidebar",
+        //   position: "left",
+        //   label: "Roadmap and Active developemt areas",
+        // }, 
         {
           type: "docsVersionDropdown",
           position: "right",

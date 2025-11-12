@@ -16,7 +16,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: accessentries.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -280,7 +280,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: addons.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -599,7 +599,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: clusters.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -1035,7 +1035,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: fargateprofiles.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -1286,7 +1286,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: identityproviderconfigs.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -1463,7 +1463,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: nodegroups.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws
@@ -1936,7 +1936,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: podidentityassociations.eks.services.k8s.aws
       spec:
         group: eks.services.k8s.aws

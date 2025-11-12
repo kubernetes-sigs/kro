@@ -7,10 +7,10 @@ jobs:
   postsubmit:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
-    - name: hydrate-goproxy
-      run: |
-        mkdir -p hydrate-goproxy
-        cd hydrate-goproxy
-        go mod init hydrate-goproxy
-        go get github.com/kubernetes-sigs/kro@${GITHUB_SHA}
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: hydrate-goproxy
+        run: |
+          mkdir -p hydrate-goproxy
+          cd hydrate-goproxy
+          go mod init hydrate-goproxy
+          go get github.com/kubernetes-sigs/kro@${GITHUB_SHA}

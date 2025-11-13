@@ -2,6 +2,8 @@ module github.com/kro-run/kro/tools/lsp/server
 
 go 1.25.0
 
+toolchain go1.25.4
+
 require (
 	github.com/go-logr/logr v1.4.2
 	github.com/go-logr/zapr v1.3.0

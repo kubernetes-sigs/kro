@@ -1,0 +1,69 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenantenvironment.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TenantEnvironment
+    spec:
+      tenantId: string
+  resources:
+  - id: tenantNamespace
+    template:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: ${schema.spec.tenantId}
+        labels:
+          name: ${schema.spec.tenantId}
+  - id: tenantQuota
+    template:
+      apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: ${schema.spec.tenantId}-quota
+        namespace: ${schema.spec.tenantId}
+        labels:
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        hard:
+          requests.cpu: "1"
+          requests.memory: "1Gi"
+          limits.cpu: "2"
+          limits.memory: "2Gi"
+  - id: tenantNetworkpolicy
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: ${schema.spec.tenantId}-isolation
+        namespace: ${schema.spec.tenantId}
+        labels:
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        - Egress
+        ingress:
+        - from:
+          - namespaceSelector:
+              matchLabels:
+                name: ${schema.spec.tenantId}
+        egress:
+        - to:
+          - namespaceSelector:
+              matchLabels:
+                name: ${schema.spec.tenantId}
+        - to:
+          - namespaceSelector:
+              matchLabels:
+                name: kube-system
+        - to: []
+          ports:
+          - protocol: TCP
+            port: 80
+          - protocol: TCP
+            port: 443
+        - to:

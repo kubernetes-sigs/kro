@@ -1,0 +1,39 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenant.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Tenant
+    spec:
+      tenantId: string
+      image: string | default=nginx
+      replicas: integer | default=2
+  resources:
+  # Tenant Environment Resources
+  - id: tenantEnvironment
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: TenantEnvironment
+      metadata:
+        name: ${schema.spec.tenantId}
+        labels:
+          name: ${schema.spec.tenantId}
+      spec:
+        tenantId: ${schema.spec.tenantId}
+  # Tenant Environment Resources
+  - id: tenantApplication
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: TenantApplication
+      metadata:
+        name: ${schema.spec.tenantId}
+        labels:
+          name: ${schema.spec.tenantId}
+      spec:
+        tenantId: ${schema.spec.tenantId}
+        image: ${schema.spec.image}
+        replicas: ${schema.spec.replicas}
+
+

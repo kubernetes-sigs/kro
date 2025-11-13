@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: Tenant
+metadata:
+  name: tenant001
+  namespace: tenant001
+spec:
+  tenantId: tenant001

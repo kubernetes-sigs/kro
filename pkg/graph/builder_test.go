@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
@@ -1785,7 +1784,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 }
 
 func TestNewBuilder(t *testing.T) {
-	builder, err := NewBuilder(&rest.Config{}, &http.Client{}, logr.Discard())
+	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
 }

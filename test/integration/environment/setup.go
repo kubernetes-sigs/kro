@@ -131,11 +131,7 @@ func (e *Environment) initializeClients() error {
 	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	restConfig := e.ClientSet.RESTConfig()
-	e.GraphBuilder, err = graph.NewBuilder(
-		restConfig,
-		e.ClientSet.HTTPClient(),
-		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
-	)
+	e.GraphBuilder, err = graph.NewBuilder(restConfig, e.ClientSet.HTTPClient())
 	if err != nil {
 		return fmt.Errorf("creating graph builder: %w", err)
 	}

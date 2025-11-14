@@ -102,7 +102,7 @@ tenant.kro.run                    v1alpha1     Tenant           Active   30s
 Apply the tenant instance:
 
 ```bash
-kubectl apply -f tenant-instance-tmpl.yaml
+kubectl apply -f tenant-instance.yaml
 ```
 
 Check tenant instance status:

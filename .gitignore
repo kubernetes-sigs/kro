@@ -44,3 +44,4 @@ TODO.*
 node_modules/
 
 tools/lsp/client/out/
+manifests/bundled

@@ -44,6 +44,14 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
+HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds
+
+ifeq ($(shell uname -s),Darwin)
+	SED_INPLACE_FLAGS ?= -i ''
+else
+	SED_INPLACE_FLAGS ?= -i
+endif
+
 HELM_DIR = ./helm
 WHAT ?= unit
 
@@ -224,16 +232,32 @@ publish-image: ko ## Publish the kro controller images
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
+.PHONY: inject-helm-version
+inject-helm-version:
+	sed $(SED_INPLACE_FLAGS) 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
+	sed $(SED_INPLACE_FLAGS) 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
+	sed $(SED_INPLACE_FLAGS) 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+
 .PHONY: package-helm
-package-helm: ## Package Helm chart
-	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
-	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
-	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+package-helm: inject-helm-version ## Package Helm chart
 	${HELM} package helm
 
 .PHONY: publish-helm
 publish-helm: ## Helm publish
 	${HELM} push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
+
+.PHONY: bundle-static-manifests
+bundle-static-manifests: inject-helm-version
+	mkdir -p manifests/bundled
+	@command -v yq >/dev/null 2>&1 || { echo >&2 "yq is required but not installed. Please install yq v4+"; exit 1; }
+	@variants=$$(yq -r '.variants[].name' manifests/variants.yaml); \
+	for v in $$variants; do \
+		echo "Rendering variant: $$v"; \
+		tmpfile=$$(mktemp); \
+		yq -r ".variants[] | select(.name==\"$${v}\") | .values" manifests/variants.yaml > $$tmpfile; \
+		${HELM} template ${HELM_STATIC_MANIFESTS_FLAGS} --set image.tag=${RELEASE_VERSION} -f $$tmpfile ./helm > manifests/bundled/$${v}.yaml; \
+		rm -f $$tmpfile; \
+	done
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm

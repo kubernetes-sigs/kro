@@ -1,0 +1,67 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenantapplication.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TenantApplication
+    spec:
+      tenantId: string
+      image: string | default=100
+      replicas: integer | default=2
+  resources:
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.tenantId}-deployment
+        namespace: ${schema.spec.tenantId}
+        labels:
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app: ${schema.spec.tenantId}
+        template:
+          metadata:
+            labels:
+              app: ${schema.spec.tenantId}
+              saas/tenant-id: ${schema.spec.tenantId}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              ports:
+              - containerPort: 80
+                protocol: TCP
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.tenantId}-service
+        namespace: ${schema.spec.tenantId}
+        labels:
+          app: ${schema.spec.tenantId}
+          saas/tenant: "true"
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        selector:
+          app: ${schema.spec.tenantId}
+          saas/tenant-id: ${schema.spec.tenantId}
+        ports:
+        - port: 80
+          targetPort: 80
+          protocol: TCP
+          name: http
+        type: ClusterIP

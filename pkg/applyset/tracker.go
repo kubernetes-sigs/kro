@@ -66,8 +66,10 @@ type k8sObjectKey struct {
 
 // tracker manages a collection of resources to be applied.
 type tracker struct {
-	// mu protects all fields below from concurrent access.
-	// MUST be held when reading or writing any field.
+	// mu guards all maps and sets in tracker.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
 	mu sync.Mutex
 
 	// objects is a list of objects we are applying.

@@ -251,10 +251,11 @@ type applySet struct {
 	currentLabels      map[string]string
 	currentAnnotations map[string]string
 
+	// mu guards all maps and sets in applySet.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
 	mu sync.Mutex
-
-	// The following fields are protected by mu and MUST NOT be accessed without
-	// holding the lock:
 
 	// set of applyset object rest mappings
 	// Protected by mu.

@@ -46,14 +46,18 @@ type ResourceState struct {
 
 // InstanceState tracks the overall state of resources being managed
 type InstanceState struct {
+	// mu guards all maps and sets in applySet.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
+	mu sync.RWMutex
+
 	// Current state of the instance
 	State string
 	// Map of resource IDs to their current states
 	ResourceStates map[string]*ResourceState
 	// Any error encountered during reconciliation
 	ReconcileErr error
-	// Mutex to protect concurrent access to ResourceStates map
-	mu sync.RWMutex
 }
 
 // SetResourceState sets the state for a resource in a thread-safe manner

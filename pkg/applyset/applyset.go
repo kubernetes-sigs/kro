@@ -560,16 +560,13 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 
 	concurrency := a.concurrency
 	if concurrency <= 0 {
-		concurrency = len(a.desired.objects)
+		concurrency = a.desired.Len()
 	}
 
 	eg, egctx := errgroup.WithContext(ctx)
 	eg.SetLimit(concurrency)
 
-	// protect concurrent access to write the apply results
-	var mu sync.Mutex
-
-	for _, obj := range a.desired.objects {
+	for _, obj := range a.desired.Objects() {
 		dynResource, err := a.resourceClient(obj)
 		if err != nil {
 			return results, err
@@ -578,8 +575,6 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 		// Apply resources using server-side apply
 		eg.Go(func() error {
 			lastApplied, err := a.applyResource(egctx, dynResource, obj, options)
-			mu.Lock()
-			defer mu.Unlock()
 			results.recordApplied(obj, lastApplied, err)
 			return nil
 		})

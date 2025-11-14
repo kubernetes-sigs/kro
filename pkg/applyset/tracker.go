@@ -138,3 +138,13 @@ func (t *tracker) Len() int {
 	defer t.mu.Unlock()
 	return len(t.objects)
 }
+
+// Objects returns a copy of all objects in a thread-safe manner
+func (t *tracker) Objects() []ApplyableObject {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Return a copy to prevent concurrent modification
+	result := make([]ApplyableObject, len(t.objects))
+	copy(result, t.objects)
+	return result
+}

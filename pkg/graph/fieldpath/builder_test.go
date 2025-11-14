@@ -110,3 +110,81 @@ func TestBuild(t *testing.T) {
 		})
 	}
 }
+
+func TestStripIndices(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "simple path without indices",
+			path: "spec.containers.ports",
+			want: "spec.containers.ports",
+		},
+		{
+			name: "path with single array index",
+			path: "spec.containers[0]",
+			want: "spec.containers",
+		},
+		{
+			name: "path with multiple array indices",
+			path: "routes[0].middlewares[1]",
+			want: "routes.middlewares",
+		},
+		{
+			name: "path with consecutive indices",
+			path: "spec[0][1].field",
+			want: "spec.field",
+		},
+		{
+			name: "path with quoted field names",
+			path: `spec["my.field"][0].value`,
+			want: `spec.["my.field"]value`,
+		},
+		{
+			name: "complex path with mixed indices and fields",
+			path: "spec.containers[0].env[2].value",
+			want: "spec.containers.env.value",
+		},
+		{
+			name: "path with only indices",
+			path: "[0][1][2]",
+			want: "",
+		},
+		{
+			name: "empty path",
+			path: "",
+			want: "",
+		},
+		{
+			name: "path with trailing index",
+			path: "routes.middlewares[99]",
+			want: "routes.middlewares",
+		},
+		{
+			name:    "invalid path - unterminated bracket",
+			path:    "spec.containers[0",
+			wantErr: true,
+		},
+		{
+			name:    "invalid path - unterminated quote",
+			path:    `spec["field`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := StripIndices(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("StripIndices() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("StripIndices() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -46,3 +46,28 @@ func Build(segments []Segment) string {
 
 	return b.String()
 }
+
+// StripIndices removes all array index segments from a field path, returning
+// a type path suitable for type naming. This is useful because all elements
+// in an array share the same type.
+//
+// Examples:
+//   - "routes[0].middlewares[1]" -> "routes.middlewares"
+//   - "spec.containers[0].ports" -> "spec.containers.ports"
+//   - "simple.path" -> "simple.path"
+func StripIndices(path string) (string, error) {
+	segments, err := Parse(path)
+	if err != nil {
+		return "", err
+	}
+
+	var nameSegments []Segment
+	for _, seg := range segments {
+		// array indices are skipped
+		if seg.Name != "" {
+			nameSegments = append(nameSegments, NewNamedSegment(seg.Name))
+		}
+	}
+
+	return Build(nameSegments), nil
+}

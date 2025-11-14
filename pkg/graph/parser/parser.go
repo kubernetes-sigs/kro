@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -37,15 +36,17 @@ const (
 //
 // Note that this function will also validate the resource against the schema
 // and return an error if the resource does not match the schema. When CEL
-// expressions are found, they are extracted and returned with the expected
-// type of the field (inferred from the schema).
+// expressions are found, they are extracted and returned with the schema
+// of the field. The caller is responsible for converting schemas to CEL types
+// with appropriate type naming.
 func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
 	return parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depth first search to traverse the resource and
-// extract expressions from string fields
+// extract expressions from string fields.
+// The path parameter includes array indices for error reporting (e.g., "spec.containers[0]").
 func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
@@ -68,22 +69,6 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 	default:
 		return parseScalarTypes(field, schema, path, expectedTypes)
 	}
-}
-
-// getCelType converts an OpenAPI schema to a CEL type using the Kubernetes OpenAPI library.
-// This replaces manual type conversion with the library's schema-to-CEL type conversion.
-func getCelType(schema *spec.Schema) *cel.Type {
-	if schema == nil {
-		return cel.DynType
-	}
-
-	// Use the Kubernetes OpenAPI library to convert schema to CEL type
-	declType := openapi.SchemaDeclType(schema, false)
-	if declType == nil {
-		return cel.DynType
-	}
-
-	return declType.CelType()
 }
 
 // getExpectedTypes extracts the expected types from a schema for validation purposes.
@@ -276,13 +261,12 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 	}
 
 	if ok {
-		// For CEL expressions, get the CEL type from the schema
-		expectedType := getCelType(schema)
+		// For CEL expressions, just extract and return - caller will set ExpectedType
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
 			Expressions:          []string{expr},
-			ExpectedType:         expectedType,
+			ExpectedType:         nil, // Builder will set this
 			Path:                 path,
 			StandaloneExpression: true,
 		}}, nil
@@ -297,7 +281,7 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		// String templates always produce strings
+		// String templates always produce strings - we can set this since it's always the same
 		return []variable.FieldDescriptor{{
 			Expressions:  expressions,
 			ExpectedType: cel.StringType,

@@ -1,0 +1,29 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-unknown-fields
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: AllowUnknownInstance
+    spec:
+      name: string
+  resources:
+    - id: example
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: AllowUnknown
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          config:
+            foo: bar
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: check-unknown-fields
+        data:
+          foo: ${example.spec.config.foo}
+          name: ${schema.spec.name}

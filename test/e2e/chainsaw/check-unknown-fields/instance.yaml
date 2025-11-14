@@ -1,0 +1,6 @@
+apiVersion: kro.run/v1alpha1
+kind: AllowUnknownInstance
+metadata:
+  name: check-unknown-fields
+spec:
+  name: name

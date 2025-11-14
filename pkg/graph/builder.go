@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/go-logr/logr"
 	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -45,7 +46,7 @@ import (
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(
-	clientConfig *rest.Config, httpClient *http.Client,
+	clientConfig *rest.Config, httpClient *http.Client, logger logr.Logger,
 ) (*Builder, error) {
 	schemaResolver, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
 	if err != nil {
@@ -60,6 +61,7 @@ func NewBuilder(
 	rgBuilder := &Builder{
 		schemaResolver: schemaResolver,
 		restMapper:     rm,
+		logger:         logger,
 	}
 	return rgBuilder, nil
 }
@@ -91,6 +93,7 @@ type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
 	restMapper     meta.RESTMapper
+	logger         logr.Logger
 }
 
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
@@ -251,7 +254,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// Validate all CEL expressions for each resource node
 	for _, resource := range resources {
-		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id]); err != nil {
+		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id], b.logger); err != nil {
 			return nil, fmt.Errorf("failed to validate node %q: %w", resource.id, err)
 		}
 	}
@@ -678,9 +681,14 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
-func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema) error {
+func validateNode(
+	resource *Resource,
+	templatesEnv, schemaEnv *cel.Env,
+	resourceSchema *spec.Schema,
+	logger logr.Logger,
+) error {
 	// Validate template expressions
-	if err := validateTemplateExpressions(templatesEnv, resource); err != nil {
+	if err := validateTemplateExpressions(templatesEnv, resource, logger); err != nil {
 		return err
 	}
 
@@ -710,18 +718,35 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 // validateTemplateExpressions validates CEL template expressions for a single resource.
 // It type-checks that expressions reference valid fields and return the expected types
 // based on the OpenAPI schemas.
-func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
+func validateTemplateExpressions(env *cel.Env, resource *Resource, logger logr.Logger) error {
 	for _, templateVariable := range resource.variables {
 		if len(templateVariable.Expressions) == 1 {
 			// Single expression - validate against expected types
 			expression := templateVariable.Expressions[0]
 
+			var outputType *cel.Type
 			checkedAST, err := parseAndCheckCELExpression(env, expression)
 			if err != nil {
-				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
+				if templateVariable.Kind == variable.ResourceVariableKindDynamic {
+					// we are on a dynamic expression - there are cases in which
+					// the type-checker will fail to type-check the expression,
+					// but the resource can still be resolved by our ecosystem.
+					//
+					// For example, if the object is not available in the schema
+					// due to x-kubernetes-preserve-unknown-fields
+					outputType = templateVariable.ExpectedType
+					logger.V(1).Info("failed to statically type-check template expression",
+						"resource", resource.id,
+						"expression", expression,
+						"path", templateVariable.Path,
+						"error", err.Error())
+				} else {
+					return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
+				}
+			} else {
+				outputType = checkedAST.OutputType()
 			}
 
-			outputType := checkedAST.OutputType()
 			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
 				return err
 			}

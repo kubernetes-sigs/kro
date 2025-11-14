@@ -189,7 +189,7 @@ func main() {
 	}, set.Metadata(), set.RESTMapper())
 
 	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(
-		restConfig, set.HTTPClient(),
+		restConfig, set.HTTPClient(), rootLogger,
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")

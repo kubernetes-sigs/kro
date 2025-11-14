@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: check-unknown-fields
+data:
+  foo: "bar"
+  name: "name"

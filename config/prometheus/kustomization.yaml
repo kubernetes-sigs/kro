@@ -1,2 +1,5 @@
+namespace: kro-system
+
 resources:
 - monitor.yaml
+- service.yaml

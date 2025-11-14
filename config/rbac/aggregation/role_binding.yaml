@@ -1,0 +1,16 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kro:controller
+  labels:
+    app.kubernetes.io/instance: kro
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/part-of: kro
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: kro:controller
+subjects:
+- kind: ServiceAccount
+  name: kro
+  namespace: default

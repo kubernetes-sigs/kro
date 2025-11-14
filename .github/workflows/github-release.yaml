@@ -13,6 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Build static manifests
+        env:
+          TAG: ${{ github.ref_name}}
+        run: |
+          version="${TAG#v*}"
+          
+          # TODO
+          # (tjamet) we need to have a better way to inject the version into those manifests
+          sed -i \
+          -e "s/newTag: .*/newTag: \"${version}\"/" \
+          -e "s/app.kubernetes.io\/version: .*/app.kubernetes.io\/version: \"${version}\"/" \
+          ./manifests/*/kustomization.yaml
+          
+          mkdir -p ./manifests/bundled
+          
+          kustomize build ./manifests/core-install > ./manifests/bundled/kro-core-install-manifests.yaml
+          kustomize build ./manifests/core-install-with-prometheus > ./manifests/bundled/kro-core-install-manifests-with-prometheus.yaml
+          kustomize build ./manifests/unrestricted > ./manifests/bundled/kro-unrestricted-manifests.yaml
+          kustomize build ./manifests/unrestricted-with-prometheus > ./manifests/bundled/kro-unrestricted-manifests-with-prometheus.yaml
       - uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # 2.4.1
         with:
           generate_release_notes: true
+          files: |
+            ./manifests/bundled/kro-*.yaml

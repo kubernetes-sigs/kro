@@ -89,7 +89,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=\"kro:controller:static\" crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases output:rbac:artifacts:config=config/rbac/aggregation
 	cp config/crd/bases/* helm/crds
 
 .PHONY: generate
@@ -117,6 +117,7 @@ ifeq ($(WHAT),integration)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
+	go test -v ./test/deployment/...
 else
 	@echo "Error: WHAT must be either 'unit' or 'integration'"
 	@echo "Usage: make test WHAT=unit|integration"

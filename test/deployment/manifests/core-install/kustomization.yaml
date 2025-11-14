@@ -1,0 +1,14 @@
+resources:
+- ../../../../manifests/core-install
+
+
+
+images:
+- name: registry.k8s.io/kro/kro
+  newName: registry.k8s.io/kro/kro
+  newTag: "v0.0.0-test-integration"
+
+labels:
+  - pairs:
+      app.kubernetes.io/version: "0.0.0-test-integration"
+    includeTemplates: true

@@ -1,0 +1,25 @@
+# Adds namespace to all resources.
+namespace: kro-system
+
+
+resources:
+- ../../config/crd
+- ../../config/rbac/unrestricted
+- ../../config/manager
+
+
+images:
+- name: kro/controller
+  newName: registry.k8s.io/kro/kro
+  newTag: "v0.6.0"
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: kro
+      app.kubernetes.io/name: kro
+    includeTemplates: true
+    includeSelectors: true
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/version: "0.6.0"
+    includeTemplates: true

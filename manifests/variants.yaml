@@ -1,0 +1,14 @@
+variants:
+- name: kro-core-install-manifests
+  values:
+    rbac:
+      mode: aggregation
+- name: kro-core-install-manifests-with-prometheus
+  values:
+    rbac:
+      mode: aggregation
+    metrics:
+      service:
+        create: true
+      serviceMonitor:
+        enabled: true

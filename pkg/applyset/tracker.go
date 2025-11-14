@@ -65,26 +65,6 @@ type k8sObjectKey struct {
 }
 
 // tracker manages a collection of resources to be applied.
-//
-// CONCURRENCY SAFETY:
-// This type is safe for concurrent use. The Add() and Len() methods can be called
-// from multiple goroutines simultaneously. This is critical because the parallel
-// DAG walker in controller_reconcile.go calls Add() concurrently as resources are
-// resolved.
-//
-// All exported methods MUST acquire the mutex before accessing any fields.
-// The mutex protects:
-//   - objects slice (concurrent appends)
-//   - serverIDs map (concurrent reads/writes)
-//   - clientIDs map (concurrent reads/writes)
-//
-// When adding new methods or modifying existing ones, ensure proper locking:
-//
-//	func (t *tracker) NewMethod() {
-//	    t.mu.Lock()
-//	    defer t.mu.Unlock()
-//	    // ... safe to access fields here
-//	}
 type tracker struct {
 	// mu protects all fields below from concurrent access.
 	// MUST be held when reading or writing any field.

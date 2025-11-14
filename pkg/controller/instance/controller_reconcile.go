@@ -17,8 +17,11 @@ package instance
 import (
 	"context"
 	"fmt"
+	stdruntime "runtime"
+	"sync"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,8 +34,6 @@ import (
 
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
-	"github.com/kubernetes-sigs/kro/pkg/graph/walker"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -175,7 +176,7 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 //  1. Get topological levels from DAG (groups resources by dependency depth)
 //  2. For each level sequentially:
 //     a. Create a new ApplySet for this level
-//     b. Process resources in parallel using walker
+//     b. Process resources in parallel using errgroup
 //     c. Apply all resources in the level
 //     d. Wait for readiness before proceeding to next level
 //     e. Sync runtime for CEL expression evaluation
@@ -232,20 +233,8 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 }
 
 // processLevel processes all resources in a single topological level.
-// Resources within a level are processed in parallel using the walker.
+// Resources within a level are processed in parallel using errgroup.
 // Each level gets its own ApplySet for isolated application.
-//
-// CONCURRENCY SAFETY:
-// This method creates a DAG subgraph and uses the walker to process resources
-// in parallel. The vertexFunc is called concurrently from multiple goroutines.
-// Any shared state accessed in vertexFunc MUST be protected by mutexes.
-//
-// Thread-safe components used:
-//   - aset.Add() - protected by tracker mutex (see pkg/applyset/tracker.go)
-//   - igr.state.SetResourceState() - should be thread-safe
-//   - igr.runtime - check if methods are safe for concurrent access
-//
-// See docs/developer-concurrency-guide.md for detailed concurrency guidelines.
 func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum int, resourceIDs []string, isLastLevel bool) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
@@ -265,8 +254,11 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 
 	unresolvedResourceID := ""
 	hasErrors := false
+	walkErrors := make(map[string]error)
+	var walkErrorsMu sync.Mutex
 
-	// Process resources in this level using the walker
+	// Process resources in this level in parallel using errgroup
+	// All resources in the same topological level are independent by definition
 	vertexFunc := func(ctx context.Context, resourceID string) error {
 		log := igr.log.WithValues("resourceID", resourceID, "level", levelNum)
 
@@ -330,42 +322,31 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 		return nil
 	}
 
-	// Create a subgraph containing only this level's resources for parallel processing
-	levelDAG := dag.NewDirectedAcyclicGraph[string]()
-	originalDAG := igr.runtime.DAG()
+	// Use errgroup to process all resources in parallel
+	// Resources in the same level have no dependencies on each other
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(stdruntime.NumCPU()) // Limit parallelism to number of CPUs
 
-	// Add all resources in this level to the subgraph
-	for i, id := range resourceIDs {
-		if err := levelDAG.AddVertex(id, i); err != nil {
-			return fmt.Errorf("failed to add vertex to level DAG: %w", err)
-		}
-	}
-
-	// Add dependencies only between resources within this level
-	resourceSet := make(map[string]struct{})
-	for _, id := range resourceIDs {
-		resourceSet[id] = struct{}{}
-	}
-
-	for _, id := range resourceIDs {
-		origVertex := originalDAG.Vertices[id]
-		var levelDeps []string
-		for dep := range origVertex.DependsOn {
-			if _, inLevel := resourceSet[dep]; inLevel {
-				levelDeps = append(levelDeps, dep)
+	for _, resourceID := range resourceIDs {
+		resourceID := resourceID // Capture loop variable
+		g.Go(func() error {
+			if err := vertexFunc(gCtx, resourceID); err != nil {
+				walkErrorsMu.Lock()
+				walkErrors[resourceID] = err
+				walkErrorsMu.Unlock()
+				return err
 			}
-		}
-		if len(levelDeps) > 0 {
-			if err := levelDAG.AddDependencies(id, levelDeps); err != nil {
-				return fmt.Errorf("failed to add dependencies to level DAG: %w", err)
-			}
-		}
+			return nil
+		})
 	}
 
-	// Walk the level DAG in parallel for maximum performance
-	walkErrors := walker.Walk(ctx, levelDAG, vertexFunc, walker.Options{})
+	// Wait for all resources in this level to complete
+	if err := g.Wait(); err != nil {
+		// At least one resource failed
+		hasErrors = true
+	}
 
-	// Process walk errors
+	// Process any errors
 	for resourceID, err := range walkErrors {
 		igr.log.Error(err, "Error processing resource", "resourceID", resourceID, "level", levelNum)
 		if resourceState, ok := igr.state.GetResourceState(resourceID); ok {
@@ -375,7 +356,6 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 		if unresolvedResourceID == "" {
 			unresolvedResourceID = resourceID
 		}
-		hasErrors = true
 	}
 
 	// Apply all resources that were added to the applyset for this level
@@ -541,6 +521,8 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 		igr.log.V(1).Info("Deleting level", "level", i, "resources", len(levelResources))
 
 		hasDeleting := false
+		walkErrors := make(map[string]error)
+		var walkErrorsMu sync.Mutex
 
 		// Define vertex function for deletion
 		vertexFunc := func(ctx context.Context, resourceID string) error {
@@ -564,42 +546,28 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 			return nil
 		}
 
-		// Create a subgraph for this level to enable parallel deletion
-		levelDAG := dag.NewDirectedAcyclicGraph[string]()
-		originalDAG := igr.runtime.DAG()
+		// Use errgroup to delete all resources in this level in parallel
+		// Resources in the same level have no dependencies on each other
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(stdruntime.NumCPU())
 
-		// Add all resources in this level
-		for idx, id := range levelResources {
-			if err := levelDAG.AddVertex(id, idx); err != nil {
-				return fmt.Errorf("failed to add vertex to deletion DAG: %w", err)
-			}
-		}
-
-		// Add dependencies only between resources within this level
-		resourceSet := make(map[string]struct{})
-		for _, id := range levelResources {
-			resourceSet[id] = struct{}{}
-		}
-
-		for _, id := range levelResources {
-			origVertex := originalDAG.Vertices[id]
-			var levelDeps []string
-			for dep := range origVertex.DependsOn {
-				if _, inLevel := resourceSet[dep]; inLevel {
-					levelDeps = append(levelDeps, dep)
+		for _, resourceID := range levelResources {
+			resourceID := resourceID // Capture loop variable
+			g.Go(func() error {
+				if err := vertexFunc(gCtx, resourceID); err != nil {
+					walkErrorsMu.Lock()
+					walkErrors[resourceID] = err
+					walkErrorsMu.Unlock()
+					return err
 				}
-			}
-			if len(levelDeps) > 0 {
-				if err := levelDAG.AddDependencies(id, levelDeps); err != nil {
-					return fmt.Errorf("failed to add dependencies to deletion DAG: %w", err)
-				}
-			}
+				return nil
+			})
 		}
 
-		// Walk the level in reverse (for deletion) with parallelism
-		walkErrors := walker.Walk(ctx, levelDAG, vertexFunc, walker.Options{
-			Reverse: true,
-		})
+		// Wait for all deletions in this level to complete
+		if err := g.Wait(); err != nil {
+			// At least one deletion failed
+		}
 
 		// Process walk errors
 		for resourceID, err := range walkErrors {

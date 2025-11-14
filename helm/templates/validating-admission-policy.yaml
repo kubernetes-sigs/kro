@@ -1,0 +1,33 @@
+{{- if not .Values.config.allowCRDDeletion }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kro.fullname" . }}-crd-protection-policy
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kro.run"]
+        apiVersions: ["v1alpha1"]
+        operations: ["DELETE"]
+        resources: ["resourcegraphdefinitions"]
+  validations:
+    - expression: |
+        has(oldObject.metadata.annotations) &&
+        oldObject.metadata.annotations.exists(w, w == '{{ .Values.validation.admission.policy.rgd.protectionKey }}') &&
+        oldObject.metadata.annotations['{{ .Values.validation.admission.policy.rgd.annotation.key }}'] == 'true'
+      reason: Invalid
+      message: |
+        Deletion denied. To proceed, set annotation '{{ .Values.validation.admission.policy.rgd.annotation.key }}: "true"'. Note: removing an RGD also deletes its CustomResourceDefinition and may cause data loss.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kro.fullname" . }}-crd-protection-policy-binding
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kro.fullname" . }}-crd-protection-policy
+  validationActions: {{ .Values.validation.admission.policy.rgd.actions }}
+{{- end }}

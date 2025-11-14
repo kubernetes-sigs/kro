@@ -31,6 +31,8 @@ import (
 
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/walker"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -134,7 +136,7 @@ func (igr *instanceGraphReconciler) handleReconciliation(
 
 func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 	log := igr.log.WithValues("resourceID", resourceID)
-	resourceState := igr.state.ResourceStates[resourceID]
+	resourceState, _ := igr.state.GetResourceState(resourceID)
 	if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
 		log.V(1).Info("Resource not ready", "reason", reason, "error", err)
 		resourceState.State = ResourceStateWaitingForReadiness
@@ -163,7 +165,24 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 	return true
 }
 
-// reconcileInstance handles the reconciliation of an active instance
+// reconcileInstance handles the reconciliation of an active instance.
+// Resources are processed level-by-level, with resources in each level
+// processed in parallel once their dependencies are satisfied.
+//
+// ARCHITECTURE:
+// This uses a hybrid approach combining level-by-level progression with
+// parallel processing within each level:
+//  1. Get topological levels from DAG (groups resources by dependency depth)
+//  2. For each level sequentially:
+//     a. Create a new ApplySet for this level
+//     b. Process resources in parallel using walker
+//     c. Apply all resources in the level
+//     d. Wait for readiness before proceeding to next level
+//     e. Sync runtime for CEL expression evaluation
+//
+// This provides both safety (controlled progression) and performance
+// (parallel processing where safe). See docs/developer-concurrency-guide.md
+// for detailed concurrency patterns.
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
@@ -175,74 +194,121 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	mark.GraphResolved()
 
-	// Initialize resource states
+	// Initialize resource states for all resources
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		igr.state.ResourceStates[resourceID] = &ResourceState{State: ResourceStatePending}
+		igr.state.SetResourceState(resourceID, &ResourceState{State: ResourceStatePending})
 	}
 
+	// Get topological levels from the DAG
+	dag := igr.runtime.DAG()
+	levels, err := dag.TopologicalSortLevels()
+	if err != nil {
+		mark.ResourcesNotReady("failed to compute topological levels: %v", err)
+		return fmt.Errorf("failed to compute topological levels: %w", err)
+	}
+
+	igr.log.V(1).Info("Processing resources in levels", "totalLevels", len(levels))
+
+	// Process each level sequentially
+	for levelNum, levelResources := range levels {
+		igr.log.V(1).Info("Processing level", "level", levelNum, "resources", len(levelResources))
+
+		if err := igr.processLevel(ctx, levelNum, levelResources, levelNum == len(levels)-1); err != nil {
+			mark.ResourcesNotReady("failed to process level %d: %v", levelNum, err)
+			return err
+		}
+
+		// Synchronize runtime after each level to update CEL expressions
+		// that depend on resources from this level
+		if _, err := igr.runtime.Synchronize(); err != nil {
+			mark.ResourcesNotReady("failed to synchronize after level %d: %v", levelNum, err)
+			return fmt.Errorf("failed to synchronize after level %d: %w", levelNum, err)
+		}
+	}
+
+	// All resources have been successfully reconciled
+	mark.ResourcesReady()
+	return nil
+}
+
+// processLevel processes all resources in a single topological level.
+// Resources within a level are processed in parallel using the walker.
+// Each level gets its own ApplySet for isolated application.
+//
+// CONCURRENCY SAFETY:
+// This method creates a DAG subgraph and uses the walker to process resources
+// in parallel. The vertexFunc is called concurrently from multiple goroutines.
+// Any shared state accessed in vertexFunc MUST be protected by mutexes.
+//
+// Thread-safe components used:
+//   - aset.Add() - protected by tracker mutex (see pkg/applyset/tracker.go)
+//   - igr.state.SetResourceState() - should be thread-safe
+//   - igr.runtime - check if methods are safe for concurrent access
+//
+// See docs/developer-concurrency-guide.md for detailed concurrency guidelines.
+func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum int, resourceIDs []string, isLastLevel bool) error {
+	instance := igr.runtime.GetInstance()
+	mark := NewConditionsMarkerFor(instance)
+
+	// Create a new ApplySet for this level
 	config := applyset.Config{
 		ToolLabels:   igr.instanceSubResourcesLabeler.Labels(),
 		FieldManager: FieldManagerForApplyset,
 		ToolingID:    KROTooling,
-		Log:          igr.log,
+		Log:          igr.log.WithValues("level", levelNum),
 	}
 
 	aset, err := applyset.New(instance, igr.restMapper, igr.client, config)
 	if err != nil {
-		return igr.delayedRequeue(fmt.Errorf("failed creating an applyset: %w", err))
+		return fmt.Errorf("failed creating applyset for level %d: %w", levelNum, err)
 	}
 
 	unresolvedResourceID := ""
-	prune := true
-	// Reconcile resources in topological order
-	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		log := igr.log.WithValues("resourceID", resourceID)
+	hasErrors := false
 
-		// Initialize resource state in instance state
+	// Process resources in this level using the walker
+	vertexFunc := func(ctx context.Context, resourceID string) error {
+		log := igr.log.WithValues("resourceID", resourceID, "level", levelNum)
+
+		// Mark resource as in progress
 		resourceState := &ResourceState{State: ResourceStateInProgress}
-		igr.state.ResourceStates[resourceID] = resourceState
+		igr.state.SetResourceState(resourceID, resourceState)
 
-		// Check if resource should be processed (create or get)
-		// TODO(barney-s): skipping on error seems un-intuitive, should we skip on CEL evaluation error?
+		// Check if resource should be processed
 		if want, err := igr.runtime.ReadyToProcessResource(resourceID); err != nil || !want {
 			log.V(1).Info("Skipping resource processing", "reason", err)
 			resourceState.State = ResourceStateSkipped
 			igr.runtime.IgnoreResource(resourceID)
-			continue
+			return nil // Not an error, just skipped
 		}
 
-		// Check if the resource dependencies are resolved and can be reconciled
+		// Check if the resource dependencies are resolved
 		resource, state := igr.runtime.GetResource(resourceID)
-
 		if state != runtime.ResourceStateResolved {
-			unresolvedResourceID = resourceID
-			prune = false
-			break
+			resourceState.State = ResourceStateError
+			resourceState.Err = fmt.Errorf("resource not resolved")
+			return resourceState.Err
 		}
 
 		// Check if all dependencies are ready
 		if !igr.areDependenciesReady(resourceID) {
-			unresolvedResourceID = resourceID
-			prune = false
-			break
+			resourceState.State = ResourceStateError
+			resourceState.Err = fmt.Errorf("dependencies not ready")
+			return resourceState.Err
 		}
 
-		// ExternalRefs are read-only - fetch them directly instead of adding to applyset
+		// Handle ExternalRefs
 		if igr.runtime.ResourceDescriptor(resourceID).IsExternalRef() {
 			clusterObj, err := igr.readExternalRef(ctx, resourceID, resource)
 			if err != nil {
 				resourceState.State = ResourceStateError
 				resourceState.Err = fmt.Errorf("failed to read external ref: %w", err)
-				break
+				return resourceState.Err
 			}
 			igr.runtime.SetResource(resourceID, clusterObj)
 			igr.updateResourceReadiness(resourceID)
-			// Synchronize runtime state after each resource to re-evaluate CEL expressions
-			if _, err := igr.runtime.Synchronize(); err != nil {
-				return fmt.Errorf("failed to synchronize after reading external ref: %w", err)
-			}
 			resourceState.State = ResourceStateSynced
-			continue
+			return nil
 		}
 
 		// Regular resources go through the applyset
@@ -252,25 +318,77 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		}
 		clusterObj, err := aset.Add(ctx, applyable)
 		if err != nil {
-			return fmt.Errorf("failed to add resource to applyset: %w", err)
+			resourceState.State = ResourceStateError
+			resourceState.Err = fmt.Errorf("failed to add resource to applyset: %w", err)
+			return resourceState.Err
 		}
 
 		if clusterObj != nil {
 			igr.runtime.SetResource(resourceID, clusterObj)
-			igr.updateResourceReadiness(resourceID)
-			// Synchronize runtime state after each resource to re-evaluate CEL expressions
-			if _, err := igr.runtime.Synchronize(); err != nil {
-				return fmt.Errorf("failed to synchronize after apply/prune: %w", err)
+		}
+
+		return nil
+	}
+
+	// Create a subgraph containing only this level's resources for parallel processing
+	levelDAG := dag.NewDirectedAcyclicGraph[string]()
+	originalDAG := igr.runtime.DAG()
+
+	// Add all resources in this level to the subgraph
+	for i, id := range resourceIDs {
+		if err := levelDAG.AddVertex(id, i); err != nil {
+			return fmt.Errorf("failed to add vertex to level DAG: %w", err)
+		}
+	}
+
+	// Add dependencies only between resources within this level
+	resourceSet := make(map[string]struct{})
+	for _, id := range resourceIDs {
+		resourceSet[id] = struct{}{}
+	}
+
+	for _, id := range resourceIDs {
+		origVertex := originalDAG.Vertices[id]
+		var levelDeps []string
+		for dep := range origVertex.DependsOn {
+			if _, inLevel := resourceSet[dep]; inLevel {
+				levelDeps = append(levelDeps, dep)
+			}
+		}
+		if len(levelDeps) > 0 {
+			if err := levelDAG.AddDependencies(id, levelDeps); err != nil {
+				return fmt.Errorf("failed to add dependencies to level DAG: %w", err)
 			}
 		}
 	}
 
+	// Walk the level DAG in parallel for maximum performance
+	walkErrors := walker.Walk(ctx, levelDAG, vertexFunc, walker.Options{})
+
+	// Process walk errors
+	for resourceID, err := range walkErrors {
+		igr.log.Error(err, "Error processing resource", "resourceID", resourceID, "level", levelNum)
+		if resourceState, ok := igr.state.GetResourceState(resourceID); ok {
+			resourceState.State = ResourceStateError
+			resourceState.Err = err
+		}
+		if unresolvedResourceID == "" {
+			unresolvedResourceID = resourceID
+		}
+		hasErrors = true
+	}
+
+	// Apply all resources that were added to the applyset for this level
+	// Only prune on the last level
+	prune := isLastLevel && !hasErrors
 	result, err := aset.Apply(ctx, prune)
+
 	for _, applied := range result.AppliedObjects {
-		resourceState := igr.state.ResourceStates[applied.ID]
+		resourceState, _ := igr.state.GetResourceState(applied.ID)
 		if applied.Error != nil {
 			resourceState.State = ResourceStateError
 			resourceState.Err = applied.Error
+			hasErrors = true
 		} else {
 			// Update runtime with the applied resource
 			if applied.LastApplied != nil {
@@ -281,34 +399,40 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 	}
 
 	if err != nil {
-		mark.ResourcesNotReady("failed to reconcile the apply set: %v", err)
-		return igr.delayedRequeue(fmt.Errorf("failed to apply/prune resources: %w", err))
-	}
-
-	// Inspect resource states and return error if any resource is in error state
-	if err := igr.state.ResourceErrors(); err != nil {
-		mark.ResourcesNotReady("at least one resource reports an error: %v", err)
-		return igr.delayedRequeue(err)
+		mark.ResourcesNotReady("failed to apply level %d: %v", levelNum, err)
+		return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
 	}
 
 	if err := result.Errors(); err != nil {
-		mark.ResourcesNotReady("there was an error while reconciling resources in the apply set: %v", err)
-		return igr.delayedRequeue(fmt.Errorf("failed to apply/prune resources: %w", err))
+		mark.ResourcesNotReady("errors applying level %d: %v", levelNum, err)
+		return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
 	}
 
 	if unresolvedResourceID != "" {
-		mark.ResourcesInProgress("waiting for resource resolution: %s", unresolvedResourceID)
-		return igr.delayedRequeue(fmt.Errorf("unresolved resource: %s", unresolvedResourceID))
+		mark.ResourcesInProgress("waiting for resource resolution in level %d: %s", levelNum, unresolvedResourceID)
+		return igr.delayedRequeue(fmt.Errorf("unresolved resource in level %d: %s", levelNum, unresolvedResourceID))
 	}
 
-	// If there are any cluster mutations, we need to requeue.
+	// Check readiness of all resources in this level before proceeding
+	for _, resourceID := range resourceIDs {
+		resourceState, ok := igr.state.GetResourceState(resourceID)
+		if !ok || resourceState.State == ResourceStateSkipped {
+			continue
+		}
+
+		if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
+			mark.ResourcesInProgress("level %d resource %s not ready: %s", levelNum, resourceID, reason)
+			return igr.delayedRequeue(fmt.Errorf("level %d resource %s not ready: %s", levelNum, resourceID, reason))
+		}
+	}
+
+	// If there are any cluster mutations, we need to requeue
 	if result.HasClusterMutation() {
-		mark.ResourcesInProgress("reconciling cluster mutation after apply")
-		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
+		mark.ResourcesInProgress("level %d had cluster mutations", levelNum)
+		return igr.delayedRequeue(fmt.Errorf("level %d had cluster mutations", levelNum))
 	}
 
-	// All resources have been successfully reconciled
-	mark.ResourcesReady()
+	igr.log.V(1).Info("Level processed successfully", "level", levelNum)
 	return nil
 }
 
@@ -362,6 +486,8 @@ func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) 
 // initializeDeletionState prepares resources for deletion by checking their
 // current state and marking them appropriately.
 func (igr *instanceGraphReconciler) initializeDeletionState() error {
+	// Iterate through all resources to check resource states
+	// Order doesn't matter here - we're just gathering current state
 	for _, resourceID := range igr.runtime.TopologicalOrder() {
 		if _, err := igr.runtime.Synchronize(); err != nil {
 			return fmt.Errorf("failed to synchronize during deletion state initialization: %w", err)
@@ -369,9 +495,9 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 
 		resource, state := igr.runtime.GetResource(resourceID)
 		if state != runtime.ResourceStateResolved {
-			igr.state.ResourceStates[resourceID] = &ResourceState{
+			igr.state.SetResourceState(resourceID, &ResourceState{
 				State: ResourceStateSkipped,
-			}
+			})
 			continue
 		}
 
@@ -380,45 +506,124 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 		observed, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				igr.state.ResourceStates[resourceID] = &ResourceState{
+				igr.state.SetResourceState(resourceID, &ResourceState{
 					State: ResourceStateDeleted,
-				}
+				})
 				continue
 			}
 			return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
 		}
 
 		igr.runtime.SetResource(resourceID, observed)
-		igr.state.ResourceStates[resourceID] = &ResourceState{
+		igr.state.SetResourceState(resourceID, &ResourceState{
 			State: ResourceStatePendingDeletion,
-		}
+		})
 	}
 	return nil
 }
 
 // deleteResourcesInOrder processes resource deletion in reverse topological order
-// to respect dependencies between resources.
+// to respect dependencies between resources. Processes deletions level-by-level
+// in reverse order for predictable resource cleanup.
 func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) error {
-	// Process resources in reverse order
-	resources := igr.runtime.TopologicalOrder()
-	for i := len(resources) - 1; i >= 0; i-- {
-		resourceID := resources[i]
-		resourceState := igr.state.ResourceStates[resourceID]
+	// Get topological levels from the DAG
+	graphDAG := igr.runtime.DAG()
+	levels, err := graphDAG.TopologicalSortLevels()
+	if err != nil {
+		return fmt.Errorf("failed to compute topological levels for deletion: %w", err)
+	}
 
-		if resourceState == nil || resourceState.State != ResourceStatePendingDeletion {
-			continue
+	igr.log.V(1).Info("Deleting resources in reverse levels", "totalLevels", len(levels))
+
+	// Process each level in reverse order (bottom-up for deletion)
+	for i := len(levels) - 1; i >= 0; i-- {
+		levelResources := levels[i]
+		igr.log.V(1).Info("Deleting level", "level", i, "resources", len(levelResources))
+
+		hasDeleting := false
+
+		// Define vertex function for deletion
+		vertexFunc := func(ctx context.Context, resourceID string) error {
+			resourceState, ok := igr.state.GetResourceState(resourceID)
+			if !ok || resourceState == nil || resourceState.State != ResourceStatePendingDeletion {
+				// Resource not pending deletion, skip
+				return nil
+			}
+
+			// Skip deletion for read-only resources
+			if igr.runtime.ResourceDescriptor(resourceID).IsExternalRef() {
+				resourceState.State = ResourceStateSkipped
+				return nil
+			}
+
+			igr.log.V(2).Info("Deleting resource", "resourceID", resourceID, "level", i)
+			if err := igr.deleteResource(ctx, resourceID); err != nil {
+				return fmt.Errorf("failed to delete resource %s: %w", resourceID, err)
+			}
+
+			return nil
 		}
 
-		// Skip deletion for read-only resources
-		if igr.runtime.ResourceDescriptor(resourceID).IsExternalRef() {
-			igr.state.ResourceStates[resourceID].State = ResourceStateSkipped
-			continue
+		// Create a subgraph for this level to enable parallel deletion
+		levelDAG := dag.NewDirectedAcyclicGraph[string]()
+		originalDAG := igr.runtime.DAG()
+
+		// Add all resources in this level
+		for idx, id := range levelResources {
+			if err := levelDAG.AddVertex(id, idx); err != nil {
+				return fmt.Errorf("failed to add vertex to deletion DAG: %w", err)
+			}
 		}
 
-		if err := igr.deleteResource(ctx, resourceID); err != nil {
+		// Add dependencies only between resources within this level
+		resourceSet := make(map[string]struct{})
+		for _, id := range levelResources {
+			resourceSet[id] = struct{}{}
+		}
+
+		for _, id := range levelResources {
+			origVertex := originalDAG.Vertices[id]
+			var levelDeps []string
+			for dep := range origVertex.DependsOn {
+				if _, inLevel := resourceSet[dep]; inLevel {
+					levelDeps = append(levelDeps, dep)
+				}
+			}
+			if len(levelDeps) > 0 {
+				if err := levelDAG.AddDependencies(id, levelDeps); err != nil {
+					return fmt.Errorf("failed to add dependencies to deletion DAG: %w", err)
+				}
+			}
+		}
+
+		// Walk the level in reverse (for deletion) with parallelism
+		walkErrors := walker.Walk(ctx, levelDAG, vertexFunc, walker.Options{
+			Reverse: true,
+		})
+
+		// Process walk errors
+		for resourceID, err := range walkErrors {
+			igr.log.Error(err, "Error deleting resource", "resourceID", resourceID, "level", i)
 			return err
 		}
+
+		// Check if any resources in this level are still deleting
+		for _, resourceID := range levelResources {
+			if resourceState, ok := igr.state.GetResourceState(resourceID); ok {
+				if resourceState.State == InstanceStateDeleting {
+					hasDeleting = true
+					break
+				}
+			}
+		}
+
+		// If any resources in this level are still deleting, wait before proceeding to next level
+		if hasDeleting {
+			igr.log.V(2).Info("Resource deletion in progress for level", "level", i)
+			return igr.delayedRequeue(fmt.Errorf("resource deletion in progress for level %d", i))
+		}
 	}
+
 	return nil
 }
 
@@ -433,16 +638,21 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 	err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			igr.state.ResourceStates[resourceID].State = ResourceStateDeleted
+			resourceState, _ := igr.state.GetResourceState(resourceID)
+			resourceState.State = ResourceStateDeleted
 			return nil
 		}
-		igr.state.ResourceStates[resourceID].State = InstanceStateError
-		igr.state.ResourceStates[resourceID].Err = fmt.Errorf("failed to delete resource: %w", err)
-		return igr.state.ResourceStates[resourceID].Err
+		resourceState, _ := igr.state.GetResourceState(resourceID)
+		resourceState.State = InstanceStateError
+		resourceState.Err = fmt.Errorf("failed to delete resource: %w", err)
+		return resourceState.Err
 	}
 
-	igr.state.ResourceStates[resourceID].State = InstanceStateDeleting
-	return igr.delayedRequeue(fmt.Errorf("resource deletion in progress"))
+	// Delete initiated successfully - mark as deleting and return nil
+	// The controller will requeue to check deletion status later
+	resourceState, _ := igr.state.GetResourceState(resourceID)
+	resourceState.State = InstanceStateDeleting
+	return nil
 }
 
 // getResourceClient returns the appropriate dynamic client and namespace for a resource

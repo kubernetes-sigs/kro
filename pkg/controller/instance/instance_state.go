@@ -14,7 +14,10 @@
 
 package instance
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 const (
 	InstanceStateInProgress = "IN_PROGRESS"
@@ -49,11 +52,30 @@ type InstanceState struct {
 	ResourceStates map[string]*ResourceState
 	// Any error encountered during reconciliation
 	ReconcileErr error
+	// Mutex to protect concurrent access to ResourceStates map
+	mu sync.RWMutex
 }
 
-func (s *InstanceState) ResourceErrors() error {
+// SetResourceState sets the state for a resource in a thread-safe manner
+func (i *InstanceState) SetResourceState(resourceID string, state *ResourceState) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.ResourceStates[resourceID] = state
+}
+
+// GetResourceState gets the state for a resource in a thread-safe manner
+func (i *InstanceState) GetResourceState(resourceID string) (*ResourceState, bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	state, ok := i.ResourceStates[resourceID]
+	return state, ok
+}
+
+func (i *InstanceState) ResourceErrors() error {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	var errorsSeen []error
-	for _, resourceState := range s.ResourceStates {
+	for _, resourceState := range i.ResourceStates {
 		if resourceState.Err != nil {
 			errorsSeen = append(errorsSeen, resourceState.Err)
 		}

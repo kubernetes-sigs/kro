@@ -31,8 +31,6 @@ type Graph struct {
 	Instance *Resource
 	// Resources is a map of the processed resources in the resource graph definition.
 	Resources map[string]*Resource
-	// TopologicalOrder is the topological order of the resources in the resource graph definition.
-	TopologicalOrder []string
 }
 
 // NewGraphRuntime creates a new runtime resource graph definition from the resource graph definition instance.
@@ -46,7 +44,7 @@ func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runt
 
 	instance := rgd.Instance.DeepCopy()
 	instance.originalObject = newInstance
-	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder)
+	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.DAG)
 	if err != nil {
 		return nil, err
 	}

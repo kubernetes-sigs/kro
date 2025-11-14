@@ -13,9 +13,4 @@ status:
     - status: 'True'
       observedGeneration: 1
   state: Active
-  topologicalOrder:
-    - configmap
-    - service
-    - deployment
-    - autoscaler
 

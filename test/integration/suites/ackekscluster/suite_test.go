@@ -89,23 +89,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(createdRGD.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(12)) // All resources from the generator
 
-			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
-				"clusterRole",
-				"clusterVPC",
-				"clusterInternetGateway",
-				"clusterRouteTable",
-				"clusterSubnetA",
-				"clusterSubnetB",
-				"cluster",
-				"clusterAdminRole",
-				"clusterElasticIPAddress",
-				"clusterNATGateway",
-				"clusterNodeRole",
-				"clusterNodeGroup",
-			}))
-
 			// Verify the ResourceGraphDefinition status
-			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(12))
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

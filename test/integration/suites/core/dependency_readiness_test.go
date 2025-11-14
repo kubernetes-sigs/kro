@@ -166,8 +166,6 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(3))
 
 			// Verify topological order (configmaps should come before deployment)
-			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(3))
-			g.Expect(createdRGD.Status.TopologicalOrder[2]).To(Equal("deployment"))
 
 			// Verify ready condition
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())

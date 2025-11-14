@@ -251,14 +251,27 @@ type applySet struct {
 	currentLabels      map[string]string
 	currentAnnotations map[string]string
 
+	// CONCURRENCY SAFETY:
+	// mu protects concurrent access to maps and sets below. These fields are
+	// accessed from multiple goroutines when the parallel DAG walker calls Add().
+	// The mutex MUST be held when accessing any of the protected fields.
+	mu sync.Mutex
+
+	// The following fields are protected by mu and MUST NOT be accessed without
+	// holding the lock:
+
 	// set of applyset object rest mappings
+	// Protected by mu.
 	desiredRESTMappings map[schema.GroupKind]*meta.RESTMapping
 	// set of applyset object namespaces
+	// Protected by mu.
 	desiredNamespaces sets.Set[string]
 
 	// superset of desired and old namespaces
+	// Protected by mu.
 	supersetNamespaces sets.Set[string]
 	// superset of desired and old GKs
+	// Protected by mu.
 	supersetGKs sets.Set[string]
 
 	desired *tracker
@@ -282,7 +295,9 @@ func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.
 		if namespace == "" {
 			namespace = a.parent.GetNamespace()
 		}
+		a.mu.Lock()
 		a.desiredNamespaces.Insert(namespace)
+		a.mu.Unlock()
 	case meta.RESTScopeNameRoot:
 		if obj.GetNamespace() != "" {
 			return fmt.Errorf("namespace was provided for cluster-scoped object %v %v", gvk, obj.GetName())
@@ -300,6 +315,10 @@ func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.
 func (a *applySet) getRestMapping(obj ApplyableObject) (*meta.RESTMapping, error) {
 	gvk := obj.GroupVersionKind()
 	gk := gvk.GroupKind()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	// Ensure a rest mapping exists for the object
 	_, found := a.desiredRESTMappings[gk]
 	if !found {
@@ -317,7 +336,10 @@ func (a *applySet) getRestMapping(obj ApplyableObject) (*meta.RESTMapping, error
 }
 
 func (a *applySet) resourceClient(obj Applyable) (dynamic.ResourceInterface, error) {
+	a.mu.Lock()
 	restMapping, ok := a.desiredRESTMappings[obj.GroupVersionKind().GroupKind()]
+	a.mu.Unlock()
+
 	if !ok {
 		// This should never happen, but if it does, we want to know about it.
 		return nil, fmt.Errorf("FATAL: rest mapping not found for %v", obj.GroupVersionKind())
@@ -336,6 +358,11 @@ func (a *applySet) resourceClient(obj Applyable) (dynamic.ResourceInterface, err
 	return dynResource, nil
 }
 
+// Add adds an object to the applyset for later application.
+//
+// CONCURRENCY SAFETY: This method is safe to call from multiple goroutines.
+// It internally uses mutex-protected methods (getRestMapping, getAndRecordNamespace)
+// and adds to a concurrent-safe tracker.
 func (a *applySet) Add(ctx context.Context, obj ApplyableObject) (*unstructured.Unstructured, error) {
 	restMapping, err := a.getRestMapping(obj)
 	if err != nil {

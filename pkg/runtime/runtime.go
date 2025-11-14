@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
@@ -45,11 +46,18 @@ var _ Interface = &ResourceGraphDefinitionRuntime{}
 func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
-	topologicalOrder []string,
+	dag *dag.DirectedAcyclicGraph[string],
 ) (*ResourceGraphDefinitionRuntime, error) {
+	// Derive topological order from DAG
+	topologicalOrder, err := dag.TopologicalSort()
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute topological order: %w", err)
+	}
+
 	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
+		dag:                          dag,
 		topologicalOrder:             topologicalOrder,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
@@ -113,12 +121,10 @@ func NewResourceGraphDefinitionRuntime(
 
 	// Evaluate the static variables, so that the caller only needs to call Synchronize
 	// whenever a new resource is added or a variable is updated.
-	err := r.evaluateStaticVariables()
-	if err != nil {
+	if err := r.evaluateStaticVariables(); err != nil {
 		return nil, fmt.Errorf("failed to evaluate static variables: %w", err)
 	}
-	err = r.propagateResourceVariables()
-	if err != nil {
+	if err := r.propagateResourceVariables(); err != nil {
 		return nil, fmt.Errorf("failed to propagate resource variables: %w", err)
 	}
 
@@ -161,6 +167,9 @@ type ResourceGraphDefinitionRuntime struct {
 	// vice versa.
 	expressionsCache map[string]*expressionEvaluationState
 
+	// dag is the directed acyclic graph representation of resource dependencies
+	dag *dag.DirectedAcyclicGraph[string]
+
 	// topologicalOrder holds the dependency order of resources. This order
 	// ensures that resources are processed in a way that respects their
 	// dependencies, preventing circular dependencies and ensuring efficient
@@ -175,6 +184,11 @@ type ResourceGraphDefinitionRuntime struct {
 // TopologicalOrder returns the topological order of resources.
 func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
 	return rt.topologicalOrder
+}
+
+// DAG returns the underlying dependency graph.
+func (rt *ResourceGraphDefinitionRuntime) DAG() *dag.DirectedAcyclicGraph[string] {
+	return rt.dag
 }
 
 // ResourceDescriptor returns the descriptor for a given resource id.

@@ -46,40 +46,6 @@ type Options struct {
 	Reverse bool
 }
 
-// Walk executes the DAG in parallel using a fixed worker pool.
-// This is a clean, modern implementation that:
-// - Separates topology computation from execution
-// - Uses bounded worker pools for predictable parallelism
-// - Employs atomic operations for indegree tracking
-// - Leverages errgroup for structured concurrency
-// - Maintains an immutable DAG (no dynamic graph mutation)
-//
-// CONCURRENCY MODEL:
-// Walk spawns up to opts.Parallelism goroutines that execute the provided
-// VertexFunc concurrently. The VertexFunc MUST be safe for concurrent execution.
-//
-// Thread Safety Requirements for VertexFunc:
-//  1. Any shared state accessed in fn must be protected by synchronization
-//  2. Multiple goroutines will call fn(ctx, vertexID) simultaneously
-//  3. The DAG itself is read-only and safe for concurrent access
-//  4. Vertices are only processed after all their dependencies complete
-//
-// Example of thread-safe usage:
-//
-//	var mu sync.Mutex
-//	results := make(map[string]Result)
-//
-//	vertexFunc := func(ctx context.Context, id string) error {
-//	    result := process(id)
-//	    mu.Lock()
-//	    results[id] = result
-//	    mu.Unlock()
-//	    return nil
-//	}
-//
-//	walker.Walk(ctx, dag, vertexFunc, walker.Options{})
-//
-// See docs/developer-concurrency-guide.md for detailed patterns and guidelines.
 func Walk[T cmp.Ordered](ctx context.Context, d *dag.DirectedAcyclicGraph[T], fn VertexFunc[T], opts Options) map[T]error {
 	if opts.Parallelism <= 0 {
 		opts.Parallelism = runtime.NumCPU()

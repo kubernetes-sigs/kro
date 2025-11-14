@@ -56,12 +56,10 @@ const (
 	FieldManagerForLabeler  = "kro.run/labeller"
 )
 
-var (
-	KROTooling = applyset.ToolingID{
-		Name:    "kro",
-		Version: version.GetVersionInfo().GitVersion,
-	}
-)
+var KROTooling = applyset.ToolingID{
+	Name:    "kro",
+	Version: version.GetVersionInfo().GitVersion,
+}
 
 // instanceGraphReconciler is responsible for reconciling a single instance and
 // and its associated sub-resources. It executes the reconciliation logic based
@@ -169,21 +167,6 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 // reconcileInstance handles the reconciliation of an active instance.
 // Resources are processed level-by-level, with resources in each level
 // processed in parallel once their dependencies are satisfied.
-//
-// ARCHITECTURE:
-// This uses a hybrid approach combining level-by-level progression with
-// parallel processing within each level:
-//  1. Get topological levels from DAG (groups resources by dependency depth)
-//  2. For each level sequentially:
-//     a. Create a new ApplySet for this level
-//     b. Process resources in parallel using errgroup
-//     c. Apply all resources in the level
-//     d. Wait for readiness before proceeding to next level
-//     e. Sync runtime for CEL expression evaluation
-//
-// This provides both safety (controlled progression) and performance
-// (parallel processing where safe). See docs/developer-concurrency-guide.md
-// for detailed concurrency patterns.
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
@@ -208,7 +191,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		return fmt.Errorf("failed to compute topological levels: %w", err)
 	}
 
-	igr.log.V(1).Info("Processing resources in levels", "totalLevels", len(levels))
+	igr.log.V(1).Info(fmt.Sprintf("Processing %d levels", len(levels)))
 
 	// Process each level sequentially
 	for levelNum, levelResources := range levels {
@@ -328,7 +311,6 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 	g.SetLimit(stdruntime.NumCPU()) // Limit parallelism to number of CPUs
 
 	for _, resourceID := range resourceIDs {
-		resourceID := resourceID // Capture loop variable
 		g.Go(func() error {
 			if err := vertexFunc(gCtx, resourceID); err != nil {
 				walkErrorsMu.Lock()

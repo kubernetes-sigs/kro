@@ -218,9 +218,8 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 	for len(visited) < len(vertices) {
 		var currentLevel []T
 
-		// Find all vertices whose dependencies are satisfied IN THIS ITERATION
-		// This is the key difference from the original - we only add vertices
-		// whose dependencies were satisfied in previous levels, not in the current one
+		// Only find vertices in level whose dependencies
+		// are already resolved in a previous level.
 		for _, vertex := range vertices {
 			if visited[vertex.ID] {
 				continue

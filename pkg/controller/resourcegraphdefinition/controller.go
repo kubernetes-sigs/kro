@@ -38,10 +38,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
-
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
 	allowCRDDeletion bool

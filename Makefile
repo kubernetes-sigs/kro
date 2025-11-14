@@ -89,8 +89,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-	cp config/crd/bases/* helm/crds
+	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -227,7 +226,6 @@ publish-image: ko ## Publish the kro controller images
 
 .PHONY: package-helm
 package-helm: ## Package Helm chart
-	cp ./config/crd/bases/* helm/crds/
 	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
 	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
 	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml

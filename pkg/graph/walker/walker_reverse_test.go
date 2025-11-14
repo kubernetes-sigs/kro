@@ -16,25 +16,54 @@ package walker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 )
 
-func TestWalker_ReverseSimpleChain(t *testing.T) {
-	// Create a simple chain: A -> B -> C
-	// In reverse order, should execute: C, B, A
+func TestWalkReverse_EmptyGraph(t *testing.T) {
+	d := dag.NewDirectedAcyclicGraph[string]()
+
+	executed := []string{}
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		executed = append(executed, vertexID)
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Empty(t, executed)
+}
+
+func TestWalkReverse_SingleVertex(t *testing.T) {
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+
+	executed := []string{}
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		executed = append(executed, vertexID)
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Equal(t, []string{"A"}, executed)
+}
+
+func TestWalkReverse_TwoVerticesNoDependency(t *testing.T) {
 	d := dag.NewDirectedAcyclicGraph[string]()
 	_ = d.AddVertex("A", 0)
 	_ = d.AddVertex("B", 1)
-	_ = d.AddVertex("C", 2)
-	_ = d.AddDependencies("B", []string{"A"})
-	_ = d.AddDependencies("C", []string{"B"})
 
 	var mu sync.Mutex
 	executed := []string{}
-
 	vertexFunc := func(ctx context.Context, vertexID string) error {
 		mu.Lock()
 		executed = append(executed, vertexID)
@@ -42,43 +71,63 @@ func TestWalker_ReverseSimpleChain(t *testing.T) {
 		return nil
 	}
 
-	errors := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
 
-	if len(errors) != 0 {
-		t.Errorf("expected no errors, got %v", errors)
-	}
-
-	if len(executed) != 3 {
-		t.Errorf("expected 3 vertices executed, got %d", len(executed))
-	}
-
-	// Verify execution order respects reverse dependencies
-	// C must execute before B, B must execute before A
-	indexC := indexOf(executed, "C")
-	indexB := indexOf(executed, "B")
-	indexA := indexOf(executed, "A")
-
-	if indexC == -1 || indexB == -1 || indexA == -1 {
-		t.Errorf("not all vertices were executed: %v", executed)
-	}
-
-	if indexC > indexB {
-		t.Errorf("C should execute before B in reverse order, got order: %v", executed)
-	}
-
-	if indexB > indexA {
-		t.Errorf("B should execute before A in reverse order, got order: %v", executed)
-	}
+	assert.Empty(t, errs)
+	assert.Len(t, executed, 2)
+	assert.Contains(t, executed, "A")
+	assert.Contains(t, executed, "B")
 }
 
-func TestWalker_ReverseDiamond(t *testing.T) {
-	// Create diamond pattern:
+func TestWalkReverse_ChainOfTwo(t *testing.T) {
+	// A -> B in forward
+	// B then A in reverse
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddDependencies("B", []string{"A"})
+
+	executed := []string{}
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		executed = append(executed, vertexID)
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Equal(t, []string{"B", "A"}, executed)
+}
+
+func TestWalkReverse_ChainOfThree(t *testing.T) {
+	// A -> B -> C in forward
+	// C -> B -> A in reverse
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"B"})
+
+	executed := []string{}
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		executed = append(executed, vertexID)
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Equal(t, []string{"C", "B", "A"}, executed)
+}
+
+func TestWalkReverse_DiamondPattern(t *testing.T) {
 	//     A
 	//    / \
 	//   B   C
 	//    \ /
 	//     D
-	// In reverse: D, then B and C in parallel, then A
+	// Reverse: D first, then B and C, then A
 	d := dag.NewDirectedAcyclicGraph[string]()
 	_ = d.AddVertex("A", 0)
 	_ = d.AddVertex("B", 1)
@@ -90,7 +139,6 @@ func TestWalker_ReverseDiamond(t *testing.T) {
 
 	var mu sync.Mutex
 	executed := []string{}
-
 	vertexFunc := func(ctx context.Context, vertexID string) error {
 		mu.Lock()
 		executed = append(executed, vertexID)
@@ -98,42 +146,69 @@ func TestWalker_ReverseDiamond(t *testing.T) {
 		return nil
 	}
 
-	errors := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
 
-	if len(errors) != 0 {
-		t.Errorf("expected no errors, got %v", errors)
-	}
-
-	if len(executed) != 4 {
-		t.Errorf("expected 4 vertices executed, got %d", len(executed))
-	}
-
-	// Verify D executes first
-	if executed[0] != "D" {
-		t.Errorf("D should execute first in reverse order, got: %v", executed)
-	}
-
-	// Verify A executes last
-	if executed[3] != "A" {
-		t.Errorf("A should execute last in reverse order, got: %v", executed)
-	}
-
-	// B and C should execute after D but before A
-	indexB := indexOf(executed, "B")
-	indexC := indexOf(executed, "C")
-
-	if indexB < 1 || indexB > 2 {
-		t.Errorf("B should execute in middle positions, got position %d in: %v", indexB, executed)
-	}
-
-	if indexC < 1 || indexC > 2 {
-		t.Errorf("C should execute in middle positions, got position %d in: %v", indexC, executed)
-	}
+	assert.Empty(t, errs)
+	assert.Len(t, executed, 4)
+	assert.Equal(t, "D", executed[0], "D should execute first")
+	assert.Equal(t, "A", executed[3], "A should execute last")
 }
 
-func TestWalker_ReverseWithFailure(t *testing.T) {
-	// Create a chain: A -> B -> C
-	// Fail B in reverse order, A should not execute
+func TestWalkReverse_ParallelExecutionDetected(t *testing.T) {
+	// A -> B, A -> C (B and C both depend on A)
+	// Reverse: B and C in parallel, then A
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"A"})
+
+	var mu sync.Mutex
+	concurrentExecutions := 0
+	maxConcurrent := 0
+
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		mu.Lock()
+		concurrentExecutions++
+		if concurrentExecutions > maxConcurrent {
+			maxConcurrent = concurrentExecutions
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		concurrentExecutions--
+		mu.Unlock()
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Greater(t, maxConcurrent, 1, "B and C should execute in parallel")
+}
+
+func TestWalkReverse_ErrorInVertex(t *testing.T) {
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+
+	expectedErr := errors.New("vertex A failed")
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		return expectedErr
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Len(t, errs, 1)
+	assert.Equal(t, expectedErr, errs["A"])
+}
+
+func TestWalkReverse_ErrorStopsUpstream(t *testing.T) {
+	// A -> B -> C in forward
+	// C -> B -> A in reverse
+	// B fails, so A should not execute
 	d := dag.NewDirectedAcyclicGraph[string]()
 	_ = d.AddVertex("A", 0)
 	_ = d.AddVertex("B", 1)
@@ -141,52 +216,170 @@ func TestWalker_ReverseWithFailure(t *testing.T) {
 	_ = d.AddDependencies("B", []string{"A"})
 	_ = d.AddDependencies("C", []string{"B"})
 
-	var mu sync.Mutex
 	executed := []string{}
-
 	vertexFunc := func(ctx context.Context, vertexID string) error {
-		mu.Lock()
 		executed = append(executed, vertexID)
-		mu.Unlock()
-
 		if vertexID == "B" {
-			return context.Canceled // Use any error
+			return errors.New("B failed")
 		}
 		return nil
 	}
 
-	errors := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
 
-	if len(errors) == 0 {
-		t.Error("expected errors, got none")
-	}
-
-	if _, exists := errors["B"]; !exists {
-		t.Error("expected B to have an error")
-	}
-
-	// C should execute (it has no reverse dependencies)
-	if indexOf(executed, "C") == -1 {
-		t.Error("C should have executed")
-	}
-
-	// B should execute (even though it failed)
-	if indexOf(executed, "B") == -1 {
-		t.Error("B should have executed (and failed)")
-	}
-
-	// A should NOT execute (B failed, and A depends on B in reverse)
-	if indexOf(executed, "A") != -1 {
-		t.Error("A should not have executed due to B's failure")
-	}
+	assert.Len(t, errs, 1)
+	assert.Error(t, errs["B"])
+	assert.Contains(t, executed, "C", "C should execute")
+	assert.Contains(t, executed, "B", "B should execute (and fail)")
+	assert.NotContains(t, executed, "A", "A should not execute after B fails")
 }
 
-// indexOf returns the index of item in slice, or -1 if not found
-func indexOf(slice []string, item string) int {
-	for i, v := range slice {
-		if v == item {
-			return i
+func TestWalkReverse_MultipleIndependentErrors(t *testing.T) {
+	// A -> B, A -> C
+	// Reverse: B and C fail independently
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"A"})
+
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		if vertexID == "B" || vertexID == "C" {
+			return errors.New(vertexID + " failed")
 		}
+		return nil
 	}
-	return -1
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Len(t, errs, 2)
+	assert.Error(t, errs["B"])
+	assert.Error(t, errs["C"])
+}
+
+func TestWalkReverse_ContextCancellation(t *testing.T) {
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"B"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		if vertexID == "C" {
+			cancel()
+		}
+		time.Sleep(10 * time.Millisecond)
+		return ctx.Err()
+	}
+
+	errs := Walk(ctx, d, vertexFunc, Options{Reverse: true})
+
+	assert.NotEmpty(t, errs)
+}
+
+func TestWalkReverse_ParallelismLimit(t *testing.T) {
+	// Create 4 independent vertices
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+
+	var mu sync.Mutex
+	currentConcurrent := 0
+	maxConcurrent := 0
+
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		mu.Lock()
+		currentConcurrent++
+		if currentConcurrent > maxConcurrent {
+			maxConcurrent = currentConcurrent
+		}
+		mu.Unlock()
+
+		time.Sleep(30 * time.Millisecond)
+
+		mu.Lock()
+		currentConcurrent--
+		mu.Unlock()
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true, Parallelism: 2})
+
+	assert.Empty(t, errs)
+	assert.LessOrEqual(t, maxConcurrent, 2, "should not exceed parallelism limit")
+}
+
+func TestWalkReverse_ComplexGraph(t *testing.T) {
+	//     A   B
+	//      \ / \
+	//       C   D
+	//        \ /
+	//         E
+	// Reverse: E first, then C and D, then A and B
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+	_ = d.AddVertex("E", 4)
+	_ = d.AddDependencies("C", []string{"A", "B"})
+	_ = d.AddDependencies("D", []string{"B"})
+	_ = d.AddDependencies("E", []string{"C", "D"})
+
+	var mu sync.Mutex
+	executed := []string{}
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		mu.Lock()
+		executed = append(executed, vertexID)
+		mu.Unlock()
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	assert.Len(t, executed, 5)
+
+	// Build execution order index
+	index := make(map[string]int)
+	for i, v := range executed {
+		index[v] = i
+	}
+
+	// Verify reverse dependencies
+	assert.Greater(t, index["C"], index["E"], "C should come after E in reverse")
+	assert.Greater(t, index["D"], index["E"], "D should come after E in reverse")
+	assert.Greater(t, index["A"], index["C"], "A should come after C in reverse")
+	assert.Greater(t, index["B"], index["C"], "B should come after C in reverse")
+	assert.Greater(t, index["B"], index["D"], "B should come after D in reverse")
+}
+
+func TestWalkReverse_AllVerticesExecuted(t *testing.T) {
+	d := dag.NewDirectedAcyclicGraph[string]()
+	vertices := []string{"A", "B", "C", "D"}
+	for i, v := range vertices {
+		_ = d.AddVertex(v, i)
+	}
+
+	var mu sync.Mutex
+	executed := make(map[string]bool)
+	vertexFunc := func(ctx context.Context, vertexID string) error {
+		mu.Lock()
+		executed[vertexID] = true
+		mu.Unlock()
+		return nil
+	}
+
+	errs := Walk(context.Background(), d, vertexFunc, Options{Reverse: true})
+
+	assert.Empty(t, errs)
+	for _, v := range vertices {
+		assert.True(t, executed[v], "vertex %s should be executed", v)
+	}
 }

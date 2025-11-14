@@ -98,6 +98,8 @@ type instanceGraphReconciler struct {
 // It manages the full lifecycle of the instance including creation, updates,
 // and deletion.
 func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
+	igr.log.V(2).Info("reconciling instance")
+
 	igr.state = newInstanceState()
 
 	// Create runtime - if this fails, the defer in Controller.Reconcile handles status
@@ -225,10 +227,28 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			break
 		}
 
+		// ExternalRefs are read-only - fetch them directly instead of adding to applyset
+		if igr.runtime.ResourceDescriptor(resourceID).IsExternalRef() {
+			clusterObj, err := igr.readExternalRef(ctx, resourceID, resource)
+			if err != nil {
+				resourceState.State = ResourceStateError
+				resourceState.Err = fmt.Errorf("failed to read external ref: %w", err)
+				break
+			}
+			igr.runtime.SetResource(resourceID, clusterObj)
+			igr.updateResourceReadiness(resourceID)
+			// Synchronize runtime state after each resource to re-evaluate CEL expressions
+			if _, err := igr.runtime.Synchronize(); err != nil {
+				return fmt.Errorf("failed to synchronize after reading external ref: %w", err)
+			}
+			resourceState.State = ResourceStateSynced
+			continue
+		}
+
+		// Regular resources go through the applyset
 		applyable := applyset.ApplyableObject{
 			Unstructured: resource,
 			ID:           resourceID,
-			ExternalRef:  igr.runtime.ResourceDescriptor(resourceID).IsExternalRef(),
 		}
 		clusterObj, err := aset.Add(ctx, applyable)
 		if err != nil {
@@ -273,7 +293,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	if err := result.Errors(); err != nil {
 		mark.ResourcesNotReady("there was an error while reconciling resources in the apply set: %v", err)
-		return fmt.Errorf("failed to apply/prune resources: %w", err)
+		return igr.delayedRequeue(fmt.Errorf("failed to apply/prune resources: %w", err))
 	}
 
 	if unresolvedResourceID != "" {
@@ -546,6 +566,32 @@ func (igr *instanceGraphReconciler) setUnmanaged(
 // delayedRequeue wraps an error with requeue information for the controller runtime.
 func (igr *instanceGraphReconciler) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, igr.reconcileConfig.DefaultRequeueDuration)
+}
+
+// readExternalRef fetches an external reference from the cluster.
+// External references are resources that exist outside of this instance's control.
+func (igr *instanceGraphReconciler) readExternalRef(ctx context.Context, resourceID string, resource *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	gvk := resource.GroupVersionKind()
+	restMapping, err := igr.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get REST mapping for %v: %w", gvk, err)
+	}
+
+	var dynResource dynamic.ResourceInterface
+	if restMapping.Scope.Name() == meta.RESTScopeNameNamespace {
+		namespace := igr.getResourceNamespace(resourceID)
+		dynResource = igr.client.Resource(restMapping.Resource).Namespace(namespace)
+	} else {
+		dynResource = igr.client.Resource(restMapping.Resource)
+	}
+
+	clusterObj, err := dynResource.Get(ctx, resource.GetName(), metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get external ref %s/%s: %w", resource.GetNamespace(), resource.GetName(), err)
+	}
+
+	igr.log.V(2).Info("read external ref", "gvk", gvk, "namespace", resource.GetNamespace(), "name", resource.GetName())
+	return clusterObj, nil
 }
 
 // getResourceNamespace determines the appropriate namespace for a resource.

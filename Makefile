@@ -10,6 +10,17 @@ KO_PUSH ?= true
 KO_LOCAL ?= true
 export KIND_CLUSTER_NAME ?= kro
 
+# Adapted from etcd-operator and k/k:
+# Set the GOTOOLCHAIN to force the toolchain defined in go.mod
+GOTOOLCHAIN ?= auto
+ifeq (auto,$(GOTOOLCHAIN)) # User didn't specify the GOTOOLCHAIN, or is set to auto.
+ifeq (,$(FORCE_HOST_GO)) # User didn't provide FORCE_HOST_GO, use go.mod's toolchain
+    export GOTOOLCHAIN=$(shell grep '^toolchain go' go.mod | cut -d' ' -f2)
+else # User provided FORCE_HOST_GO, use the local version
+    export GOTOOLCHAIN=local
+endif
+endif
+
 GIT_TAG ?= dirty-tag
 GIT_VERSION ?= $(shell git describe --tags --always --dirty)
 GIT_HASH ?= $(shell git rev-parse HEAD)
@@ -113,7 +124,7 @@ else
 endif
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v1.64.5
+GOLANGCI_LINT_VERSION ?= v2.6.1
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -157,7 +168,7 @@ CHAINSAW ?= $(LOCALBIN)/chainsaw
 ## Tool Versions
 KO_VERSION ?= v0.17.1
 KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.16.2
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
 CHAINSAW_VERSION ?= v0.2.12
 
 .PHONY: chainsaw

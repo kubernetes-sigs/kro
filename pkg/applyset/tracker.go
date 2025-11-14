@@ -50,10 +50,6 @@ type ApplyableObject struct {
 	// It is opaque and is passed in the callbacks as is
 	ID string
 
-	// Lifecycle hints
-	// TODO(barney-s): need to exapnd on these: https://github.com/kubernetes-sigs/kro/issues/542
-	ExternalRef bool
-
 	// lastReadRevision is the revision of the object that was last read from the cluster.
 	lastReadRevision string
 }

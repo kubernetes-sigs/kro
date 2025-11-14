@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -47,34 +48,7 @@ var _ = Describe("ExternalRef", func() {
 			Expect(env.Client.Delete(ctx, ns)).To(Succeed())
 		})
 
-		// Create a Deployment that will be referenced
-		deployment1 := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-deployment",
-				Namespace: namespace,
-			},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To[int32](2),
-				Selector: &metav1.LabelSelector{
-					MatchLabels: map[string]string{
-						"app": "test-deployment",
-					},
-				},
-				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: map[string]string{
-							"app": "test-deployment",
-						},
-					},
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{
-							{Name: "test-container", Image: "nginx"},
-						},
-					},
-				},
-			},
-		}
-		Expect(env.Client.Create(ctx, deployment1)).To(Succeed())
+		By("creating ResourceGraphDefinition with ExternalRef")
 
 		// Create ResourceGraphDefinition with ExternalRef
 		rgd := generator.NewResourceGraphDefinition("test-externalref",
@@ -128,6 +102,8 @@ var _ = Describe("ExternalRef", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		By("ensuring ResourceGraphDefinition is created and becomes active")
+
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -150,6 +126,7 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+		By("creating instance")
 		// Create instance
 		instance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
@@ -161,11 +138,90 @@ var _ = Describe("ExternalRef", func() {
 				},
 			},
 		}
+
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		// Verify Deployment is created with correct environment variables
-		deployment := &appsv1.Deployment{}
+		// this is the expected dpeloyment
+		deployment1 := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-deployment",
+				Namespace: namespace,
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr.To[int32](2),
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"app": "test-deployment",
+					},
+				},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"app": "test-deployment",
+						},
+					},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{Name: "test-container", Image: "nginx"},
+						},
+					},
+				},
+			},
+		}
+
+		By("ensuring instance is created but doesnt become ready yet because reference is missing")
 		Eventually(func(g Gomega, ctx SpecContext) {
+			instance := instance.DeepCopy()
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: instance.GetNamespace(),
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			// Verify deployment has the ConfigMap reference in envFrom
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "IN_PROGRESS"))
+
+			deployment1 := deployment1.DeepCopy()
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      deployment1.Name,
+				Namespace: deployment1.Namespace,
+			}, deployment1)).To(MatchError(errors.IsNotFound, "deployment should not be created yet"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("ensuring ResourceGraphDefinition becomes ready")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			// Verify the ResourceGraphDefinition status
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating external ref dependency")
+		Expect(env.Client.Create(ctx, deployment1)).To(Succeed())
+
+		By("ensuring instance becomes ready")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			instance := instance.DeepCopy()
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "foo-instance",
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify Deployment is created with correct environment variables
+		By("ensuring dependent deployment is created with correct environment variables")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			deployment := &appsv1.Deployment{}
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "foo-instance",
 				Namespace: namespace,

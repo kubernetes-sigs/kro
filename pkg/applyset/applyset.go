@@ -554,22 +554,29 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 		if err != nil {
 			return results, err
 		}
+
+		// Apply resources using server-side apply
 		eg.Go(func() error {
-			lastApplied, err := dynResource.Apply(egctx, obj.GetName(), obj.Unstructured, options)
+			lastApplied, err := a.applyResource(egctx, dynResource, obj, options)
 			mu.Lock()
 			defer mu.Unlock()
 			results.recordApplied(obj, lastApplied, err)
-			var appliedRevision string
-			if lastApplied != nil {
-				appliedRevision = lastApplied.GetResourceVersion()
-			}
-			a.log.V(2).Info("applied object", "object", obj.String(), "applied-revision", appliedRevision,
-				"error", err)
 			return nil
 		})
 	}
 
 	return results, eg.Wait()
+}
+
+// applyResource applies a resource to the cluster using server-side apply.
+func (a *applySet) applyResource(ctx context.Context, dynResource dynamic.ResourceInterface, obj ApplyableObject, options metav1.ApplyOptions) (*unstructured.Unstructured, error) {
+	resource, err := dynResource.Apply(ctx, obj.GetName(), obj.Unstructured, options)
+	var appliedRevision string
+	if resource != nil {
+		appliedRevision = resource.GetResourceVersion()
+	}
+	a.log.V(2).Info("applied resource", "object", obj.String(), "applied-revision", appliedRevision, "error", err)
+	return resource, err
 }
 
 func (a *applySet) prune(ctx context.Context, results *ApplyResult, dryRun bool) (*ApplyResult, error) {

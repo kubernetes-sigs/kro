@@ -1,0 +1,14 @@
+apiVersion: kro.run/v1alpha1
+kind: ExternalReferenceTest
+metadata:
+  finalizers:
+    - kro.run/finalizer
+  generation: 1
+  labels:
+    kro.run/owned: "true"
+    kro.run/resource-graph-definition-name: check-external-references
+  name: test-external-reference
+spec:
+  name: foobar
+status:
+  state: IN_PROGRESS

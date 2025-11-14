@@ -1,0 +1,4 @@
+kind: ExternalReferenceTest
+apiVersion: kro.run/v1alpha1
+metadata:
+  name: test-external-reference

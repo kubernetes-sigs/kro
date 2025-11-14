@@ -270,7 +270,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	}
 
 	err := dc.syncFunc(ctx, item, handler.(Handler))
-	if err == nil || apierrors.IsNotFound(err) {
+	if err == nil {
 		dc.queue.Forget(item)
 		return true
 	}
@@ -291,6 +291,12 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 		requeueTotal.WithLabelValues(gvrKey, "requeue_after").Inc()
 		dc.queue.AddAfter(item, typedErr.Duration())
 	default:
+		// we only check here for this not found error here because we want explicit requeue signals to have priority
+		if apierrors.IsNotFound(err) {
+			dc.log.V(1).Info("item no longer exists, dropping from queue", "item", item)
+			dc.queue.Forget(item)
+			return true
+		}
 		requeueTotal.WithLabelValues(gvrKey, "rate_limited").Inc()
 		if dc.queue.NumRequeues(item) < dc.config.QueueMaxRetries {
 			dc.log.Error(err, "Error syncing item, requeuing with rate limit", "item", item)

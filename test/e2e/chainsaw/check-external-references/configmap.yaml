@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: check-external-references
+  namespace: default
+data:
+  ECHO_VALUE: "Hello, World!"

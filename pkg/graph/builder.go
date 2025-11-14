@@ -465,7 +465,7 @@ func (b *Builder) buildInstanceResource(
 	// CRD declarations.
 
 	// The instance resource is a Kubernetes resource, so it has a GroupVersionKind.
-	gvk := metadata.GetResourceGraphDefinitionInstanceGVK(group, apiVersion, kind)
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
 
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
@@ -497,7 +497,7 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource has a set of variables that need to be resolved.
 	instance := &Resource{
 		id:     "instance",
-		gvr:    metadata.GVKtoGVR(gvk),
+		gvr:    gvr,
 		schema: instanceSchema,
 		crd:    instanceCRD,
 	}

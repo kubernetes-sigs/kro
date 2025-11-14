@@ -42,28 +42,8 @@ spec:
         labels:
           saas/tenant-id: ${schema.spec.tenantId}
       spec:
-        podSelector: {}
-        policyTypes:
-        - Ingress
-        - Egress
+        podSelector:
+          matchLabels:
         ingress:
         - from:
-          - namespaceSelector:
-              matchLabels:
-                name: ${schema.spec.tenantId}
-        egress:
-        - to:
-          - namespaceSelector:
-              matchLabels:
-                name: ${schema.spec.tenantId}
-        - to:
-          - namespaceSelector:
-              matchLabels:
-                name: kube-system
-        - to: []
-          ports:
-          - protocol: TCP
-            port: 80
-          - protocol: TCP
-            port: 443
-        - to:
+          - podSelector: {}

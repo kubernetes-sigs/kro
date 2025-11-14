@@ -344,7 +344,6 @@ var _ = Describe("Validation", func() {
 				}, rgd)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-				g.Expect(rgd.Status.TopologicalOrder).To(BeEmpty())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())

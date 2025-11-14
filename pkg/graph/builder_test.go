@@ -581,7 +581,9 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				assert.Contains(t, clusterDeps, "subnet2")
 
 				// Validate topological order
-				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, g.TopologicalOrder)
+				order, err := g.DAG.TopologicalSort()
+				assert.NoError(t, err)
+				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, order)
 			},
 		},
 		{
@@ -723,7 +725,9 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				assert.Empty(t, g.Resources["pod3"].GetDependencies())
 				assert.Empty(t, g.Resources["pod4"].GetDependencies())
 				// Order doesn't matter as they're all independent
-				assert.Len(t, g.TopologicalOrder, 4)
+				order, err := g.DAG.TopologicalSort()
+				assert.NoError(t, err)
+				assert.Len(t, order, 4)
 			},
 		},
 		{
@@ -989,20 +993,43 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				monitorDeps := []string{"cluster1", "cluster2", "cluster3"}
 				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].GetDependencies())
 
-				// Validate topological order
-				assert.Equal(t, []string{
-					"vpc",
-					"subnet1",
-					"subnet2",
-					"subnet3",
-					"secgroup",
-					"policy",
-					"role",
-					"cluster1",
-					"cluster2",
-					"cluster3",
-					"monitor",
-				}, g.TopologicalOrder)
+				// Validate topological order - check that dependencies are respected
+				// Note: The exact order within levels may vary, but dependencies must be satisfied
+				order, err := g.DAG.TopologicalSort()
+				assert.NoError(t, err)
+				assert.Len(t, order, 11)
+
+				// vpc and policy should come before their dependents
+				vpcIdx := sliceIndex(order, "vpc")
+				policyIdx := sliceIndex(order, "policy")
+
+				// subnets and secgroup depend on vpc
+				for _, resource := range []string{"subnet1", "subnet2", "subnet3", "secgroup"} {
+					assert.Less(t, vpcIdx, sliceIndex(order, resource),
+						"%s should come after vpc", resource)
+				}
+
+				// role depends on policy
+				assert.Less(t, policyIdx, sliceIndex(order, "role"),
+					"role should come after policy")
+
+				// clusters depend on role and subnets
+				roleIdx := sliceIndex(order, "role")
+				subnet1Idx := sliceIndex(order, "subnet1")
+				for _, cluster := range []string{"cluster1", "cluster2", "cluster3"} {
+					clusterIdx := sliceIndex(order, cluster)
+					assert.Less(t, roleIdx, clusterIdx,
+						"%s should come after role", cluster)
+					assert.Less(t, subnet1Idx, clusterIdx,
+						"%s should come after subnet1", cluster)
+				}
+
+				// monitor depends on all clusters
+				monitorIdx := sliceIndex(order, "monitor")
+				for _, cluster := range []string{"cluster1", "cluster2", "cluster3"} {
+					assert.Less(t, sliceIndex(order, cluster), monitorIdx,
+						"monitor should come after %s", cluster)
+				}
 			},
 		},
 		{
@@ -1835,4 +1862,14 @@ func Test_ValidateOpenAPISchema(t *testing.T) {
 			tt.validateFunc(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
 		})
 	}
+}
+
+// sliceIndex returns the index of the first occurrence of item in slice, or -1 if not found
+func sliceIndex(slice []string, item string) int {
+	for i, v := range slice {
+		if v == item {
+			return i
+		}
+	}
+	return -1
 }

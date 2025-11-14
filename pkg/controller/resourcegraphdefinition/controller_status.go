@@ -34,7 +34,6 @@ import (
 func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	ctx context.Context,
 	o *v1alpha1.ResourceGraphDefinition,
-	topologicalOrder []string,
 	resources []v1alpha1.ResourceInformation,
 ) error {
 	log, _ := logr.FromContext(ctx)
@@ -58,7 +57,6 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		dc := current.DeepCopy()
 		dc.Status.Conditions = o.Status.Conditions
 		dc.Status.State = o.Status.State
-		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
 
 		log.V(1).Info("updating resource graph definition status",

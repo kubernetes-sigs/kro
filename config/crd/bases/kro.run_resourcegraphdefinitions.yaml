@@ -301,12 +301,6 @@ spec:
               state:
                 description: State is the state of the resourcegraphdefinition
                 type: string
-              topologicalOrder:
-                description: TopologicalOrder is the topological order of the resourcegraphdefinition
-                  graph
-                items:
-                  type: string
-                type: array
             type: object
         type: object
     served: true

@@ -222,17 +222,7 @@ var _ = Describe("Conditions", func() {
 			g.Expect(createdRGD.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(6))
 
-			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
-				"deploymentA",
-				"serviceAccountA",
-				"serviceA",
-				"deploymentB",
-				"serviceAccountB",
-				"serviceB",
-			}))
-
 			// Verify the ResourceGraphDefinition status
-			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(6))
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

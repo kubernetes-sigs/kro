@@ -17,6 +17,7 @@ package applyset
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -64,6 +65,8 @@ type k8sObjectKey struct {
 }
 
 type tracker struct {
+	mu sync.Mutex // protects concurrent access to tracker fields
+
 	// objects is a list of objects we are applying.
 	objects []ApplyableObject
 
@@ -82,6 +85,9 @@ func NewTracker() *tracker {
 }
 
 func (t *tracker) Add(obj ApplyableObject) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	gvk := obj.GroupVersionKind()
 
 	// Server side uniqueness check
@@ -120,5 +126,7 @@ func (t *tracker) Add(obj ApplyableObject) error {
 }
 
 func (t *tracker) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return len(t.objects)
 }

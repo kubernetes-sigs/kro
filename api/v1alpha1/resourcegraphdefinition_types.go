@@ -135,8 +135,6 @@ const (
 type ResourceGraphDefinitionStatus struct {
 	// State is the state of the resourcegraphdefinition
 	State ResourceGraphDefinitionState `json:"state,omitempty"`
-	// TopologicalOrder is the topological order of the resourcegraphdefinition graph
-	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of an object's state
 	Conditions Conditions `json:"conditions,omitempty"`
 	// Resources represents the resources, and their information (dependencies for now)

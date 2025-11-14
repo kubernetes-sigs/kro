@@ -189,3 +189,127 @@ func checkValidTopologicalOrder(t *testing.T, d *DirectedAcyclicGraph[string], o
 		}
 	}
 }
+
+func TestDAGTopologicalSortLevels(t *testing.T) {
+	grid := []struct {
+		Name   string
+		Nodes  string
+		Edges  string
+		Levels [][]string
+	}{
+		{
+			Name:   "simple chain",
+			Nodes:  "A,B,C",
+			Edges:  "A->B,B->C",
+			Levels: [][]string{{"A"}, {"B"}, {"C"}},
+		},
+		{
+			Name:   "parallel resources",
+			Nodes:  "A,B,C",
+			Edges:  "A->C,B->C",
+			Levels: [][]string{{"A", "B"}, {"C"}},
+		},
+		{
+			Name:   "diamond pattern",
+			Nodes:  "A,B,C,D",
+			Edges:  "A->B,A->C,B->D,C->D",
+			Levels: [][]string{{"A"}, {"B", "C"}, {"D"}},
+		},
+		{
+			Name:   "no dependencies",
+			Nodes:  "A,B,C",
+			Edges:  "",
+			Levels: [][]string{{"A", "B", "C"}},
+		},
+		{
+			Name:   "complex DAG",
+			Nodes:  "A,B,C,D,E,F",
+			Edges:  "A->C,B->C,C->D,C->E,D->F,E->F",
+			Levels: [][]string{{"A", "B"}, {"C"}, {"D", "E"}, {"F"}},
+		},
+		{
+			Name:   "original order preserved within level",
+			Nodes:  "Z,Y,X,W,V,U",
+			Edges:  "Z->U,Y->U,X->U",
+			Levels: [][]string{{"Z", "Y", "X", "W", "V"}, {"U"}},
+		},
+	}
+
+	for _, g := range grid {
+		t.Run(g.Name, func(t *testing.T) {
+			d := NewDirectedAcyclicGraph[string]()
+			for i, node := range strings.Split(g.Nodes, ",") {
+				if err := d.AddVertex(node, i); err != nil {
+					t.Fatalf("adding vertex: %v", err)
+				}
+			}
+
+			if g.Edges != "" {
+				for _, edge := range strings.Split(g.Edges, ",") {
+					tokens := strings.SplitN(edge, "->", 2)
+					if err := d.AddDependencies(tokens[1], []string{tokens[0]}); err != nil {
+						t.Fatalf("adding edge %q: %v", edge, err)
+					}
+				}
+			}
+
+			levels, err := d.TopologicalSortLevels()
+			if err != nil {
+				t.Errorf("topological sort levels failed: %v", err)
+			}
+
+			if len(levels) != len(g.Levels) {
+				t.Errorf("expected %d levels, got %d", len(g.Levels), len(levels))
+				t.Logf("Expected levels: %v", g.Levels)
+				t.Logf("Got levels: %v", levels)
+				return
+			}
+
+			for i, expectedLevel := range g.Levels {
+				if len(levels[i]) != len(expectedLevel) {
+					t.Errorf("level %d: expected %d nodes, got %d", i, len(expectedLevel), len(levels[i]))
+					continue
+				}
+
+				// Check exact order within level (not just membership)
+				for j, expectedNode := range expectedLevel {
+					if levels[i][j] != expectedNode {
+						t.Errorf("level %d position %d: expected %s, got %s", i, j, expectedNode, levels[i][j])
+					}
+				}
+			}
+
+			// Verify that nodes in the same level have no dependencies on each other
+			for levelIdx, level := range levels {
+				for _, node := range level {
+					for _, otherNode := range level {
+						if node == otherNode {
+							continue
+						}
+						if _, hasDep := d.Vertices[node].DependsOn[otherNode]; hasDep {
+							t.Errorf("level %d: node %s depends on %s in the same level", levelIdx, node, otherNode)
+						}
+					}
+				}
+			}
+
+			// Verify that all dependencies of a node appear in earlier levels
+			nodeLevel := make(map[string]int)
+			for i, level := range levels {
+				for _, node := range level {
+					nodeLevel[node] = i
+				}
+			}
+
+			for _, level := range levels {
+				for _, node := range level {
+					for dep := range d.Vertices[node].DependsOn {
+						if nodeLevel[dep] >= nodeLevel[node] {
+							t.Errorf("node %s depends on %s, but %s is not in an earlier level", node, dep, dep)
+						}
+					}
+				}
+			}
+		})
+	}
+}

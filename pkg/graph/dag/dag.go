@@ -190,6 +190,80 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
 	return order, nil
 }
 
+// TopologicalSortLevels returns the vertices of the graph grouped by topological levels.
+// Each level contains vertices that have no dependencies on each other and can be
+// processed in parallel. Within each level, vertices are sorted by their original Order.
+//
+// For example, given a graph:
+//
+//	A -> C
+//	B -> C
+//	C -> D
+//
+// The result would be: [[A, B], [C], [D]]
+// where A and B can be processed in parallel, then C, then D.
+func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
+	visited := make(map[T]bool)
+	var levels [][]T
+
+	// Make a list of vertices, sorted by Order
+	vertices := make([]*Vertex[T], 0, len(d.Vertices))
+	for _, vertex := range d.Vertices {
+		vertices = append(vertices, vertex)
+	}
+	sort.Slice(vertices, func(i, j int) bool {
+		return vertices[i].Order < vertices[j].Order
+	})
+
+	for len(visited) < len(vertices) {
+		var currentLevel []T
+
+		// Find all vertices whose dependencies are satisfied IN THIS ITERATION
+		// This is the key difference from the original - we only add vertices
+		// whose dependencies were satisfied in previous levels, not in the current one
+		for _, vertex := range vertices {
+			if visited[vertex.ID] {
+				continue
+			}
+
+			allDependenciesReady := true
+			for dep := range vertex.DependsOn {
+				if !visited[dep] {
+					allDependenciesReady = false
+					break
+				}
+			}
+			if !allDependenciesReady {
+				continue
+			}
+
+			currentLevel = append(currentLevel, vertex.ID)
+		}
+
+		if len(currentLevel) == 0 {
+			// No progress made - there must be a cycle
+			hasCycle, cycle := d.hasCycle()
+			if !hasCycle {
+				// Unexpected!
+				return nil, &CycleError[T]{}
+			}
+			return nil, &CycleError[T]{
+				Cycle: cycle,
+			}
+		}
+
+		// Mark all vertices in this level as visited AFTER collecting them all
+		// This ensures that vertices in the same level don't see each other as "visited"
+		for _, id := range currentLevel {
+			visited[id] = true
+		}
+
+		levels = append(levels, currentLevel)
+	}
+
+	return levels, nil
+}
+
 func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {
 	visited := make(map[T]bool)
 	recStack := make(map[T]bool)

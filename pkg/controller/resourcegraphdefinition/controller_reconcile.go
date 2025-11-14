@@ -38,7 +38,7 @@ import (
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	ctx context.Context,
 	rgd *v1alpha1.ResourceGraphDefinition,
-) ([]string, []v1alpha1.ResourceInformation, error) {
+) ([]v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
 
@@ -47,7 +47,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	processedRGD, resourcesInfo, err := r.reconcileResourceGraphDefinitionGraph(ctx, rgd)
 	if err != nil {
 		mark.ResourceGraphInvalid(err.Error())
-		return nil, nil, err
+		return nil, err
 	}
 	mark.ResourceGraphValid()
 
@@ -55,7 +55,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	graphExecLabeler, err := r.setupLabeler(rgd)
 	if err != nil {
 		mark.FailedLabelerSetup(err.Error())
-		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
+		return nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
 	crd := processedRGD.Instance.GetCRD()
@@ -65,7 +65,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	log.V(1).Info("reconciling resource graph definition CRD")
 	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
 		mark.KindUnready(err.Error())
-		return processedRGD.TopologicalOrder, resourcesInfo, err
+		return resourcesInfo, err
 	}
 	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
 		mark.KindUnready(err.Error())
@@ -78,11 +78,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// rather than have it ignore this context and use the background context.
 	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, processedRGD, graphExecLabeler); err != nil {
 		mark.ControllerFailedToStart(err.Error())
-		return processedRGD.TopologicalOrder, resourcesInfo, err
+		return resourcesInfo, err
 	}
 	mark.ControllerRunning()
 
-	return processedRGD.TopologicalOrder, resourcesInfo, nil
+	return resourcesInfo, nil
 }
 
 func (r *ResourceGraphDefinitionReconciler) getResourceGVRsToWatchForRGD(processedRGD *graph.Graph) []schema.GroupVersionResource {

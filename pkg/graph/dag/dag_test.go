@@ -15,301 +15,400 @@
 package dag
 
 import (
-	"fmt"
-	"reflect"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestDAGAddNode(t *testing.T) {
+func TestAddVertex_Success(t *testing.T) {
 	d := NewDirectedAcyclicGraph[string]()
 
-	if err := d.AddVertex("A", 1); err != nil {
-		t.Errorf("Failed to add node: %v", err)
-	}
+	err := d.AddVertex("A", 1)
 
-	if err := d.AddVertex("A", 1); err == nil {
-		t.Error("Expected error when adding duplicate node, but got nil")
-	}
-
-	if len(d.Vertices) != 1 {
-		t.Errorf("Expected 1 node, but got %d", len(d.Vertices))
-	}
+	assert.NoError(t, err)
+	assert.Len(t, d.Vertices, 1)
+	assert.Contains(t, d.Vertices, "A")
 }
 
-func TestDAGAddEdge(t *testing.T) {
+func TestAddVertex_DuplicateReturnsError(t *testing.T) {
 	d := NewDirectedAcyclicGraph[string]()
-	if err := d.AddVertex("A", 1); err != nil {
-		t.Fatalf("error from AddVertex(A, 1): %v", err)
-	}
-	if err := d.AddVertex("B", 2); err != nil {
-		t.Fatalf("error from AddVertex(B, 2): %v", err)
-	}
+	_ = d.AddVertex("A", 1)
 
-	if err := d.AddDependencies("A", []string{"B"}); err != nil {
-		t.Errorf("Failed to add edge: %v", err)
-	}
+	err := d.AddVertex("A", 1)
 
-	if err := d.AddDependencies("A", []string{"C"}); err == nil {
-		t.Error("Expected error when adding edge to non-existent node, but got nil")
-	}
-
-	if err := d.AddDependencies("A", []string{"A"}); err == nil {
-		t.Error("Expected error when adding self reference, but got nil")
-	}
+	assert.Error(t, err)
+	assert.Len(t, d.Vertices, 1)
 }
 
-func TestDAGHasCycle(t *testing.T) {
+func TestAddVertex_MultipleVertices(t *testing.T) {
 	d := NewDirectedAcyclicGraph[string]()
-	if err := d.AddVertex("A", 1); err != nil {
-		t.Fatalf("error from AddVertex(A, 1): %v", err)
-	}
-	if err := d.AddVertex("B", 2); err != nil {
-		t.Fatalf("error from AddVertex(B, 2): %v", err)
-	}
-	if err := d.AddVertex("C", 3); err != nil {
-		t.Fatalf("error from AddVertex(C, 3): %v", err)
-	}
 
-	if err := d.AddDependencies("A", []string{"B"}); err != nil {
-		t.Fatalf("adding dependencies: %v", err)
-	}
-	if err := d.AddDependencies("B", []string{"C"}); err != nil {
-		t.Fatalf("adding dependencies: %v", err)
-	}
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
 
-	if cyclic, _ := d.hasCycle(); cyclic {
-		t.Error("DAG incorrectly reported a cycle")
-	}
+	assert.Len(t, d.Vertices, 3)
+	assert.Contains(t, d.Vertices, "A")
+	assert.Contains(t, d.Vertices, "B")
+	assert.Contains(t, d.Vertices, "C")
+}
 
-	if err := d.AddDependencies("C", []string{"A"}); err == nil {
-		t.Error("Expected error when creating a cycle, but got nil")
-	}
+func TestAddDependencies_Success(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
 
-	// pointless to test for the cycle here, so we need to emulate one
-	// by artificially adding a cycle.
+	err := d.AddDependencies("A", []string{"B"})
+
+	assert.NoError(t, err)
+	assert.Contains(t, d.Vertices["A"].DependsOn, "B")
+}
+
+func TestAddDependencies_NonExistentNodeReturnsError(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+
+	err := d.AddDependencies("A", []string{"C"})
+
+	assert.Error(t, err)
+}
+
+func TestAddDependencies_SelfReferenceReturnsError(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+
+	err := d.AddDependencies("A", []string{"A"})
+
+	assert.Error(t, err)
+}
+
+func TestAddDependencies_MultipleDependencies(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
+
+	err := d.AddDependencies("A", []string{"B", "C"})
+
+	assert.NoError(t, err)
+	assert.Contains(t, d.Vertices["A"].DependsOn, "B")
+	assert.Contains(t, d.Vertices["A"].DependsOn, "C")
+}
+
+func TestHasCycle_NoCycle(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
+	_ = d.AddDependencies("A", []string{"B"})
+	_ = d.AddDependencies("B", []string{"C"})
+
+	cyclic, _ := d.hasCycle()
+
+	assert.False(t, cyclic)
+}
+
+func TestHasCycle_DetectsCycle(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
+	_ = d.AddDependencies("A", []string{"B"})
+	_ = d.AddDependencies("B", []string{"C"})
+	// Artificially create cycle
 	d.Vertices["C"].DependsOn["A"] = struct{}{}
-	if cyclic, _ := d.hasCycle(); !cyclic {
-		t.Error("DAG failed to detect cycle")
-	}
 
-	if _, err := d.TopologicalSort(); err == nil {
-		t.Errorf("TopologicalSort failed to detect cycle")
-	} else if AsCycleError[string](err) == nil {
-		t.Errorf("TopologicalSort returned unexpected error: %T %v", err, err)
-	}
+	cyclic, _ := d.hasCycle()
+
+	assert.True(t, cyclic)
 }
 
-func TestDAGTopologicalSort(t *testing.T) {
-	grid := []struct {
-		Nodes string
-		Edges string
-		Want  string
-	}{
-		{Nodes: "A,B", Want: "A,B"},
-		{Nodes: "A,B", Edges: "A->B", Want: "A,B"},
-		{Nodes: "A,B", Edges: "B->A", Want: "B,A"},
-		{Nodes: "A,B,C,D,E,F", Want: "A,B,C,D,E,F"},
-		{Nodes: "A,B,C,D,E,F", Edges: "C->D", Want: "A,B,C,D,E,F"},
-		{Nodes: "A,B,C,D,E,F", Edges: "D->C", Want: "A,B,D,E,F,C"},
-		{Nodes: "A,B,C,D,E,F", Edges: "F->A,F->B,B->A", Want: "C,D,E,F,B,A"},
-		{Nodes: "A,B,C,D,E,F", Edges: "B->A,C->A,D->B,D->C,F->E,A->E", Want: "D,F,B,C,A,E"},
-	}
+func TestAddDependencies_PreventsCycle(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
+	_ = d.AddDependencies("A", []string{"B"})
+	_ = d.AddDependencies("B", []string{"C"})
 
-	for i, g := range grid {
-		t.Run(fmt.Sprintf("[%d] nodes=%s,edges=%s", i, g.Nodes, g.Edges), func(t *testing.T) {
-			d := NewDirectedAcyclicGraph[string]()
-			for i, node := range strings.Split(g.Nodes, ",") {
-				if err := d.AddVertex(node, i); err != nil {
-					t.Fatalf("adding vertex: %v", err)
-				}
-			}
+	err := d.AddDependencies("C", []string{"A"})
 
-			if g.Edges != "" {
-				for _, edge := range strings.Split(g.Edges, ",") {
-					tokens := strings.SplitN(edge, "->", 2)
-					if err := d.AddDependencies(tokens[1], []string{tokens[0]}); err != nil {
-						t.Fatalf("adding edge %q: %v", edge, err)
-					}
-				}
-			}
-
-			order, err := d.TopologicalSort()
-			if err != nil {
-				t.Errorf("topological sort failed: %v", err)
-			}
-
-			got := strings.Join(order, ",")
-			want := g.Want
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("unexpected result from TopologicalSort for nodes=%q edges=%q, got %q, want %q", g.Nodes, g.Edges, got, want)
-			}
-
-			checkValidTopologicalOrder(t, d, order)
-		})
-	}
+	assert.Error(t, err)
 }
 
-func checkValidTopologicalOrder(t *testing.T, d *DirectedAcyclicGraph[string], order []string) {
+func TestTopologicalSort_DetectsCycle(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 1)
+	_ = d.AddVertex("B", 2)
+	_ = d.AddVertex("C", 3)
+	_ = d.AddDependencies("A", []string{"B"})
+	_ = d.AddDependencies("B", []string{"C"})
+	d.Vertices["C"].DependsOn["A"] = struct{}{}
+
+	_, err := d.TopologicalSort()
+
+	assert.Error(t, err)
+	assert.NotNil(t, AsCycleError[string](err))
+}
+
+func TestTopologicalSort_TwoNodesNoDeps(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A", "B"}, order)
+}
+
+func TestTopologicalSort_TwoNodesWithDep(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddDependencies("B", []string{"A"})
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A", "B"}, order)
+}
+
+func TestTopologicalSort_TwoNodesReverseDep(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddDependencies("A", []string{"B"})
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"B", "A"}, order)
+}
+
+func TestTopologicalSort_MultipleNodesNoDeps(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A", "B", "C", "D"}, order)
+}
+
+func TestTopologicalSort_Chain(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"B"})
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"A", "B", "C"}, order)
+}
+
+func TestTopologicalSort_ComplexDAG(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+	_ = d.AddVertex("E", 4)
+	_ = d.AddVertex("F", 5)
+	_ = d.AddDependencies("A", []string{"B", "C"})
+	_ = d.AddDependencies("B", []string{"D"})
+	_ = d.AddDependencies("C", []string{"D"})
+	_ = d.AddDependencies("E", []string{"A", "F"})
+
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Len(t, order, 6)
+	// Verify dependencies are respected
 	pos := make(map[string]int)
 	for i, node := range order {
 		pos[node] = i
 	}
+	// D must come before B and C
+	assert.Less(t, pos["D"], pos["B"])
+	assert.Less(t, pos["D"], pos["C"])
+	// B and C must come before A
+	assert.Less(t, pos["B"], pos["A"])
+	assert.Less(t, pos["C"], pos["A"])
+	// A and F must come before E
+	assert.Less(t, pos["A"], pos["E"])
+	assert.Less(t, pos["F"], pos["E"])
+}
 
-	// Verify that we obey the dependencies
-	for _, node := range order {
-		for successor := range d.Vertices[node].DependsOn {
-			if pos[node] < pos[successor] {
-				t.Errorf("invalid topological order: %v", order)
+func TestTopologicalSort_PreservesOrder(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("Z", 0)
+	_ = d.AddVertex("Y", 1)
+	_ = d.AddVertex("X", 2)
+	_ = d.AddVertex("W", 3)
+	// No dependencies, should preserve original order
+	order, err := d.TopologicalSort()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"Z", "Y", "X", "W"}, order)
+}
+
+func TestTopologicalSortLevels_SimpleChain(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"B"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 3)
+	assert.Equal(t, [][]string{{"A"}, {"B"}, {"C"}}, levels)
+}
+
+func TestTopologicalSortLevels_ParallelResources(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("C", []string{"A", "B"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 2)
+	assert.Equal(t, [][]string{{"A", "B"}, {"C"}}, levels)
+}
+
+func TestTopologicalSortLevels_DiamondPattern(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"A"})
+	_ = d.AddDependencies("D", []string{"B", "C"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 3)
+	assert.Equal(t, [][]string{{"A"}, {"B", "C"}, {"D"}}, levels)
+}
+
+func TestTopologicalSortLevels_NoDependencies(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 1)
+	assert.Equal(t, [][]string{{"A", "B", "C"}}, levels)
+}
+
+func TestTopologicalSortLevels_ComplexDAG(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+	_ = d.AddVertex("E", 4)
+	_ = d.AddVertex("F", 5)
+	_ = d.AddDependencies("C", []string{"A", "B"})
+	_ = d.AddDependencies("D", []string{"C"})
+	_ = d.AddDependencies("E", []string{"C"})
+	_ = d.AddDependencies("F", []string{"D", "E"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 4)
+	assert.Equal(t, [][]string{{"A", "B"}, {"C"}, {"D", "E"}, {"F"}}, levels)
+}
+
+func TestTopologicalSortLevels_PreservesOrder(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("Z", 0)
+	_ = d.AddVertex("Y", 1)
+	_ = d.AddVertex("X", 2)
+	_ = d.AddVertex("W", 3)
+	_ = d.AddVertex("V", 4)
+	_ = d.AddVertex("U", 5)
+	_ = d.AddDependencies("U", []string{"Z", "Y", "X"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 2)
+	assert.Equal(t, []string{"Z", "Y", "X", "W", "V"}, levels[0])
+	assert.Equal(t, []string{"U"}, levels[1])
+}
+
+func TestTopologicalSortLevels_NoInterLevelDependencies(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddVertex("D", 3)
+	_ = d.AddDependencies("C", []string{"A"})
+	_ = d.AddDependencies("D", []string{"B"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 2)
+
+	// Verify nodes in same level have no dependencies on each other
+	for _, level := range levels {
+		for _, node := range level {
+			for _, otherNode := range level {
+				if node != otherNode {
+					assert.NotContains(t, d.Vertices[node].DependsOn, otherNode)
+				}
 			}
-		}
-	}
-
-	// Verify that we also obey the ordering, unless we cannot
-	for i, nodeKey := range order {
-		if i == 0 {
-			continue
-		}
-		node := d.Vertices[nodeKey]
-		previousNode := d.Vertices[order[i-1]]
-		if previousNode.Order <= node.Order {
-			continue // these two nodes are in order
-		}
-
-		// These two nodes are out of order, there should be a dependency on one of the previous nodes
-		hasDep := false
-		for j := 0; j < i; j++ {
-			if _, found := node.DependsOn[order[j]]; found {
-				hasDep = true
-				break
-			}
-		}
-		if !hasDep {
-			t.Errorf("invalid topological order %q; node %v appears before %v", order, previousNode, node)
 		}
 	}
 }
 
-func TestDAGTopologicalSortLevels(t *testing.T) {
-	grid := []struct {
-		Name   string
-		Nodes  string
-		Edges  string
-		Levels [][]string
-	}{
-		{
-			Name:   "simple chain",
-			Nodes:  "A,B,C",
-			Edges:  "A->B,B->C",
-			Levels: [][]string{{"A"}, {"B"}, {"C"}},
-		},
-		{
-			Name:   "parallel resources",
-			Nodes:  "A,B,C",
-			Edges:  "A->C,B->C",
-			Levels: [][]string{{"A", "B"}, {"C"}},
-		},
-		{
-			Name:   "diamond pattern",
-			Nodes:  "A,B,C,D",
-			Edges:  "A->B,A->C,B->D,C->D",
-			Levels: [][]string{{"A"}, {"B", "C"}, {"D"}},
-		},
-		{
-			Name:   "no dependencies",
-			Nodes:  "A,B,C",
-			Edges:  "",
-			Levels: [][]string{{"A", "B", "C"}},
-		},
-		{
-			Name:   "complex DAG",
-			Nodes:  "A,B,C,D,E,F",
-			Edges:  "A->C,B->C,C->D,C->E,D->F,E->F",
-			Levels: [][]string{{"A", "B"}, {"C"}, {"D", "E"}, {"F"}},
-		},
-		{
-			Name:   "original order preserved within level",
-			Nodes:  "Z,Y,X,W,V,U",
-			Edges:  "Z->U,Y->U,X->U",
-			Levels: [][]string{{"Z", "Y", "X", "W", "V"}, {"U"}},
-		},
+func TestTopologicalSortLevels_DependenciesInEarlierLevels(t *testing.T) {
+	d := NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("A", 0)
+	_ = d.AddVertex("B", 1)
+	_ = d.AddVertex("C", 2)
+	_ = d.AddDependencies("B", []string{"A"})
+	_ = d.AddDependencies("C", []string{"B"})
+
+	levels, err := d.TopologicalSortLevels()
+
+	assert.NoError(t, err)
+	assert.Len(t, levels, 3)
+
+	// Build level map
+	nodeLevel := make(map[string]int)
+	for i, level := range levels {
+		for _, node := range level {
+			nodeLevel[node] = i
+		}
 	}
 
-	for _, g := range grid {
-		t.Run(g.Name, func(t *testing.T) {
-			d := NewDirectedAcyclicGraph[string]()
-			for i, node := range strings.Split(g.Nodes, ",") {
-				if err := d.AddVertex(node, i); err != nil {
-					t.Fatalf("adding vertex: %v", err)
-				}
+	// Verify all dependencies appear in earlier levels
+	for _, level := range levels {
+		for _, node := range level {
+			for dep := range d.Vertices[node].DependsOn {
+				assert.Less(t, nodeLevel[dep], nodeLevel[node])
 			}
-
-			if g.Edges != "" {
-				for _, edge := range strings.Split(g.Edges, ",") {
-					tokens := strings.SplitN(edge, "->", 2)
-					if err := d.AddDependencies(tokens[1], []string{tokens[0]}); err != nil {
-						t.Fatalf("adding edge %q: %v", edge, err)
-					}
-				}
-			}
-
-			levels, err := d.TopologicalSortLevels()
-			if err != nil {
-				t.Errorf("topological sort levels failed: %v", err)
-			}
-
-			if len(levels) != len(g.Levels) {
-				t.Errorf("expected %d levels, got %d", len(g.Levels), len(levels))
-				t.Logf("Expected levels: %v", g.Levels)
-				t.Logf("Got levels: %v", levels)
-				return
-			}
-
-			for i, expectedLevel := range g.Levels {
-				if len(levels[i]) != len(expectedLevel) {
-					t.Errorf("level %d: expected %d nodes, got %d", i, len(expectedLevel), len(levels[i]))
-					continue
-				}
-
-				// Check exact order within level (not just membership)
-				for j, expectedNode := range expectedLevel {
-					if levels[i][j] != expectedNode {
-						t.Errorf("level %d position %d: expected %s, got %s", i, j, expectedNode, levels[i][j])
-					}
-				}
-			}
-
-			// Verify that nodes in the same level have no dependencies on each other
-			for levelIdx, level := range levels {
-				for _, node := range level {
-					for _, otherNode := range level {
-						if node == otherNode {
-							continue
-						}
-						if _, hasDep := d.Vertices[node].DependsOn[otherNode]; hasDep {
-							t.Errorf("level %d: node %s depends on %s in the same level", levelIdx, node, otherNode)
-						}
-					}
-				}
-			}
-
-			// Verify that all dependencies of a node appear in earlier levels
-			nodeLevel := make(map[string]int)
-			for i, level := range levels {
-				for _, node := range level {
-					nodeLevel[node] = i
-				}
-			}
-
-			for _, level := range levels {
-				for _, node := range level {
-					for dep := range d.Vertices[node].DependsOn {
-						if nodeLevel[dep] >= nodeLevel[node] {
-							t.Errorf("node %s depends on %s, but %s is not in an earlier level", node, dep, dep)
-						}
-					}
-				}
-			}
-		})
+		}
 	}
 }

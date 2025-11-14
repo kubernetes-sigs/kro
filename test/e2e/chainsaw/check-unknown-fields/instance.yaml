@@ -4,3 +4,5 @@ metadata:
   name: check-unknown-fields
 spec:
   name: name
+  nested:
+    field: value

@@ -727,22 +727,19 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, logger logr.L
 			var outputType *cel.Type
 			checkedAST, err := parseAndCheckCELExpression(env, expression)
 			if err != nil {
-				if templateVariable.Kind == variable.ResourceVariableKindDynamic {
-					// we are on a dynamic expression - there are cases in which
-					// the type-checker will fail to type-check the expression,
-					// but the resource can still be resolved by our ecosystem.
-					//
-					// For example, if the object is not available in the schema
-					// due to x-kubernetes-preserve-unknown-fields
-					outputType = templateVariable.ExpectedType
-					logger.V(1).Info("failed to statically type-check template expression",
-						"resource", resource.id,
-						"expression", expression,
-						"path", templateVariable.Path,
-						"error", err.Error())
-				} else {
-					return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
-				}
+				// we are on a dynamic expression - there are cases in which
+				// the type-checker will fail to type-check the expression,
+				// but the resource can still be resolved by our ecosystem.
+				//
+				// For example, if the object is not available in the schema
+				// due to x-kubernetes-preserve-unknown-fields,
+				// or when we have arbitrary object schema fields
+				outputType = cel.DynType
+				logger.V(1).Info("failed to statically type-check template expression",
+					"resource", resource.id,
+					"expression", expression,
+					"path", templateVariable.Path,
+					"error", err.Error())
 			} else {
 				outputType = checkedAST.OutputType()
 			}

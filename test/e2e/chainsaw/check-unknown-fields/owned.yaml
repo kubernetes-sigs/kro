@@ -5,3 +5,4 @@ metadata:
 data:
   foo: "bar"
   name: "name"
+  nested: "value"

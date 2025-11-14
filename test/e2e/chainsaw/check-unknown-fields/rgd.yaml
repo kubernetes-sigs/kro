@@ -8,6 +8,7 @@ spec:
     kind: AllowUnknownInstance
     spec:
       name: string
+      nested: object
   resources:
     - id: example
       template:
@@ -27,3 +28,4 @@ spec:
         data:
           foo: ${example.spec.config.foo}
           name: ${schema.spec.name}
+          nested: ${schema.spec.nested.field}

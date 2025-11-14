@@ -1,0 +1,16 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: my-rgd
+spec:
+  schema:
+    kind: MyKind
+    apiVersion: v1alpha1
+    additionalPrinterColumnPolicy: Add
+    additionalPrinterColumns:
+      - name: Foo
+        jsonPath: .status.foo
+        type: string
+      - name: Bar
+        jsonPath: .spec.bar
+        type: integer

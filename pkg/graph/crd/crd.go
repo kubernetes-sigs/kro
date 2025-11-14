@@ -27,16 +27,24 @@ import (
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas~
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, policy v1alpha1.AdditionalPrinterColumnPolicy, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	crdGroup := group
 	if crdGroup == "" {
 		crdGroup = v1alpha1.KRODomainName
 	}
-	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
+	printerColumns := newCRDAdditionalPrinterColumns(policy, additionalPrinterColumns)
+	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), printerColumns)
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
+
+	// Use defaults if no columns provided
+	printerColumns := additionalPrinterColumns
+	if len(printerColumns) == 0 {
+		printerColumns = defaultAdditionalPrinterColumns
+	}
+
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fmt.Sprintf("%s.%s", pluralKind, group),
@@ -62,7 +70,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
-					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
+					AdditionalPrinterColumns: printerColumns,
 				},
 			},
 		},
@@ -76,6 +84,8 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 	// if statusFieldsOverride is true, we will override the status fields with the default ones
 	// TODO(a-hilaly): Allow users to override the default status fields.
 	if statusFieldsOverride {
+		// Use lowercase 'state' to match the JSONPath in defaultAdditionalPrinterColumns
+		// (.status.state)
 		if _, ok := status.Properties["state"]; !ok {
 			status.Properties["state"] = defaultStateType
 		}
@@ -103,10 +113,56 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 	}
 }
 
-func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResourceColumnDefinition) []extv1.CustomResourceColumnDefinition {
-	if len(additionalPrinterColumns) == 0 {
+// newCRDAdditionalPrinterColumns determines the final set of printer columns to use
+// based on the policy and user-provided columns.
+//
+// If no user columns are provided, it always returns the default columns.
+//
+// Policy behaviors:
+//   - Replace (or empty string): User columns completely replace defaults.
+//     This gives users full control but requires them to redefine all columns.
+//   - Add: User columns are merged with defaults. User columns override defaults
+//     when they share the same Name. New columns are appended to the end.
+//     This allows users to customize specific columns while keeping others.
+//
+// Returns the final slice of printer columns to use in the CRD.
+func newCRDAdditionalPrinterColumns(
+	policy v1alpha1.AdditionalPrinterColumnPolicy,
+	userCols []extv1.CustomResourceColumnDefinition,
+) []extv1.CustomResourceColumnDefinition {
+	if len(userCols) == 0 {
 		return defaultAdditionalPrinterColumns
 	}
 
-	return additionalPrinterColumns
+	// For backwards compatibility, treat an empty policy string as Replace.
+	// This handles cases where the policy field is not set (zero value) or explicitly
+	// set to Replace. When Replace policy is used, the user-provided columns completely
+	// replace the defaults, giving users full control over the printer columns.
+	if policy == "" || policy == v1alpha1.AdditionalPrinterColumnPolicyReplace {
+		return userCols
+	}
+
+	// Add policy: merge user columns with defaults
+	// Start with defaults, then override/append user columns
+	merged := make([]extv1.CustomResourceColumnDefinition, len(defaultAdditionalPrinterColumns), len(defaultAdditionalPrinterColumns)+len(userCols))
+	copy(merged, defaultAdditionalPrinterColumns)
+
+	// Build an index by column Name for O(1) lookup
+	index := make(map[string]int, len(merged))
+	for i, c := range merged {
+		index[c.Name] = i
+	}
+
+	// Process user columns: override defaults by Name, or append if new
+	for _, u := range userCols {
+		if pos, ok := index[u.Name]; ok {
+			// Override the default column at this position
+			merged[pos] = u
+		} else {
+			// Append new column not in defaults
+			merged = append(merged, u)
+		}
+	}
+
+	return merged
 }

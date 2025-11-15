@@ -17,6 +17,7 @@ package schema
 import (
 	"fmt"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
@@ -25,6 +26,8 @@ import (
 //
 // NOTE(a-hilaly): there must be an upstream library that does this conversion, but life
 // is too short to find it. So I'm just going to write this function here.
+//
+// nolint:gocyclo // TODO(jakobmoellerdev): Revisit and kill this function
 func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Schema, error) {
 	if props == nil {
 		return nil, nil
@@ -158,6 +161,13 @@ func ConvertJSONSchemaPropsToSpecSchema(props *extv1.JSONSchemaProps) (*spec.Sch
 		} else {
 			schema.AdditionalProperties = &spec.SchemaOrBool{Allows: props.AdditionalProperties.Allows}
 		}
+	}
+
+	if props.XPreserveUnknownFields != nil && *props.XPreserveUnknownFields {
+		if schema.Extensions == nil {
+			schema.Extensions = spec.Extensions{}
+		}
+		schema.Extensions.Add(krocel.XKubernetesPreserveUnknownFields, true)
 	}
 
 	return schema, nil

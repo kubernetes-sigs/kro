@@ -103,7 +103,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
 
 		for name, schema := range opts.typedResources {
-			declType := openapi.SchemaDeclType(schema, false)
+			declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 			if declType != nil {
 				typeName := "__type_" + name
 				declType = declType.MaybeAssignTypeName(typeName)
@@ -119,7 +119,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		}
 
 		if len(declTypes) > 0 {
-			baseProvider := apiservercel.NewDeclTypeProvider(declTypes...)
+			baseProvider := NewDeclTypeProvider(declTypes...)
 			// Enable recognition of CEL reserved keywords as field names
 			baseProvider.SetRecognizeKeywordAsFieldName(true)
 
@@ -159,14 +159,14 @@ func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
 // CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
 // This is used for deep introspection of type structures when generating schemas.
 // The provider maps CEL type names to their full DeclType definitions with all fields.
-func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclTypeProvider {
+func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
 	if len(schemas) == 0 {
 		return nil
 	}
 
 	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
 	for name, schema := range schemas {
-		declType := openapi.SchemaDeclType(schema, false)
+		declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 		if declType != nil {
 			declType = declType.MaybeAssignTypeName(name)
 			declTypes = append(declTypes, declType)
@@ -177,7 +177,7 @@ func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclT
 		return nil
 	}
 
-	provider := apiservercel.NewDeclTypeProvider(declTypes...)
+	provider := NewDeclTypeProvider(declTypes...)
 	// Enable recognition of CEL reserved keywords as field names.
 	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
 	provider.SetRecognizeKeywordAsFieldName(true)

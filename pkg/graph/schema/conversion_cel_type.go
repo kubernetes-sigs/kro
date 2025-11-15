@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/utils/ptr"
@@ -25,7 +26,7 @@ import (
 
 // GenerateSchemaFromCELTypes generates a JSONSchemaProps from a map of CEL types.
 // The provider is used to recursively introspect struct types and extract all fields.
-func GenerateSchemaFromCELTypes(typeMap map[string]*cel.Type, provider *apiservercel.DeclTypeProvider) (*extv1.JSONSchemaProps, error) {
+func GenerateSchemaFromCELTypes(typeMap map[string]*cel.Type, provider *krocel.DeclTypeProvider) (*extv1.JSONSchemaProps, error) {
 	fieldDescriptors := make([]fieldDescriptor, 0, len(typeMap))
 
 	for path, celType := range typeMap {
@@ -67,7 +68,7 @@ func primitiveTypeToSchema(typeName string) (*extv1.JSONSchemaProps, bool) {
 
 // inferSchemaFromCELType converts a CEL type to an OpenAPI schema.
 // For struct types, it uses the provider to recursively extract all fields.
-func inferSchemaFromCELType(celType *cel.Type, provider *apiservercel.DeclTypeProvider) (*extv1.JSONSchemaProps, error) {
+func inferSchemaFromCELType(celType *cel.Type, provider *krocel.DeclTypeProvider) (*extv1.JSONSchemaProps, error) {
 	if celType == nil {
 		return nil, fmt.Errorf("type is nil")
 	}

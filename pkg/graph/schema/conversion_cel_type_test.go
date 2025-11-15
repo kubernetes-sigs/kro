@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -151,7 +152,7 @@ func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 		"extra":    apiservercel.NewDeclField("extra", apiservercel.DynType, false, nil, nil),
 	}
 	userType := apiservercel.NewObjectType("User", userFields)
-	provider := apiservercel.NewDeclTypeProvider(userType, addressType)
+	provider := krocel.NewDeclTypeProvider(userType, addressType)
 
 	typeMap := map[string]*cel.Type{
 		"user": userType.CelType(),

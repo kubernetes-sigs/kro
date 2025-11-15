@@ -6,6 +6,22 @@ spec:
   schema:
     apiVersion: v1alpha1
     kind: DogsvsCatsApp
+    additionalPrinterColumns:
+    - name: STATE
+      type: string
+      jsonPath: .status.state
+    - name: SYNCED
+      type: boolean
+      jsonPath: .status.synced
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    - name: VOTE URL
+      type: string
+      jsonPath: .status.voteURL
+    - name: RESULT URL
+      type: string
+      jsonPath: .status.resultURL
     spec:
       name: string
       namespace: string | default="default"
@@ -26,8 +42,8 @@ spec:
       workerReplicas: ${workerapp.status.availableReplicas}
       postgresEndpoint: ${postgres.status.endpoint}
       redisEndpoint: ${redis.status.endpoint}
-      voteURL: ${voteingress.status.loadBalancer.ingress[0].hostname}
-      resultURL: ${resultingress.status.loadBalancer.ingress[0].hostname}
+      voteURL: ${voteapp.status.url}
+      resultURL: ${resultapp.status.url}
 
   resources:
   # --- PostgreSQL Database ---
@@ -91,7 +107,7 @@ spec:
         service:
           enabled: true
         ingress:
-          enabled: false
+          enabled: true
 
   # --- Result Application ---
   - id: resultapp
@@ -114,7 +130,7 @@ spec:
         service:
           enabled: true
         ingress:
-          enabled: false
+          enabled: true
 
   # --- Worker Application ---
   - id: workerapp
@@ -135,63 +151,3 @@ spec:
         redisEndpoint: ${redis.status.endpoint}
         postgresEndpoint: ${postgres.status.endpoint}
         postgresSecretName: ${postgres.status.secretName}
-
-  # --- Vote Ingress ---
-  - id: voteingress
-    readyWhen:
-      - ${has(voteingress.status.loadBalancer)}
-      - ${has(voteingress.status.loadBalancer.ingress)}
-      - ${size(voteingress.status.loadBalancer.ingress) > 0}
-    template:
-      apiVersion: networking.k8s.io/v1
-      kind: Ingress
-      metadata:
-        name: ${schema.spec.name}-vote-ingress
-        namespace: ${schema.spec.namespace}
-        annotations:
-          alb.ingress.kubernetes.io/scheme: internet-facing
-          alb.ingress.kubernetes.io/target-type: ip
-        labels:
-          app: ${schema.spec.name}-vote
-      spec:
-        ingressClassName: alb
-        rules:
-        - http:
-            paths:
-            - path: /
-              pathType: Prefix
-              backend:
-                service:
-                  name: ${voteapp.status.serviceName}
-                  port:
-                    number: 80
-
-  # --- Result Ingress ---
-  - id: resultingress
-    readyWhen:
-      - ${has(resultingress.status.loadBalancer)}
-      - ${has(resultingress.status.loadBalancer.ingress)}
-      - ${size(resultingress.status.loadBalancer.ingress) > 0}
-    template:
-      apiVersion: networking.k8s.io/v1
-      kind: Ingress
-      metadata:
-        name: ${schema.spec.name}-result-ingress
-        namespace: ${schema.spec.namespace}
-        annotations:
-          alb.ingress.kubernetes.io/scheme: internet-facing
-          alb.ingress.kubernetes.io/target-type: ip
-        labels:
-          app: ${schema.spec.name}-result
-      spec:
-        ingressClassName: alb
-        rules:
-        - http:
-            paths:
-            - path: /
-              pathType: Prefix
-              backend:
-                service:
-                  name: ${resultapp.status.serviceName}
-                  port:
-                    number: 80

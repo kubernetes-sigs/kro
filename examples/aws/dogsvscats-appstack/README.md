@@ -32,6 +32,24 @@ This example uses the following reusable components:
 - AWS ACK controllers for EC2, RDS, and ElastiCache
 - VPC with private subnets
 
+Following is a way to deploy EKS cluster that covers all the above prerequisites:
+
+Uses the workshop bootstrap Terraform that creates an EKS cluster (Auto Mode), KRO, ACK add-ons, and ALB Controller.
+
+```bash
+# Clone the workshop bootstrap and apply
+git clone https://github.com/aws-samples/krmops-on-eks-workshop.git
+cd krmops-on-eks-workshop/kro-and-ack/bootstrap/terraform
+
+# Set your variables
+export AWS_REGION=ap-southeast-2
+export CLUSTER_NAME=agentcore-demo
+
+terraform init
+terraform apply -auto-approve \
+  -var="region=${AWS_REGION}" \
+  -var="cluster_name=${CLUSTER_NAME}"
+
 ## Create ResourceGraphDefinitions
 
 Change directory to `examples`:
@@ -125,9 +143,10 @@ dogsvscats-voting-app   ACTIVE   True     5m
 Get the URLs:
 
 ```
-echo "Vote App: http://$(kubectl get dogsvscatsapp dogsvscats-voting-app -o jsonpath='{.status.voteURL}')"
-echo "Result App: http://$(kubectl get dogsvscatsapp dogsvscats-voting-app -o jsonpath='{.status.resultURL}')"
+kubectl get dogsvscatsapp dogsvscats-voting-app
 ```
+
+This will display both the Vote App and Result App URLs in the output.
 
 Navigate to the vote URL to cast votes, then check the result URL to see the results.
 

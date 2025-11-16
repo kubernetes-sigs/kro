@@ -139,7 +139,9 @@ func (t *tracker) Len() int {
 	return len(t.objects)
 }
 
-// Objects returns a copy of all objects in a thread-safe manner
+// Objects returns a thread-safe snapshot of all tracked objects.
+// The returned slice is a copy, so callers can safely iterate or modify it
+// without worrying about concurrent changes to the underlying tracker.
 func (t *tracker) Objects() []ApplyableObject {
 	t.mu.Lock()
 	defer t.mu.Unlock()

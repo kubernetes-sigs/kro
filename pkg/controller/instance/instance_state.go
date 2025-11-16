@@ -60,14 +60,17 @@ type InstanceState struct {
 	ReconcileErr error
 }
 
-// SetResourceState sets the state for a resource in a thread-safe manner
+// SetResourceState safely sets or updates the state of a resource.
+// Thread-safe for concurrent writes.
 func (i *InstanceState) SetResourceState(resourceID string, state *ResourceState) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.ResourceStates[resourceID] = state
 }
 
-// GetResourceState gets the state for a resource in a thread-safe manner
+// GetResourceState safely retrieves the state of a resource.
+// Returns the state and a boolean indicating if it exists.
+// Thread-safe for concurrent reads.
 func (i *InstanceState) GetResourceState(resourceID string) (*ResourceState, bool) {
 	i.mu.RLock()
 	defer i.mu.RUnlock()

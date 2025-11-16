@@ -1,0 +1,2151 @@
+diff --git a/Makefile b/Makefile
+index 26e7a00..2450a6e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -89,7 +89,8 @@ help: ## Display this help.
+ 
+ .PHONY: manifests
+ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+-	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
++	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
++	cp config/crd/bases/* helm/crds
+ 
+ .PHONY: generate
+ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+@@ -226,6 +227,7 @@ publish-image: ko ## Publish the kro controller images
+ 
+ .PHONY: package-helm
+ package-helm: ## Package Helm chart
++	cp ./config/crd/bases/* helm/crds/
+ 	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
+ 	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
+ 	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+diff --git a/api/v1alpha1/resourcegraphdefinition_types.go b/api/v1alpha1/resourcegraphdefinition_types.go
+index 1c88b6d..fdbc2ca 100644
+--- a/api/v1alpha1/resourcegraphdefinition_types.go
++++ b/api/v1alpha1/resourcegraphdefinition_types.go
+@@ -16,7 +16,24 @@ package v1alpha1
+ import (
+ 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+-	"k8s.io/apimachinery/pkg/runtime"
++	runtime "k8s.io/apimachinery/pkg/runtime"
++)
++
++// AdditionalPrinterColumnPolicy defines how additional printer columns are applied to the generated CustomResourceDefinition (CRD). This policy controls whether user-provided columns replace or merge with the default columns.
++type AdditionalPrinterColumnPolicy string
++
++const (
++	// AdditionalPrinterColumnPolicyReplace specifies that the provided additional
++	// printer columns should completely replace the default columns. If no
++	// AdditionalPrinterColumns are provided or the list is empty, the system
++	// will fall back to using the default columns.
++	AdditionalPrinterColumnPolicyReplace AdditionalPrinterColumnPolicy = "Replace"
++
++	// AdditionalPrinterColumnPolicyAdd specifies that the provided additional
++	// printer columns should be appended to the default columns. When there are
++	// conflicts (columns with the same Name or JSONPath), the user-provided
++	// columns take precedence over the defaults.
++	AdditionalPrinterColumnPolicyAdd AdditionalPrinterColumnPolicy = "Add"
+ )
+ 
+ // ResourceGraphDefinitionSpec defines the desired state of ResourceGraphDefinition
+@@ -73,11 +90,23 @@ type Schema struct {
+ 	// Validation is a list of validation rules that are applied to the
+ 	// resourcegraphdefinition.
+ 	Validation []Validation `json:"validation,omitempty"`
+-	// AdditionalPrinterColumns defines additional printer columns
+-	// that will be passed down to the created CRD. If set, no
+-	// default printer columns will be added to the created CRD,
+-	// and if default printer columns need to be retained, they
+-	// need to be added explicitly.
++	// AdditionalPrinterColumnPolicy defines additional printer columns
++	// that will be passed down to the created CRD. The default policy is "Replace".
++	//
++	// AdditionalPrinterColumnPolicy controls how provided additional printer
++	// columns via AdditionalPrinterColumns are applied to the generated CRD.
++	//
++	// - "Replace": uses the provided columns as is; if no or empty AdditionalPrinterColumns are provided, fallback to the default columns.
++	// - "Add": appends the provided columns to the defaults, with user
++	//   definitions overriding defaults when they share a identifying key
++	//   (Name preferred, fallback to JSONPath).
++	//
++	// +kubebuilder:validation:Enum=Replace;Add
++	// +kubebuilder:default=Replace
++	AdditionalPrinterColumnPolicy AdditionalPrinterColumnPolicy `json:"additionalPrinterColumnPolicy,omitempty"`
++
++	// AdditionalPrinterColumns is the list of user-specified printer columns
++	// to apply according to AdditionalPrinterColumnPolicy.
+ 	//
+ 	// +kubebuilder:validation:Optional
+ 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+diff --git a/config/crd/bases/kro.run_resourcegraphdefinitions.yaml b/config/crd/bases/kro.run_resourcegraphdefinitions.yaml
+new file mode 100644
+index 0000000..9b78c48
+--- /dev/null
++++ b/config/crd/bases/kro.run_resourcegraphdefinitions.yaml
+@@ -0,0 +1,329 @@
++---
++apiVersion: apiextensions.k8s.io/v1
++kind: CustomResourceDefinition
++metadata:
++  annotations:
++    controller-gen.kubebuilder.io/version: v0.19.0
++  name: resourcegraphdefinitions.kro.run
++spec:
++  group: kro.run
++  names:
++    kind: ResourceGraphDefinition
++    listKind: ResourceGraphDefinitionList
++    plural: resourcegraphdefinitions
++    shortNames:
++    - rgd
++    singular: resourcegraphdefinition
++  scope: Cluster
++  versions:
++  - additionalPrinterColumns:
++    - jsonPath: .spec.schema.apiVersion
++      name: APIVERSION
++      type: string
++    - jsonPath: .spec.schema.kind
++      name: KIND
++      type: string
++    - jsonPath: .status.state
++      name: STATE
++      type: string
++    - jsonPath: .status.topologicalOrder
++      name: TOPOLOGICALORDER
++      priority: 1
++      type: string
++    - jsonPath: .metadata.creationTimestamp
++      name: AGE
++      type: date
++    name: v1alpha1
++    schema:
++      openAPIV3Schema:
++        description: ResourceGraphDefinition is the Schema for the resourcegraphdefinitions
++          API
++        properties:
++          apiVersion:
++            description: |-
++              APIVersion defines the versioned schema of this representation of an object.
++              Servers should convert recognized schemas to the latest internal value, and
++              may reject unrecognized values.
++              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
++            type: string
++          kind:
++            description: |-
++              Kind is a string value representing the REST resource this object represents.
++              Servers may infer this from the endpoint the client submits requests to.
++              Cannot be updated.
++              In CamelCase.
++              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
++            type: string
++          metadata:
++            type: object
++          spec:
++            description: ResourceGraphDefinitionSpec defines the desired state of
++              ResourceGraphDefinition
++            properties:
++              resources:
++                description: The resources that are part of the resourcegraphdefinition.
++                items:
++                  properties:
++                    externalRef:
++                      description: |-
++                        ExternalRef is a reference to an external resource.
++                        It allows the user to specify the Kind, Version, Name and Namespace of the resource
++                        to be read and used in the Graph.
++                      properties:
++                        apiVersion:
++                          type: string
++                        kind:
++                          type: string
++                        metadata:
++                          properties:
++                            name:
++                              type: string
++                            namespace:
++                              type: string
++                          required:
++                          - name
++                          - namespace
++                          type: object
++                      required:
++                      - apiVersion
++                      - kind
++                      - metadata
++                      type: object
++                    id:
++                      type: string
++                    includeWhen:
++                      items:
++                        type: string
++                      type: array
++                    readyWhen:
++                      items:
++                        type: string
++                      type: array
++                    template:
++                      type: object
++                      x-kubernetes-preserve-unknown-fields: true
++                  required:
++                  - id
++                  type: object
++                  x-kubernetes-validations:
++                  - message: exactly one of template or externalRef must be provided
++                    rule: (has(self.template) && !has(self.externalRef)) || (!has(self.template)
++                      && has(self.externalRef))
++                type: array
++              schema:
++                description: |-
++                  The schema of the resourcegraphdefinition, which includes the
++                  apiVersion, kind, spec, status, types, and some validation
++                  rules.
++                properties:
++                  additionalPrinterColumnPolicy:
++                    default: Replace
++                    description: |-
++                      AdditionalPrinterColumnPolicy defines additional printer columns
++                      that will be passed down to the created CRD. The default policy is "Replace".
++
++                      AdditionalPrinterColumnPolicy controls how provided additional printer
++                      columns via AdditionalPrinterColumns are applied to the generated CRD.
++
++                      - "Replace": uses the provided columns as is; if no or empty AdditionalPrinterColumns are provided, fallback to the default columns.
++                      - "Add": appends the provided columns to the defaults, with user
++                        definitions overriding defaults when they share a identifying key
++                        (Name preferred, fallback to JSONPath).
++                    enum:
++                    - Replace
++                    - Add
++                    type: string
++                  additionalPrinterColumns:
++                    description: |-
++                      AdditionalPrinterColumns is the list of user-specified printer columns
++                      to apply according to AdditionalPrinterColumnPolicy.
++                    items:
++                      description: CustomResourceColumnDefinition specifies a column
++                        for server side printing.
++                      properties:
++                        description:
++                          description: description is a human readable description
++                            of this column.
++                          type: string
++                        format:
++                          description: |-
++                            format is an optional OpenAPI type definition for this column. The 'name' format is applied
++                            to the primary identifier column to assist in clients identifying column is the resource name.
++                            See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
++                          type: string
++                        jsonPath:
++                          description: |-
++                            jsonPath is a simple JSON path (i.e. with array notation) which is evaluated against
++                            each custom resource to produce the value for this column.
++                          type: string
++                        name:
++                          description: name is a human readable name for the column.
++                          type: string
++                        priority:
++                          description: |-
++                            priority is an integer defining the relative importance of this column compared to others. Lower
++                            numbers are considered higher priority. Columns that may be omitted in limited space scenarios
++                            should be given a priority greater than 0.
++                          format: int32
++                          type: integer
++                        type:
++                          description: |-
++                            type is an OpenAPI type definition for this column.
++                            See https://github.com/OAI/OpenAPI-Specification/blob/master/versions/2.0.md#data-types for details.
++                          type: string
++                      required:
++                      - jsonPath
++                      - name
++                      - type
++                      type: object
++                    type: array
++                  apiVersion:
++                    description: |-
++                      The APIVersion of the resourcegraphdefinition. This is used to generate
++                      and create the CRD for the resourcegraphdefinition.
++                    pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
++                    type: string
++                    x-kubernetes-validations:
++                    - message: apiVersion is immutable
++                      rule: self == oldSelf
++                  group:
++                    default: kro.run
++                    description: |-
++                      The group of the resourcegraphdefinition. This is used to set the API group
++                      of the generated CRD. If omitted, it defaults to "kro.run".
++                    type: string
++                  kind:
++                    description: |-
++                      The kind of the resourcegraphdefinition. This is used to generate
++                      and create the CRD for the resourcegraphdefinition.
++                    pattern: ^[A-Z][a-zA-Z0-9]{0,62}$
++                    type: string
++                    x-kubernetes-validations:
++                    - message: kind is immutable
++                      rule: self == oldSelf
++                  spec:
++                    description: |-
++                      The spec of the resourcegraphdefinition. Typically, this is the spec of
++                      the CRD that the resourcegraphdefinition is managing. This is adhering
++                      to the SimpleSchema spec
++                    type: object
++                    x-kubernetes-preserve-unknown-fields: true
++                  status:
++                    description: |-
++                      The status of the resourcegraphdefinition. This is the status of the CRD
++                      that the resourcegraphdefinition is managing. This is adhering to the
++                      SimpleSchema spec.
++                    type: object
++                    x-kubernetes-preserve-unknown-fields: true
++                  types:
++                    description: |-
++                      Types is a map of custom type definitions. These can be used in the spec
++                      of the resourcegraphdefinition. Each type definition is also adhering to
++                      the SimpleSchema spec.
++                    type: object
++                    x-kubernetes-preserve-unknown-fields: true
++                  validation:
++                    description: |-
++                      Validation is a list of validation rules that are applied to the
++                      resourcegraphdefinition.
++                    items:
++                      properties:
++                        expression:
++                          type: string
++                        message:
++                          type: string
++                      type: object
++                    type: array
++                required:
++                - apiVersion
++                - kind
++                type: object
++            required:
++            - schema
++            type: object
++          status:
++            description: ResourceGraphDefinitionStatus defines the observed state
++              of ResourceGraphDefinition
++            properties:
++              conditions:
++                description: Conditions represent the latest available observations
++                  of an object's state
++                items:
++                  description: |-
++                    Condition is the common struct used by all CRDs managed by ACK service
++                    controllers to indicate terminal states  of the CR and its backend AWS
++                    service API resource
++                  properties:
++                    lastTransitionTime:
++                      description: Last time the condition transitioned from one status
++                        to another.
++                      format: date-time
++                      type: string
++                    message:
++                      description: A human-readable message indicating details about
++                        the transition.
++                      type: string
++                    observedGeneration:
++                      description: |-
++                        observedGeneration represents the .metadata.generation that the condition was set based upon.
++                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
++                        with respect to the current state of the instance.
++                      format: int64
++                      minimum: 0
++                      type: integer
++                    reason:
++                      description: The reason for the condition's last transition.
++                      type: string
++                    status:
++                      description: Status of the condition, one of True, False, Unknown.
++                      type: string
++                    type:
++                      description: Type is the type of the Condition
++                      type: string
++                  required:
++                  - status
++                  - type
++                  type: object
++                type: array
++              resources:
++                description: Resources represents the resources, and their information
++                  (dependencies for now)
++                items:
++                  description: |-
++                    ResourceInformation defines the information about a resource
++                    in the resourcegraphdefinition
++                  properties:
++                    dependencies:
++                      description: Dependencies represents the resource dependencies
++                        of a resource graph definition
++                      items:
++                        description: |-
++                          Dependency defines the dependency a resource has observed
++                          from the resources it points to based on expressions
++                        properties:
++                          id:
++                            description: ID represents the id of the dependency resource
++                            type: string
++                        type: object
++                      type: array
++                    id:
++                      description: ID represents the id of the resources we're providing
++                        information for
++                      type: string
++                  type: object
++                type: array
++              state:
++                description: State is the state of the resourcegraphdefinition
++                type: string
++              topologicalOrder:
++                description: TopologicalOrder is the topological order of the resourcegraphdefinition
++                  graph
++                items:
++                  type: string
++                type: array
++            type: object
++        type: object
++    served: true
++    storage: true
++    subresources:
++      status: {}
+diff --git a/config/crd/kustomization.yaml b/config/crd/kustomization.yaml
+new file mode 100644
+index 0000000..b95b8c8
+--- /dev/null
++++ b/config/crd/kustomization.yaml
+@@ -0,0 +1,23 @@
++# This kustomization.yaml is not intended to be run by itself,
++# since it depends on service name and namespace that are out of this kustomize package.
++# It should be run by config/default
++resources:
++- bases/kro.run_resourcegraphdefinitions.yaml
++#+kubebuilder:scaffold:crdkustomizeresource
++
++patches:
++# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
++# patches here are for enabling the conversion webhook for each CRD
++#- path: patches/webhook_in_resourcegraphdefinitions.yaml
++#+kubebuilder:scaffold:crdkustomizewebhookpatch
++
++# [CERTMANAGER] To enable cert-manager, uncomment all the sections with [CERTMANAGER] prefix.
++# patches here are for enabling the CA injection for each CRD
++#- path: patches/cainjection_in_resourcegraphdefinitions.yaml
++#+kubebuilder:scaffold:crdkustomizecainjectionpatch
++
++# [WEBHOOK] To enable webhook, uncomment the following section
++# the following config is for teaching kustomize how to do kustomization for CRDs.
++
++#configurations:
++#- kustomizeconfig.yaml
+diff --git a/config/crd/kustomizeconfig.yaml b/config/crd/kustomizeconfig.yaml
+new file mode 100644
+index 0000000..ec5c150
+--- /dev/null
++++ b/config/crd/kustomizeconfig.yaml
+@@ -0,0 +1,19 @@
++# This file is for teaching kustomize how to substitute name and namespace reference in CRD
++nameReference:
++- kind: Service
++  version: v1
++  fieldSpecs:
++  - kind: CustomResourceDefinition
++    version: v1
++    group: apiextensions.k8s.io
++    path: spec/conversion/webhook/clientConfig/service/name
++
++namespace:
++- kind: CustomResourceDefinition
++  version: v1
++  group: apiextensions.k8s.io
++  path: spec/conversion/webhook/clientConfig/service/namespace
++  create: false
++
++varReference:
++- path: metadata/annotations
+diff --git a/config/default/kustomization.yaml b/config/default/kustomization.yaml
+new file mode 100644
+index 0000000..b54ab7a
+--- /dev/null
++++ b/config/default/kustomization.yaml
+@@ -0,0 +1,142 @@
++# Adds namespace to all resources.
++namespace: kro-system
++
++# Value of this field is prepended to the
++# names of all resources, e.g. a deployment named
++# "wordpress" becomes "alices-wordpress".
++# Note that it should also match with the prefix (text before '-') of the namespace
++# field above.
++namePrefix: kro-
++
++# Labels to add to all resources and selectors.
++#labels:
++#- includeSelectors: true
++#  pairs:
++#    someName: someValue
++
++resources:
++- ../crd
++- ../rbac
++- ../manager
++# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
++# crd/kustomization.yaml
++#- ../webhook
++# [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'. 'WEBHOOK' components are required.
++#- ../certmanager
++# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
++#- ../prometheus
++
++patches:
++# Protect the /metrics endpoint by putting it behind auth.
++# If you want your controller-manager to expose the /metrics
++# endpoint w/o any authn/z, please comment the following line.
++- path: manager_auth_proxy_patch.yaml
++
++# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
++# crd/kustomization.yaml
++#- path: manager_webhook_patch.yaml
++
++# [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'.
++# Uncomment 'CERTMANAGER' sections in crd/kustomization.yaml to enable the CA injection in the admission webhooks.
++# 'CERTMANAGER' needs to be enabled to use ca injection
++#- path: webhookcainjection_patch.yaml
++
++# [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER' prefix.
++# Uncomment the following replacements to add the cert-manager CA injection annotations
++#replacements:
++#  - source: # Add cert-manager annotation to ValidatingWebhookConfiguration, MutatingWebhookConfiguration and CRDs
++#      kind: Certificate
++#      group: cert-manager.io
++#      version: v1
++#      name: serving-cert # this name should match the one in certificate.yaml
++#      fieldPath: .metadata.namespace # namespace of the certificate CR
++#    targets:
++#      - select:
++#          kind: ValidatingWebhookConfiguration
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 0
++#          create: true
++#      - select:
++#          kind: MutatingWebhookConfiguration
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 0
++#          create: true
++#      - select:
++#          kind: CustomResourceDefinition
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 0
++#          create: true
++#  - source:
++#      kind: Certificate
++#      group: cert-manager.io
++#      version: v1
++#      name: serving-cert # this name should match the one in certificate.yaml
++#      fieldPath: .metadata.name
++#    targets:
++#      - select:
++#          kind: ValidatingWebhookConfiguration
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 1
++#          create: true
++#      - select:
++#          kind: MutatingWebhookConfiguration
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 1
++#          create: true
++#      - select:
++#          kind: CustomResourceDefinition
++#        fieldPaths:
++#          - .metadata.annotations.[cert-manager.io/inject-ca-from]
++#        options:
++#          delimiter: '/'
++#          index: 1
++#          create: true
++#  - source: # Add cert-manager annotation to the webhook Service
++#      kind: Service
++#      version: v1
++#      name: webhook-service
++#      fieldPath: .metadata.name # namespace of the service
++#    targets:
++#      - select:
++#          kind: Certificate
++#          group: cert-manager.io
++#          version: v1
++#        fieldPaths:
++#          - .spec.dnsNames.0
++#          - .spec.dnsNames.1
++#        options:
++#          delimiter: '.'
++#          index: 0
++#          create: true
++#  - source:
++#      kind: Service
++#      version: v1
++#      name: webhook-service
++#      fieldPath: .metadata.namespace # namespace of the service
++#    targets:
++#      - select:
++#          kind: Certificate
++#          group: cert-manager.io
++#          version: v1
++#        fieldPaths:
++#          - .spec.dnsNames.0
++#          - .spec.dnsNames.1
++#        options:
++#          delimiter: '.'
++#          index: 1
++#          create: true
+diff --git a/config/default/manager_auth_proxy_patch.yaml b/config/default/manager_auth_proxy_patch.yaml
+new file mode 100644
+index 0000000..70c3437
+--- /dev/null
++++ b/config/default/manager_auth_proxy_patch.yaml
+@@ -0,0 +1,39 @@
++# This patch inject a sidecar container which is a HTTP proxy for the
++# controller manager, it performs RBAC authorization against the Kubernetes API using SubjectAccessReviews.
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: controller-manager
++  namespace: system
++spec:
++  template:
++    spec:
++      containers:
++      - name: kube-rbac-proxy
++        securityContext:
++          allowPrivilegeEscalation: false
++          capabilities:
++            drop:
++            - "ALL"
++        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
++        args:
++        - "--secure-listen-address=0.0.0.0:8443"
++        - "--upstream=http://127.0.0.1:8080/"
++        - "--logtostderr=true"
++        - "--v=0"
++        ports:
++        - containerPort: 8443
++          protocol: TCP
++          name: https
++        resources:
++          limits:
++            cpu: 500m
++            memory: 128Mi
++          requests:
++            cpu: 5m
++            memory: 64Mi
++      - name: manager
++        args:
++        - "--health-probe-bind-address=:8081"
++        - "--metrics-bind-address=127.0.0.1:8080"
++        - "--leader-elect"
+diff --git a/config/default/manager_config_patch.yaml b/config/default/manager_config_patch.yaml
+new file mode 100644
+index 0000000..f6f5891
+--- /dev/null
++++ b/config/default/manager_config_patch.yaml
+@@ -0,0 +1,10 @@
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: controller-manager
++  namespace: system
++spec:
++  template:
++    spec:
++      containers:
++      - name: manager
+diff --git a/config/manager/kustomization.yaml b/config/manager/kustomization.yaml
+new file mode 100644
+index 0000000..5c5f0b8
+--- /dev/null
++++ b/config/manager/kustomization.yaml
+@@ -0,0 +1,2 @@
++resources:
++- manager.yaml
+diff --git a/config/manager/manager.yaml b/config/manager/manager.yaml
+new file mode 100644
+index 0000000..58ce055
+--- /dev/null
++++ b/config/manager/manager.yaml
+@@ -0,0 +1,102 @@
++apiVersion: v1
++kind: Namespace
++metadata:
++  labels:
++    control-plane: controller-manager
++    app.kubernetes.io/name: namespace
++    app.kubernetes.io/instance: system
++    app.kubernetes.io/component: manager
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: system
++---
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: controller-manager
++  namespace: system
++  labels:
++    control-plane: controller-manager
++    app.kubernetes.io/name: deployment
++    app.kubernetes.io/instance: controller-manager
++    app.kubernetes.io/component: manager
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++spec:
++  selector:
++    matchLabels:
++      control-plane: controller-manager
++  replicas: 1
++  template:
++    metadata:
++      annotations:
++        kubectl.kubernetes.io/default-container: manager
++      labels:
++        control-plane: controller-manager
++    spec:
++      # TODO(user): Uncomment the following code to configure the nodeAffinity expression
++      # according to the platforms which are supported by your solution.
++      # It is considered best practice to support multiple architectures. You can
++      # build your manager image using the makefile target docker-buildx.
++      # affinity:
++      #   nodeAffinity:
++      #     requiredDuringSchedulingIgnoredDuringExecution:
++      #       nodeSelectorTerms:
++      #         - matchExpressions:
++      #           - key: kubernetes.io/arch
++      #             operator: In
++      #             values:
++      #               - amd64
++      #               - arm64
++      #               - ppc64le
++      #               - s390x
++      #           - key: kubernetes.io/os
++      #             operator: In
++      #             values:
++      #               - linux
++      securityContext:
++        runAsNonRoot: true
++        # TODO(user): For common cases that do not require escalating privileges
++        # it is recommended to ensure that all your Pods/Containers are restrictive.
++        # More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
++        # Please uncomment the following code if your project does NOT have to work on old Kubernetes
++        # versions < 1.19 or on vendors versions which do NOT support this field by default (i.e. Openshift < 4.11 ).
++        # seccompProfile:
++        #   type: RuntimeDefault
++      containers:
++      - command:
++        - /manager
++        args:
++        - --leader-elect
++        image: controller:latest
++        name: manager
++        securityContext:
++          allowPrivilegeEscalation: false
++          capabilities:
++            drop:
++            - "ALL"
++        livenessProbe:
++          httpGet:
++            path: /healthz
++            port: 8081
++          initialDelaySeconds: 15
++          periodSeconds: 20
++        readinessProbe:
++          httpGet:
++            path: /readyz
++            port: 8081
++          initialDelaySeconds: 5
++          periodSeconds: 10
++        # TODO(user): Configure the resources accordingly based on the project requirements.
++        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
++        resources:
++          limits:
++            cpu: 500m
++            memory: 128Mi
++          requests:
++            cpu: 10m
++            memory: 64Mi
++      serviceAccountName: controller-manager
++      terminationGracePeriodSeconds: 10
+diff --git a/config/prometheus/kustomization.yaml b/config/prometheus/kustomization.yaml
+new file mode 100644
+index 0000000..ed13716
+--- /dev/null
++++ b/config/prometheus/kustomization.yaml
+@@ -0,0 +1,2 @@
++resources:
++- monitor.yaml
+diff --git a/config/prometheus/monitor.yaml b/config/prometheus/monitor.yaml
+new file mode 100644
+index 0000000..6b5a6e4
+--- /dev/null
++++ b/config/prometheus/monitor.yaml
+@@ -0,0 +1,25 @@
++# Prometheus Monitor Service (Metrics)
++apiVersion: monitoring.coreos.com/v1
++kind: ServiceMonitor
++metadata:
++  labels:
++    control-plane: controller-manager
++    app.kubernetes.io/name: servicemonitor
++    app.kubernetes.io/instance: controller-manager-metrics-monitor
++    app.kubernetes.io/component: metrics
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: controller-manager-metrics-monitor
++  namespace: system
++spec:
++  endpoints:
++    - path: /metrics
++      port: https
++      scheme: https
++      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
++      tlsConfig:
++        insecureSkipVerify: true
++  selector:
++    matchLabels:
++      control-plane: controller-manager
+diff --git a/config/rbac/abstraction_editor_role.yaml b/config/rbac/abstraction_editor_role.yaml
+new file mode 100644
+index 0000000..1c02105
+--- /dev/null
++++ b/config/rbac/abstraction_editor_role.yaml
+@@ -0,0 +1,31 @@
++# permissions for end users to edit resourcegraphdefinitions.
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrole
++    app.kubernetes.io/instance: resourcegraphdefinition-editor-role
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: resourcegraphdefinition-editor-role
++rules:
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions
++  verbs:
++  - create
++  - delete
++  - get
++  - list
++  - patch
++  - update
++  - watch
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions/status
++  verbs:
++  - get
+diff --git a/config/rbac/abstraction_viewer_role.yaml b/config/rbac/abstraction_viewer_role.yaml
+new file mode 100644
+index 0000000..04c4333
+--- /dev/null
++++ b/config/rbac/abstraction_viewer_role.yaml
+@@ -0,0 +1,27 @@
++# permissions for end users to view resourcegraphdefinitions.
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrole
++    app.kubernetes.io/instance: resourcegraphdefinition-viewer-role
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: resourcegraphdefinition-viewer-role
++rules:
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions
++  verbs:
++  - get
++  - list
++  - watch
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions/status
++  verbs:
++  - get
+diff --git a/config/rbac/auth_proxy_client_clusterrole.yaml b/config/rbac/auth_proxy_client_clusterrole.yaml
+new file mode 100644
+index 0000000..9ec9446
+--- /dev/null
++++ b/config/rbac/auth_proxy_client_clusterrole.yaml
+@@ -0,0 +1,16 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrole
++    app.kubernetes.io/instance: metrics-reader
++    app.kubernetes.io/component: kube-rbac-proxy
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: metrics-reader
++rules:
++- nonResourceURLs:
++  - "/metrics"
++  verbs:
++  - get
+diff --git a/config/rbac/auth_proxy_role.yaml b/config/rbac/auth_proxy_role.yaml
+new file mode 100644
+index 0000000..e299954
+--- /dev/null
++++ b/config/rbac/auth_proxy_role.yaml
+@@ -0,0 +1,24 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrole
++    app.kubernetes.io/instance: proxy-role
++    app.kubernetes.io/component: kube-rbac-proxy
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: proxy-role
++rules:
++- apiGroups:
++  - authentication.k8s.io
++  resources:
++  - tokenreviews
++  verbs:
++  - create
++- apiGroups:
++  - authorization.k8s.io
++  resources:
++  - subjectaccessreviews
++  verbs:
++  - create
+diff --git a/config/rbac/auth_proxy_role_binding.yaml b/config/rbac/auth_proxy_role_binding.yaml
+new file mode 100644
+index 0000000..2db62dc
+--- /dev/null
++++ b/config/rbac/auth_proxy_role_binding.yaml
+@@ -0,0 +1,19 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRoleBinding
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrolebinding
++    app.kubernetes.io/instance: proxy-rolebinding
++    app.kubernetes.io/component: kube-rbac-proxy
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: proxy-rolebinding
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: ClusterRole
++  name: proxy-role
++subjects:
++- kind: ServiceAccount
++  name: controller-manager
++  namespace: system
+diff --git a/config/rbac/auth_proxy_service.yaml b/config/rbac/auth_proxy_service.yaml
+new file mode 100644
+index 0000000..60baa8d
+--- /dev/null
++++ b/config/rbac/auth_proxy_service.yaml
+@@ -0,0 +1,21 @@
++apiVersion: v1
++kind: Service
++metadata:
++  labels:
++    control-plane: controller-manager
++    app.kubernetes.io/name: service
++    app.kubernetes.io/instance: controller-manager-metrics-service
++    app.kubernetes.io/component: kube-rbac-proxy
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: controller-manager-metrics-service
++  namespace: system
++spec:
++  ports:
++  - name: https
++    port: 8443
++    protocol: TCP
++    targetPort: https
++  selector:
++    control-plane: controller-manager
+diff --git a/config/rbac/kustomization.yaml b/config/rbac/kustomization.yaml
+new file mode 100644
+index 0000000..731832a
+--- /dev/null
++++ b/config/rbac/kustomization.yaml
+@@ -0,0 +1,18 @@
++resources:
++# All RBAC will be applied under this service account in
++# the deployment namespace. You may comment out this resource
++# if your manager will use a service account that exists at
++# runtime. Be sure to update RoleBinding and ClusterRoleBinding
++# subjects if changing service account names.
++- service_account.yaml
++- role.yaml
++- role_binding.yaml
++- leader_election_role.yaml
++- leader_election_role_binding.yaml
++# Comment the following 4 lines if you want to disable
++# the auth proxy (https://github.com/brancz/kube-rbac-proxy)
++# which protects your /metrics endpoint.
++- auth_proxy_service.yaml
++- auth_proxy_role.yaml
++- auth_proxy_role_binding.yaml
++- auth_proxy_client_clusterrole.yaml
+diff --git a/config/rbac/leader_election_role.yaml b/config/rbac/leader_election_role.yaml
+new file mode 100644
+index 0000000..7a5914a
+--- /dev/null
++++ b/config/rbac/leader_election_role.yaml
+@@ -0,0 +1,44 @@
++# permissions to do leader election.
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  labels:
++    app.kubernetes.io/name: role
++    app.kubernetes.io/instance: leader-election-role
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: leader-election-role
++rules:
++- apiGroups:
++  - ""
++  resources:
++  - configmaps
++  verbs:
++  - get
++  - list
++  - watch
++  - create
++  - update
++  - patch
++  - delete
++- apiGroups:
++  - coordination.k8s.io
++  resources:
++  - leases
++  verbs:
++  - get
++  - list
++  - watch
++  - create
++  - update
++  - patch
++  - delete
++- apiGroups:
++  - ""
++  resources:
++  - events
++  verbs:
++  - create
++  - patch
+diff --git a/config/rbac/leader_election_role_binding.yaml b/config/rbac/leader_election_role_binding.yaml
+new file mode 100644
+index 0000000..f7ee45b
+--- /dev/null
++++ b/config/rbac/leader_election_role_binding.yaml
+@@ -0,0 +1,19 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: RoleBinding
++metadata:
++  labels:
++    app.kubernetes.io/name: rolebinding
++    app.kubernetes.io/instance: leader-election-rolebinding
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: leader-election-rolebinding
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: Role
++  name: leader-election-role
++subjects:
++- kind: ServiceAccount
++  name: controller-manager
++  namespace: system
+diff --git a/config/rbac/role.yaml b/config/rbac/role.yaml
+new file mode 100644
+index 0000000..938dae8
+--- /dev/null
++++ b/config/rbac/role.yaml
+@@ -0,0 +1,32 @@
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  name: manager-role
++rules:
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions
++  verbs:
++  - create
++  - delete
++  - get
++  - list
++  - patch
++  - update
++  - watch
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions/finalizers
++  verbs:
++  - update
++- apiGroups:
++  - kro.run
++  resources:
++  - resourcegraphdefinitions/status
++  verbs:
++  - get
++  - patch
++  - update
+diff --git a/config/rbac/role_binding.yaml b/config/rbac/role_binding.yaml
+new file mode 100644
+index 0000000..0c10ba2
+--- /dev/null
++++ b/config/rbac/role_binding.yaml
+@@ -0,0 +1,19 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRoleBinding
++metadata:
++  labels:
++    app.kubernetes.io/name: clusterrolebinding
++    app.kubernetes.io/instance: manager-rolebinding
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: manager-rolebinding
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: ClusterRole
++  name: manager-role
++subjects:
++- kind: ServiceAccount
++  name: controller-manager
++  namespace: system
+diff --git a/config/rbac/service_account.yaml b/config/rbac/service_account.yaml
+new file mode 100644
+index 0000000..4776aca
+--- /dev/null
++++ b/config/rbac/service_account.yaml
+@@ -0,0 +1,12 @@
++apiVersion: v1
++kind: ServiceAccount
++metadata:
++  labels:
++    app.kubernetes.io/name: serviceaccount
++    app.kubernetes.io/instance: controller-manager-sa
++    app.kubernetes.io/component: rbac
++    app.kubernetes.io/created-by: kro
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++  name: controller-manager
++  namespace: system
+diff --git a/config/samples/kustomization.yaml b/config/samples/kustomization.yaml
+new file mode 100644
+index 0000000..768db30
+--- /dev/null
++++ b/config/samples/kustomization.yaml
+@@ -0,0 +1,4 @@
++## Append samples of your project ##
++resources:
++- x_v1alpha1_resourcegraphdefinition.yaml
++#+kubebuilder:scaffold:manifestskustomizesamples
+diff --git a/config/samples/x_v1alpha1_abstraction.yaml b/config/samples/x_v1alpha1_abstraction.yaml
+new file mode 100644
+index 0000000..4b0c58d
+--- /dev/null
++++ b/config/samples/x_v1alpha1_abstraction.yaml
+@@ -0,0 +1,12 @@
++apiVersion: kro.run/v1alpha1
++kind: ResourceGraphDefinition
++metadata:
++  labels:
++    app.kubernetes.io/name: resourcegraphdefinition
++    app.kubernetes.io/instance: resourcegraphdefinition-sample
++    app.kubernetes.io/part-of: kro
++    app.kubernetes.io/managed-by: kustomize
++    app.kubernetes.io/created-by: kro
++  name: resourcegraphdefinition-sample
++spec:
++  # TODO(user): Add fields here
+diff --git a/helm/crds/kro.run_resourcegraphdefinitions.yaml b/helm/crds/kro.run_resourcegraphdefinitions.yaml
+index f905af9..9b78c48 100644
+--- a/helm/crds/kro.run_resourcegraphdefinitions.yaml
++++ b/helm/crds/kro.run_resourcegraphdefinitions.yaml
+@@ -116,13 +116,27 @@ spec:
+                   apiVersion, kind, spec, status, types, and some validation
+                   rules.
+                 properties:
++                  additionalPrinterColumnPolicy:
++                    default: Replace
++                    description: |-
++                      AdditionalPrinterColumnPolicy defines additional printer columns
++                      that will be passed down to the created CRD. The default policy is "Replace".
++
++                      AdditionalPrinterColumnPolicy controls how provided additional printer
++                      columns via AdditionalPrinterColumns are applied to the generated CRD.
++
++                      - "Replace": uses the provided columns as is; if no or empty AdditionalPrinterColumns are provided, fallback to the default columns.
++                      - "Add": appends the provided columns to the defaults, with user
++                        definitions overriding defaults when they share a identifying key
++                        (Name preferred, fallback to JSONPath).
++                    enum:
++                    - Replace
++                    - Add
++                    type: string
+                   additionalPrinterColumns:
+                     description: |-
+-                      AdditionalPrinterColumns defines additional printer columns
+-                      that will be passed down to the created CRD. If set, no
+-                      default printer columns will be added to the created CRD,
+-                      and if default printer columns need to be retained, they
+-                      need to be added explicitly.
++                      AdditionalPrinterColumns is the list of user-specified printer columns
++                      to apply according to AdditionalPrinterColumnPolicy.
+                     items:
+                       description: CustomResourceColumnDefinition specifies a column
+                         for server side printing.
+diff --git a/pkg/controller/resourcegraphdefinition/controller.go b/pkg/controller/resourcegraphdefinition/controller.go
+index 96c4060..a6ed923 100644
+--- a/pkg/controller/resourcegraphdefinition/controller.go
++++ b/pkg/controller/resourcegraphdefinition/controller.go
+@@ -38,6 +38,10 @@ import (
+ 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+ )
+ 
++// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions,verbs=get;list;watch;create;update;patch;delete
++// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/status,verbs=get;update;patch
++// +kubebuilder:rbac:groups=kro.run,resources=resourcegraphdefinitions/finalizers,verbs=update
++
+ // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
+ type ResourceGraphDefinitionReconciler struct {
+ 	allowCRDDeletion bool
+diff --git a/pkg/graph/builder.go b/pkg/graph/builder.go
+index bb2f0a9..bf472b5 100644
+--- a/pkg/graph/builder.go
++++ b/pkg/graph/builder.go
+@@ -480,7 +480,7 @@ func (b *Builder) buildInstanceResource(
+ 
+ 	// Synthesize the CRD for the instance resource.
+ 	overrideStatusFields := true
+-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
++	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumnPolicy, rgDefinition.AdditionalPrinterColumns)
+ 
+ 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
+ 	instanceSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)
+diff --git a/pkg/graph/crd/crd.go b/pkg/graph/crd/crd.go
+index 1566483..dc64383 100644
+--- a/pkg/graph/crd/crd.go
++++ b/pkg/graph/crd/crd.go
+@@ -27,16 +27,24 @@ import (
+ 
+ // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
+ // with the provided spec and status schemas~
+-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
++func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, policy v1alpha1.AdditionalPrinterColumnPolicy, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+ 	crdGroup := group
+ 	if crdGroup == "" {
+ 		crdGroup = v1alpha1.KRODomainName
+ 	}
+-	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
++	printerColumns := newCRDAdditionalPrinterColumns(policy, additionalPrinterColumns)
++	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), printerColumns)
+ }
+ 
+ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+ 	pluralKind := flect.Pluralize(strings.ToLower(kind))
++
++	// Use defaults if no columns provided
++	printerColumns := additionalPrinterColumns
++	if len(printerColumns) == 0 {
++		printerColumns = defaultAdditionalPrinterColumns
++	}
++
+ 	return &extv1.CustomResourceDefinition{
+ 		ObjectMeta: metav1.ObjectMeta{
+ 			Name:            fmt.Sprintf("%s.%s", pluralKind, group),
+@@ -62,7 +70,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
+ 					Subresources: &extv1.CustomResourceSubresources{
+ 						Status: &extv1.CustomResourceSubresourceStatus{},
+ 					},
+-					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
++					AdditionalPrinterColumns: printerColumns,
+ 				},
+ 			},
+ 		},
+@@ -76,6 +84,8 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
+ 	// if statusFieldsOverride is true, we will override the status fields with the default ones
+ 	// TODO(a-hilaly): Allow users to override the default status fields.
+ 	if statusFieldsOverride {
++		// Use lowercase 'state' to match the JSONPath in defaultAdditionalPrinterColumns
++		// (.status.state)
+ 		if _, ok := status.Properties["state"]; !ok {
+ 			status.Properties["state"] = defaultStateType
+ 		}
+@@ -103,10 +113,56 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
+ 	}
+ }
+ 
+-func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResourceColumnDefinition) []extv1.CustomResourceColumnDefinition {
+-	if len(additionalPrinterColumns) == 0 {
++// newCRDAdditionalPrinterColumns determines the final set of printer columns to use
++// based on the policy and user-provided columns.
++//
++// If no user columns are provided, it always returns the default columns.
++//
++// Policy behaviors:
++//   - Replace (or empty string): User columns completely replace defaults.
++//     This gives users full control but requires them to redefine all columns.
++//   - Add: User columns are merged with defaults. User columns override defaults
++//     when they share the same Name. New columns are appended to the end.
++//     This allows users to customize specific columns while keeping others.
++//
++// Returns the final slice of printer columns to use in the CRD.
++func newCRDAdditionalPrinterColumns(
++	policy v1alpha1.AdditionalPrinterColumnPolicy,
++	userCols []extv1.CustomResourceColumnDefinition,
++) []extv1.CustomResourceColumnDefinition {
++	if len(userCols) == 0 {
+ 		return defaultAdditionalPrinterColumns
+ 	}
+ 
+-	return additionalPrinterColumns
++	// For backwards compatibility, treat an empty policy string as Replace.
++	// This handles cases where the policy field is not set (zero value) or explicitly
++	// set to Replace. When Replace policy is used, the user-provided columns completely
++	// replace the defaults, giving users full control over the printer columns.
++	if policy == "" || policy == v1alpha1.AdditionalPrinterColumnPolicyReplace {
++		return userCols
++	}
++
++	// Add policy: merge user columns with defaults
++	// Start with defaults, then override/append user columns
++	merged := make([]extv1.CustomResourceColumnDefinition, len(defaultAdditionalPrinterColumns), len(defaultAdditionalPrinterColumns)+len(userCols))
++	copy(merged, defaultAdditionalPrinterColumns)
++
++	// Build an index by column Name for O(1) lookup
++	index := make(map[string]int, len(merged))
++	for i, c := range merged {
++		index[c.Name] = i
++	}
++
++	// Process user columns: override defaults by Name, or append if new
++	for _, u := range userCols {
++		if pos, ok := index[u.Name]; ok {
++			// Override the default column at this position
++			merged[pos] = u
++		} else {
++			// Append new column not in defaults
++			merged = append(merged, u)
++		}
++	}
++
++	return merged
+ }
+diff --git a/pkg/graph/crd/crd_test.go b/pkg/graph/crd/crd_test.go
+index 06e88d9..d67bd13 100644
+--- a/pkg/graph/crd/crd_test.go
++++ b/pkg/graph/crd/crd_test.go
+@@ -24,6 +24,12 @@ import (
+ 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+ )
+ 
++// stateProperty is the lowercase property key in the CRD schema
++const stateProperty string = "state"
++
++// stateColumn is the uppercase display name for the printer column
++const stateColumn string = "State"
++
+ func TestSynthesizeCRD(t *testing.T) {
+ 	tests := []struct {
+ 		name                 string
+@@ -73,7 +79,7 @@ func TestSynthesizeCRD(t *testing.T) {
+ 
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, nil)
++			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, v1alpha1.AdditionalPrinterColumnPolicyReplace, nil)
+ 
+ 			assert.Equal(t, tt.expectedName, crd.Name)
+ 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
+@@ -99,16 +105,16 @@ func TestSynthesizeCRD(t *testing.T) {
+ 
+ func TestNewCRD(t *testing.T) {
+ 	tests := []struct {
+-		name                   string
+-		group                  string
+-		apiVersion             string
+-		kind                   string
+-		printerColumns         []extv1.CustomResourceColumnDefinition
+-		expectedName           string
+-		expectedKind           string
+-		expectedPlural         string
+-		expectedSingular       string
+-		expectedPrinterColumns []extv1.CustomResourceColumnDefinition
++		name                     string
++		group                    string
++		apiVersion               string
++		kind                     string
++		additionalPrinterColumns []extv1.CustomResourceColumnDefinition
++		expectedName             string
++		expectedKind             string
++		expectedPlural           string
++		expectedSingular         string
++		expectedPrinterColumns   []extv1.CustomResourceColumnDefinition
+ 	}{
+ 		{
+ 			name:                   "basic example",
+@@ -144,23 +150,23 @@ func TestNewCRD(t *testing.T) {
+ 			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+ 		},
+ 		{
+-			name:                   "non nil empty printer columns",
+-			group:                  "kro.com",
+-			apiVersion:             "v2beta1",
+-			kind:                   "WebHook",
+-			printerColumns:         []extv1.CustomResourceColumnDefinition{},
+-			expectedName:           "webhooks.kro.com",
+-			expectedKind:           "WebHook",
+-			expectedPlural:         "webhooks",
+-			expectedSingular:       "webhook",
+-			expectedPrinterColumns: defaultAdditionalPrinterColumns,
++			name:                     "non nil empty printer columns",
++			group:                    "kro.com",
++			apiVersion:               "v2beta1",
++			kind:                     "WebHook",
++			additionalPrinterColumns: []extv1.CustomResourceColumnDefinition{},
++			expectedName:             "webhooks.kro.com",
++			expectedKind:             "WebHook",
++			expectedPlural:           "webhooks",
++			expectedSingular:         "webhook",
++			expectedPrinterColumns:   defaultAdditionalPrinterColumns,
+ 		},
+ 		{
+ 			name:       "custom printer columns",
+ 			group:      "kro.com",
+ 			apiVersion: "v2beta1",
+ 			kind:       "WebHook",
+-			printerColumns: []extv1.CustomResourceColumnDefinition{
++			additionalPrinterColumns: []extv1.CustomResourceColumnDefinition{
+ 				{
+ 					Name:     "Available replicas",
+ 					Type:     "integer",
+@@ -194,7 +200,7 @@ func TestNewCRD(t *testing.T) {
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			schema := &extv1.JSONSchemaProps{Type: "object"}
+-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns)
++			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.additionalPrinterColumns)
+ 
+ 			assert.Equal(t, tt.expectedName, crd.Name)
+ 			assert.Equal(t, tt.group, crd.Spec.Group)
+@@ -244,7 +250,7 @@ func TestNewCRDSchema(t *testing.T) {
+ 			name: "with existing status properties and override enabled",
+ 			spec: extv1.JSONSchemaProps{Type: "object"},
+ 			status: extv1.JSONSchemaProps{Type: "object", Properties: map[string]extv1.JSONSchemaProps{
+-				"state": {
++				stateProperty: {
+ 					Type:        "string",
+ 					Description: "Custom state filed",
+ 				},
+@@ -275,10 +281,9 @@ func TestNewCRDSchema(t *testing.T) {
+ 			require.NotNil(t, statusProps.Properties)
+ 
+ 			if tt.expectedStateField {
+-				assert.Contains(t, statusProps.Properties, "state")
++				assert.Contains(t, statusProps.Properties, stateProperty)
+ 				assert.Equal(t, defaultConditionsType, statusProps.Properties["conditions"])
+ 			}
+-
+ 			if tt.status.Properties != nil {
+ 				if customField, exists := tt.status.Properties["customField"]; exists {
+ 					assert.Contains(t, statusProps.Properties, "customField")
+@@ -289,3 +294,232 @@ func TestNewCRDSchema(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestNewCRDAdditionalPrinterColumns(t *testing.T) {
++	tests := []struct {
++		name     string
++		policy   v1alpha1.AdditionalPrinterColumnPolicy
++		userCols []extv1.CustomResourceColumnDefinition
++		want     []extv1.CustomResourceColumnDefinition
++	}{
++		// Replace Policy Tests:
++		{
++			name:     "Replace policy with empty user columns returns defaults",
++			policy:   v1alpha1.AdditionalPrinterColumnPolicyReplace,
++			userCols: []extv1.CustomResourceColumnDefinition{},
++			want:     defaultAdditionalPrinterColumns,
++		},
++		{
++			name:   "Replace policy with user columns returns only user columns",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyReplace,
++			userCols: []extv1.CustomResourceColumnDefinition{
++				{Name: "Custom", JSONPath: ".spec.custom", Type: "string"},
++			},
++			want: []extv1.CustomResourceColumnDefinition{
++				{Name: "Custom", JSONPath: ".spec.custom", Type: "string"},
++			},
++		},
++		{
++			name:     "Empty policy defaults to Replace behavior",
++			policy:   "",
++			userCols: []extv1.CustomResourceColumnDefinition{},
++			want:     defaultAdditionalPrinterColumns,
++		},
++		// Add Policy Tests:
++		{
++			name:     "Add policy with empty user columns returns defaults",
++			policy:   v1alpha1.AdditionalPrinterColumnPolicyAdd,
++			userCols: []extv1.CustomResourceColumnDefinition{},
++			want:     defaultAdditionalPrinterColumns,
++		},
++		{
++			name:   "Add policy overrides default by name",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyAdd,
++			userCols: []extv1.CustomResourceColumnDefinition{
++				{Name: stateColumn, JSONPath: ".status.customState", Type: "string"}, // override default State
++			},
++			want: func() []extv1.CustomResourceColumnDefinition {
++				// Create expected result with State overridden
++				result := make([]extv1.CustomResourceColumnDefinition, len(defaultAdditionalPrinterColumns))
++				copy(result, defaultAdditionalPrinterColumns)
++				// Find and override State column
++				for i, col := range result {
++					if col.Name == stateColumn {
++						result[i] = extv1.CustomResourceColumnDefinition{Name: stateColumn, JSONPath: ".status.customState", Type: "string"}
++						break
++					}
++				}
++				return result
++			}(),
++		},
++		{
++			name:   "Add policy appends new user column",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyAdd,
++			userCols: []extv1.CustomResourceColumnDefinition{
++				{Name: "CUSTOM", JSONPath: ".spec.custom", Type: "string"},
++			},
++			want: append(defaultAdditionalPrinterColumns,
++				extv1.CustomResourceColumnDefinition{Name: "CUSTOM", JSONPath: ".spec.custom", Type: "string"}),
++		},
++		{
++			name:   "Add policy with mixed override and append",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyAdd,
++			userCols: []extv1.CustomResourceColumnDefinition{
++				{Name: stateColumn, JSONPath: ".status.customState", Type: "string"}, // override
++				{Name: "CUSTOM", JSONPath: ".spec.custom", Type: "string"},           // append
++			},
++			want: func() []extv1.CustomResourceColumnDefinition {
++				result := make([]extv1.CustomResourceColumnDefinition, len(defaultAdditionalPrinterColumns))
++				copy(result, defaultAdditionalPrinterColumns)
++				// Find and override State column
++				for i, col := range result {
++					if col.Name == stateColumn {
++						result[i] = extv1.CustomResourceColumnDefinition{Name: stateColumn, JSONPath: ".status.customState", Type: "string"}
++						break
++					}
++				}
++				// Append custom column
++				result = append(result, extv1.CustomResourceColumnDefinition{Name: "CUSTOM", JSONPath: ".spec.custom", Type: "string"})
++				return result
++			}(),
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got := newCRDAdditionalPrinterColumns(tt.policy, tt.userCols)
++			assert.Equal(t, tt.want, got)
++		})
++	}
++}
++
++func TestSynthesizeCRDWithPolicy(t *testing.T) {
++	spec := extv1.JSONSchemaProps{
++		Type: "object",
++		Properties: map[string]extv1.JSONSchemaProps{
++			"field": {Type: "string"},
++		},
++	}
++	status := extv1.JSONSchemaProps{
++		Type: "object",
++		Properties: map[string]extv1.JSONSchemaProps{
++			stateProperty: {Type: "string"},
++		},
++	}
++
++	tests := []struct {
++		name                       string
++		policy                     v1alpha1.AdditionalPrinterColumnPolicy
++		additionalPrinterColumns   []extv1.CustomResourceColumnDefinition
++		expectedColumnCount        int
++		expectedCustomColumnExists bool
++	}{
++		{
++			name:   "Replace policy with custom columns",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyReplace,
++			additionalPrinterColumns: []extv1.CustomResourceColumnDefinition{
++				{Name: "Custom", JSONPath: ".spec.field", Type: "string"},
++			},
++			expectedColumnCount:        1,
++			expectedCustomColumnExists: true,
++		},
++		{
++			name:                       "Replace policy with empty columns uses defaults",
++			policy:                     v1alpha1.AdditionalPrinterColumnPolicyReplace,
++			additionalPrinterColumns:   []extv1.CustomResourceColumnDefinition{},
++			expectedColumnCount:        len(defaultAdditionalPrinterColumns),
++			expectedCustomColumnExists: false,
++		},
++		{
++			name:   "Add policy merges with defaults",
++			policy: v1alpha1.AdditionalPrinterColumnPolicyAdd,
++			additionalPrinterColumns: []extv1.CustomResourceColumnDefinition{
++				{Name: "Custom", JSONPath: ".spec.field", Type: "string"},
++			},
++			expectedColumnCount:        len(defaultAdditionalPrinterColumns) + 1,
++			expectedCustomColumnExists: true,
++		},
++		{
++			name:   "Empty policy defaults to Replace",
++			policy: "",
++			additionalPrinterColumns: []extv1.CustomResourceColumnDefinition{
++				{Name: "Custom", JSONPath: ".spec.field", Type: "string"},
++			},
++			expectedColumnCount:        1,
++			expectedCustomColumnExists: true,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			crd := SynthesizeCRD("kro.com", "v1", "TestKind", spec, status, false, tt.policy, tt.additionalPrinterColumns)
++
++			require.NotNil(t, crd)
++			assert.Equal(t, "testkinds.kro.com", crd.Name)
++
++			// Check printer columns
++			version := crd.Spec.Versions[0]
++			assert.Len(t, version.AdditionalPrinterColumns, tt.expectedColumnCount)
++
++			if tt.expectedCustomColumnExists {
++				found := false
++				for _, col := range version.AdditionalPrinterColumns {
++					if col.Name == "Custom" {
++						found = true
++						assert.Equal(t, ".spec.field", col.JSONPath)
++						break
++					}
++				}
++				assert.True(t, found, "Custom column should be present")
++			}
++		})
++	}
++}
++
++func TestAdditionalPrinterColumnPolicyBackwardsCompatibility(t *testing.T) {
++	spec := extv1.JSONSchemaProps{Type: "object"}
++	status := extv1.JSONSchemaProps{Type: "object"}
++
++	// Test that omitting policy behaves like Replace
++	crd1 := SynthesizeCRD("kro.com", "v1", "TestKind", spec, status, false, "", nil)
++	crd2 := SynthesizeCRD("kro.com", "v1", "TestKind", spec, status, false, v1alpha1.AdditionalPrinterColumnPolicyReplace, nil)
++
++	version1 := crd1.Spec.Versions[0]
++	version2 := crd2.Spec.Versions[0]
++
++	assert.Equal(t, version1.AdditionalPrinterColumns, version2.AdditionalPrinterColumns, "Empty policy should behave like Replace")
++	assert.Equal(t, defaultAdditionalPrinterColumns, version1.AdditionalPrinterColumns, "Should use default columns when policy is empty and no user columns provided")
++}
++
++func TestAdditionalPrinterColumnPolicyMergeOrder(t *testing.T) {
++	userCols := []extv1.CustomResourceColumnDefinition{
++		{Name: "First", JSONPath: ".spec.first", Type: "string"},
++		{Name: stateColumn, JSONPath: ".status.overriddenState", Type: "string"}, // Override default
++		{Name: "Second", JSONPath: ".spec.second", Type: "integer"},
++	}
++
++	result := newCRDAdditionalPrinterColumns(v1alpha1.AdditionalPrinterColumnPolicyAdd, userCols)
++
++	// Check that State was overridden in place
++	stateFound := false
++	for _, col := range result {
++		if col.Name == stateColumn {
++			stateFound = true
++			assert.Equal(t, ".status.overriddenState", col.JSONPath, "State column should be overridden")
++			break
++		}
++	}
++	assert.True(t, stateFound, "State column should be present")
++
++	// Check that new columns are appended at the end
++	lastCols := result[len(defaultAdditionalPrinterColumns):]
++	expectedNewCols := []extv1.CustomResourceColumnDefinition{
++		{Name: "First", JSONPath: ".spec.first", Type: "string"},
++		{Name: "Second", JSONPath: ".spec.second", Type: "integer"},
++	}
++	assert.Equal(t, expectedNewCols, lastCols, "New columns should be appended in order")
++
++	// Verify total length
++	expectedLength := len(defaultAdditionalPrinterColumns) + 2 // 2 new columns (State was overridden, not added)
++	assert.Len(t, result, expectedLength)
++}
+diff --git a/resourcegraphdefinition.yaml b/resourcegraphdefinition.yaml
+new file mode 100644
+index 0000000..9f63a98
+--- /dev/null
++++ b/resourcegraphdefinition.yaml
+@@ -0,0 +1,16 @@
++apiVersion: kro.run/v1alpha1
++kind: ResourceGraphDefinition
++metadata:
++  name: my-rgd
++spec:
++  schema:
++    kind: MyKind
++    apiVersion: v1alpha1
++    additionalPrinterColumnPolicy: Add
++    additionalPrinterColumns:
++      - name: Foo
++        jsonPath: .status.foo
++        type: string
++      - name: Bar
++        jsonPath: .spec.bar
++        type: integer
+\ No newline at end of file
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/chainsaw-test.yaml b/test/e2e/chainsaw/check-additional-printer-columns/chainsaw-test.yaml
+new file mode 100644
+index 0000000..e3ee955
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/chainsaw-test.yaml
+@@ -0,0 +1,51 @@
++apiVersion: chainsaw.kyverno.io/v1alpha1
++kind: Test
++metadata:
++  name: check-additional-printer-columns
++spec:
++  description: | 
++    Tests AdditionalPrinterColumnPolicy behavior in ResourceGraphDefinitions.
++    Verifies that the different policies (default, Replace, Add) correctly control
++    how additional printer columns are applied to generated CRDs.
++  steps:
++  - name: test-default-policy
++    try:
++    - apply:
++        file: rgd-default.yaml
++      description: Apply RGD with no additionalPrinterColumnPolicy (should default to Replace)
++    - assert:
++        file: crd-default-assert.yaml
++      description: Verify CRD has default printer columns
++    catch:
++    - description: kro controller pod logs collector
++      podLogs:
++        selector: app.kubernetes.io/instance=kro
++        namespace: kro-system
++
++  - name: test-replace-policy
++    try:
++    - apply:
++        file: rgd-replace-policy.yaml
++      description: Apply RGD with Replace policy and custom columns
++    - assert:
++        file: crd-replace-assert.yaml
++      description: Verify CRD has only custom printer columns (no defaults)
++    catch:
++    - description: kro controller pod logs collector
++      podLogs:
++        selector: app.kubernetes.io/instance=kro
++        namespace: kro-system
++
++  - name: test-add-policy
++    try:
++    - apply:
++        file: rgd-add-policy.yaml
++      description: Apply RGD with Add policy and custom columns
++    - assert:
++        file: crd-add-assert.yaml
++      description: Verify CRD merges custom columns with defaults
++    catch:
++    - description: kro controller pod logs collector
++      podLogs:
++        selector: app.kubernetes.io/instance=kro
++        namespace: kro-system
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/crd-add-assert.yaml b/test/e2e/chainsaw/check-additional-printer-columns/crd-add-assert.yaml
+new file mode 100644
+index 0000000..349cc7d
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/crd-add-assert.yaml
+@@ -0,0 +1,84 @@
++apiVersion: apiextensions.k8s.io/v1
++kind: CustomResourceDefinition
++metadata:
++  name: testaddprintercolumns.kro.run
++spec:
++  conversion:
++    strategy: None
++  group: kro.run
++  names:
++    kind: TestAddPrinterColumns
++    listKind: TestAddPrinterColumnsList
++    plural: testaddprintercolumns
++    singular: testaddprintercolumns
++  scope: Namespaced
++  versions:
++  - additionalPrinterColumns:
++    # Default State column should be overridden
++    - description: Custom state showing the name
++      jsonPath: .spec.name
++      name: State
++      type: string
++    # Default Synced column should remain
++    - description: Whether a ResourceGraphDefinition instance is
++        ready
++      jsonPath: .status.conditions[?(@.type=="Ready")].status
++      name: Ready
++      type: string
++    # Default Age column should remain
++    - description: Age of the resource
++      jsonPath: .metadata.creationTimestamp
++      name: Age
++      type: date
++    # New REPLICAS column should be appended
++    - description: Number of replicas
++      jsonPath: .spec.replicas
++      name: REPLICAS
++      type: integer
++    name: v1alpha1
++    schema:
++      openAPIV3Schema:
++        properties:
++          apiVersion:
++            type: string
++          kind:
++            type: string
++          metadata:
++            type: object
++          spec:
++            default: {}
++            properties:
++              name:
++                default: test
++                type: string
++              replicas:
++                default: 1
++                type: integer
++            type: object
++          status:
++            properties:
++              conditions:
++                items:
++                  properties:
++                    lastTransitionTime:
++                      type: string
++                    message:
++                      type: string
++                    observedGeneration:
++                      type: integer
++                    reason:
++                      type: string
++                    status:
++                      type: string
++                    type:
++                      type: string
++                  type: object
++                type: array
++              state:
++                type: string
++            type: object
++        type: object
++    served: true
++    storage: true
++    subresources:
++      status: {}
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/crd-default-assert.yaml b/test/e2e/chainsaw/check-additional-printer-columns/crd-default-assert.yaml
+new file mode 100644
+index 0000000..486e575
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/crd-default-assert.yaml
+@@ -0,0 +1,42 @@
++apiVersion: apiextensions.k8s.io/v1
++kind: CustomResourceDefinition
++metadata:
++  name: testdefaultprintercolumns.kro.run
++spec:
++  versions:
++  - additionalPrinterColumns:
++    - description: The state of a ResourceGraphDefinition instance
++      jsonPath: .status.state
++      name: State
++      type: string
++    - description: Whether a ResourceGraphDefinition instance is ready
++      jsonPath: .status.conditions[?(@.type=="Ready")].status
++      name: Ready
++      type: string
++    - description: Age of the resource
++      jsonPath: .metadata.creationTimestamp
++      name: Age
++      type: date
++    name: v1alpha1
++    schema:
++      openAPIV3Schema:
++        properties:
++          spec:
++            default: {}
++            properties:
++              name:
++                default: test
++                type: string
++              replicas:
++                default: 1
++                type: integer
++            type: object
++          status:
++            properties:
++              conditions:
++                type: array
++              state:
++                type: string
++            type: object
++    served: true
++    storage: true
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/crd-replace-assert.yaml b/test/e2e/chainsaw/check-additional-printer-columns/crd-replace-assert.yaml
+new file mode 100644
+index 0000000..c582e0a
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/crd-replace-assert.yaml
+@@ -0,0 +1,72 @@
++apiVersion: apiextensions.k8s.io/v1
++kind: CustomResourceDefinition
++metadata:
++  name: testreplaceprintercolumns.kro.run
++spec:
++  conversion:
++    strategy: None
++  group: kro.run
++  names:
++    kind: TestReplacePrinterColumns
++    listKind: TestReplacePrinterColumnsList
++    plural: testreplaceprintercolumns
++    singular: testreplaceprintercolumns
++  scope: Namespaced
++  versions:
++  - additionalPrinterColumns:
++    # Only custom columns, no defaults
++    - description: The name specified in spec
++      jsonPath: .spec.name
++      name: NAME
++      type: string
++    - description: Number of replicas
++      jsonPath: .spec.replicas
++      name: REPLICAS
++      type: integer
++    name: v1alpha1
++    schema:
++      openAPIV3Schema:
++        properties:
++          apiVersion:
++            type: string
++          kind:
++            type: string
++          metadata:
++            type: object
++          spec:
++            default: {}
++            properties:
++              name:
++                default: test
++                type: string
++              replicas:
++                default: 1
++                type: integer
++            type: object
++          status:
++            properties:
++              conditions:
++                items:
++                  properties:
++                    lastTransitionTime:
++                      type: string
++                    message:
++                      type: string
++                    observedGeneration:
++                      type: integer
++                    reason:
++                      type: string
++                    status:
++                      type: string
++                    type:
++                      type: string
++                  type: object
++                type: array
++              state:
++                type: string
++            type: object
++        type: object
++    served: true
++    storage: true
++    subresources:
++      status: {}
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/rgd-add-policy.yaml b/test/e2e/chainsaw/check-additional-printer-columns/rgd-add-policy.yaml
+new file mode 100644
+index 0000000..bf8d5f6
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/rgd-add-policy.yaml
+@@ -0,0 +1,31 @@
++apiVersion: kro.run/v1alpha1
++kind: ResourceGraphDefinition
++metadata:
++  name: test-add-printer-columns
++spec:
++  schema:
++    apiVersion: v1alpha1
++    kind: TestAddPrinterColumns
++    additionalPrinterColumnPolicy: Add
++    additionalPrinterColumns:
++      - name: "State"  # This should override the default State column
++        type: "string"
++        jsonPath: ".spec.name"
++        description: "Custom state showing the name"
++      - name: "REPLICAS"  # This should be appended as a new column
++        type: "integer"
++        jsonPath: ".spec.replicas"
++        description: "Number of replicas"
++    spec:
++      name: string | default="test"
++      replicas: integer | default=1
++  resources:
++    - id: configmap
++      template:
++        apiVersion: v1
++        kind: ConfigMap
++        metadata:
++          name: ${schema.metadata.name}-config
++        data:
++          name: ${schema.spec.name}
++          replicas: ${string(schema.spec.replicas)}
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/rgd-default.yaml b/test/e2e/chainsaw/check-additional-printer-columns/rgd-default.yaml
+new file mode 100644
+index 0000000..1c919d7
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/rgd-default.yaml
+@@ -0,0 +1,21 @@
++apiVersion: kro.run/v1alpha1
++kind: ResourceGraphDefinition
++metadata:
++  name: test-default-printer-columns
++spec:
++  schema:
++    apiVersion: v1alpha1
++    kind: TestDefaultPrinterColumns
++    spec:
++      name: string | default="test"
++      replicas: integer | default=1
++  resources:
++    - id: configmap
++      template:
++        apiVersion: v1
++        kind: ConfigMap
++        metadata:
++          name: ${schema.metadata.name}-config
++        data:
++          name: ${schema.spec.name}
++          replicas: ${string(schema.spec.replicas)}
+diff --git a/test/e2e/chainsaw/check-additional-printer-columns/rgd-replace-policy.yaml b/test/e2e/chainsaw/check-additional-printer-columns/rgd-replace-policy.yaml
+new file mode 100644
+index 0000000..9af9ecd
+--- /dev/null
++++ b/test/e2e/chainsaw/check-additional-printer-columns/rgd-replace-policy.yaml
+@@ -0,0 +1,31 @@
++apiVersion: kro.run/v1alpha1
++kind: ResourceGraphDefinition
++metadata:
++  name: test-replace-printer-columns
++spec:
++  schema:
++    apiVersion: v1alpha1
++    kind: TestReplacePrinterColumns
++    additionalPrinterColumnPolicy: Replace
++    additionalPrinterColumns:
++      - name: "NAME"
++        type: "string"
++        jsonPath: ".spec.name"
++        description: "The name specified in spec"
++      - name: "REPLICAS"
++        type: "integer"
++        jsonPath: ".spec.replicas"
++        description: "Number of replicas"
++    spec:
++      name: string | default="test"
++      replicas: integer | default=1
++  resources:
++    - id: configmap
++      template:
++        apiVersion: v1
++        kind: ConfigMap
++        metadata:
++          name: ${schema.metadata.name}-config
++        data:
++          name: ${schema.spec.name}
++          replicas: ${string(schema.spec.replicas)}
+diff --git a/test/integration/environment/setup.go b/test/integration/environment/setup.go
+index 286f76c..e1aa983 100644
+--- a/test/integration/environment/setup.go
++++ b/test/integration/environment/setup.go
+@@ -75,7 +75,7 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment,
+ 	env.TestEnv = &envtest.Environment{
+ 		CRDDirectoryPaths: []string{
+ 			// resourcegraphdefinition CRD
+-			filepath.Join("../../../..", "helm", "crds"),
++			filepath.Join("../../../..", "config", "crd", "bases"),
+ 			// ACK ec2 CRDs
+ 			filepath.Join("../..", "crds", "ack-ec2-controller"),
+ 			// ACK iam CRDs

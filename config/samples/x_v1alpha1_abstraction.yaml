@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  labels:
+    app.kubernetes.io/name: resourcegraphdefinition
+    app.kubernetes.io/instance: resourcegraphdefinition-sample
+    app.kubernetes.io/part-of: kro
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: kro
+  name: resourcegraphdefinition-sample
+spec:
+  # TODO(user): Add fields here

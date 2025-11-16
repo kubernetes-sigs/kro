@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions/status
+  verbs:
+  - get
+  - patch
+  - update

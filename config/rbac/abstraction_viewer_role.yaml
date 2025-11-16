@@ -1,0 +1,27 @@
+# permissions for end users to view resourcegraphdefinitions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: resourcegraphdefinition-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: kro
+    app.kubernetes.io/part-of: kro
+    app.kubernetes.io/managed-by: kustomize
+  name: resourcegraphdefinition-viewer-role
+rules:
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kro.run
+  resources:
+  - resourcegraphdefinitions/status
+  verbs:
+  - get

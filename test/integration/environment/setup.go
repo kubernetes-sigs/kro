@@ -75,7 +75,7 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 	env.TestEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			// resourcegraphdefinition CRD
-			filepath.Join("../../../..", "helm", "crds"),
+			filepath.Join("../../../..", "config", "crd", "bases"),
 			// ACK ec2 CRDs
 			filepath.Join("../..", "crds", "ack-ec2-controller"),
 			// ACK iam CRDs

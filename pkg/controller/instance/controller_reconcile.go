@@ -165,8 +165,8 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 }
 
 // reconcileInstance handles the reconciliation of an active instance.
-// Resources are processed level-by-level, with resources in each level
-// processed in parallel once their dependencies are satisfied.
+// Resources are processed level-by-level using a single ApplySet for the entire instance.
+// This follows the ApplySet spec which uses GKNN-based inventory tracking in parent annotations.
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
@@ -193,13 +193,73 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	igr.log.V(1).Info(fmt.Sprintf("Processing %d levels", len(levels)))
 
-	// Process each level sequentially
+	// Create a single ApplySet for the entire instance
+	config := applyset.Config{
+		ToolLabels:   igr.instanceSubResourcesLabeler.Labels(),
+		FieldManager: FieldManagerForApplyset,
+		ToolingID:    KROTooling,
+		Log:          igr.log,
+	}
+
+	aset, err := applyset.New(instance, igr.restMapper, igr.client, config)
+	if err != nil {
+		mark.ResourcesNotReady("failed to create applyset: %v", err)
+		return fmt.Errorf("failed to create applyset: %w", err)
+	}
+
+	// Process each level sequentially, adding resources to the same ApplySet
 	for levelNum, levelResources := range levels {
 		igr.log.V(1).Info("Processing level", "level", levelNum, "resources", len(levelResources))
 
-		if err := igr.processLevel(ctx, levelNum, levelResources, levelNum == len(levels)-1); err != nil {
+		if err := igr.processLevel(ctx, aset, levelNum, levelResources); err != nil {
 			mark.ResourcesNotReady("failed to process level %d: %v", levelNum, err)
 			return err
+		}
+
+		// Apply after each level to respect topological ordering
+		// Don't prune yet - we'll prune once at the end after all levels are applied
+		result, err := aset.Apply(ctx, false)
+		if err != nil {
+			mark.ResourcesNotReady("failed to apply level %d: %v", levelNum, err)
+			return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
+		}
+
+		if err := result.Errors(); err != nil {
+			mark.ResourcesNotReady("errors applying level %d: %v", levelNum, err)
+			return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
+		}
+
+		// Update resource states and runtime with applied resources
+		for _, applied := range result.AppliedObjects {
+			resourceState, _ := igr.state.GetResourceState(applied.ID)
+			if applied.Error != nil {
+				resourceState.State = ResourceStateError
+				resourceState.Err = applied.Error
+			} else {
+				if applied.LastApplied != nil {
+					igr.runtime.SetResource(applied.ID, applied.LastApplied)
+				}
+				igr.updateResourceReadiness(applied.ID)
+			}
+		}
+
+		// Check readiness of all resources in this level before proceeding
+		for _, resourceID := range levelResources {
+			resourceState, ok := igr.state.GetResourceState(resourceID)
+			if !ok || resourceState.State == ResourceStateSkipped {
+				continue
+			}
+
+			if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
+				mark.ResourcesInProgress("level %d resource %s not ready: %s", levelNum, resourceID, reason)
+				return igr.delayedRequeue(fmt.Errorf("level %d resource %s not ready: %s", levelNum, resourceID, reason))
+			}
+		}
+
+		// If there are any cluster mutations, requeue to get latest state
+		if result.HasClusterMutation() {
+			mark.ResourcesInProgress("level %d had cluster mutations", levelNum)
+			return igr.delayedRequeue(fmt.Errorf("level %d had cluster mutations", levelNum))
 		}
 
 		// Synchronize runtime after each level to update CEL expressions
@@ -208,6 +268,26 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			mark.ResourcesNotReady("failed to synchronize after level %d: %v", levelNum, err)
 			return fmt.Errorf("failed to synchronize after level %d: %w", levelNum, err)
 		}
+
+		igr.log.V(1).Info("Level processed successfully", "level", levelNum)
+	}
+
+	// Prune resources that are no longer part of the desired state
+	// The ApplySet tracks inventory via GKNN in parent annotations
+	// We do a final apply with prune=true to clean up orphaned resources
+	pruneResult, err := aset.Apply(ctx, true)
+	if err != nil {
+		mark.ResourcesNotReady("failed to prune orphaned resources: %v", err)
+		return fmt.Errorf("failed to prune orphaned resources: %w", err)
+	}
+
+	// Log pruned resources
+	for _, pruned := range pruneResult.PrunedObjects {
+		if pruned.Error != nil {
+			igr.log.Error(pruned.Error, "Failed to prune resource", "resource", pruned.String())
+		} else {
+			igr.log.V(2).Info("Pruned resource", "resource", pruned.String())
+		}
 	}
 
 	// All resources have been successfully reconciled
@@ -215,34 +295,22 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 	return nil
 }
 
-// processLevel processes all resources in a single topological level.
-// Resources within a level are processed in parallel using errgroup.
-// Each level gets its own ApplySet for isolated application.
-func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum int, resourceIDs []string, isLastLevel bool) error {
+// processLevel processes all resources in a single topological level by adding them
+// to the provided ApplySet. Resources within a level are processed in parallel using errgroup.
+// The ApplySet is shared across all levels to maintain proper GKNN-based inventory tracking.
+func (igr *instanceGraphReconciler) processLevel(ctx context.Context, aset applyset.Set, levelNum int, resourceIDs []string) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
 
-	// Create a new ApplySet for this level
-	config := applyset.Config{
-		ToolLabels:   igr.instanceSubResourcesLabeler.Labels(),
-		FieldManager: FieldManagerForApplyset,
-		ToolingID:    KROTooling,
-		Log:          igr.log.WithValues("level", levelNum),
-	}
-
-	aset, err := applyset.New(instance, igr.restMapper, igr.client, config)
-	if err != nil {
-		return fmt.Errorf("failed creating applyset for level %d: %w", levelNum, err)
-	}
+	igr.log.V(1).Info("Adding resources to applyset for level", "level", levelNum, "resources", len(resourceIDs))
 
 	unresolvedResourceID := ""
-	hasErrors := false
-	walkErrors := make(map[string]error)
-	var walkErrorsMu sync.Mutex
+	processingErrors := make(map[string]error)
+	var processingErrorsMu sync.Mutex
 
 	// Process resources in this level in parallel using errgroup
 	// All resources in the same topological level are independent by definition
-	vertexFunc := func(ctx context.Context, resourceID string) error {
+	processResource := func(ctx context.Context, resourceID string) error {
 		log := igr.log.WithValues("resourceID", resourceID, "level", levelNum)
 
 		// Mark resource as in progress
@@ -312,10 +380,10 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 
 	for _, resourceID := range resourceIDs {
 		g.Go(func() error {
-			if err := vertexFunc(gCtx, resourceID); err != nil {
-				walkErrorsMu.Lock()
-				walkErrors[resourceID] = err
-				walkErrorsMu.Unlock()
+			if err := processResource(gCtx, resourceID); err != nil {
+				processingErrorsMu.Lock()
+				processingErrors[resourceID] = err
+				processingErrorsMu.Unlock()
 				return err
 			}
 			return nil
@@ -325,11 +393,10 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 	// Wait for all resources in this level to complete
 	if err := g.Wait(); err != nil {
 		// At least one resource failed
-		hasErrors = true
 	}
 
 	// Process any errors
-	for resourceID, err := range walkErrors {
+	for resourceID, err := range processingErrors {
 		igr.log.Error(err, "Error processing resource", "resourceID", resourceID, "level", levelNum)
 		if resourceState, ok := igr.state.GetResourceState(resourceID); ok {
 			resourceState.State = ResourceStateError
@@ -340,61 +407,11 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, levelNum i
 		}
 	}
 
-	// Apply all resources that were added to the applyset for this level
-	// Only prune on the last level
-	prune := isLastLevel && !hasErrors
-	result, err := aset.Apply(ctx, prune)
-
-	for _, applied := range result.AppliedObjects {
-		resourceState, _ := igr.state.GetResourceState(applied.ID)
-		if applied.Error != nil {
-			resourceState.State = ResourceStateError
-			resourceState.Err = applied.Error
-			hasErrors = true
-		} else {
-			// Update runtime with the applied resource
-			if applied.LastApplied != nil {
-				igr.runtime.SetResource(applied.ID, applied.LastApplied)
-			}
-			igr.updateResourceReadiness(applied.ID)
-		}
-	}
-
-	if err != nil {
-		mark.ResourcesNotReady("failed to apply level %d: %v", levelNum, err)
-		return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
-	}
-
-	if err := result.Errors(); err != nil {
-		mark.ResourcesNotReady("errors applying level %d: %v", levelNum, err)
-		return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
-	}
-
 	if unresolvedResourceID != "" {
 		mark.ResourcesInProgress("waiting for resource resolution in level %d: %s", levelNum, unresolvedResourceID)
 		return igr.delayedRequeue(fmt.Errorf("unresolved resource in level %d: %s", levelNum, unresolvedResourceID))
 	}
 
-	// Check readiness of all resources in this level before proceeding
-	for _, resourceID := range resourceIDs {
-		resourceState, ok := igr.state.GetResourceState(resourceID)
-		if !ok || resourceState.State == ResourceStateSkipped {
-			continue
-		}
-
-		if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
-			mark.ResourcesInProgress("level %d resource %s not ready: %s", levelNum, resourceID, reason)
-			return igr.delayedRequeue(fmt.Errorf("level %d resource %s not ready: %s", levelNum, resourceID, reason))
-		}
-	}
-
-	// If there are any cluster mutations, we need to requeue
-	if result.HasClusterMutation() {
-		mark.ResourcesInProgress("level %d had cluster mutations", levelNum)
-		return igr.delayedRequeue(fmt.Errorf("level %d had cluster mutations", levelNum))
-	}
-
-	igr.log.V(1).Info("Level processed successfully", "level", levelNum)
 	return nil
 }
 
@@ -503,11 +520,11 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 		igr.log.V(1).Info("Deleting level", "level", i, "resources", len(levelResources))
 
 		hasDeleting := false
-		walkErrors := make(map[string]error)
-		var walkErrorsMu sync.Mutex
+		deletionErrors := make(map[string]error)
+		var deletionErrorsMu sync.Mutex
 
 		// Define vertex function for deletion
-		vertexFunc := func(ctx context.Context, resourceID string) error {
+		deleteResource := func(ctx context.Context, resourceID string) error {
 			resourceState, ok := igr.state.GetResourceState(resourceID)
 			if !ok || resourceState == nil || resourceState.State != ResourceStatePendingDeletion {
 				// Resource not pending deletion, skip
@@ -534,12 +551,11 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 		g.SetLimit(stdruntime.NumCPU())
 
 		for _, resourceID := range levelResources {
-			resourceID := resourceID // Capture loop variable
 			g.Go(func() error {
-				if err := vertexFunc(gCtx, resourceID); err != nil {
-					walkErrorsMu.Lock()
-					walkErrors[resourceID] = err
-					walkErrorsMu.Unlock()
+				if err := deleteResource(gCtx, resourceID); err != nil {
+					deletionErrorsMu.Lock()
+					deletionErrors[resourceID] = err
+					deletionErrorsMu.Unlock()
 					return err
 				}
 				return nil
@@ -551,8 +567,8 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 			// At least one deletion failed
 		}
 
-		// Process walk errors
-		for resourceID, err := range walkErrors {
+		// Process errors
+		for resourceID, err := range deletionErrors {
 			igr.log.Error(err, "Error deleting resource", "resourceID", resourceID, "level", i)
 			return err
 		}

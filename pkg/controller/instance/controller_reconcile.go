@@ -187,7 +187,7 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		return fmt.Errorf("failed to compute topological levels: %w", err)
 	}
 
-	igr.log.V(1).Info(fmt.Sprintf("Processing %d levels", len(levels)))
+	igr.log.V(1).Info("Processing levels", "levels", len(levels))
 
 	// Create a single ApplySet for the entire instance
 	config := applyset.Config{

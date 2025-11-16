@@ -178,11 +178,6 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 
 	mark.GraphResolved()
 
-	// Initialize resource states for all resources
-	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		igr.state.SetResourceState(resourceID, &ResourceState{State: ResourceStatePending})
-	}
-
 	// Get topological levels from the DAG
 	dag := igr.runtime.DAG()
 	levels, err := dag.TopologicalSortLevels()
@@ -312,6 +307,8 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, aset apply
 	// All resources in the same topological level are independent by definition
 	processResource := func(ctx context.Context, resourceID string) error {
 		log := igr.log.WithValues("resourceID", resourceID, "level", levelNum)
+
+		igr.state.SetResourceState(resourceID, &ResourceState{State: ResourceStatePending})
 
 		// Mark resource as in progress
 		resourceState := &ResourceState{State: ResourceStateInProgress}
@@ -467,36 +464,43 @@ func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) 
 func (igr *instanceGraphReconciler) initializeDeletionState() error {
 	// Iterate through all resources to check resource states
 	// Order doesn't matter here - we're just gathering current state
-	for _, resourceID := range igr.runtime.TopologicalOrder() {
-		if _, err := igr.runtime.Synchronize(); err != nil {
-			return fmt.Errorf("failed to synchronize during deletion state initialization: %w", err)
-		}
+	levels, err := igr.runtime.DAG().TopologicalSortLevels()
+	if err != nil {
+		return fmt.Errorf("failed to get resource IDs: %w", err)
+	}
 
-		resource, state := igr.runtime.GetResource(resourceID)
-		if state != runtime.ResourceStateResolved {
-			igr.state.SetResourceState(resourceID, &ResourceState{
-				State: ResourceStateSkipped,
-			})
-			continue
-		}
+	for _, level := range levels {
+		for _, resourceID := range level {
+			if _, err := igr.runtime.Synchronize(); err != nil {
+				return fmt.Errorf("failed to synchronize during deletion state initialization: %w", err)
+			}
 
-		// Check if resource exists
-		rc := igr.getResourceClient(resourceID)
-		observed, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
+			resource, state := igr.runtime.GetResource(resourceID)
+			if state != runtime.ResourceStateResolved {
 				igr.state.SetResourceState(resourceID, &ResourceState{
-					State: ResourceStateDeleted,
+					State: ResourceStateSkipped,
 				})
 				continue
 			}
-			return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
-		}
 
-		igr.runtime.SetResource(resourceID, observed)
-		igr.state.SetResourceState(resourceID, &ResourceState{
-			State: ResourceStatePendingDeletion,
-		})
+			// Check if resource exists
+			rc := igr.getResourceClient(resourceID)
+			observed, err := rc.Get(context.TODO(), resource.GetName(), metav1.GetOptions{})
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					igr.state.SetResourceState(resourceID, &ResourceState{
+						State: ResourceStateDeleted,
+					})
+					continue
+				}
+				return fmt.Errorf("failed to check resource %s existence: %w", resourceID, err)
+			}
+
+			igr.runtime.SetResource(resourceID, observed)
+			igr.state.SetResourceState(resourceID, &ResourceState{
+				State: ResourceStatePendingDeletion,
+			})
+		}
 	}
 	return nil
 }

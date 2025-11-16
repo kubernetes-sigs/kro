@@ -136,7 +136,7 @@ func TestAddDependencies_PreventsCycle(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestTopologicalSort_DetectsCycle(t *testing.T) {
+func TestTopologicalSortLevels_DetectsCycle(t *testing.T) {
 	d := NewDirectedAcyclicGraph[string]()
 	_ = d.AddVertex("A", 1)
 	_ = d.AddVertex("B", 2)
@@ -145,118 +145,10 @@ func TestTopologicalSort_DetectsCycle(t *testing.T) {
 	_ = d.AddDependencies("B", []string{"C"})
 	d.Vertices["C"].DependsOn["A"] = struct{}{}
 
-	_, err := d.TopologicalSort()
+	_, err := d.TopologicalSortLevels()
 
 	assert.Error(t, err)
 	assert.NotNil(t, AsCycleError[string](err))
-}
-
-func TestTopologicalSort_TwoNodesNoDeps(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"A", "B"}, order)
-}
-
-func TestTopologicalSort_TwoNodesWithDep(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-	_ = d.AddDependencies("B", []string{"A"})
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"A", "B"}, order)
-}
-
-func TestTopologicalSort_TwoNodesReverseDep(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-	_ = d.AddDependencies("A", []string{"B"})
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"B", "A"}, order)
-}
-
-func TestTopologicalSort_MultipleNodesNoDeps(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-	_ = d.AddVertex("C", 2)
-	_ = d.AddVertex("D", 3)
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"A", "B", "C", "D"}, order)
-}
-
-func TestTopologicalSort_Chain(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-	_ = d.AddVertex("C", 2)
-	_ = d.AddDependencies("B", []string{"A"})
-	_ = d.AddDependencies("C", []string{"B"})
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"A", "B", "C"}, order)
-}
-
-func TestTopologicalSort_ComplexDAG(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("A", 0)
-	_ = d.AddVertex("B", 1)
-	_ = d.AddVertex("C", 2)
-	_ = d.AddVertex("D", 3)
-	_ = d.AddVertex("E", 4)
-	_ = d.AddVertex("F", 5)
-	_ = d.AddDependencies("A", []string{"B", "C"})
-	_ = d.AddDependencies("B", []string{"D"})
-	_ = d.AddDependencies("C", []string{"D"})
-	_ = d.AddDependencies("E", []string{"A", "F"})
-
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Len(t, order, 6)
-	// Verify dependencies are respected
-	pos := make(map[string]int)
-	for i, node := range order {
-		pos[node] = i
-	}
-	// D must come before B and C
-	assert.Less(t, pos["D"], pos["B"])
-	assert.Less(t, pos["D"], pos["C"])
-	// B and C must come before A
-	assert.Less(t, pos["B"], pos["A"])
-	assert.Less(t, pos["C"], pos["A"])
-	// A and F must come before E
-	assert.Less(t, pos["A"], pos["E"])
-	assert.Less(t, pos["F"], pos["E"])
-}
-
-func TestTopologicalSort_PreservesOrder(t *testing.T) {
-	d := NewDirectedAcyclicGraph[string]()
-	_ = d.AddVertex("Z", 0)
-	_ = d.AddVertex("Y", 1)
-	_ = d.AddVertex("X", 2)
-	_ = d.AddVertex("W", 3)
-	// No dependencies, should preserve original order
-	order, err := d.TopologicalSort()
-
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"Z", "Y", "X", "W"}, order)
 }
 
 func TestTopologicalSortLevels_SimpleChain(t *testing.T) {

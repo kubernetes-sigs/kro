@@ -581,9 +581,14 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				assert.Contains(t, clusterDeps, "subnet2")
 
 				// Validate topological order
-				order, err := g.DAG.TopologicalSort()
+				levels, err := g.DAG.TopologicalSortLevels()
+				resources := make([]string, 0)
+				for _, level := range levels {
+					resources = append(resources, level...)
+				}
+
 				assert.NoError(t, err)
-				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, order)
+				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, resources)
 			},
 		},
 		{
@@ -725,8 +730,12 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				assert.Empty(t, g.Resources["pod3"].GetDependencies())
 				assert.Empty(t, g.Resources["pod4"].GetDependencies())
 				// Order doesn't matter as they're all independent
-				order, err := g.DAG.TopologicalSort()
+				levels, err := g.DAG.TopologicalSortLevels()
 				assert.NoError(t, err)
+				var order []string
+				for _, level := range levels {
+					order = append(order, level...)
+				}
 				assert.Len(t, order, 4)
 			},
 		},
@@ -995,8 +1004,12 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 
 				// Validate topological order - check that dependencies are respected
 				// Note: The exact order within levels may vary, but dependencies must be satisfied
-				order, err := g.DAG.TopologicalSort()
+				levels, err := g.DAG.TopologicalSortLevels()
 				assert.NoError(t, err)
+				var order []string
+				for _, level := range levels {
+					order = append(order, level...)
+				}
 				assert.Len(t, order, 11)
 
 				// vpc and policy should come before their dependents

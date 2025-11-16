@@ -37,9 +37,6 @@ type Interface interface {
 	// encounters any issues.
 	Synchronize() (bool, error)
 
-	// TopologicalOrder returns the topological order of resources.
-	TopologicalOrder() []string
-
 	// DAG returns the underlying dependency graph.
 	DAG() *dag.DirectedAcyclicGraph[string]
 

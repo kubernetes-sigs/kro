@@ -48,17 +48,11 @@ func NewResourceGraphDefinitionRuntime(
 	resources map[string]Resource,
 	dag *dag.DirectedAcyclicGraph[string],
 ) (*ResourceGraphDefinitionRuntime, error) {
-	// Derive topological order from DAG
-	topologicalOrder, err := dag.TopologicalSort()
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute topological order: %w", err)
-	}
 
 	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
 		dag:                          dag,
-		topologicalOrder:             topologicalOrder,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
@@ -133,8 +127,7 @@ func NewResourceGraphDefinitionRuntime(
 
 // ResourceGraphDefinitionRuntime implements the Interface for managing and synchronizing
 // resources. Is is the responsibility of the consumer to call Synchronize
-// appropriately, and decide whether to follow the TopologicalOrder or a
-// BFS/DFS traversal of the resources.
+// appropriately.
 type ResourceGraphDefinitionRuntime struct {
 	// instance represents the main resource instance being managed.
 	// This is typically the top-level custom resource that owns or manages
@@ -170,20 +163,9 @@ type ResourceGraphDefinitionRuntime struct {
 	// dag is the directed acyclic graph representation of resource dependencies
 	dag *dag.DirectedAcyclicGraph[string]
 
-	// topologicalOrder holds the dependency order of resources. This order
-	// ensures that resources are processed in a way that respects their
-	// dependencies, preventing circular dependencies and ensuring efficient
-	// synchronization.
-	topologicalOrder []string
-
 	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
-}
-
-// TopologicalOrder returns the topological order of resources.
-func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
-	return rt.topologicalOrder
 }
 
 // DAG returns the underlying dependency graph.
@@ -194,8 +176,7 @@ func (rt *ResourceGraphDefinitionRuntime) DAG() *dag.DirectedAcyclicGraph[string
 // ResourceDescriptor returns the descriptor for a given resource id.
 //
 // It is the responsibility of the caller to ensure that the resource id
-// exists in the runtime. a.k.a the caller should use the TopologicalOrder
-// to get the resource ids.
+// exists in the runtime.
 func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) ResourceDescriptor {
 	return rt.resources[id]
 }

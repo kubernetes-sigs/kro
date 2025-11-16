@@ -167,6 +167,7 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 // reconcileInstance handles the reconciliation of an active instance.
 // Resources are processed level-by-level using a single ApplySet for the entire instance.
 // This follows the ApplySet spec which uses GKNN-based inventory tracking in parent annotations.
+// See https://github.com/kubernetes/enhancements/blob/master/keps/sig-cli/3659-kubectl-apply-prune/README.md#design-details-applyset-specification
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)

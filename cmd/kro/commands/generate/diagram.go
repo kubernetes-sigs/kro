@@ -60,12 +60,6 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to setup rgd graph: %w", err)
 	}
 
-	// Get topological order from DAG
-	topologicalOrder, err := rgdGraph.DAG.TopologicalSort()
-	if err != nil {
-		return fmt.Errorf("failed to compute topological order: %w", err)
-	}
-
 	graph := charts.NewGraph()
 
 	// Graph layout
@@ -75,10 +69,8 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 			Height: "90vh",
 		}),
 		charts.WithTitleOpts(opts.Title{
-			Title: fmt.Sprintf("Resource Graph: %s", rgd.Name),
-			Subtitle: fmt.Sprintf("Resources: %d, Dependencies: %d",
-				len(rgdGraph.Resources),
-				rgdGraph.DAG.EdgeCount()),
+			Title:    fmt.Sprintf("Resource Graph: %s", rgd.Name),
+			Subtitle: fmt.Sprintf("Topological Order: %v", rgdGraph.TopologicalOrder),
 			TitleStyle: &opts.TextStyle{
 				FontSize:   18,
 				FontWeight: "bold",
@@ -92,9 +84,8 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 		}),
 	)
 
-	// Map resources to their topological order for display
 	resourceOrder := make(map[string]int)
-	for i, resourceName := range topologicalOrder {
+	for i, resourceName := range rgdGraph.TopologicalOrder {
 		resourceOrder[resourceName] = i + 1
 	}
 

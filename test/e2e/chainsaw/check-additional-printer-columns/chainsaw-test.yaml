@@ -1,0 +1,51 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-additional-printer-columns
+spec:
+  description: | 
+    Tests AdditionalPrinterColumnPolicy behavior in ResourceGraphDefinitions.
+    Verifies that the different policies (default, Replace, Add) correctly control
+    how additional printer columns are applied to generated CRDs.
+  steps:
+  - name: test-default-policy
+    try:
+    - apply:
+        file: rgd-default.yaml
+      description: Apply RGD with no additionalPrinterColumnPolicy (should default to Replace)
+    - assert:
+        file: crd-default-assert.yaml
+      description: Verify CRD has default printer columns
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: test-replace-policy
+    try:
+    - apply:
+        file: rgd-replace-policy.yaml
+      description: Apply RGD with Replace policy and custom columns
+    - assert:
+        file: crd-replace-assert.yaml
+      description: Verify CRD has only custom printer columns (no defaults)
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: test-add-policy
+    try:
+    - apply:
+        file: rgd-add-policy.yaml
+      description: Apply RGD with Add policy and custom columns
+    - assert:
+        file: crd-add-assert.yaml
+      description: Verify CRD merges custom columns with defaults
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

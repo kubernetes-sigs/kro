@@ -212,8 +212,11 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			return err
 		}
 
-		// Apply after each level to respect topological ordering
-		// Don't prune yet - we'll prune once at the end after all levels are applied
+		// We apply after each level (without pruning) to:
+		// 1. Respect topological ordering - resources exist before dependents need them
+		// 2. Update the ApplySet parent incrementally for failure recovery
+		// 3. Synchronize runtime so later levels can reference earlier outputs
+		// Final pruning happens only after all levels are successfully applied
 		result, err := aset.Apply(ctx, false)
 		if err != nil {
 			mark.ResourcesNotReady("failed to apply level %d: %v", levelNum, err)
@@ -225,7 +228,9 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			return igr.delayedRequeue(fmt.Errorf("failed to apply level %d: %w", levelNum, err))
 		}
 
-		// Update resource states and runtime with applied resources
+		// Update tracking state and runtime with the results from this apply operation.
+		// We sync both the reconciliation state (for status reporting) and the runtime
+		// (for CEL evaluation) with the latest cluster state of applied resources.
 		for _, applied := range result.AppliedObjects {
 			resourceState, _ := igr.state.GetResourceState(applied.ID)
 			if applied.Error != nil {
@@ -239,7 +244,9 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			}
 		}
 
-		// Check readiness of all resources in this level before proceeding
+		// Verify all resources in this level are ready before proceeding to the next level.
+		// This enforces the dependency contract: resources must be fully ready before
+		// their dependents (in later levels) are created.
 		for _, resourceID := range levelResources {
 			resourceState, ok := igr.state.GetResourceState(resourceID)
 			if !ok || resourceState.State == ResourceStateSkipped {
@@ -252,14 +259,17 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 			}
 		}
 
-		// If there are any cluster mutations, requeue to get latest state
+		// If the cluster modified any applied resources (via webhooks, admission controllers,
+		// or defaulting), requeue to fetch the updated state. The next reconciliation will
+		// have the post-mutation values available for CEL evaluation in later levels.
 		if result.HasClusterMutation() {
 			mark.ResourcesInProgress("level %d had cluster mutations", levelNum)
 			return igr.delayedRequeue(fmt.Errorf("level %d had cluster mutations", levelNum))
 		}
 
-		// Synchronize runtime after each level to update CEL expressions
-		// that depend on resources from this level
+		// Synchronize runtime after applying this level to ensure the CEL context is up-to-date.
+		// Resources in later levels may have CEL expressions that reference fields from resources
+		// in this level, so we must synchronize before proceeding to the next level.
 		if _, err := igr.runtime.Synchronize(); err != nil {
 			mark.ResourcesNotReady("failed to synchronize after level %d: %v", levelNum, err)
 			return fmt.Errorf("failed to synchronize after level %d: %w", levelNum, err)

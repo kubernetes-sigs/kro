@@ -538,7 +538,6 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) 
 		deletionErrors := make(map[string]error)
 		var deletionErrorsMu sync.Mutex
 
-		// Define vertex function for deletion
 		deleteResource := func(ctx context.Context, resourceID string) error {
 			resourceState, ok := igr.state.GetResourceState(resourceID)
 			if !ok || resourceState == nil || resourceState.State != ResourceStatePendingDeletion {

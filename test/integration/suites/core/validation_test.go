@@ -167,7 +167,6 @@ var _ = Describe("Validation", func() {
 	})
 
 	Context("Kubernetes Object Structure", func() {
-		//nolint:dupl
 		It("should validate correct kubernetes object structure", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-k8s-valid",
 				generator.WithSchema(
@@ -319,7 +318,6 @@ var _ = Describe("Validation", func() {
 	})
 
 	Context("Proper Cleanup", func() {
-		//nolint:dupl
 		It("should not panic when deleting an inactive ResourceGraphDefinition", func(ctx SpecContext) {
 			rgd := generator.NewResourceGraphDefinition("test-cleanup",
 				generator.WithSchema(

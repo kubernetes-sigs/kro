@@ -224,6 +224,18 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
 
+	// Compute the topological levels of the graph and ensure it is acyclic.
+	levels, err := dag.TopologicalSortLevels()
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute topological levels: %w", err)
+	}
+
+	// Flatten the levels into a single topological order slice.
+	var topologicalOrder []string
+	for _, level := range levels {
+		topologicalOrder = append(topologicalOrder, level...)
+	}
+
 	// Now that we know all resources are properly declared and dependencies are valid,
 	// we can perform type checking on the CEL expressions.
 
@@ -250,9 +262,10 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	resourceGraphDefinition := &Graph{
-		DAG:       dag,
-		Instance:  instance,
-		Resources: resources,
+		DAG:              dag,
+		Instance:         instance,
+		Resources:        resources,
+		TopologicalOrder: topologicalOrder,
 	}
 	return resourceGraphDefinition, nil
 }

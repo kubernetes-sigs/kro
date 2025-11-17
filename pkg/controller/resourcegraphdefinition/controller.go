@@ -169,9 +169,9 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
+	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
-	if err := r.updateStatus(ctx, o, resourcesInformation); err != nil {
+	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
 	}
 

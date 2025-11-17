@@ -31,6 +31,8 @@ type Graph struct {
 	Instance *Resource
 	// Resources is a map of the processed resources in the resource graph definition.
 	Resources map[string]*Resource
+	// TopologicalOrder is the topological order of the resources in the resource graph definition.
+	TopologicalOrder []string
 }
 
 // NewGraphRuntime creates a new runtime resource graph definition from the resource graph definition instance.

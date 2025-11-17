@@ -44,9 +44,7 @@ import (
 )
 
 // NewBuilder creates a new GraphBuilder instance.
-func NewBuilder(
-	clientConfig *rest.Config, httpClient *http.Client,
-) (*Builder, error) {
+func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, error) {
 	schemaResolver, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
@@ -720,8 +718,8 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
 			if err != nil {
 				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
 			}
-
 			outputType := checkedAST.OutputType()
+
 			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
 				return err
 			}

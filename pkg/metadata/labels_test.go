@@ -96,7 +96,7 @@ func TestHasMatchingKROOwner(t *testing.T) {
 			aOwnerID:   "test-uid-123",
 			bOwnerName: "test-rgd",
 			bOwnerID:   "test-uid-456",
-			expected:   false,
+			expected:   true,
 		},
 		{
 			name:     "no owner labels",

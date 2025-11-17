@@ -58,12 +58,10 @@ func IsKROOwned(meta metav1.Object) bool {
 // resources before calling this function.
 func HasMatchingKROOwner(a, b metav1.ObjectMeta) bool {
 	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
-	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]
 
 	bOwnerName := b.Labels[ResourceGraphDefinitionNameLabel]
-	bOwnerID := b.Labels[ResourceGraphDefinitionIDLabel]
 
-	return aOwnerName == bOwnerName && aOwnerID == bOwnerID
+	return aOwnerName == bOwnerName
 }
 
 // SetKROOwned sets the OwnedLabel to true on the resource.

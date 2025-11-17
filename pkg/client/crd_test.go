@@ -127,8 +127,7 @@ func TestCRDWrapper_verifyNoConflict(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
-			errMsg:  "conflict detected: CRD test.crd has ownership by another ResourceGraphDefinition",
+			wantErr: false,
 		},
 	}
 

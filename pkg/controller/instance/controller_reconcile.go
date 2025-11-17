@@ -135,7 +135,11 @@ func (igr *instanceGraphReconciler) handleReconciliation(
 
 func (igr *instanceGraphReconciler) updateResourceReadiness(resourceID string) {
 	log := igr.log.WithValues("resourceID", resourceID)
-	resourceState, _ := igr.state.GetResourceState(resourceID)
+	resourceState, ok := igr.state.GetResourceState(resourceID)
+	if !ok {
+		log.Error(nil, "Resource state not found", "resourceID", resourceID)
+		return
+	}
 	if ready, reason, err := igr.runtime.IsResourceReady(resourceID); err != nil || !ready {
 		log.V(1).Info("Resource not ready", "reason", reason, "error", err)
 		resourceState.State = ResourceStateWaitingForReadiness
@@ -232,7 +236,11 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 		// We sync both the reconciliation state (for status reporting) and the runtime
 		// (for CEL evaluation) with the latest cluster state of applied resources.
 		for _, applied := range result.AppliedObjects {
-			resourceState, _ := igr.state.GetResourceState(applied.ID)
+			resourceState, ok := igr.state.GetResourceState(applied.ID)
+			if !ok {
+				igr.log.Error(nil, "Resource state not found for applied object", "resourceID", applied.ID)
+				continue
+			}
 			if applied.Error != nil {
 				resourceState.State = ResourceStateError
 				resourceState.Err = applied.Error
@@ -454,14 +462,21 @@ func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) 
 	// Mark resources as being deleted
 	mark.ResourcesInProgress("deleting resources in reverse topological order")
 
+	// Compute topological levels for deletion
+	levels, err := igr.runtime.DAG().TopologicalSortLevels()
+	if err != nil {
+		mark.ResourcesNotReady("failed to compute topological levels: %v", err)
+		return fmt.Errorf("failed to compute topological levels: %w", err)
+	}
+
 	// Initialize deletion state for all resources
-	if err := igr.initializeDeletionState(); err != nil {
+	if err := igr.initializeDeletionState(levels); err != nil {
 		mark.ResourcesNotReady("failed to initialize deletion state: %v", err)
 		return fmt.Errorf("failed to initialize deletion state: %w", err)
 	}
 
 	// Delete resources in reverse order
-	if err := igr.deleteResourcesInOrder(ctx); err != nil {
+	if err := igr.deleteResourcesInOrder(ctx, levels); err != nil {
 		mark.ResourcesNotReady("failed to delete resources: %v", err)
 		return err
 	}
@@ -472,14 +487,9 @@ func (igr *instanceGraphReconciler) handleInstanceDeletion(ctx context.Context) 
 
 // initializeDeletionState prepares resources for deletion by checking their
 // current state and marking them appropriately.
-func (igr *instanceGraphReconciler) initializeDeletionState() error {
+func (igr *instanceGraphReconciler) initializeDeletionState(levels [][]string) error {
 	// Iterate through all resources to check resource states
 	// Order doesn't matter here - we're just gathering current state
-	levels, err := igr.runtime.DAG().TopologicalSortLevels()
-	if err != nil {
-		return fmt.Errorf("failed to get resource IDs: %w", err)
-	}
-
 	for _, level := range levels {
 		for _, resourceID := range level {
 			if _, err := igr.runtime.Synchronize(); err != nil {
@@ -519,14 +529,7 @@ func (igr *instanceGraphReconciler) initializeDeletionState() error {
 // deleteResourcesInOrder processes resource deletion in reverse topological order
 // to respect dependencies between resources. Processes deletions level-by-level
 // in reverse order for predictable resource cleanup.
-func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context) error {
-	// Get topological levels from the DAG
-	graphDAG := igr.runtime.DAG()
-	levels, err := graphDAG.TopologicalSortLevels()
-	if err != nil {
-		return fmt.Errorf("failed to compute topological levels for deletion: %w", err)
-	}
-
+func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context, levels [][]string) error {
 	igr.log.V(1).Info("Deleting resources in reverse levels", "totalLevels", len(levels))
 
 	// Process each level in reverse order (bottom-up for deletion)
@@ -614,15 +617,19 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 	resource, _ := igr.runtime.GetResource(resourceID)
 	rc := igr.getResourceClient(resourceID)
 
+	// Get resource state once and check it exists
+	resourceState, ok := igr.state.GetResourceState(resourceID)
+	if !ok {
+		return fmt.Errorf("resource state not found for %s", resourceID)
+	}
+
 	// Attempt to delete the resource
 	err := rc.Delete(ctx, resource.GetName(), metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			resourceState, _ := igr.state.GetResourceState(resourceID)
 			resourceState.State = ResourceStateDeleted
 			return nil
 		}
-		resourceState, _ := igr.state.GetResourceState(resourceID)
 		resourceState.State = InstanceStateError
 		resourceState.Err = fmt.Errorf("failed to delete resource: %w", err)
 		return resourceState.Err
@@ -630,7 +637,6 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 
 	// Delete initiated successfully - mark as deleting and return nil
 	// The controller will requeue to check deletion status later
-	resourceState, _ := igr.state.GetResourceState(resourceID)
 	resourceState.State = InstanceStateDeleting
 	return nil
 }

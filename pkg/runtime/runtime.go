@@ -192,15 +192,12 @@ func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) Resource
 // readiness conditions are met or not.
 func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
 	rt.mu.RLock()
-	r, ok := rt.resolvedResources[id]
-	rt.mu.RUnlock()
-	if ok {
+	defer rt.mu.RUnlock()
+
+	if r, ok := rt.resolvedResources[id]; ok {
 		return r, ResourceStateResolved
 	}
-	rt.mu.RLock()
-	resolved := rt.canProcessResource(id)
-	rt.mu.RUnlock()
-	if resolved {
+	if rt.canProcessResource(id) {
 		return rt.resources[id].Unstructured(), ResourceStateResolved
 	}
 	return nil, ResourceStateWaitingOnDependencies
@@ -526,13 +523,13 @@ func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
 // of ignored resources.
 func (rt *ResourceGraphDefinitionRuntime) areDependenciesIgnored(resourceID string) bool {
 	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
 	for _, p := range rt.resources[resourceID].GetDependencies() {
 		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
-			rt.mu.RUnlock()
 			return true
 		}
 	}
-	rt.mu.RUnlock()
 	return false
 }
 

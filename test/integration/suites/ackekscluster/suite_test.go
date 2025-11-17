@@ -92,15 +92,15 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
 				"clusterRole",
 				"clusterVPC",
+				"clusterAdminRole",
+				"clusterElasticIPAddress",
+				"clusterNodeRole",
 				"clusterInternetGateway",
 				"clusterRouteTable",
 				"clusterSubnetA",
 				"clusterSubnetB",
 				"cluster",
-				"clusterAdminRole",
-				"clusterElasticIPAddress",
 				"clusterNATGateway",
-				"clusterNodeRole",
 				"clusterNodeGroup",
 			}))
 

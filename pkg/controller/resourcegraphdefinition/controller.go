@@ -36,6 +36,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
@@ -48,8 +49,7 @@ type ResourceGraphDefinitionReconciler struct {
 
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
+	clientSet kroclient.SetInterface
 
 	metadataLabeler         metadata.Labeler
 	rgBuilder               *graph.Builder
@@ -64,12 +64,10 @@ func NewResourceGraphDefinitionReconciler(
 	builder *graph.Builder,
 	maxConcurrentReconciles int,
 ) *ResourceGraphDefinitionReconciler {
-	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
 		clientSet:               clientSet,
 		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
@@ -157,6 +155,9 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 ) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
+			if needRequeue, duration := requeue.Check(err); needRequeue {
+				return ctrl.Result{RequeueAfter: duration}, nil
+			}
 			return ctrl.Result{}, err
 		}
 		if err := r.setUnmanaged(ctx, o); err != nil {
@@ -171,8 +172,14 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 
 	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
+	// Always update status
 	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
+	}
+
+	// Check if this is a requeue error
+	if needRequeue, duration := requeue.Check(reconcileErr); needRequeue {
+		return ctrl.Result{RequeueAfter: duration}, nil
 	}
 
 	return ctrl.Result{}, reconcileErr

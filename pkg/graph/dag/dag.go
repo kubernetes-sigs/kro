@@ -136,9 +136,10 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 	return nil
 }
 
-// TopologicalSortLevels returns the vertices of the graph grouped by topological levels.
-// Each level contains vertices that have no dependencies on each other and can be
-// processed in parallel. Within each level, vertices are sorted by their original Order.
+// TopologicalSortLevels returns the vertices of the graph grouped by topological levels
+// using Kahn's algorithm. Each level contains vertices that have no dependencies on each
+// other and can be processed in parallel. Within each level, vertices are sorted by their
+// original Order for stability.
 //
 // For example, given a graph:
 //
@@ -149,8 +150,75 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 // The result would be: [[A, B], [C], [D]]
 // where A and B can be processed in parallel, then C, then D.
 func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
-	visited := make(map[T]bool)
+	// Calculate in-degrees (number of dependencies) for each vertex
+	inDegree := make(map[T]int)
+	for id := range d.Vertices {
+		inDegree[id] = len(d.Vertices[id].DependsOn)
+	}
+
+	// Find all vertices with in-degree 0 (no dependencies)
+	currentLevel := make([]*Vertex[T], 0)
+	for id, degree := range inDegree {
+		if degree == 0 {
+			currentLevel = append(currentLevel, d.Vertices[id])
+		}
+	}
+
 	var levels [][]T
+	processed := 0
+
+	// Process vertices level by level
+	for len(currentLevel) > 0 {
+		// Sort current level by Order to maintain stability and preserve user-provided ordering
+		sort.Slice(currentLevel, func(i, j int) bool {
+			return currentLevel[i].Order < currentLevel[j].Order
+		})
+
+		// Convert vertices to IDs for output
+		levelIDs := make([]T, len(currentLevel))
+		for i, v := range currentLevel {
+			levelIDs[i] = v.ID
+		}
+		levels = append(levels, levelIDs)
+		processed += len(currentLevel)
+
+		// Find next level by decrementing in-degrees
+		nextLevel := make([]*Vertex[T], 0)
+		for _, vertex := range currentLevel {
+			// For each vertex that depends on the current vertex, decrement its in-degree
+			for id, v := range d.Vertices {
+				if _, dependsOn := v.DependsOn[vertex.ID]; dependsOn {
+					inDegree[id]--
+					if inDegree[id] == 0 {
+						nextLevel = append(nextLevel, v)
+					}
+				}
+			}
+		}
+
+		currentLevel = nextLevel
+	}
+
+	// Check if all vertices were processed (if not, there's a cycle)
+	if processed != len(d.Vertices) {
+		hasCycle, cycle := d.hasCycle()
+		if !hasCycle {
+			// Unexpected state
+			return nil, &CycleError[T]{}
+		}
+		return nil, &CycleError[T]{
+			Cycle: cycle,
+		}
+	}
+
+	return levels, nil
+}
+
+// TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
+// and preserving order of nodes within each "depth" of the topological ordering.
+func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
+	visited := make(map[T]bool)
+	var order []T
 
 	// Make a list of vertices, sorted by Order
 	vertices := make([]*Vertex[T], 0, len(d.Vertices))
@@ -162,10 +230,8 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 	})
 
 	for len(visited) < len(vertices) {
-		var currentLevel []T
+		progress := false
 
-		// Only find vertices in level whose dependencies
-		// are already resolved in a previous level.
 		for _, vertex := range vertices {
 			if visited[vertex.ID] {
 				continue
@@ -182,11 +248,12 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 				continue
 			}
 
-			currentLevel = append(currentLevel, vertex.ID)
+			order = append(order, vertex.ID)
+			visited[vertex.ID] = true
+			progress = true
 		}
 
-		if len(currentLevel) == 0 {
-			// No progress made - there must be a cycle
+		if !progress {
 			hasCycle, cycle := d.hasCycle()
 			if !hasCycle {
 				// Unexpected!
@@ -196,17 +263,9 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 				Cycle: cycle,
 			}
 		}
-
-		// Mark all vertices in this level as visited AFTER collecting them all
-		// This ensures that vertices in the same level don't see each other as "visited"
-		for _, id := range currentLevel {
-			visited[id] = true
-		}
-
-		levels = append(levels, currentLevel)
 	}
 
-	return levels, nil
+	return order, nil
 }
 
 func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {

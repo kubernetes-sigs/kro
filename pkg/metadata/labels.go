@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	logr "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -56,10 +58,17 @@ func IsKROOwned(meta metav1.Object) bool {
 // HasMatchingKROOwner returns true if resources have the same RGD owner.
 // Note: The caller is responsible for ensuring that KRO labels exist on both
 // resources before calling this function.
-func HasMatchingKROOwner(a, b metav1.ObjectMeta) bool {
+func HasMatchingKROOwner(ctx context.Context, a, b metav1.ObjectMeta) bool {
+	log := logr.FromContext(ctx)
 	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
+	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]
 
 	bOwnerName := b.Labels[ResourceGraphDefinitionNameLabel]
+	bOwnerID := b.Labels[ResourceGraphDefinitionIDLabel]
+
+	if aOwnerName == bOwnerName && aOwnerID != bOwnerID {
+		log.Info("Existing Instance CRD being adopted by new RGD", "name", aOwnerName, "existingRGDID", aOwnerID, "newRGDID", bOwnerID)
+	}
 
 	return aOwnerName == bOwnerName
 }

@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,7 @@ func TestHasMatchingKROOwner(t *testing.T) {
 		},
 	}
 
+	ctx := context.TODO()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			labelsA := map[string]string{}
@@ -119,7 +121,7 @@ func TestHasMatchingKROOwner(t *testing.T) {
 
 			metaA := metav1.ObjectMeta{Labels: labelsA}
 			metaB := metav1.ObjectMeta{Labels: labelsB}
-			result := HasMatchingKROOwner(metaA, metaB)
+			result := HasMatchingKROOwner(ctx, metaA, metaB)
 			assert.Equal(t, tc.expected, result)
 		})
 	}

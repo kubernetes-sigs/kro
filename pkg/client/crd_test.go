@@ -15,6 +15,7 @@
 package client
 
 import (
+	"context"
 	"testing"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -131,10 +132,11 @@ func TestCRDWrapper_verifyNoConflict(t *testing.T) {
 		},
 	}
 
+	ctx := context.TODO()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := &CRDWrapper{}
-			err := w.verifyOwnership(tt.existingCRD, tt.newCRD)
+			err := w.verifyOwnership(ctx, tt.existingCRD, tt.newCRD)
 
 			if tt.wantErr {
 				assert.Error(t, err)

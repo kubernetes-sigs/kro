@@ -125,7 +125,7 @@ func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
 	} else {
-		if err := w.verifyOwnership(existing, crd); err != nil {
+		if err := w.verifyOwnership(ctx, existing, crd); err != nil {
 			return err
 		}
 
@@ -205,12 +205,12 @@ func (w *CRDWrapper) waitForReady(ctx context.Context, name string) error {
 // ResourceGraphDefinition that is attempting to update it. This prevents conflicts
 // where multiple ResourceGraphDefinitions try to manage the same CRD, or where a
 // CRD created outside of KRO is accidentally overwritten.
-func (w *CRDWrapper) verifyOwnership(existingCRD *v1.CustomResourceDefinition, newCRD v1.CustomResourceDefinition) error {
+func (w *CRDWrapper) verifyOwnership(ctx context.Context, existingCRD *v1.CustomResourceDefinition, newCRD v1.CustomResourceDefinition) error {
 	if !metadata.IsKROOwned(&existingCRD.ObjectMeta) {
 		return fmt.Errorf("conflict detected: CRD %s already exists and is not owned by KRO", existingCRD.Name)
 	}
 
-	if !metadata.HasMatchingKROOwner(existingCRD.ObjectMeta, newCRD.ObjectMeta) {
+	if !metadata.HasMatchingKROOwner(ctx, existingCRD.ObjectMeta, newCRD.ObjectMeta) {
 		return fmt.Errorf("conflict detected: CRD %s has ownership by another ResourceGraphDefinition", existingCRD.Name)
 	}
 

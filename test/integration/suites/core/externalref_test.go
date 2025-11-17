@@ -122,6 +122,8 @@ var _ = Describe("ExternalRef", func() {
 
 			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		By("creating instance")
@@ -196,6 +198,8 @@ var _ = Describe("ExternalRef", func() {
 
 			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(ContainElements("deployment1", "deployment"))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		By("creating external ref dependency")

@@ -284,6 +284,8 @@ Try to only rely on the `Ready` condition, as other condition types may change f
 
 :::
 
+Additionally, the ResourceGraphDefinition contains a `topologicalOrder` field that provides a list of resources in the order they should be processed. This is useful for understanding the dependencies between resources and their apply order.
+
 Generally a status in `ResourceGraphDefinition` may look like
 
 ```yaml
@@ -314,4 +316,7 @@ status:
       status: "True"
       type: Ready
   state: Active
+  topologicalOrder:
+    - configmap
+    - deployment
 ```

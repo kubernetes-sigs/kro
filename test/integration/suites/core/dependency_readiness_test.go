@@ -154,7 +154,6 @@ var _ = Describe("Dependency Readiness", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		//nolint:dupl
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
@@ -167,6 +166,8 @@ var _ = Describe("Dependency Readiness", func() {
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(3))
 
 			// Verify topological order (configmaps should come before deployment)
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(3))
+			g.Expect(createdRGD.Status.TopologicalOrder[2]).To(Equal("deployment"))
 
 			// Verify ready condition
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())

@@ -11,4 +11,7 @@ status:
   (conditions[?type == 'Ready']):
     - status: 'True'
   state: Active
+  topologicalOrder:
+    - input
+    - owned
 

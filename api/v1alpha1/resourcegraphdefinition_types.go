@@ -135,6 +135,8 @@ const (
 type ResourceGraphDefinitionStatus struct {
 	// State is the state of the resourcegraphdefinition
 	State ResourceGraphDefinitionState `json:"state,omitempty"`
+	// TopologicalOrder is the topological order of the resourcegraphdefinition graph
+	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of an object's state
 	Conditions Conditions `json:"conditions,omitempty"`
 	// Resources represents the resources, and their information (dependencies for now)
@@ -162,6 +164,7 @@ type Dependency struct {
 // +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.schema.apiVersion`
 // +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.schema.kind`
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
+// +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:shortName=rgd,scope=Cluster
 

@@ -163,6 +163,16 @@ var _ = Describe("Topology", func() {
 			}
 			g.Expect(readyCondition).ToNot(BeNil())
 			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			// Verify topological order
+			g.Expect(rgd.Status.TopologicalOrder).To(HaveLen(5))
+			g.Expect(rgd.Status.TopologicalOrder).To(Equal([]string{
+				"clusterRole",
+				"vpc",
+				"subnetA",
+				"subnetB",
+				"cluster",
+			}))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 

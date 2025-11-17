@@ -211,7 +211,6 @@ var _ = Describe("Conditions", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
-		//nolint:dupl
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
@@ -223,7 +222,17 @@ var _ = Describe("Conditions", func() {
 			g.Expect(createdRGD.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(6))
 
+			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
+				"deploymentA",
+				"serviceAccountA",
+				"serviceA",
+				"deploymentB",
+				"serviceAccountB",
+				"serviceB",
+			}))
+
 			// Verify the ResourceGraphDefinition status
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(6))
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

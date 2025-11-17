@@ -102,6 +102,8 @@ var _ = Describe("DeploymentService", func() {
 			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(2))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{"deployment", "service"}))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance

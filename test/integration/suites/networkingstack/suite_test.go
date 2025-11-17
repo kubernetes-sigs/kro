@@ -87,6 +87,15 @@ var _ = Describe("NetworkingStack", func() {
 			g.Expect(createdRGD.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
 			g.Expect(createdRGD.Spec.Resources).To(HaveLen(5)) // vpc, 3 subnets, security group
 
+			// Verify the ResourceGraphDefinition status
+			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(5))
+			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
+				"vpc",
+				"securityGroup",
+				"subnetAZA",
+				"subnetAZB",
+				"subnetAZC",
+			}))
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

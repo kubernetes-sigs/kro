@@ -13,4 +13,6 @@ status:
     - status: 'True'
       observedGeneration: 1
   state: Active
+  topologicalOrder:
+    - deployment
 

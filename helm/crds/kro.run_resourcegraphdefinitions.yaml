@@ -26,10 +26,6 @@ spec:
     - jsonPath: .status.state
       name: STATE
       type: string
-    - jsonPath: .status.topologicalOrder
-      name: TOPOLOGICALORDER
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: AGE
       type: date

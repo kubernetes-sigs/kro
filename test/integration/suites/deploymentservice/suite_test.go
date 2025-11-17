@@ -47,7 +47,7 @@ func TestDeploymentservice(t *testing.T) {
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 3 * time.Second,
+					DefaultRequeueDuration: 15 * time.Second,
 				},
 			},
 		)

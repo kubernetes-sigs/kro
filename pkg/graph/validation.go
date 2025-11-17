@@ -98,12 +98,7 @@ func isValidKindName(name string) bool {
 
 // isKROReservedWord checks if the given word is a reserved word in KRO.
 func isKROReservedWord(word string) bool {
-	for _, w := range reservedKeyWords.List() {
-		if w == word {
-			return true
-		}
-	}
-	return false
+	return reservedKeyWords.Has(word)
 }
 
 // validateResourceGraphDefinitionNamingConventions validates the naming conventions of

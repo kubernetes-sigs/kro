@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
@@ -42,7 +43,8 @@ var _ Interface = &ResourceGraphDefinitionRuntime{}
 // static variables. This helps hide the complexity of the runtime from the
 // caller (instance controller in this case).
 //
-// The output of this function is NOT thread safe.
+// The returned runtime supports concurrent reads and writes to mutable
+// resource state via internal locking.
 func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
@@ -129,6 +131,9 @@ func NewResourceGraphDefinitionRuntime(
 // resources. Is is the responsibility of the consumer to call Synchronize
 // appropriately.
 type ResourceGraphDefinitionRuntime struct {
+	// mu guards concurrent access to mutable maps.
+	mu sync.RWMutex
+
 	// instance represents the main resource instance being managed.
 	// This is typically the top-level custom resource that owns or manages
 	// other resources in the graph.
@@ -186,25 +191,27 @@ func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) Resource
 // whether the resource variables are resolved or not, and whether the resource
 // readiness conditions are met or not.
 func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
-	// Did the user set the resource?
+	rt.mu.RLock()
 	r, ok := rt.resolvedResources[id]
+	rt.mu.RUnlock()
 	if ok {
 		return r, ResourceStateResolved
 	}
-
-	// If not, can we process the resource?
+	rt.mu.RLock()
 	resolved := rt.canProcessResource(id)
+	rt.mu.RUnlock()
 	if resolved {
 		return rt.resources[id].Unstructured(), ResourceStateResolved
 	}
-
 	return nil, ResourceStateWaitingOnDependencies
 }
 
 // SetResource updates or sets a resource in the runtime. This is typically
 // called after a resource has been created or updated in the cluster.
 func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstructured.Unstructured) {
+	rt.mu.Lock()
 	rt.resolvedResources[id] = resource
+	rt.mu.Unlock()
 }
 
 // GetInstance returns the main instance object managed by this runtime.
@@ -466,7 +473,9 @@ func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
 // defined in the resource. If no readyWhenExpressions are defined, the resource
 // is considered ready.
 func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bool, string, error) {
+	rt.mu.RLock()
 	observed, ok := rt.resolvedResources[resourceID]
+	rt.mu.RUnlock()
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
 		// before calling this function.
@@ -504,7 +513,9 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 // IgnoreResource ignores resource that has a condition expression that evaluated
 // to false or whose dependencies are ignored
 func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
+	rt.mu.Lock()
 	rt.ignoredByConditionsResources[resourceID] = true
+	rt.mu.Unlock()
 }
 
 // areDependenciesIgnored will returns true if the dependencies of the resource
@@ -514,11 +525,14 @@ func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
 // and all its dependencies will be ignored as well. Causing a chain reaction
 // of ignored resources.
 func (rt *ResourceGraphDefinitionRuntime) areDependenciesIgnored(resourceID string) bool {
+	rt.mu.RLock()
 	for _, p := range rt.resources[resourceID].GetDependencies() {
 		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
+			rt.mu.RUnlock()
 			return true
 		}
 	}
+	rt.mu.RUnlock()
 	return false
 }
 

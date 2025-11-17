@@ -1814,8 +1814,8 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			_, err := builder.NewResourceGraphDefinition(rgd)
 
 			if tt.wantErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errMsg)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
 				return
 			}
 			require.NoError(t, err)

@@ -580,6 +580,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				assert.Contains(t, clusterDeps, "subnet1")
 				assert.Contains(t, clusterDeps, "subnet2")
 
+				// Validate topological order
 				assert.Equal(t, []string{"vpc", "clusterpolicy", "clusterrole", "subnet1", "subnet2", "cluster"}, g.TopologicalOrder)
 			},
 		},

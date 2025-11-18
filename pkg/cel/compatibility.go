@@ -37,6 +37,7 @@ const (
 // - For lists: recursively checks element type compatibility
 // - For maps: recursively checks key and value type compatibility
 // - For structs: uses DeclTypeProvider to introspect fields and check all required fields exist with compatible types
+// - For map → struct and struct → map compatibility if fields/keys are structurally compatible
 //
 // The provider is required for introspecting struct field information.
 // Returns true if types are compatible, false otherwise. If false, the error describes why.
@@ -50,23 +51,28 @@ func AreTypesStructurallyCompatible(output, expected *cel.Type, provider *DeclTy
 		return true, nil
 	}
 
+	// Unwrap optional output if available
 	if output.Kind() == cel.OpaqueKind && output.TypeName() == "optional_type" {
 		return AreTypesStructurallyCompatible(output.Parameters()[0], expected, provider)
 	}
 
-	switch expected.Kind() {
-	case cel.ListKind:
+	switch {
+	case expected.Kind() == cel.StructKind && output.Kind() == cel.MapKind:
+		return areMapTypesAssignableToStruct(output, expected, provider)
+	case expected.Kind() == cel.MapKind && output.Kind() == cel.StructKind:
+		return areStructTypesAssignableToMap(output, expected, provider)
+	case expected.Kind() == cel.ListKind:
 		return areListTypesCompatible(output, expected, provider)
-	case cel.MapKind:
+	case expected.Kind() == cel.MapKind:
 		return areMapTypesCompatible(output, expected, provider)
-	case cel.StructKind:
+	case expected.Kind() == cel.StructKind:
 		return areStructTypesCompatible(output, expected, provider)
 	default:
-		// Kinds must match
+		// Kinds must match otherwise
 		if output.Kind() != expected.Kind() {
 			return false, fmt.Errorf("type kind mismatch: got %q, expected %q", output.String(), expected.String())
 		}
-		// For primitives (int, string, bool, etc.), kind equality is enough
+		// primitives: kind equality already checked
 		return true, nil
 	}
 }
@@ -270,6 +276,73 @@ func areStructFieldsCompatible(output, expected *apiservercel.DeclType, provider
 		compatible, err := AreTypesStructurallyCompatible(outputCELType, expectedCELType, provider)
 		if !compatible {
 			return false, fmt.Errorf("field %q has incompatible type: %w", fieldName, err)
+		}
+	}
+
+	return true, nil
+}
+
+func areMapTypesAssignableToStruct(outputMap, expectedStruct *cel.Type, provider *DeclTypeProvider) (bool, error) {
+	expectedDecl := resolveDeclTypeFromPath(expectedStruct.String(), provider)
+	if expectedDecl == nil || expectedDecl.Fields == nil {
+		return true, nil
+	}
+
+	// map parameters are [keyType, valueType]
+	params := outputMap.Parameters()
+	if len(params) < 2 {
+		return false, fmt.Errorf("map must have key and value types")
+	}
+
+	keyType := params[0]
+	valType := params[1]
+
+	// keys must be strings to match struct field names
+	if keyType.Kind() != cel.StringKind {
+		return false, fmt.Errorf("map keys must be strings to assign to struct")
+	}
+
+	for fieldName, expectedField := range expectedDecl.Fields {
+		expectedFieldCEL := expectedField.Type.CelType()
+		if expectedFieldCEL == nil {
+			continue
+		}
+		compatible, err := AreTypesStructurallyCompatible(valType, expectedFieldCEL, provider)
+		if !compatible {
+			return false, fmt.Errorf("map value incompatible with struct field %q: %w", fieldName, err)
+		}
+	}
+
+	return true, nil
+}
+
+func areStructTypesAssignableToMap(outputStruct, expectedMap *cel.Type, provider *DeclTypeProvider) (bool, error) {
+	outputDecl := resolveDeclTypeFromPath(outputStruct.String(), provider)
+	if outputDecl == nil || outputDecl.Fields == nil {
+		return true, nil
+	}
+
+	params := expectedMap.Parameters()
+	if len(params) < 2 {
+		return false, fmt.Errorf("expected map must have key and value types")
+	}
+	keyType := params[0]
+	valType := params[1]
+
+	// struct field names map to string keys
+	if keyType.Kind() != cel.StringKind {
+		return false, fmt.Errorf("map key type must be string when assigning struct → map")
+	}
+
+	for fieldName, outputField := range outputDecl.Fields {
+		outputCEL := outputField.Type.CelType()
+		if outputCEL == nil {
+			continue
+		}
+
+		compatible, err := AreTypesStructurallyCompatible(outputCEL, valType, provider)
+		if !compatible {
+			return false, fmt.Errorf("struct field %q incompatible with map value type: %w", fieldName, err)
 		}
 	}
 

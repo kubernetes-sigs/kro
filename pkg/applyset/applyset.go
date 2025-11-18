@@ -244,30 +244,33 @@ type applySet struct {
 	// fieldManager is the name of the field manager that will be used to apply the resources.
 	fieldManager string
 
-	// toolLabels is a map of tool provided labels to be applied to the resources
-	toolLabels map[string]string
-
-	// current labels and annotations of the parent before the apply operation
-	currentLabels      map[string]string
-	currentAnnotations map[string]string
-
 	// mu guards all maps and sets in applySet.
 	// These fields are accessed and mutated from multiple goroutines during
 	// reconciliation, so the lock must be held for every read or write to
 	// avoid race conditions and ensure consistent state.
 	mu sync.Mutex
 
-	// set of applyset object rest mappings
+	// toolLabels is a map of tool provided labels to be applied to the resources.
+	// Protected by mu.
+	toolLabels map[string]string
+
+	// current labels and annotations of the parent before the apply operation.
+	// Protected by mu.
+	currentLabels map[string]string
+	// Protected by mu.
+	currentAnnotations map[string]string
+
+	// set of applyset object rest mappings.
 	// Protected by mu.
 	desiredRESTMappings map[schema.GroupKind]*meta.RESTMapping
-	// set of applyset object namespaces
+	// set of applyset object namespaces.
 	// Protected by mu.
 	desiredNamespaces sets.Set[string]
 
-	// superset of desired and old namespaces
+	// superset of desired and old namespaces.
 	// Protected by mu.
 	supersetNamespaces sets.Set[string]
-	// superset of desired and old GKs
+	// superset of desired and old GKs.
 	// Protected by mu.
 	supersetGKs sets.Set[string]
 
@@ -420,6 +423,8 @@ func (a *applySet) injectToolLabels(labels map[string]string) map[string]string 
 	if labels == nil {
 		labels = make(map[string]string)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.toolLabels != nil {
 		for k, v := range a.toolLabels {
 			labels[k] = v
@@ -497,6 +502,9 @@ func (a *applySet) desiredParentLabels() map[string]string {
 func (a *applySet) desiredParentAnnotations(
 	includeCurrent bool,
 ) (map[string]string, sets.Set[string], sets.Set[string]) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	annotations := make(map[string]string)
 	annotations[ApplySetToolingAnnotation] = a.toolingID.String()
 
@@ -543,14 +551,20 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 			return results, fmt.Errorf("unable to get parent: %w", err)
 		}
 		// Record the current labels and annotations
+		a.mu.Lock()
 		a.currentLabels = parent.GetLabels()
 		a.currentAnnotations = parent.GetAnnotations()
+		a.mu.Unlock()
 
 		// We will ensure the parent is updated with the latest applyset before applying the resources.
-		a.supersetNamespaces, a.supersetGKs, err = a.updateParentLabelsAndAnnotations(ctx, updateToSuperset)
+		supersetNamespaces, supersetGKs, err := a.updateParentLabelsAndAnnotations(ctx, updateToSuperset)
 		if err != nil {
 			return results, fmt.Errorf("unable to update Parent: %w", err)
 		}
+		a.mu.Lock()
+		a.supersetNamespaces = supersetNamespaces
+		a.supersetGKs = supersetGKs
+		a.mu.Unlock()
 	}
 
 	options := a.applyOptions

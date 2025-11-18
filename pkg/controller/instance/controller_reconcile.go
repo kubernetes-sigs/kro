@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
-	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -389,27 +388,27 @@ func (igr *instanceGraphReconciler) processLevel(ctx context.Context, aset apply
 		return nil
 	}
 
-	// Use errgroup to process all resources in parallel
-	// Resources in the same level have no dependencies on each other
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(stdruntime.NumCPU()) // Limit parallelism to number of CPUs
+	// Process all resources in the same level in parallel
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, stdruntime.NumCPU()) // Limit parallelism to number of CPUs
 
 	for _, resourceID := range resourceIDs {
-		g.Go(func() error {
-			if err := processResource(gCtx, resourceID); err != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := processResource(ctx, resourceID); err != nil {
 				processingErrorsMu.Lock()
 				processingErrors[resourceID] = err
 				processingErrorsMu.Unlock()
-				return err
 			}
-			return nil
-		})
+		}()
 	}
 
 	// Wait for all resources in this level to complete
-	if err := g.Wait(); err != nil {
-		// At least one resource failed
-	}
+	wg.Wait()
 
 	// Process any errors
 	for resourceID, err := range processingErrors {
@@ -562,27 +561,27 @@ func (igr *instanceGraphReconciler) deleteResourcesInOrder(ctx context.Context, 
 			return nil
 		}
 
-		// Use errgroup to delete all resources in this level in parallel
-		// Resources in the same level have no dependencies on each other
-		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(stdruntime.NumCPU())
+		// Delete all resources in this level in parallel
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, stdruntime.NumCPU())
 
 		for _, resourceID := range levelResources {
-			g.Go(func() error {
-				if err := deleteResource(gCtx, resourceID); err != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}        // Acquire semaphore
+				defer func() { <-sem }() // Release semaphore
+
+				if err := deleteResource(ctx, resourceID); err != nil {
 					deletionErrorsMu.Lock()
 					deletionErrors[resourceID] = err
 					deletionErrorsMu.Unlock()
-					return err
 				}
-				return nil
-			})
+			}()
 		}
 
 		// Wait for all deletions in this level to complete
-		if err := g.Wait(); err != nil {
-			// At least one deletion failed
-		}
+		wg.Wait()
 
 		// Process errors
 		for resourceID, err := range deletionErrors {

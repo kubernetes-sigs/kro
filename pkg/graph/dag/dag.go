@@ -150,13 +150,18 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 // The result would be: [[A, B], [C], [D]]
 // where A and B can be processed in parallel, then C, then D.
 func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
-	// Calculate in-degrees (number of dependencies) for each vertex
+	// Count how many dependencies each vertex has (in-degree)
+	// Also build a map from each vertex to the vertices that depend on it (reverse lookup)
 	inDegree := make(map[T]int)
-	for id := range d.Vertices {
-		inDegree[id] = len(d.Vertices[id].DependsOn)
+	reverse := make(map[T][]T)
+	for id, v := range d.Vertices {
+		inDegree[id] = len(v.DependsOn)
+		for dep := range v.DependsOn {
+			reverse[dep] = append(reverse[dep], id)
+		}
 	}
 
-	// Find all vertices with in-degree 0 (no dependencies)
+	// Start with vertices that have no dependencies - these can run first
 	currentLevel := make([]*Vertex[T], 0)
 	for id, degree := range inDegree {
 		if degree == 0 {
@@ -169,12 +174,12 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 
 	// Process vertices level by level
 	for len(currentLevel) > 0 {
-		// Sort current level by Order to maintain stability and preserve user-provided ordering
+		// Sort current level to preserve user-provided ordering
 		sort.Slice(currentLevel, func(i, j int) bool {
 			return currentLevel[i].Order < currentLevel[j].Order
 		})
 
-		// Convert vertices to IDs for output
+		// Add this level to output
 		levelIDs := make([]T, len(currentLevel))
 		for i, v := range currentLevel {
 			levelIDs[i] = v.ID
@@ -182,16 +187,15 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 		levels = append(levels, levelIDs)
 		processed += len(currentLevel)
 
-		// Find next level by decrementing in-degrees
+		// Find the next level: for each vertex we just processed, tell its dependents
+		// that one of their dependencies is now satisfied. When all dependencies are
+		// satisfied (in-degree reaches 0), the vertex is ready for the next level.
 		nextLevel := make([]*Vertex[T], 0)
 		for _, vertex := range currentLevel {
-			// For each vertex that depends on the current vertex, decrement its in-degree
-			for id, v := range d.Vertices {
-				if _, dependsOn := v.DependsOn[vertex.ID]; dependsOn {
-					inDegree[id]--
-					if inDegree[id] == 0 {
-						nextLevel = append(nextLevel, v)
-					}
+			for _, dependentID := range reverse[vertex.ID] {
+				inDegree[dependentID]--
+				if inDegree[dependentID] == 0 {
+					nextLevel = append(nextLevel, d.Vertices[dependentID])
 				}
 			}
 		}
@@ -199,13 +203,10 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 		currentLevel = nextLevel
 	}
 
-	// Check if all vertices were processed (if not, there's a cycle)
+	// If we didn't process all vertices, there must be a cycle
+	// (some vertices are waiting on dependencies that can never be satisfied)
 	if processed != len(d.Vertices) {
-		hasCycle, cycle := d.hasCycle()
-		if !hasCycle {
-			// Unexpected state
-			return nil, &CycleError[T]{}
-		}
+		_, cycle := d.hasCycle()
 		return nil, &CycleError[T]{
 			Cycle: cycle,
 		}

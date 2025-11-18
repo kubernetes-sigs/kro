@@ -203,12 +203,20 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 		currentLevel = nextLevel
 	}
 
-	// If we didn't process all vertices, there must be a cycle
-	// (some vertices are waiting on dependencies that can never be satisfied)
+	// If we didn't process all vertices, there must be a cycle.
+	// Kahn's algorithm implicitly detects cycles: vertices in a cycle will never
+	// reach in-degree 0, so they'll remain unprocessed.
 	if processed != len(d.Vertices) {
-		_, cycle := d.hasCycle()
+		// Collect vertices involved in the cycle with their unresolved dependencies
+		cyclicVertices := make([]T, 0, len(d.Vertices)-processed)
+		for id := range inDegree {
+			if inDegree[id] > 0 {
+				cyclicVertices = append(cyclicVertices, id)
+			}
+		}
+
 		return nil, &CycleError[T]{
-			Cycle: cycle,
+			Cycle: cyclicVertices,
 		}
 	}
 

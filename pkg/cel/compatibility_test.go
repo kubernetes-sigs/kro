@@ -437,3 +437,222 @@ func TestNestedTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionalPrimitive(t *testing.T) {
+	optionalString := cel.OpaqueType("optional_type", cel.StringType)
+	optionalInt := cel.OpaqueType("optional_type", cel.IntType)
+
+	tests := []struct {
+		name        string
+		output      *cel.Type
+		expected    *cel.Type
+		compatible  bool
+		errContains string
+	}{
+		{
+			name:       "optional<string> to string",
+			output:     optionalString,
+			expected:   cel.StringType,
+			compatible: true,
+		},
+		{
+			name:        "optional<string> to int",
+			output:      optionalString,
+			expected:    cel.IntType,
+			compatible:  false,
+			errContains: "kind mismatch",
+		},
+		{
+			name:        "optional<int> to string",
+			output:      optionalInt,
+			expected:    cel.StringType,
+			compatible:  false,
+			errContains: "kind mismatch",
+		},
+		{
+			name:       "optional(optional(string)) to string",
+			output:     cel.OpaqueType("optional_type", optionalString),
+			expected:   cel.StringType,
+			compatible: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compatible, err := AreTypesStructurallyCompatible(tt.output, tt.expected, nil)
+			assert.Equal(t, tt.compatible, compatible)
+			if tt.compatible {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+func TestOptionalListTypes(t *testing.T) {
+	optionalString := cel.OpaqueType("optional_type", cel.StringType)
+	optionalListString := cel.OpaqueType("optional_type", cel.ListType(cel.StringType))
+
+	tests := []struct {
+		name        string
+		output      *cel.Type
+		expected    *cel.Type
+		compatible  bool
+		errContains string
+	}{
+		{
+			name:       "optional<string> list element → list<string>",
+			output:     cel.ListType(optionalString),
+			expected:   cel.ListType(cel.StringType),
+			compatible: true,
+		},
+		{
+			name:       "optional<list<string>> → list<string>",
+			output:     optionalListString,
+			expected:   cel.ListType(cel.StringType),
+			compatible: true,
+		},
+		{
+			name:        "list<optional<string>> → list<int>",
+			output:      cel.ListType(optionalString),
+			expected:    cel.ListType(cel.IntType),
+			compatible:  false,
+			errContains: "list element type incompatible",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compatible, err := AreTypesStructurallyCompatible(tt.output, tt.expected, nil)
+			assert.Equal(t, tt.compatible, compatible)
+			if tt.compatible {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+func TestOptionalMapTypes(t *testing.T) {
+	optionalString := cel.OpaqueType("optional_type", cel.StringType)
+
+	tests := []struct {
+		name        string
+		output      *cel.Type
+		expected    *cel.Type
+		compatible  bool
+		errContains string
+	}{
+		{
+			name:       "map[string]optional<string> → map[string]string",
+			output:     cel.MapType(cel.StringType, optionalString),
+			expected:   cel.MapType(cel.StringType, cel.StringType),
+			compatible: true,
+		},
+		{
+			name:        "map[string]optional<string> → map[string]int",
+			output:      cel.MapType(cel.StringType, optionalString),
+			expected:    cel.MapType(cel.StringType, cel.IntType),
+			compatible:  false,
+			errContains: "map value type incompatible",
+		},
+		{
+			name:       "map[optional<string>]string → map[string]string (key)",
+			output:     cel.MapType(optionalString, cel.StringType),
+			expected:   cel.MapType(cel.StringType, cel.StringType),
+			compatible: true, // optional<string> → string ok
+		},
+		{
+			name:        "map[optional<string>]string → map[int]string",
+			output:      cel.MapType(optionalString, cel.StringType),
+			expected:    cel.MapType(cel.IntType, cel.StringType),
+			compatible:  false,
+			errContains: "map key type incompatible",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compatible, err := AreTypesStructurallyCompatible(tt.output, tt.expected, nil)
+			assert.Equal(t, tt.compatible, compatible)
+			if tt.compatible {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+func TestOptionalStructTypes(t *testing.T) {
+	fields := map[string]*apiservercel.DeclField{
+		"name": apiservercel.NewDeclField("name", apiservercel.StringType, true, nil, nil),
+	}
+	personType := apiservercel.NewObjectType(TypeNamePrefix+"person", fields)
+	otherType := apiservercel.NewObjectType(TypeNamePrefix+"other", fields)
+
+	unknownFieldsType := apiservercel.NewObjectType(TypeNamePrefix+"unknownFields", map[string]*apiservercel.DeclField{})
+	unknownFieldsType.Metadata = map[string]string{XKubernetesPreserveUnknownFields: "true"}
+
+	optionalString := cel.OptionalType(cel.StringType)
+	optionalPerson := cel.OptionalType(personType.CelType())
+
+	provider := NewDeclTypeProvider(personType, otherType, unknownFieldsType)
+
+	tests := []struct {
+		name        string
+		output      *cel.Type
+		expected    *cel.Type
+		compatible  bool
+		errContains string
+	}{
+		{
+			name:       "optional<string> field inside struct",
+			output:     cel.ListType(optionalString), // simulate a struct field → list<string>
+			expected:   cel.ListType(cel.StringType),
+			compatible: true,
+		},
+		{
+			name:       "optional<person> → person",
+			output:     optionalPerson,
+			expected:   personType.CelType(),
+			compatible: true,
+		},
+		{
+			name:       "optional<person> → empty struct ok (permissive right now, could be rejected as well)",
+			output:     optionalPerson,
+			expected:   apiservercel.NewObjectType(TypeNamePrefix+"noFields", nil).CelType(),
+			compatible: true,
+		},
+		{
+			name:       "optional<person> → matching struct",
+			output:     optionalPerson,
+			expected:   otherType.CelType(),
+			compatible: true,
+		},
+		{
+			name:       "optional<person> → unknown field allowing type",
+			output:     optionalPerson,
+			expected:   unknownFieldsType.CelType(),
+			compatible: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compatible, err := AreTypesStructurallyCompatible(tt.output, tt.expected, provider)
+			assert.Equal(t, tt.compatible, compatible)
+			if tt.compatible {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			}
+		})
+	}
+}

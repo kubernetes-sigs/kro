@@ -194,12 +194,18 @@ func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
 
-	if r, ok := rt.resolvedResources[id]; ok {
+	// Did the user set the resource?
+	r, ok := rt.resolvedResources[id]
+	if ok {
 		return r, ResourceStateResolved
 	}
-	if rt.canProcessResource(id) {
+
+	// If not, can we process the resource?
+	resolved := rt.canProcessResource(id)
+	if resolved {
 		return rt.resources[id].Unstructured(), ResourceStateResolved
 	}
+
 	return nil, ResourceStateWaitingOnDependencies
 }
 

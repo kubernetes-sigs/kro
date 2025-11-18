@@ -29,8 +29,8 @@ const (
 	TypeNamePrefix = "__type_"
 )
 
-// AreTypesStructurallyCompatible checks if two CEL types are structurally compatible,
-// ignoring type names and using duck-typing semantics.
+// AreTypesStructurallyCompatible checks if an output type from an expected or executed CEL expression is compatible
+// with an expected type.
 //
 // This performs deep structural comparison:
 // - For primitives: checks kind equality
@@ -50,9 +50,8 @@ func AreTypesStructurallyCompatible(output, expected *cel.Type, provider *DeclTy
 		return true, nil
 	}
 
-	// Kinds must match
-	if output.Kind() != expected.Kind() {
-		return false, fmt.Errorf("type kind mismatch: got %q, expected %q", output.String(), expected.String())
+	if output.Kind() == cel.OpaqueKind && output.TypeName() == "optional_type" {
+		return AreTypesStructurallyCompatible(output.Parameters()[0], expected, provider)
 	}
 
 	switch expected.Kind() {
@@ -63,6 +62,10 @@ func AreTypesStructurallyCompatible(output, expected *cel.Type, provider *DeclTy
 	case cel.StructKind:
 		return areStructTypesCompatible(output, expected, provider)
 	default:
+		// Kinds must match
+		if output.Kind() != expected.Kind() {
+			return false, fmt.Errorf("type kind mismatch: got %q, expected %q", output.String(), expected.String())
+		}
 		// For primitives (int, string, bool, etc.), kind equality is enough
 		return true, nil
 	}
@@ -217,6 +220,10 @@ func resolveDeclTypeFromPath(typePath string, provider *DeclTypeProvider) *apise
 // 2. The field type must be compatible
 func areStructFieldsCompatible(output, expected *apiservercel.DeclType, provider *DeclTypeProvider) (bool, error) {
 	if expected == nil {
+		return true, nil
+	}
+	// PreserveUnknownFields is set on the expected type, so everything we would pass from output would be okay
+	if expected.Metadata[XKubernetesPreserveUnknownFields] == "true" {
 		return true, nil
 	}
 

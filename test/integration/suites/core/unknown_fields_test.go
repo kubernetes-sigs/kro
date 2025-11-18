@@ -54,7 +54,6 @@ var _ = Describe("Unknown Fields", func() {
 
 	Context("CRD with preserve unknown fields", func() {
 		It("should allow instances with arbitrary unknown nested fields and resolve references", func(ctx SpecContext) {
-
 			By("applying CRD AllowUnknown with x-kubernetes-preserve-unknown-fields")
 			crd := &apiextensionsv1.CustomResourceDefinition{
 				ObjectMeta: metav1.ObjectMeta{
@@ -67,6 +66,9 @@ var _ = Describe("Unknown Fields", func() {
 							Name:    "v1alpha1",
 							Served:  true,
 							Storage: true,
+							Subresources: &apiextensionsv1.CustomResourceSubresources{
+								Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+							},
 							Schema: &apiextensionsv1.CustomResourceValidation{
 								OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
 									Type: "object",
@@ -74,9 +76,41 @@ var _ = Describe("Unknown Fields", func() {
 										"spec": {
 											Type: "object",
 											Properties: map[string]apiextensionsv1.JSONSchemaProps{
+												"static": {
+													Type: "object",
+													Properties: map[string]apiextensionsv1.JSONSchemaProps{
+														"key":  {Type: "string"},
+														"key2": {Type: "string"},
+														"key3": {Type: "string"},
+														"key4": {Type: "string"},
+														"key5": {Type: "object", XPreserveUnknownFields: ptr.To(true)},
+														"key6": {Type: "object", XPreserveUnknownFields: ptr.To(true)},
+													},
+												},
 												"config": {
 													Type:                   "object",
 													XPreserveUnknownFields: ptr.To(true),
+												},
+												"anyMap": {
+													Type: "object",
+													AdditionalProperties: &apiextensionsv1.JSONSchemaPropsOrBool{
+														Schema: &apiextensionsv1.JSONSchemaProps{
+															XPreserveUnknownFields: ptr.To(true),
+														},
+													},
+												},
+											},
+										},
+										"status": {
+											Type: "object",
+											Properties: map[string]apiextensionsv1.JSONSchemaProps{
+												"additional": {
+													Type: "object",
+													AdditionalProperties: &apiextensionsv1.JSONSchemaPropsOrBool{
+														Schema: &apiextensionsv1.JSONSchemaProps{
+															XPreserveUnknownFields: ptr.To(true),
+														},
+													},
 												},
 											},
 										},
@@ -106,6 +140,36 @@ var _ = Describe("Unknown Fields", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+			By("creating an external object reference")
+			existingAllowUnknown := &unstructured.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "AllowUnknown",
+					"metadata": map[string]any{
+						"name":      "existing-allow-unknown",
+						"namespace": namespace,
+					},
+					"spec": map[string]any{
+						"config": map[string]any{
+							"foo": "bar",
+						},
+					},
+				},
+			}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Create(ctx, existingAllowUnknown)).To(Succeed())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      existingAllowUnknown.GetName(),
+				Namespace: existingAllowUnknown.GetNamespace(),
+			}, existingAllowUnknown)).To(Succeed())
+			existingAllowUnknown.Object["status"] = map[string]any{
+				"additional": map[string]any{
+					"key": "value",
+				},
+			}
+			Expect(env.Client.Status().Update(ctx, existingAllowUnknown)).To(Succeed())
+
 			By("creating ResourceGraphDefinition that uses unknown fields")
 			rgd := generator.NewResourceGraphDefinition("check-unknown-fields",
 				generator.WithSchema(
@@ -127,6 +191,17 @@ var _ = Describe("Unknown Fields", func() {
 							"config": map[string]any{
 								"foo": "bar",
 							},
+							"static": map[string]any{
+								"key":  "${external.status.additional.key}",
+								"key2": "${external.status.additional.?key}",
+								"key3": "${external.spec.config.foo}",
+								"key4": "${external.spec.config.?foo}",
+								"key5": "${external.spec.config}",
+								"key6": "${external.status.additional}",
+							},
+							"anyMap": map[string]any{
+								"key": "${external.status.additional.?key}",
+							},
 						},
 					},
 					nil,
@@ -138,11 +213,32 @@ var _ = Describe("Unknown Fields", func() {
 						"kind":       "ConfigMap",
 						"metadata": map[string]any{
 							"name": "check-unknown-fields",
+							"annotations": map[string]string{
+								"optionalAnnotationFromMap":         "${example.spec.anyMap.?key}",
+								"optionalAnnotationFromNestedField": "${schema.spec.nested.?field}",
+							},
 						},
 						"data": map[string]any{
-							"foo":    "${example.spec.config.foo}",
-							"name":   "${schema.spec.name}",
-							"nested": "${schema.spec.nested.field}",
+							"foo":                 "${example.spec.config.foo}",
+							"name":                "${schema.spec.name}",
+							"nested":              "${schema.spec.nested.field}",
+							"optionalNested":      "${schema.spec.nested.?field}",
+							"valueFromMap":        "${example.spec.anyMap.key}",
+							"nonExisting":         "${example.spec.anyMap.?abc}",
+							"optionalStatusField": "${external.status.additional.?key}",
+							"statusField":         "${external.status.additional.key}",
+						},
+					},
+					nil,
+					nil,
+				),
+				generator.WithExternalRef("external",
+					&krov1alpha1.ExternalRef{
+						APIVersion: "kro.run/v1alpha1",
+						Kind:       "AllowUnknown",
+						Metadata: krov1alpha1.ExternalRefMetadata{
+							Name:      "existing-allow-unknown",
+							Namespace: namespace,
 						},
 					},
 					nil,
@@ -206,6 +302,8 @@ var _ = Describe("Unknown Fields", func() {
 				g.Expect(cm.Data["foo"]).To(Equal("bar"))
 				g.Expect(cm.Data["name"]).To(Equal("name"))
 				g.Expect(cm.Data["nested"]).To(Equal("value"))
+				g.Expect(cm.Data["valueFromMap"]).To(Equal("value"))
+				g.Expect(cm.Data["nonExisting"]).To(Equal(""))
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})

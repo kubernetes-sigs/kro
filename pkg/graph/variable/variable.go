@@ -32,13 +32,20 @@ type FieldDescriptor struct {
 	Path string
 	// Expressions is a list of CEL expressions in the field.
 	Expressions []string
-	// ExpectedType is the expected CEL type of the field, derived from the OpenAPI schema.
-	// For single expressions, this is the schema's CEL type.
-	// For multiple expressions (string templates), this is always cel.StringType.
+
+	// ExpectedType is the expected CEL type of the field.
+	// Set by: builder.setExpectedTypeOnDescriptor() - the single place where types are determined.
+	// Parser leaves this nil, builder sets it based on StandaloneExpression:
+	//   - For string templates (StandaloneExpression=false): always cel.StringType
+	//   - For standalone expressions (StandaloneExpression=true): derived from OpenAPI schema
 	ExpectedType *cel.Type
-	// StandaloneExpression is true if the field contains a single CEL expression
-	// that is not part of a larger string. example: "${foo}" is a standalone expression
-	// but not "hello-${foo}" or "${foo}${bar}"
+
+	// StandaloneExpression indicates if this is a single CEL expression vs a string template.
+	// Set by: parser (both parser.go and schemaless.go)
+	// Used by: builder.setExpectedTypeOnDescriptor() to determine how to set ExpectedType
+	// Examples:
+	//   true:  "${foo}" - single expression, type derived from schema
+	//   false: "hello-${foo}" or "${foo}-${bar}" - string template, always produces string
 	StandaloneExpression bool
 }
 

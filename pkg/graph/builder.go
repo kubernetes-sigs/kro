@@ -872,11 +872,6 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 		return nil
 	}
 
-	// Check output is dynamic - always valid
-	if outputType.String() == cel.DynType.String() {
-		return nil
-	}
-
 	// Try structural compatibility checking (duck typing)
 	compatible, compatErr := krocel.AreTypesStructurallyCompatible(outputType, expectedType, typeProvider)
 	if compatible {
@@ -887,15 +882,6 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 		return fmt.Errorf(
 			"type mismatch in resource %q at path %q: expression %q returns type %q but expected %q: %w",
 			resourceID, path, expression, outputType.String(), expectedType.String(), compatErr,
-		)
-	}
-
-	// Check if unwrapping would fix the type mismatch - provide helpful error message
-	if krocel.WouldMatchIfUnwrapped(outputType, expectedType) {
-		return fmt.Errorf(
-			"type mismatch in resource %q at path %q: expression %q returns %q but field expects %q. "+
-				"Use .orValue(defaultValue) to unwrap the optional type, e.g., %s.orValue(\"\")",
-			resourceID, path, expression, outputType.String(), expectedType.String(), expression,
 		)
 	}
 

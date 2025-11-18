@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -35,6 +37,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
@@ -211,6 +214,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 	schemas["schema"] = schemaWithoutStatus
 
+	// Create a DeclTypeProvider for introspecting type structures during validation
+	typeProvider := krocel.CreateDeclTypeProvider(schemas)
+
 	// First, build the dependency graph by inspecting CEL expressions.
 	// This extracts all resource dependencies and validates that:
 	// 1. All referenced resources are defined in the RGD
@@ -249,7 +255,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// Validate all CEL expressions for each resource node
 	for _, resource := range resources {
-		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id]); err != nil {
+		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id], typeProvider); err != nil {
 			return nil, fmt.Errorf("failed to validate node %q: %w", resource.id, err)
 		}
 	}
@@ -337,6 +343,12 @@ func (b *Builder) buildRGResource(
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
+
+		// 6. Set ExpectedType on each descriptor by converting schema to CEL type with proper naming
+		for i := range fieldDescriptors {
+			setExpectedTypeOnDescriptor(&fieldDescriptors[i], resourceSchema, rgResource.ID)
+		}
+
 		for _, fieldDescriptor := range fieldDescriptors {
 			templateVariables = append(templateVariables, &variable.ResourceField{
 				// Assume variables are static; we'll validate them later
@@ -623,7 +635,7 @@ func buildStatusSchema(
 				}
 
 				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, cel.StringType, expression, "status", fieldDescriptor.Path); err != nil {
+				if err := validateExpressionType(outputType, cel.StringType, expression, "status", fieldDescriptor.Path, provider); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -672,13 +684,125 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	return dependencies, isStatic, nil
 }
 
+// setExpectedTypeOnDescriptor sets the ExpectedType field on a FieldDescriptor.
+// This is the single place where ExpectedType is determined for all field descriptors.
+//
+// For string templates (multiple expressions like "foo-${expr1}-${expr2}"):
+//   - Always sets to cel.StringType since concatenation produces strings
+//
+// For standalone expressions (single expression like "${expr}"):
+//  1. Parses path into segments (e.g., "spec.containers[0].name" -> ["spec", "containers", [0], "name"])
+//  2. Walks through each segment, building type name and navigating schema:
+//     - Named segments: append to type name, look up in schema
+//     - Index segments: dereference array to element schema, append ".@idx" to type name
+//  3. Converts final schema to CEL type with constructed type name
+func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Schema, resourceID string) (*spec.Schema, string, error) {
+	typeName := krocel.TypeNamePrefix + resourceID
+	currentSchema := rootSchema
+
+	for _, seg := range segments {
+		if seg.Name != "" {
+			typeName = typeName + "." + seg.Name
+			currentSchema = lookupSchemaAtPath(currentSchema, seg.Name)
+			if currentSchema == nil {
+				return nil, "", fmt.Errorf("field %q not found in schema", seg.Name)
+			}
+		}
+
+		if seg.Index != -1 {
+			if currentSchema.Items != nil && currentSchema.Items.Schema != nil {
+				currentSchema = currentSchema.Items.Schema
+				typeName = typeName + ".@idx"
+			} else {
+				return nil, "", fmt.Errorf("field is not an array")
+			}
+		}
+	}
+
+	return currentSchema, typeName, nil
+}
+
+func setExpectedTypeOnDescriptor(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) {
+	if !descriptor.StandaloneExpression {
+		descriptor.ExpectedType = cel.StringType
+		return
+	}
+
+	segments, err := fieldpath.Parse(descriptor.Path)
+	if err != nil {
+		descriptor.ExpectedType = cel.DynType
+		return
+	}
+
+	schema, typeName, err := resolveSchemaAndTypeName(segments, rootSchema, resourceID)
+	if err != nil {
+		descriptor.ExpectedType = cel.DynType
+		return
+	}
+
+	descriptor.ExpectedType = getCelTypeFromSchema(schema, typeName)
+}
+
+// getCelTypeFromSchema converts an OpenAPI schema to a CEL type with the given type name
+func getCelTypeFromSchema(schema *spec.Schema, typeName string) *cel.Type {
+	if schema == nil {
+		return cel.DynType
+	}
+
+	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
+	if declType == nil {
+		return cel.DynType
+	}
+
+	declType = declType.MaybeAssignTypeName(typeName)
+	return declType.CelType()
+}
+
+// lookupSchemaAtPath traverses a schema following a field path and returns the schema at that location
+func lookupSchemaAtPath(schema *spec.Schema, path string) *spec.Schema {
+	if path == "" {
+		return schema
+	}
+
+	// Split path by "." to get field names
+	parts := strings.Split(path, ".")
+	current := schema
+
+	for _, part := range parts {
+		if current == nil {
+			return nil
+		}
+
+		// Check if it's an object with properties
+		if prop, ok := current.Properties[part]; ok {
+			current = &prop
+			continue
+		}
+
+		// Check if it's an array and we need to look at items
+		if current.Items != nil && current.Items.Schema != nil {
+			current = current.Items.Schema
+			// Try again with this part on the items schema
+			if prop, ok := current.Properties[part]; ok {
+				current = &prop
+				continue
+			}
+		}
+
+		// Couldn't find the field
+		return nil
+	}
+
+	return current
+}
+
 // validateNode validates all CEL expressions for a single resource node:
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
-func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema) error {
+func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
 	// Validate template expressions
-	if err := validateTemplateExpressions(templatesEnv, resource); err != nil {
+	if err := validateTemplateExpressions(templatesEnv, resource, typeProvider); err != nil {
 		return err
 	}
 
@@ -708,7 +832,7 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 // validateTemplateExpressions validates CEL template expressions for a single resource.
 // It type-checks that expressions reference valid fields and return the expected types
 // based on the OpenAPI schemas.
-func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
+func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider *krocel.DeclTypeProvider) error {
 	for _, templateVariable := range resource.variables {
 		if len(templateVariable.Expressions) == 1 {
 			// Single expression - validate against expected types
@@ -719,8 +843,7 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
 				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
 			}
 			outputType := checkedAST.OutputType()
-
-			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
+			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path, typeProvider); err != nil {
 				return err
 			}
 		} else if len(templateVariable.Expressions) > 1 {
@@ -732,7 +855,7 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
 				}
 
 				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path); err != nil {
+				if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path, typeProvider); err != nil {
 					return err
 				}
 			}
@@ -743,7 +866,8 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource) error {
 
 // validateExpressionType verifies that the CEL expression output type matches
 // the expected type. Returns an error if there is a type mismatch.
-func validateExpressionType(outputType, expectedType *cel.Type, expression, resourceID, path string) error {
+func validateExpressionType(outputType, expectedType *cel.Type, expression, resourceID, path string, typeProvider *krocel.DeclTypeProvider) error {
+	// Try CEL's built-in nominal type checking first
 	if expectedType.IsAssignableType(outputType) {
 		return nil
 	}
@@ -751,6 +875,19 @@ func validateExpressionType(outputType, expectedType *cel.Type, expression, reso
 	// Check output is dynamic - always valid
 	if outputType.String() == cel.DynType.String() {
 		return nil
+	}
+
+	// Try structural compatibility checking (duck typing)
+	compatible, compatErr := krocel.AreTypesStructurallyCompatible(outputType, expectedType, typeProvider)
+	if compatible {
+		return nil
+	}
+	// If we have a detailed compatibility error, use it
+	if compatErr != nil {
+		return fmt.Errorf(
+			"type mismatch in resource %q at path %q: expression %q returns type %q but expected %q: %w",
+			resourceID, path, expression, outputType.String(), expectedType.String(), compatErr,
+		)
 	}
 
 	// Check if unwrapping would fix the type mismatch - provide helpful error message

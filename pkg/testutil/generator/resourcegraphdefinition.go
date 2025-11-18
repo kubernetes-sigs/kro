@@ -27,6 +27,9 @@ import (
 // ResourceGraphDefinitionOption is a functional option for ResourceGraphDefinition
 type ResourceGraphDefinitionOption func(*krov1alpha1.ResourceGraphDefinition)
 
+// SchemaOption is a functional option for Schema
+type SchemaOption func(*krov1alpha1.Schema)
+
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition with the given name and options
 func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOption) *krov1alpha1.ResourceGraphDefinition {
 	rgd := &krov1alpha1.ResourceGraphDefinition{
@@ -42,7 +45,8 @@ func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOpti
 }
 
 // WithSchema sets the definition and status of the ResourceGraphDefinition
-func WithSchema(kind, version string, spec, status map[string]interface{}) ResourceGraphDefinitionOption {
+// and optionally applies schema options like WithTypes
+func WithSchema(kind, version string, spec, status map[string]interface{}, opts ...SchemaOption) ResourceGraphDefinitionOption {
 	rawSpec, err := json.Marshal(spec)
 	if err != nil {
 		panic(err)
@@ -64,6 +68,11 @@ func WithSchema(kind, version string, spec, status map[string]interface{}) Resou
 				Object: &unstructured.Unstructured{Object: status},
 				Raw:    rawStatus,
 			},
+		}
+
+		// Apply schema options
+		for _, opt := range opts {
+			opt(rgd.Spec.Schema)
 		}
 	}
 }
@@ -108,6 +117,21 @@ func WithResource(
 				Raw:    raw,
 			},
 		})
+	}
+}
+
+// WithTypes returns a SchemaOption that sets the types for the schema
+func WithTypes(types map[string]interface{}) SchemaOption {
+	rawTypes, err := json.Marshal(types)
+	if err != nil {
+		panic(err)
+	}
+
+	return func(schema *krov1alpha1.Schema) {
+		schema.Types = runtime.RawExtension{
+			Object: &unstructured.Unstructured{Object: types},
+			Raw:    rawTypes,
+		}
 	}
 }
 

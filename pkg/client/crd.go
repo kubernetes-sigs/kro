@@ -125,8 +125,28 @@ func (w *CRDWrapper) Ensure(ctx context.Context, crd v1.CustomResourceDefinition
 			return fmt.Errorf("failed to create CRD: %w", err)
 		}
 	} else {
-		if err := w.verifyOwnership(existing, crd); err != nil {
-			return err
+		kroOwned, nameMatch, idMatch := metadata.CompareRGDOwnership(existing.ObjectMeta, crd.ObjectMeta)
+		if !kroOwned {
+			return fmt.Errorf(
+				"failed to update CRD %s: CRD already exists and is not owned by KRO", crd.Name,
+			)
+		}
+
+		if !nameMatch {
+			existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+			return fmt.Errorf(
+				"failed to update CRD %s: CRD is owned by another ResourceGraphDefinition %s",
+				crd.Name, existingRGDName,
+			)
+		}
+
+		if nameMatch && !idMatch {
+			log.Info(
+				"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
+				"crd", crd.Name,
+				"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
+				"newRGDID", crd.Labels[metadata.ResourceGraphDefinitionIDLabel],
+			)
 		}
 
 		log.Info("Updating existing CRD", "name", crd.Name)
@@ -199,20 +219,4 @@ func (w *CRDWrapper) waitForReady(ctx context.Context, name string) error {
 
 			return false, nil
 		})
-}
-
-// verifyOwnership checks that an existing CRD is owned by KRO and by the same
-// ResourceGraphDefinition that is attempting to update it. This prevents conflicts
-// where multiple ResourceGraphDefinitions try to manage the same CRD, or where a
-// CRD created outside of KRO is accidentally overwritten.
-func (w *CRDWrapper) verifyOwnership(existingCRD *v1.CustomResourceDefinition, newCRD v1.CustomResourceDefinition) error {
-	if !metadata.IsKROOwned(&existingCRD.ObjectMeta) {
-		return fmt.Errorf("conflict detected: CRD %s already exists and is not owned by KRO", existingCRD.Name)
-	}
-
-	if !metadata.HasMatchingKROOwner(existingCRD.ObjectMeta, newCRD.ObjectMeta) {
-		return fmt.Errorf("conflict detected: CRD %s has ownership by another ResourceGraphDefinition", existingCRD.Name)
-	}
-
-	return nil
 }

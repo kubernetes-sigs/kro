@@ -215,60 +215,6 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
 	return levels, nil
 }
 
-// TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
-// and preserving order of nodes within each "depth" of the topological ordering.
-func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
-	visited := make(map[T]bool)
-	var order []T
-
-	// Make a list of vertices, sorted by Order
-	vertices := make([]*Vertex[T], 0, len(d.Vertices))
-	for _, vertex := range d.Vertices {
-		vertices = append(vertices, vertex)
-	}
-	sort.Slice(vertices, func(i, j int) bool {
-		return vertices[i].Order < vertices[j].Order
-	})
-
-	for len(visited) < len(vertices) {
-		progress := false
-
-		for _, vertex := range vertices {
-			if visited[vertex.ID] {
-				continue
-			}
-
-			allDependenciesReady := true
-			for dep := range vertex.DependsOn {
-				if !visited[dep] {
-					allDependenciesReady = false
-					break
-				}
-			}
-			if !allDependenciesReady {
-				continue
-			}
-
-			order = append(order, vertex.ID)
-			visited[vertex.ID] = true
-			progress = true
-		}
-
-		if !progress {
-			hasCycle, cycle := d.hasCycle()
-			if !hasCycle {
-				// Unexpected!
-				return nil, &CycleError[T]{}
-			}
-			return nil, &CycleError[T]{
-				Cycle: cycle,
-			}
-		}
-	}
-
-	return order, nil
-}
-
 func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {
 	visited := make(map[T]bool)
 	recStack := make(map[T]bool)

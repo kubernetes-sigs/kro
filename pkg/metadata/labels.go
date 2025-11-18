@@ -15,7 +15,6 @@
 package metadata
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,7 +24,6 @@ import (
 	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
-	logr "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
@@ -55,22 +53,33 @@ func IsKROOwned(meta metav1.Object) bool {
 	return ok && booleanFromString(v)
 }
 
-// HasMatchingKROOwner returns true if resources have the same RGD owner.
-// Note: The caller is responsible for ensuring that KRO labels exist on both
-// resources before calling this function.
-func HasMatchingKROOwner(ctx context.Context, a, b metav1.ObjectMeta) bool {
-	log := logr.FromContext(ctx)
-	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
-	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]
-
-	bOwnerName := b.Labels[ResourceGraphDefinitionNameLabel]
-	bOwnerID := b.Labels[ResourceGraphDefinitionIDLabel]
-
-	if aOwnerName == bOwnerName && aOwnerID != bOwnerID {
-		log.Info("Existing Instance CRD being adopted by new RGD", "name", aOwnerName, "existingRGDID", aOwnerID, "newRGDID", bOwnerID)
+// CompareRGDOwnership compares RGD ownership labels between two resources.
+// Returns three booleans:
+//   - kroOwned: whether the existing resource is owned by KRO
+//   - nameMatch: whether both resources have the same RGD name
+//   - idMatch: whether both resources have the same RGD ID
+//
+// This allows callers to distinguish between different ownership scenarios:
+//   - kroOwned=true, nameMatch=true, idMatch=true: same RGD, normal update
+//   - kroOwned=true, nameMatch=true, idMatch=false: same RGD name, different ID (adoption)
+//   - kroOwned=true, nameMatch=false: different RGD (conflict)
+//   - kroOwned=false: not owned by KRO (conflict)
+func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMatch, idMatch bool) {
+	kroOwned = IsKROOwned(&existing)
+	if !kroOwned {
+		return false, false, false
 	}
 
-	return aOwnerName == bOwnerName
+	existingOwnerName := existing.Labels[ResourceGraphDefinitionNameLabel]
+	existingOwnerID := existing.Labels[ResourceGraphDefinitionIDLabel]
+
+	desiredOwnerName := desired.Labels[ResourceGraphDefinitionNameLabel]
+	desiredOwnerID := desired.Labels[ResourceGraphDefinitionIDLabel]
+
+	nameMatch = existingOwnerName == desiredOwnerName
+	idMatch = existingOwnerID == desiredOwnerID
+
+	return kroOwned, nameMatch, idMatch
 }
 
 // SetKROOwned sets the OwnedLabel to true on the resource.

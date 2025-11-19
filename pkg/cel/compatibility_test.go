@@ -453,7 +453,15 @@ func TestMapToStructCompatibility(t *testing.T) {
 	}
 	stringStruct := apiservercel.NewObjectType(TypeNamePrefix+"stringStruct", stringStructFields)
 
-	provider := NewDeclTypeProvider(intStruct, stringStruct)
+	nestedObjectType := apiservercel.NewObjectType(TypeNamePrefix+"nestedObject", map[string]*apiservercel.DeclField{
+		"int": apiservercel.NewDeclField("int", apiservercel.IntType, true, nil, nil),
+	})
+	parentObjectType := apiservercel.NewObjectType(TypeNamePrefix+"parentObject", map[string]*apiservercel.DeclField{
+		"string": apiservercel.NewDeclField("string", apiservercel.StringType, true, nil, nil),
+		"nested": apiservercel.NewDeclField("nested", nestedObjectType, false, nil, nil),
+	})
+
+	provider := NewDeclTypeProvider(intStruct, stringStruct, parentObjectType, nestedObjectType)
 
 	tests := []struct {
 		name        string
@@ -499,6 +507,12 @@ func TestMapToStructCompatibility(t *testing.T) {
 			expected:    stringStruct.CelType(),
 			compatible:  false,
 			errContains: "incompatible",
+		},
+		{
+			name:       "map[string]dyn → struct{x:string, y: struct{x: int}} OK",
+			output:     cel.MapType(cel.StringType, cel.DynType),
+			expected:   parentObjectType.CelType(),
+			compatible: true,
 		},
 	}
 

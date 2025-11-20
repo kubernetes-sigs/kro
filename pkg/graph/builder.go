@@ -325,37 +325,38 @@ func (b *Builder) buildRGResource(
 		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
-	var templateVariables []*variable.ResourceField
-
-	// TODO(michaelhtm): CRDs are not supported for extraction currently
-	// implement new logic specific to CRDs
+	// 5. Extract CEL fieldDescriptors from the resource
+	var fieldDescriptors []variable.FieldDescriptor
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
-		celExpressions, err := parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
 		}
-		if len(celExpressions) > 0 {
-			return nil, fmt.Errorf("failed, CEL expressions are not supported for CRDs, resource %s", rgResource.ID)
+
+		for _, expr := range fieldDescriptors {
+			if !strings.HasPrefix(expr.Path, "metadata.") {
+				return nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rgResource.ID)
+			}
 		}
 	} else {
-		// 5. Extract CEL fieldDescriptors from the schema.
-		fieldDescriptors, err := parser.ParseResource(resourceObject, resourceSchema)
+		fieldDescriptors, err = parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
 
-		// 6. Set ExpectedType on each descriptor by converting schema to CEL type with proper naming
+		// Set ExpectedType on each descriptor by converting schema to CEL type with proper naming
 		for i := range fieldDescriptors {
 			setExpectedTypeOnDescriptor(&fieldDescriptors[i], resourceSchema, rgResource.ID)
 		}
+	}
 
-		for _, fieldDescriptor := range fieldDescriptors {
-			templateVariables = append(templateVariables, &variable.ResourceField{
-				// Assume variables are static; we'll validate them later
-				Kind:            variable.ResourceVariableKindStatic,
-				FieldDescriptor: fieldDescriptor,
-			})
-		}
+	var templateVariables []*variable.ResourceField
+	for _, fieldDescriptor := range fieldDescriptors {
+		templateVariables = append(templateVariables, &variable.ResourceField{
+			// Assume variables are static; we'll validate them later
+			Kind:            variable.ResourceVariableKindStatic,
+			FieldDescriptor: fieldDescriptor,
+		})
 	}
 
 	// 6. Parse ReadyWhen expressions

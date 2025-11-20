@@ -72,10 +72,13 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 				return nil, err
 			}
 			if len(expressions) > 0 {
+				// String template in schemaless parsing
+				// StandaloneExpression=false tells builder to set ExpectedType to cel.StringType
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:  expressions,
-					ExpectedType: cel.StringType, // String templates always produce strings
-					Path:         path,
+					Expressions:          expressions,
+					ExpectedType:         nil, // Builder will set this to cel.StringType
+					Path:                 path,
+					StandaloneExpression: false, // String template - always string
 				})
 			}
 		}

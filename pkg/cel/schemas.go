@@ -17,6 +17,7 @@ limitations under the License.
 package cel
 
 import (
+	"math"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -104,7 +105,7 @@ func SchemaDeclTypeWithMetadata(s common.Schema, isResourceRoot bool) *apiserver
 	case "object":
 		if s.AdditionalProperties() != nil && s.AdditionalProperties().Schema() != nil {
 			propsType := SchemaDeclTypeWithMetadata(s.AdditionalProperties().Schema(), s.AdditionalProperties().Schema().IsXEmbeddedResource())
-			mt := apiservercel.MapType
+			mt := apiservercel.NewMapType(apiservercel.StringType, apiservercel.DynType, math.MaxInt)
 			if propsType != nil {
 				var maxProperties int64
 				if s.MaxProperties() != nil {

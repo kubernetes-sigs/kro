@@ -100,7 +100,7 @@ func TestBuild(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests[0:1] {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Build(tt.segments)
 			if got != tt.want {

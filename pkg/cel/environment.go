@@ -97,7 +97,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	if len(opts.typedResources) > 0 {
 		// We need both a TypeProvider (for field resolution) and variable declarations.
 		// To avoid conflicts, we use different names for types vs variables:
-		//  - Types are registered with "__type_<name>" prefix (e.g "__type_schema")
+		//  - Types are registered with TypeNamePrefix + "<name>" (e.g "__type_schema")
 		//  - Variables use the original names (e.g "pod", "schema"...)
 
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
@@ -105,7 +105,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		for name, schema := range opts.typedResources {
 			declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 			if declType != nil {
-				typeName := "__type_" + name
+				typeName := TypeNamePrefix + name
 				declType = declType.MaybeAssignTypeName(typeName)
 
 				// add type declaration

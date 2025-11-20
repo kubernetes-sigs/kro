@@ -34,6 +34,8 @@ linters:
       - builtin$
       - examples$
   settings:
+    goconst:
+      ignore-string-values: ["true","false"]
     staticcheck:
       checks:
         - -QF1008

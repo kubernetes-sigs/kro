@@ -349,6 +349,23 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 													Properties: map[string]spec.Schema{
 														"name":  {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
 														"image": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+														"ports": {
+															SchemaProps: spec.SchemaProps{
+																Type: []string{"array"},
+																Items: &spec.SchemaOrArray{
+																	Schema: &spec.Schema{
+																		SchemaProps: spec.SchemaProps{
+																			Type: []string{"object"},
+																			Properties: map[string]spec.Schema{
+																				"name":          {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+																				"containerPort": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+																				"protocol":      {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+																			},
+																		},
+																	},
+																},
+															},
+														},
 														"env": {
 															SchemaProps: spec.SchemaProps{
 																Type: []string{"array"},

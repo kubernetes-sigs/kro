@@ -19,8 +19,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/cel-go/cel"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -37,15 +35,17 @@ const (
 //
 // Note that this function will also validate the resource against the schema
 // and return an error if the resource does not match the schema. When CEL
-// expressions are found, they are extracted and returned with the expected
-// type of the field (inferred from the schema).
+// expressions are found, they are extracted and returned with the schema
+// of the field. The caller is responsible for converting schemas to CEL types
+// with appropriate type naming.
 func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
 	return parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depth first search to traverse the resource and
-// extract expressions from string fields
+// extract expressions from string fields.
+// The path parameter includes array indices for error reporting (e.g., "spec.containers[0]").
 func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
@@ -62,28 +62,12 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 	case []interface{}:
 		return parseArray(field, schema, path, expectedTypes)
 	case string:
-		return parseString(field, schema, path, expectedTypes)
+		return parseString(field, path, expectedTypes)
 	case nil:
 		return nil, nil
 	default:
 		return parseScalarTypes(field, schema, path, expectedTypes)
 	}
-}
-
-// getCelType converts an OpenAPI schema to a CEL type using the Kubernetes OpenAPI library.
-// This replaces manual type conversion with the library's schema-to-CEL type conversion.
-func getCelType(schema *spec.Schema) *cel.Type {
-	if schema == nil {
-		return cel.DynType
-	}
-
-	// Use the Kubernetes OpenAPI library to convert schema to CEL type
-	declType := openapi.SchemaDeclType(schema, false)
-	if declType == nil {
-		return cel.DynType
-	}
-
-	return declType.CelType()
 }
 
 // getExpectedTypes extracts the expected types from a schema for validation purposes.
@@ -269,22 +253,23 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 	return expressionsFields, nil
 }
 
-func parseString(field string, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func parseString(field string, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	ok, err := isStandaloneExpression(field)
 	if err != nil {
 		return nil, err
 	}
 
 	if ok {
-		// For CEL expressions, get the CEL type from the schema
-		expectedType := getCelType(schema)
+		// Standalone CEL expression: "${expr}"
+		// ExpectedType will be set by builder based on schema
+		// StandaloneExpression=true tells builder to derive type from schema
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
 			Expressions:          []string{expr},
-			ExpectedType:         expectedType,
+			ExpectedType:         nil, // Builder will set this based on schema
 			Path:                 path,
-			StandaloneExpression: true,
+			StandaloneExpression: true, // Single expression - type from schema
 		}}, nil
 	}
 
@@ -297,11 +282,14 @@ func parseString(field string, schema *spec.Schema, path string, expectedTypes [
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		// String templates always produce strings
+		// String template: "foo-${expr1}-${expr2}"
+		// ExpectedType will be set by builder to cel.StringType
+		// StandaloneExpression=false tells builder this is string concatenation
 		return []variable.FieldDescriptor{{
-			Expressions:  expressions,
-			ExpectedType: cel.StringType,
-			Path:         path,
+			Expressions:          expressions,
+			ExpectedType:         nil, // Builder will set this to cel.StringType
+			Path:                 path,
+			StandaloneExpression: false, // Multiple expressions - always string
 		}}, nil
 	}
 	return nil, nil

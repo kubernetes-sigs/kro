@@ -120,8 +120,8 @@ config:
   dynamicControllerDefaultResyncPeriod: 36000
   # The maximum number of retries for an item in the queue will be retried before being dropped
   dynamicControllerDefaultQueueMaxRetries: 20
-  # The log level verbosity. 0 is the least verbose, 5 is the most verbose
-  logLevel: 3
+  # Log level verbosity: 'debug', 'info', 'error', 'panic', or integer > 0
+  logLevel: "info"
 
 metrics:
   service:

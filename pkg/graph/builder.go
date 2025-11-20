@@ -350,7 +350,7 @@ func (b *Builder) buildRGResource(
 		}
 	}
 
-	var templateVariables []*variable.ResourceField
+	templateVariables := make([]*variable.ResourceField, 0, len(fieldDescriptors))
 	for _, fieldDescriptor := range fieldDescriptors {
 		templateVariables = append(templateVariables, &variable.ResourceField{
 			// Assume variables are static; we'll validate them later

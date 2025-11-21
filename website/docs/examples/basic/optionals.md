@@ -5,6 +5,7 @@ sidebar_position: 104
 # Optional Values & External References
 
 ## Config Map
+
 ```yaml title="config-map.yaml"
 apiVersion: v1
 kind: ConfigMap

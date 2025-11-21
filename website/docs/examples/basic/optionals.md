@@ -6,6 +6,8 @@ sidebar_position: 104
 
 ## Config Map
 
+This example shows how to reference an existing ConfigMap and use the optional accessor `?` to safely extract values.
+
 ```yaml title="config-map.yaml"
 apiVersion: v1
 kind: ConfigMap
@@ -62,12 +64,13 @@ spec:
 
 ## Secret
 
+This example demonstrates referencing an existing Secret and transforming its base64-encoded data using CEL expressions with the optional accessor and base64 decoding functions.
+
 ```yaml title="secret.yaml"
 apiVersion: v1
 kind: Secret
 metadata:
   name: test
-  namespace: default
 stringData:
   uri: api.test.com
 ```
@@ -82,10 +85,7 @@ spec:
     apiVersion: v1alpha1
     kind: test
     spec:
-      prefix: string | default="test"
-      namespace: string | default="default"
-    status:
-      creationTimestamp: ${secret.metadata.creationTimestamp}
+      name: string     
   resources:
     - id: test
       externalRef:
@@ -99,8 +99,7 @@ spec:
         apiVersion: v1
         kind: Secret
         metadata:
-          name: "${schema.spec.prefix}-transformed"
-          namespace: ${schema.spec.namespace}
+          name: "${schema.spec.name}"          
         stringData:
           token: "${ string(base64.decode(string(test.data.uri))) }/oauth/token"
 ```

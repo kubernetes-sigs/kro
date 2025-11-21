@@ -91,7 +91,7 @@ type Validation struct {
 type ExternalRefMetadata struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
 }
 

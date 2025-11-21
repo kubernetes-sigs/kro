@@ -1,0 +1,14 @@
+apiVersion: kro.run/v1alpha1
+kind: ElastiCacheServerless
+metadata:
+  name: ${REDIS_NAME}
+  namespace: default
+spec:
+  name: ${REDIS_NAME}
+  namespace: default
+  vpcID: "${VPC_ID}"
+  subnetIDs: [${SUBNET_IDS}]
+  engine: "redis"
+  dataStorageLimit: 1
+  ecpuLimit: 1000
+  description: "Redis Serverless cache for voting app"

@@ -194,6 +194,8 @@ func (a *Inspector) inspectAst(expr *exprpb.Expr, currentPath string) Expression
 		return a.inspectIdent(e.IdentExpr, currentPath)
 	case *exprpb.Expr_ComprehensionExpr:
 		return a.inspectComprehension(e.ComprehensionExpr, currentPath)
+	case *exprpb.Expr_ListExpr:
+		return a.inspectList(e.ListExpr)
 	default:
 		return ExpressionInspection{}
 	}
@@ -383,6 +385,27 @@ func (a *Inspector) inspectComprehension(comp *exprpb.Expr_Comprehension, curren
 			},
 		})
 	}
+
+	return inspection
+}
+
+func (a *Inspector) inspectList(expr *exprpb.Expr_CreateList) ExpressionInspection {
+	inspection := ExpressionInspection{}
+
+	for _, element := range expr.Elements {
+		elemInspection := a.inspectAst(element, "")
+		inspection.ResourceDependencies = append(inspection.ResourceDependencies, elemInspection.ResourceDependencies...)
+		inspection.FunctionCalls = append(inspection.FunctionCalls, elemInspection.FunctionCalls...)
+		inspection.UnknownResources = append(inspection.UnknownResources, elemInspection.UnknownResources...)
+		inspection.UnknownFunctions = append(inspection.UnknownFunctions, elemInspection.UnknownFunctions...)
+	}
+
+	// Only treat this as a REAL list literal if it appears as a literal expression,
+	// not part of CEL internal operator argument structure.
+	inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
+		Name:      "createList",
+		Arguments: []string{a.listExpressionToString(expr)},
+	})
 
 	return inspection
 }

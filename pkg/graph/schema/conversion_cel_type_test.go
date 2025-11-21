@@ -131,6 +131,22 @@ func TestInferSchemaFromCELType_Collections(t *testing.T) {
 		})
 	}
 }
+func TestGenerateSchemaFromCELTypes_Timestamp(t *testing.T) {
+	typeMap := map[string]*cel.Type{
+		"ts": cel.TimestampType,
+	}
+
+	result, err := GenerateSchemaFromCELTypes(typeMap, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	prop, ok := result.Properties["ts"]
+	require.True(t, ok)
+
+	assert.Equal(t, "string", prop.Type)
+	assert.Equal(t, "datetime", prop.Format)
+	assert.Equal(t, "Timestamp representing a creation time", prop.Description)
+}
 
 func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 	addressFields := map[string]*apiservercel.DeclField{

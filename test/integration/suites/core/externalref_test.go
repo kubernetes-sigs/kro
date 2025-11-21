@@ -300,8 +300,7 @@ var _ = Describe("ExternalRef", func() {
 				APIVersion: "apiextensions.k8s.io/v1",
 				Kind:       "CustomResourceDefinition",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Name:      "${schema.spec.crdName}",
-					Namespace: "default",
+					Name: "${schema.spec.crdName}",
 				},
 			}, nil, nil),
 		)

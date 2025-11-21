@@ -79,6 +79,8 @@ spec:
                             name:
                               type: string
                             namespace:
+                              description: Namespace of the external resource. optional,
+                                if empty uses instance namespace
                               type: string
                           required:
                           - name

@@ -1,0 +1,15 @@
+apiVersion: kro.run/v1alpha1
+kind: RDSPostgres
+metadata:
+  name: ${POSTGRES_NAME}
+  namespace: default
+spec:
+  name: ${POSTGRES_NAME}
+  namespace: default
+  vpcID: "${VPC_ID}"
+  subnetIDs: [${SUBNET_IDS}]
+  instanceClass: "db.t4g.micro"
+  allocatedStorage: 20
+  engineVersion: "16.3"
+  dbName: "postgres"
+  masterUsername: "postgres"

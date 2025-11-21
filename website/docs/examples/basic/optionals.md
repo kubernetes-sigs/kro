@@ -93,6 +93,7 @@ spec:
         kind: Secret
         metadata:
           name: test
+          namespace: ""
     - id: secret
       template:
         apiVersion: v1

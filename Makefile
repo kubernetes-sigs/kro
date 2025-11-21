@@ -254,7 +254,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 
 .PHONY: deploy-kind
 deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind: ko
+deploy-kind: ko ## Deploy kro to a kind cluster
 	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
 	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system

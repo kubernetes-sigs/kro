@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
@@ -392,7 +393,58 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "CEL expressions are not supported for CRDs",
+			errMsg:  "CEL expressions in CRDs are only supported for metadata fields",
+		},
+		{
+			name: "crds are allowed to have CEL expressions in metadata.name",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"crdName": "string",
+					},
+					nil,
+				),
+				generator.WithResource("somecrd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.crdName}",
+					},
+					"spec": map[string]interface{}{
+						"group":   "ec2.services.k8s.aws",
+						"version": "v1alpha1",
+						"names": map[string]interface{}{
+							"kind":     "VPC",
+							"listKind": "VPCList",
+							"singular": "vpc",
+							"plural":   "vpcs",
+						},
+						"scope": "Namespaced",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "crds with dynamic external references work",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"crdName": "string",
+					},
+					nil,
+				),
+				generator.WithExternalRef("crd", &krov1alpha1.ExternalRef{
+					APIVersion: "apiextensions.k8s.io/v1",
+					Kind:       "CustomResourceDefinition",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Name: "${schema.spec.crdName}",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
 		},
 		{
 			name: "valid instance definition with complex types",

@@ -102,5 +102,5 @@ spec:
           name: "${schema.spec.prefix}-transformed"
           namespace: ${schema.spec.namespace}
         stringData:
-          Token-url: "${ string(base64.decode(string(test.data.uri))) }/oauth/token"
+          token: "${ string(base64.decode(string(test.data.uri))) }/oauth/token"
 ```

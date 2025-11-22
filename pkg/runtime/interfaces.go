@@ -66,6 +66,9 @@ type Interface interface {
 	// if not it will add itself to the ignored resources
 	ReadyToProcessResource(resourceID string) (bool, error)
 
+	// AreDependenciesReady returns true if all the dependencies of the resource are ready
+	AreDependenciesReady(resourceID string) bool
+
 	// IgnoreResource ignores resource that has a condition expressison that evaluated
 	// to false
 	IgnoreResource(resourceID string)

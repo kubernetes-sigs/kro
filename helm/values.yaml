@@ -153,3 +153,13 @@ metrics:
     # - action: replace
     #   replacement: my-cluster
     #   targetLabel: cluster
+
+validation:
+  admission:
+    policy:
+      rgd:
+        annotation:
+          # The Key on the RGD to use for the validation of delete
+          key: kro.run/allow-delete
+        # The value of the annotation to use for the validation of delete operations on RGDs
+        actions: '[Deny]'

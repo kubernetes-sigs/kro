@@ -121,7 +121,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		gvr,
 		processedRGD,
 		r.clientSet,
-		r.clientSet.RESTMapper(),
 		labeler,
 	)
 }

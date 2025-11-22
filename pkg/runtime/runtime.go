@@ -575,6 +575,22 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 	return true, nil
 }
 
+func (rt *ResourceGraphDefinitionRuntime) AreDependenciesReady(resourceID string) bool {
+	for _, dep := range rt.ResourceDescriptor(resourceID).GetDependencies() {
+		// If the dependency is not resolved, we can't be sure that it's ready
+		_, st := rt.GetResource(dep)
+		if st != ResourceStateResolved {
+			return false
+		}
+		// The dependency needs to be ready in the runtime
+		ready, _, err := rt.IsResourceReady(dep)
+		if err != nil || !ready {
+			return false
+		}
+	}
+	return true
+}
+
 // evaluateExpression evaluates a CEL expression and returns a value if successful, or error.
 // It caches compiled programs by expression string to avoid redundant compilation.
 func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(

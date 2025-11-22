@@ -15,10 +15,8 @@
 package metadata
 
 import (
-	"fmt"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -43,36 +41,21 @@ func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
 	return containsString(obj.GetFinalizers(), kroFinalizer)
 }
 
-// SetInstanceFinalizerUnstructured adds an instance-specific finalizer to an unstructured object.
-func SetInstanceFinalizerUnstructured(obj *unstructured.Unstructured) error {
-	finalizers := obj.GetFinalizers()
-	if !containsString(finalizers, kroFinalizer) {
-		finalizers = append(finalizers, kroFinalizer)
-		obj.SetFinalizers(finalizers)
-	}
-	return nil
+// SetInstanceFinalizer adds an instance-specific finalizer to an unstructured object.
+func SetInstanceFinalizer(obj client.Object) {
+	controllerutil.AddFinalizer(obj, kroFinalizer)
 }
 
-// RemoveInstanceFinalizerUnstructured removes an instance-specific finalizer from an unstructured object.
-func RemoveInstanceFinalizerUnstructured(obj *unstructured.Unstructured) error {
+// RemoveInstanceFinalizer removes an instance-specific finalizer from an unstructured object.
+func RemoveInstanceFinalizer(obj client.Object) {
 	if controllerutil.ContainsFinalizer(obj, kroFinalizer) {
 		controllerutil.RemoveFinalizer(obj, kroFinalizer)
 	}
-	return nil
 }
 
-// HasInstanceFinalizerUnstructured checks if an unstructured object has an instance-specific finalizer.
-func HasInstanceFinalizerUnstructured(obj *unstructured.Unstructured) (bool, error) {
-	finalizers, found, err := unstructured.NestedStringSlice(obj.Object, "metadata", "finalizers")
-	if err != nil {
-		return false, fmt.Errorf("error getting finalizers: %w", err)
-	}
-
-	if !found {
-		return false, nil
-	}
-
-	return containsString(finalizers, kroFinalizer), nil
+// HasInstanceFinalizer checks if an unstructured object has an instance-specific finalizer.
+func HasInstanceFinalizer(obj client.Object) bool {
+	return controllerutil.ContainsFinalizer(obj, kroFinalizer)
 }
 
 // Helper functions

@@ -162,6 +162,15 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 		}
 	}
 
+	// Add CEL metrics to the status
+	celMetrics := igr.runtime.GetCELMetrics()
+	if celMetrics.TotalCost > 0 {
+		status["celMetrics"] = map[string]interface{}{
+			"totalCost":       celMetrics.TotalCost,
+			"costPerResource": celMetrics.CostPerResource,
+		}
+	}
+
 	return status
 }
 

@@ -170,6 +170,33 @@ type ResourceGraphDefinitionRuntime struct {
 	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
+
+	celMetrics CELMetrics
+}
+
+// RecordCELCost records the cost of a CEL expression evaluation for a given resource.
+// The cost is accumulated both in the total cost and in the per-resource breakdown.
+func (rt *ResourceGraphDefinitionRuntime) RecordCELCost(resourceID string, cost uint64) {
+	rt.celMetrics.TotalCost += cost
+	if rt.celMetrics.CostPerResource == nil {
+		rt.celMetrics.CostPerResource = make(map[string]uint64)
+	}
+	rt.celMetrics.CostPerResource[resourceID] += cost
+}
+
+// GetCELMetrics returns the current CEL expression evaluation metrics.
+// This includes the total cost across all expressions and the cost breakdown per resource.
+func (rt *ResourceGraphDefinitionRuntime) GetCELMetrics() CELMetrics {
+	return rt.celMetrics
+}
+
+// ResetCELMetrics resets the CEL expression evaluation metrics to zero.
+// This is typically called at the start of a new reconciliation cycle to track
+// costs for that specific reconciliation.
+func (rt *ResourceGraphDefinitionRuntime) ResetCELMetrics() {
+	rt.celMetrics = CELMetrics{
+		CostPerResource: make(map[string]uint64),
+	}
 }
 
 // TopologicalOrder returns the topological order of resources.
@@ -316,9 +343,15 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			value, details, err := evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				return err
+			}
+
+			if details != nil {
+				if cost := details.ActualCost(); cost != nil {
+					rt.RecordCELCost("schema", *cost)
+				}
 			}
 
 			variable.Resolved = true
@@ -356,48 +389,99 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 		return err
 	}
 
-	// Let's iterate over any resolved resource and try to resolve
-	// the dynamic variables that depend on it.
-	// Since we have already cached the expressions, we don't need to
-	// loop over all the resources.
-	for _, variable := range rt.expressionsCache {
-		if variable.Kind.IsDynamic() {
-			// Skip the variable if it's already resolved
-			if variable.Resolved {
-				continue
-			}
+	// Iterate over resources in topological order to resolve their dynamic variables.
+	// This ensures we track costs per resource ID rather than per expression.
+	for _, resourceID := range rt.topologicalOrder {
+		variables, ok := rt.runtimeVariables[resourceID]
+		if !ok {
+			continue
+		}
 
-			// we need to make sure that the dependencies are
-			// part of the resolved resources.
-			if len(variable.Dependencies) > 0 &&
-				!containsAllElements(resolvedResources, variable.Dependencies) {
-				continue
-			}
+		for _, variable := range variables {
+			if variable.Kind.IsDynamic() {
+				// Skip the variable if it's already resolved
+				if variable.Resolved {
+					continue
+				}
 
-			evalContext := make(map[string]interface{})
-			for _, dep := range variable.Dependencies {
-				evalContext[dep] = rt.resolvedResources[dep].Object
-			}
+				// we need to make sure that the dependencies are
+				// part of the resolved resources.
+				if len(variable.Dependencies) > 0 &&
+					!containsAllElements(resolvedResources, variable.Dependencies) {
+					continue
+				}
 
-			evalContext["schema"] = rt.instance.Unstructured().Object
+				evalContext := make(map[string]interface{})
+				for _, dep := range variable.Dependencies {
+					evalContext[dep] = rt.resolvedResources[dep].Object
+				}
 
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
-			if err != nil {
-				if strings.Contains(err.Error(), "no such key") {
-					// TODO(a-hilaly): I'm not sure if this is the best way to handle
-					// these. Probably need to reiterate here.
+				evalContext["schema"] = rt.instance.Unstructured().Object
+
+				value, details, err := evaluateExpression(env, evalContext, variable.Expression)
+				if err != nil {
+					if strings.Contains(err.Error(), "no such key") {
+						// TODO(a-hilaly): I'm not sure if this is the best way to handle
+						// these. Probably need to reiterate here.
+						return &EvalError{
+							IsIncompleteData: true,
+							Err:              err,
+						}
+					}
 					return &EvalError{
-						IsIncompleteData: true,
-						Err:              err,
+						Err: err,
 					}
 				}
-				return &EvalError{
-					Err: err,
-				}
-			}
 
-			variable.Resolved = true
-			variable.ResolvedValue = value
+				if details != nil {
+					if cost := details.ActualCost(); cost != nil {
+						rt.RecordCELCost(resourceID, *cost)
+					}
+				}
+
+				variable.Resolved = true
+				variable.ResolvedValue = value
+			}
+		}
+	}
+
+	// Also evaluate instance variables that might be dynamic
+	if instanceVars, ok := rt.runtimeVariables["instance"]; ok {
+		for _, variable := range instanceVars {
+			if variable.Kind.IsDynamic() && !variable.Resolved {
+				if len(variable.Dependencies) > 0 &&
+					!containsAllElements(resolvedResources, variable.Dependencies) {
+					continue
+				}
+
+				evalContext := make(map[string]interface{})
+				for _, dep := range variable.Dependencies {
+					evalContext[dep] = rt.resolvedResources[dep].Object
+				}
+				evalContext["schema"] = rt.instance.Unstructured().Object
+
+				value, details, err := evaluateExpression(env, evalContext, variable.Expression)
+				if err != nil {
+					if strings.Contains(err.Error(), "no such key") {
+						return &EvalError{
+							IsIncompleteData: true,
+							Err:              err,
+						}
+					}
+					return &EvalError{
+						Err: err,
+					}
+				}
+
+				if details != nil {
+					if cost := details.ActualCost(); cost != nil {
+						rt.RecordCELCost("instance", *cost)
+					}
+				}
+
+				variable.Resolved = true
+				variable.ResolvedValue = value
+			}
 		}
 	}
 
@@ -494,9 +578,14 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 	}
 
 	for _, expression := range expressions {
-		out, err := evaluateExpression(env, context, expression)
+		out, details, err := evaluateExpression(env, context, expression)
 		if err != nil {
 			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
+		}
+		if details != nil {
+			if cost := details.ActualCost(); cost != nil {
+				rt.RecordCELCost(resourceID, *cost)
+			}
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !out.(bool) {
@@ -552,9 +641,14 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 
 	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := evaluateExpression(env, context, includeWhenExpression)
+		value, details, err := evaluateExpression(env, context, includeWhenExpression)
 		if err != nil {
 			return false, err
+		}
+		if details != nil {
+			if cost := details.ActualCost(); cost != nil {
+				rt.RecordCELCost(resourceID, *cost)
+			}
 		}
 		// returning a reason here to point out which expression is not ready yet
 		if !value.(bool) {
@@ -565,25 +659,26 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 }
 
 // evaluateExpression evaluates an CEL expression and returns a value if successful, or error
-func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
+func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, *cel.EvalDetails, error) {
 	ast, issues := env.Compile(expression)
 	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
+		return nil, nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 	}
-	// Here as well
-	program, err := env.Program(ast)
+	// Enable cost tracking when creating the program
+	program, err := env.Program(ast, cel.EvalOptions(cel.OptTrackCost))
 	if err != nil {
-		return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
+		return nil, nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
 	}
 	// We get an error here when the value field we're looking for is not yet defined
 	// For now leaving it as error, in the future when we see different scenarios
 	// of this error, we can make some a reason, and others an error
-	val, _, err := program.Eval(context)
+	val, details, err := program.Eval(context)
 	if err != nil {
-		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
+		return nil, details, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
 	}
 
-	return krocel.GoNativeType(val)
+	nativeVal, err := krocel.GoNativeType(val)
+	return nativeVal, details, err
 }
 
 // containsAllElements checks if all elements in the inner slice are present

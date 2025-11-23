@@ -196,6 +196,10 @@ func (a *Inspector) inspectAst(expr *exprpb.Expr, currentPath string) Expression
 		return a.inspectComprehension(e.ComprehensionExpr, currentPath)
 	case *exprpb.Expr_ListExpr:
 		return a.inspectList(e.ListExpr)
+	case *exprpb.Expr_StructExpr:
+		return a.inspectStruct(e.StructExpr)
+	case *exprpb.Expr_ConstExpr:
+		return ExpressionInspection{}
 	default:
 		return ExpressionInspection{}
 	}
@@ -406,6 +410,31 @@ func (a *Inspector) inspectList(expr *exprpb.Expr_CreateList) ExpressionInspecti
 		Name:      "createList",
 		Arguments: []string{a.listExpressionToString(expr)},
 	})
+
+	return inspection
+}
+
+// inspectStruct analyzes struct/map creation expressions in CEL.
+func (a *Inspector) inspectStruct(expr *exprpb.Expr_CreateStruct) ExpressionInspection {
+	inspection := ExpressionInspection{}
+
+	for _, entry := range expr.Entries {
+		if mapKey := entry.GetMapKey(); mapKey != nil {
+			keyInspection := a.inspectAst(mapKey, "")
+			inspection.ResourceDependencies = append(inspection.ResourceDependencies, keyInspection.ResourceDependencies...)
+			inspection.FunctionCalls = append(inspection.FunctionCalls, keyInspection.FunctionCalls...)
+			inspection.UnknownResources = append(inspection.UnknownResources, keyInspection.UnknownResources...)
+			inspection.UnknownFunctions = append(inspection.UnknownFunctions, keyInspection.UnknownFunctions...)
+		}
+
+		if value := entry.GetValue(); value != nil {
+			valueInspection := a.inspectAst(value, "")
+			inspection.ResourceDependencies = append(inspection.ResourceDependencies, valueInspection.ResourceDependencies...)
+			inspection.FunctionCalls = append(inspection.FunctionCalls, valueInspection.FunctionCalls...)
+			inspection.UnknownResources = append(inspection.UnknownResources, valueInspection.UnknownResources...)
+			inspection.UnknownFunctions = append(inspection.UnknownFunctions, valueInspection.UnknownFunctions...)
+		}
+	}
 
 	return inspection
 }

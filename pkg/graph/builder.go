@@ -565,15 +565,6 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}
 
-	// Add the validating admission policies defined in the instance spec.
-	instanceSchema.XValidations = make(extv1.ValidationRules, len(rgSchema.Validation))
-	for idx, validation := range rgSchema.Validation {
-		instanceSchema.XValidations[idx] = extv1.ValidationRule{
-			Message: validation.Message,
-			Rule:    validation.Expression,
-		}
-	}
-
 	return instanceSchema, nil
 }
 

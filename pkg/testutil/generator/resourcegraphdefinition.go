@@ -134,12 +134,3 @@ func WithTypes(types map[string]interface{}) SchemaOption {
 		}
 	}
 }
-
-func WithValidation(expression, message string) ResourceGraphDefinitionOption {
-	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
-		rgd.Spec.Schema.Validation = append(rgd.Spec.Schema.Validation, krov1alpha1.Validation{
-			Expression: expression,
-			Message:    message,
-		})
-	}
-}

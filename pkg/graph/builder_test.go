@@ -28,7 +28,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func TestGraphBuilder_Validation(t *testing.T) {
@@ -1057,29 +1056,6 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, g.TopologicalOrder)
 			},
 		},
-		{
-			name: "check validation expression",
-			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
-				generator.WithSchema(
-					"Test", "v1alpha1",
-					map[string]interface{}{
-						"name": "string",
-					},
-					nil,
-				),
-				generator.WithValidation("rule", "message"),
-			},
-			validateDeps: func(t *testing.T, g *Graph) {
-				require.Len(t, g.Instance.crd.Spec.Versions, 1)
-				schema := g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema
-				require.Contains(t, schema.Properties, "spec")
-				spec := schema.Properties["spec"]
-
-				require.Len(t, spec.XValidations, 1)
-				assert.Equal(t, "rule", spec.XValidations[0].Rule)
-				assert.Equal(t, "message", spec.XValidations[0].Message)
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -1839,54 +1815,6 @@ func TestNewBuilder(t *testing.T) {
 	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
-}
-
-func Test_ValidateOpenAPISchema(t *testing.T) {
-	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
-	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
-	}
-
-	tests := []struct {
-		name                        string
-		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
-		validateFunc                func(t *testing.T, schema *extv1.JSONSchemaProps)
-	}{
-		{
-			name: "check validation expression",
-			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
-				generator.WithSchema(
-					"Test", "v1alpha1",
-					map[string]interface{}{
-						"name": "string",
-					},
-					nil,
-				),
-				generator.WithValidation("rule", "message"),
-			},
-			validateFunc: func(t *testing.T, schema *extv1.JSONSchemaProps) {
-				require.Contains(t, schema.Properties, "spec")
-				spec := schema.Properties["spec"]
-
-				require.Len(t, spec.XValidations, 1)
-				assert.Equal(t, "rule", spec.XValidations[0].Rule)
-				assert.Equal(t, "message", spec.XValidations[0].Message)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
-			require.NoError(t, err)
-			require.Len(t, g.Instance.crd.Spec.Versions, 1)
-			require.NotNil(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
-			tt.validateFunc(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
-		})
-	}
 }
 
 func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {

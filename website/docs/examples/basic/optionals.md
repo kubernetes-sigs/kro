@@ -4,6 +4,9 @@ sidebar_position: 104
 
 # Optional Values & External References
 
+## Config Map
+
+This example shows how to reference an existing ConfigMap and use the optional accessor `?` to safely extract values.
 
 ```yaml title="config-map.yaml"
 apiVersion: v1
@@ -57,4 +60,46 @@ spec:
                   env:
                     - name: MY_VALUE
                       value: ${input.data.?ECHO_VALUE}
+```
+
+## Secret
+
+This example demonstrates referencing an existing Secret and transforming its base64-encoded data using CEL expressions with the optional accessor and base64 decoding functions.
+
+```yaml title="secret.yaml"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test
+stringData:
+  uri: api.test.com
+```
+
+```yaml title="secret-transformation-rg.yaml"
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: secret-transformation
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: test
+    spec:
+      name: string     
+  resources:
+    - id: test
+      externalRef:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: test
+          namespace: ""
+    - id: secret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: "${schema.spec.name}"          
+        stringData:
+          token: "${ string(base64.decode(string(test.data.uri))) }/oauth/token"
 ```

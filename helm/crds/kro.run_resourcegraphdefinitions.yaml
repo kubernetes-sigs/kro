@@ -79,10 +79,11 @@ spec:
                             name:
                               type: string
                             namespace:
+                              description: Namespace of the external resource. optional,
+                                if empty uses instance namespace
                               type: string
                           required:
                           - name
-                          - namespace
                           type: object
                       required:
                       - apiVersion
@@ -208,18 +209,6 @@ spec:
                       the SimpleSchema spec.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
-                  validation:
-                    description: |-
-                      Validation is a list of validation rules that are applied to the
-                      resourcegraphdefinition.
-                    items:
-                      properties:
-                        expression:
-                          type: string
-                        message:
-                          type: string
-                      type: object
-                    type: array
                 required:
                 - apiVersion
                 - kind

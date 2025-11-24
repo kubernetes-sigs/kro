@@ -194,6 +194,12 @@ func (a *Inspector) inspectAst(expr *exprpb.Expr, currentPath string) Expression
 		return a.inspectIdent(e.IdentExpr, currentPath)
 	case *exprpb.Expr_ComprehensionExpr:
 		return a.inspectComprehension(e.ComprehensionExpr, currentPath)
+	case *exprpb.Expr_ListExpr:
+		return a.inspectList(e.ListExpr)
+	case *exprpb.Expr_StructExpr:
+		return a.inspectStruct(e.StructExpr)
+	case *exprpb.Expr_ConstExpr:
+		return ExpressionInspection{}
 	default:
 		return ExpressionInspection{}
 	}
@@ -382,6 +388,52 @@ func (a *Inspector) inspectComprehension(comp *exprpb.Expr_Comprehension, curren
 				a.exprToString(comp.Result),
 			},
 		})
+	}
+
+	return inspection
+}
+
+func (a *Inspector) inspectList(expr *exprpb.Expr_CreateList) ExpressionInspection {
+	inspection := ExpressionInspection{}
+
+	for _, element := range expr.Elements {
+		elemInspection := a.inspectAst(element, "")
+		inspection.ResourceDependencies = append(inspection.ResourceDependencies, elemInspection.ResourceDependencies...)
+		inspection.FunctionCalls = append(inspection.FunctionCalls, elemInspection.FunctionCalls...)
+		inspection.UnknownResources = append(inspection.UnknownResources, elemInspection.UnknownResources...)
+		inspection.UnknownFunctions = append(inspection.UnknownFunctions, elemInspection.UnknownFunctions...)
+	}
+
+	// Only treat this as a REAL list literal if it appears as a literal expression,
+	// not part of CEL internal operator argument structure.
+	inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
+		Name:      "createList",
+		Arguments: []string{a.listExpressionToString(expr)},
+	})
+
+	return inspection
+}
+
+// inspectStruct analyzes struct/map creation expressions in CEL.
+func (a *Inspector) inspectStruct(expr *exprpb.Expr_CreateStruct) ExpressionInspection {
+	inspection := ExpressionInspection{}
+
+	for _, entry := range expr.Entries {
+		if mapKey := entry.GetMapKey(); mapKey != nil {
+			keyInspection := a.inspectAst(mapKey, "")
+			inspection.ResourceDependencies = append(inspection.ResourceDependencies, keyInspection.ResourceDependencies...)
+			inspection.FunctionCalls = append(inspection.FunctionCalls, keyInspection.FunctionCalls...)
+			inspection.UnknownResources = append(inspection.UnknownResources, keyInspection.UnknownResources...)
+			inspection.UnknownFunctions = append(inspection.UnknownFunctions, keyInspection.UnknownFunctions...)
+		}
+
+		if value := entry.GetValue(); value != nil {
+			valueInspection := a.inspectAst(value, "")
+			inspection.ResourceDependencies = append(inspection.ResourceDependencies, valueInspection.ResourceDependencies...)
+			inspection.FunctionCalls = append(inspection.FunctionCalls, valueInspection.FunctionCalls...)
+			inspection.UnknownResources = append(inspection.UnknownResources, valueInspection.UnknownResources...)
+			inspection.UnknownFunctions = append(inspection.UnknownFunctions, valueInspection.UnknownFunctions...)
+		}
 	}
 
 	return inspection

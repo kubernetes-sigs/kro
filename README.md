@@ -2,7 +2,6 @@
 
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/kubernetes-sigs/kro)](https://goreportcard.com/report/github.com/kubernetes-sigs/kro)
-[![unit tests](https://github.com/kubernetes-sigs/kro/actions/workflows/unit-tests.yaml/badge.svg)](https://github.com/kubernetes-sigs/kro/actions/workflows/unit-tests.yaml)
 ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/kubernetes-sigs/kro)
 ![GitHub License](https://img.shields.io/github/license/kubernetes-sigs/kro)
 ![GitHub Repo stars](https://img.shields.io/github/stars/kubernetes-sigs/kro)

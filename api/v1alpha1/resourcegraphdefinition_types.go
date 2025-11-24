@@ -112,11 +112,6 @@ type Schema struct {
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
-type Validation struct {
-	Expression string `json:"expression,omitempty"`
-	Message    string `json:"message,omitempty"`
-}
-
 type ExternalRefMetadata struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`

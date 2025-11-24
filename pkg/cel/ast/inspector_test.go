@@ -296,6 +296,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			expression:    `createPod(Pod{metadata: {name: "test", labels: {"app": "web"}}, spec: {containers: [{name: "main", image: "nginx"}]}})`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{`[{name: "main", image: "nginx"}]`}},
 				{Name: "createPod", Arguments: []string{
 					`Pod{metadata: {name: "test", labels: {"app": "web"}}, spec: {containers: [{name: "main", image: "nginx"}]}}`,
 				}},
@@ -424,6 +425,66 @@ func TestInspector_InspectionResults(t *testing.T) {
 			wantFunctions: []FunctionCall{
 				// size() will NOT be recorded, because it’s built-in
 				{Name: "createList", Arguments: []string{"[cfg.a, cfg.b]"}},
+			},
+		},
+		{
+			name:       "map with resources",
+			resources:  []string{"pod"},
+			expression: `{"name": pod.metadata.name}`,
+			wantResources: []ResourceDependency{
+				{ID: "pod", Path: "pod.metadata.name"},
+			},
+		},
+		{
+			name:       "struct with resources",
+			resources:  []string{"deployment"},
+			expression: `Config{replicas: deployment.spec.replicas}`,
+			wantResources: []ResourceDependency{
+				{ID: "deployment", Path: "deployment.spec.replicas"},
+			},
+		},
+		{
+			name:       "nested maps with resources",
+			resources:  []string{"app", "db"},
+			expression: `{"app": {"name": app.metadata.name, "version": app.spec.version}, "db": {"host": db.spec.host}}`,
+			wantResources: []ResourceDependency{
+				{ID: "app", Path: "app.metadata.name"},
+				{ID: "app", Path: "app.spec.version"},
+				{ID: "db", Path: "db.spec.host"},
+			},
+		},
+		{
+			name:       "map with dynamic key from resource",
+			resources:  []string{"config"},
+			expression: `{config.metadata.name: config.spec.value}`,
+			wantResources: []ResourceDependency{
+				{ID: "config", Path: "config.metadata.name"},
+				{ID: "config", Path: "config.spec.value"},
+			},
+		},
+		{
+			name:       "map inside list",
+			resources:  []string{"svc"},
+			expression: `[{"port": svc.spec.ports[0].port}]`,
+			wantResources: []ResourceDependency{
+				{ID: "svc", Path: "svc.spec.ports"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{`[{"port": _[_](svc.spec.ports, 0).port}]`}},
+			},
+		},
+		{
+			name:       "map with function calls in values",
+			resources:  []string{"user"},
+			functions:  []string{"toLower", "hash"},
+			expression: `{"username": toLower(user.name), "hash": hash(user.password)}`,
+			wantResources: []ResourceDependency{
+				{ID: "user", Path: "user.name"},
+				{ID: "user", Path: "user.password"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "hash", Arguments: []string{"user.password"}},
+				{Name: "toLower", Arguments: []string{"user.name"}},
 			},
 		},
 	}

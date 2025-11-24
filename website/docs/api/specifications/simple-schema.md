@@ -1,12 +1,13 @@
 ---
-sidebar_position: 2
+sidebar_position: 1
+sidebar_label: SimpleSchema
 ---
 
 # Simple Schema
 
 **kro** follows a different approach for defining your API schema and shapes. It
-leverages a human-friendly and readable syntax that is OpenAPI specification
-compatible. Here's a comprehensive example:
+uses a human-friendly and readable syntax that is OpenAPI specification
+compatible. Here's an example:
 
 ```yaml
 apiVersion: kro.run/v1alpha1

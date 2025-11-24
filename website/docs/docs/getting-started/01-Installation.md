@@ -2,109 +2,128 @@
 sidebar_position: 1
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Installing kro
 
-This guide walks you through the process of installing kro on your Kubernetes
-cluster using Helm.
+Install kro on your Kubernetes cluster using Helm.
 
 ## Prerequisites
 
-Before you begin, ensure you have the following:
+- Helm 3.x installed
+- kubectl configured to access your cluster
 
-1. `Helm` 3.x installed
-2. `kubectl` installed and configured to interact with your Kubernetes cluster
+## Installation
 
-## Installation Steps
+<Tabs>
+  <TabItem value="quickstart" label="Quick Start" default>
 
-:::info[**Alpha Stage**]
+Install the latest version:
 
-kro is currently in alpha stage. While the images are publicly available, please
-note that the software is still under active development and APIs may change.
-
-:::
-
-### Install kro using Helm
-
-Once authenticated, install kro using the Helm chart:
-
-Fetch the latest release version from GitHub
-```sh
-export KRO_VERSION=$(curl -sL \
-    https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
-    jq -r '.tag_name | ltrimstr("v")'
-  )
+```bash
+helm install kro oci://registry.k8s.io/kro/charts/kro \
+  --namespace kro \
+  --create-namespace
 ```
-Validate `KRO_VERSION` populated with a version
-```
-echo $KRO_VERSION
-```
-Install kro using Helm
-```
+
+  </TabItem>
+  <TabItem value="pinned" label="Pinned Version">
+
+Install a specific version for reproducible deployments:
+
+```bash
+# Set the version you want to install
+export KRO_VERSION=0.6.2
+
+# Install kro
 helm install kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --create-namespace \
   --version=${KRO_VERSION}
 ```
 
-## Verifying the Installation
+Or automatically use the latest release:
 
-After running the installation command, verify that Kro has been installed
-correctly:
-
-1. Check the Helm release:
-
-   ```sh
-   helm -n kro list
-   ```
-
-   Expected result: You should see the "kro" release listed.
-   ```
-    NAME	NAMESPACE	REVISION	STATUS  
-    kro 	kro      	1       	deployed
-   ```
-
-2. Check the kro pods:
-   ```sh
-   kubectl get pods -n kro
-   ```
-   Expected result: You should see kro-related pods running.
-   ```
-    NAME                        READY   STATUS             RESTARTS   AGE
-    kro-7d98bc6f46-jvjl5        1/1     Running            0           1s 
-   ```
-
-## Upgrading kro
-
-To upgrade to a newer version of kro, use the Helm upgrade command:
-
-Replace `<new-version>` with the version you want to upgrade to.
 ```bash
-export KRO_VERSION=<new-version>
+# Fetch latest release version
+export KRO_VERSION=$(curl -sL \
+    https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | \
+    jq -r '.tag_name | ltrimstr("v")')
+
+# Verify version
+echo $KRO_VERSION
+
+# Install kro
+helm install kro oci://registry.k8s.io/kro/charts/kro \
+  --namespace kro \
+  --create-namespace \
+  --version=${KRO_VERSION}
 ```
 
-Upgrade the controller
+  </TabItem>
+</Tabs>
+
+## Verify Installation
+
+Check the Helm release:
+
+```bash
+helm list -n kro
 ```
+
+Expected output:
+```
+NAME  NAMESPACE  REVISION  STATUS
+kro   kro        1         deployed
+```
+
+Check the kro pod is running:
+
+```bash
+kubectl get pods -n kro
+```
+
+Expected output:
+```
+NAME                   READY   STATUS    RESTARTS   AGE
+kro-7d98bc6f46-jvjl5   1/1     Running   0          30s
+```
+
+## Upgrade
+
+<Tabs>
+  <TabItem value="latest" label="Latest Version" default>
+
+```bash
+helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
+  --namespace kro
+```
+
+  </TabItem>
+  <TabItem value="specific" label="Specific Version">
+
+```bash
+export KRO_VERSION=0.6.2
+
 helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro \
   --version=${KRO_VERSION}
 ```
 
-:::info[**CRD Updates**]
+  </TabItem>
+</Tabs>
 
-Helm does not support updating CRDs, so you may need to manually update or
-remove and reapply kro related CRDs. For more information, refer to the Helm
-documentation.
-
+:::info
+Helm does not update CRDs automatically. If a new version includes CRD changes, you may need to manually apply them. Check the release notes for CRD updates.
 :::
 
-## Uninstalling kro
-
-To uninstall kro, use the following command:
+## Uninstall
 
 ```bash
 helm uninstall kro -n kro
 ```
 
-Keep in mind that this command will remove all kro resources from your cluster,
-except for the ResourceGraphDefinition CRD and any other custom resources you may have
-created.
+:::info
+This removes the kro controller but preserves your RGDs and deployed instances. To fully clean up, manually delete instances and RGDs before uninstalling.
+:::

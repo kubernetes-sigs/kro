@@ -16,7 +16,9 @@ package ast
 
 import (
 	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -47,7 +49,6 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 		},
-
 		{
 			name:       "bucket name with function",
 			resources:  []string{"bucket"},
@@ -57,7 +58,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "bucket", Path: "bucket.name"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "toLower"},
+				{Name: "toLower", Arguments: []string{"bucket.name"}},
 			},
 		},
 		{
@@ -69,7 +70,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "deployment", Path: "deployment.spec.replicas"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "max"},
+				{Name: "max", Arguments: []string{"deployment.spec.replicas", "5"}},
 			},
 		},
 		{
@@ -81,7 +82,6 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "list", Path: "list"},
 				{ID: "flags", Path: "flags"},
 			},
-			wantFunctions: []FunctionCall{},
 		},
 		{
 			name:      "mixed constant types",
@@ -95,7 +95,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			)`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
-				{Name: "process"},
+				{Name: "process", Arguments: []string{`b"bytes123"`, "3.14", "42u", "null"}},
 			},
 		},
 		{
@@ -110,7 +110,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "validate", Arguments: []string{
-					"(conditions.ready || conditions.initialized) && list[3]",
+					"(conditions.ready || (conditions.initialized && _[_](list, 3)))",
 				}},
 			},
 		},
@@ -142,8 +142,12 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "bucket", Path: "bucket.spec.name"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "concat"},
-				{Name: "toLower"},
+				{Name: "concat", Arguments: []string{
+					"toLower(eksCluster.spec.name)",
+					`"-"`,
+					"bucket.spec.name",
+				}},
+				{Name: "toLower", Arguments: []string{"eksCluster.spec.name"}},
 			},
 		},
 		{
@@ -155,7 +159,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "count"},
+				{Name: "count", Arguments: []string{"instances"}},
 			},
 		},
 		{
@@ -171,8 +175,8 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "eksCluster", Path: "eksCluster.status.state"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "contains"},
-				{Name: "count"},
+				{Name: "contains", Arguments: []string{"fargateProfile.spec.subnets", `"subnet-123"`}},
+				{Name: "count", Arguments: []string{"fargateProfile.spec.selectors"}},
 			},
 		},
 		{
@@ -189,16 +193,23 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "vpc", Path: "vpc.status.vpcID"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "concat"},
-				{Name: "contains"},
-				{Name: "map"}, // first map is for rules
-				{Name: "map"}, // second map is for ipRanges
+				{Name: "concat", Arguments: []string{"range.cidr", `"/"`, "range.description"}},
+				{Name: "contains", Arguments: []string{
+					"map(r.ipRanges, range, concat(range.cidr, \"/\", range.description))",
+					`"0.0.0.0/0"`,
+				}},
+				{Name: "map", Arguments: []string{"r.ipRanges", "range", "concat(range.cidr, \"/\", range.description)"}},
+				{Name: "map", Arguments: []string{
+					"securityGroup.spec.rules",
+					"(@result && contains(map(r.ipRanges, range, concat(range.cidr, \"/\", range.description)), \"0.0.0.0/0\"))",
+					"@result",
+				}},
 			},
 		},
 		{
 			name:      "eks cluster validation",
 			resources: []string{"eksCluster", "nodeGroups", "iamRole", "vpc"},
-			functions: []string{"filter", "contains", "timeAgo"}, // duration and size are a built-in function
+			functions: []string{"filter", "contains", "timeAgo"},
 			expression: `eksCluster.status.state == "ACTIVE" &&
 				duration(timeAgo(eksCluster.status.createdAt)) > duration("24h") &&
 				size(nodeGroups.filter(ng,
@@ -214,12 +225,21 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "vpc", Path: "vpc.subnets"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "contains"},
-				{Name: "contains"},
-				{Name: "map"},
-				{Name: "map"},
-				{Name: "timeAgo"},
-				// built-in functions don't appear in the function list
+				{Name: "contains", Arguments: []string{"ng.labels", `"environment"`}},
+				{Name: "contains", Arguments: []string{"map(iamRole.policies, p, p.actions)", `"eks:*"`}},
+				{Name: "createList", Arguments: []string{"[ng]"}},
+				{Name: "createList", Arguments: []string{"[s]"}},
+				{Name: "map", Arguments: []string{
+					"nodeGroups",
+					"(((ng.status.state == \"ACTIVE\") && contains(ng.labels, \"environment\")) ? (@result + [ng]) : @result)",
+					"@result",
+				}},
+				{Name: "map", Arguments: []string{
+					"vpc.subnets",
+					"(s.isPrivate ? (@result + [s]) : @result)",
+					"@result",
+				}},
+				{Name: "timeAgo", Arguments: []string{"eksCluster.status.createdAt"}},
 			},
 		},
 		{
@@ -243,9 +263,13 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "customer", Path: "customer.address.zipCode"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "validateAddress"},
-				{Name: "map"},
-				{Name: "calculateTax"},
+				{Name: "calculateTax", Arguments: []string{"order.total", "customer.address.zipCode"}},
+				{Name: "map", Arguments: []string{
+					"order.items",
+					"(@result && ((product.id == item.productId) && (_[_](inventory.stock, item.productId) >= item.quantity)))",
+					"@result",
+				}},
+				{Name: "validateAddress", Arguments: []string{"customer.shippingAddress"}},
 			},
 		},
 		{
@@ -257,7 +281,12 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "pods", Path: "pods"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "map"},
+				{Name: "createList", Arguments: []string{"[p]"}},
+				{Name: "map", Arguments: []string{
+					"pods",
+					"((p.status == \"Running\") ? (@result + [p]) : @result)",
+					"@result",
+				}},
 			},
 		},
 		{
@@ -267,7 +296,10 @@ func TestInspector_InspectionResults(t *testing.T) {
 			expression:    `createPod(Pod{metadata: {name: "test", labels: {"app": "web"}}, spec: {containers: [{name: "main", image: "nginx"}]}})`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
-				{Name: "createPod"},
+				{Name: "createList", Arguments: []string{`[{name: "main", image: "nginx"}]`}},
+				{Name: "createPod", Arguments: []string{
+					`Pod{metadata: {name: "test", labels: {"app": "web"}}, spec: {containers: [{name: "main", image: "nginx"}]}}`,
+				}},
 			},
 		},
 		{
@@ -281,7 +313,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			})`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
-				{Name: "processMap"},
+				{Name: "processMap", Arguments: []string{
+					`{"string-key": 123, 42: "number-key", true: "bool-key"}`,
+				}},
 			},
 		},
 		{
@@ -297,7 +331,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			})`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
-				{Name: "validate"},
+				{Name: "validate", Arguments: []string{
+					`Container{resource: Resource{cpu: "100m", memory: "256Mi"}, env: {"DB_HOST": "localhost", "DB_PORT": "5432"}}`,
+				}},
 			},
 		},
 		{
@@ -307,6 +343,148 @@ func TestInspector_InspectionResults(t *testing.T) {
 			wantResources: []ResourceDependency{
 				// for optionals, we can only depend on the known object, not on the path thereafter (as its optional)
 				{ID: "bucket", Path: "bucket"},
+			},
+		},
+		{
+			name:       "format statement powered by list",
+			resources:  []string{"serviceAccount", "configMap", "schema"},
+			expression: `"%s:%s".format([schema.metadata.namespace, serviceAccount.metadata.name])`,
+			wantFunctions: []FunctionCall{
+				{Name: `"%s:%s".format`},
+				{Name: "createList", Arguments: []string{"[schema.metadata.namespace, serviceAccount.metadata.name]"}},
+			},
+			wantResources: []ResourceDependency{
+				{ID: "serviceAccount", Path: "serviceAccount.metadata.name"},
+				{ID: "schema", Path: "schema.metadata.namespace"},
+			},
+		},
+		{
+			name:       "simple list literal",
+			resources:  []string{},
+			expression: `[1, 2, 3]`,
+			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{"[1, 2, 3]"}},
+			},
+		},
+
+		{
+			name:       "nested list literal",
+			resources:  []string{},
+			expression: `[[1, 2], ["a", "b"]]`,
+			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{"[1, 2]"}},
+				{Name: "createList", Arguments: []string{"[\"a\", \"b\"]"}},
+				{Name: "createList", Arguments: []string{"[[1, 2], [\"a\", \"b\"]]"}},
+			},
+		},
+
+		{
+			name:       "list with struct elements",
+			resources:  []string{},
+			expression: `[{a: 1}, {b: 2}]`,
+			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{"[{a: 1}, {b: 2}]"}},
+			},
+		},
+
+		{
+			name:       "list containing function calls",
+			resources:  []string{},
+			functions:  []string{"toLower", "hash"},
+			expression: `[toLower("A"), hash("x")]`,
+			wantFunctions: []FunctionCall{
+				{Name: "toLower", Arguments: []string{`"A"`}},
+				{Name: "hash", Arguments: []string{`"x"`}},
+				{Name: "createList", Arguments: []string{"[toLower(\"A\"), hash(\"x\")]"}},
+			},
+		},
+		{
+			name:       "list with optional access",
+			resources:  []string{"bucket"},
+			expression: `[bucket.?spec.name, "x"]`,
+			wantResources: []ResourceDependency{
+				{ID: "bucket", Path: "bucket"},
+			},
+			wantFunctions: []FunctionCall{
+				{
+					Name:      "createList",
+					Arguments: []string{`[_?._(bucket, "spec").name, "x"]`},
+				},
+			},
+		},
+		{
+			name:       "list inside binary operator",
+			resources:  []string{"cfg"},
+			expression: `size([cfg.a, cfg.b]) > 1`,
+			// no "size" – CEL already provides it
+			functions: []string{},
+			wantResources: []ResourceDependency{
+				{ID: "cfg", Path: "cfg.a"},
+				{ID: "cfg", Path: "cfg.b"},
+			},
+			wantFunctions: []FunctionCall{
+				// size() will NOT be recorded, because it’s built-in
+				{Name: "createList", Arguments: []string{"[cfg.a, cfg.b]"}},
+			},
+		},
+		{
+			name:       "map with resources",
+			resources:  []string{"pod"},
+			expression: `{"name": pod.metadata.name}`,
+			wantResources: []ResourceDependency{
+				{ID: "pod", Path: "pod.metadata.name"},
+			},
+		},
+		{
+			name:       "struct with resources",
+			resources:  []string{"deployment"},
+			expression: `Config{replicas: deployment.spec.replicas}`,
+			wantResources: []ResourceDependency{
+				{ID: "deployment", Path: "deployment.spec.replicas"},
+			},
+		},
+		{
+			name:       "nested maps with resources",
+			resources:  []string{"app", "db"},
+			expression: `{"app": {"name": app.metadata.name, "version": app.spec.version}, "db": {"host": db.spec.host}}`,
+			wantResources: []ResourceDependency{
+				{ID: "app", Path: "app.metadata.name"},
+				{ID: "app", Path: "app.spec.version"},
+				{ID: "db", Path: "db.spec.host"},
+			},
+		},
+		{
+			name:       "map with dynamic key from resource",
+			resources:  []string{"config"},
+			expression: `{config.metadata.name: config.spec.value}`,
+			wantResources: []ResourceDependency{
+				{ID: "config", Path: "config.metadata.name"},
+				{ID: "config", Path: "config.spec.value"},
+			},
+		},
+		{
+			name:       "map inside list",
+			resources:  []string{"svc"},
+			expression: `[{"port": svc.spec.ports[0].port}]`,
+			wantResources: []ResourceDependency{
+				{ID: "svc", Path: "svc.spec.ports"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{`[{"port": _[_](svc.spec.ports, 0).port}]`}},
+			},
+		},
+		{
+			name:       "map with function calls in values",
+			resources:  []string{"user"},
+			functions:  []string{"toLower", "hash"},
+			expression: `{"username": toLower(user.name), "hash": hash(user.password)}`,
+			wantResources: []ResourceDependency{
+				{ID: "user", Path: "user.name"},
+				{ID: "user", Path: "user.password"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "hash", Arguments: []string{"user.password"}},
+				{Name: "toLower", Arguments: []string{"user.name"}},
 			},
 		},
 	}
@@ -323,42 +501,23 @@ func TestInspector_InspectionResults(t *testing.T) {
 				t.Fatalf("Inspect() error = %v", err)
 			}
 
-			// Sort for stable comparison
-			sortDependencies := func(deps []ResourceDependency) {
-				sort.Slice(deps, func(i, j int) bool {
-					return deps[i].Path < deps[j].Path
-				})
+			sortDependencies := func(a, b ResourceDependency) int {
+				return strings.Compare(a.Path, b.Path)
+			}
+			sortFunctions := func(a, b FunctionCall) int {
+				return strings.Compare(a.Name, b.Name)
 			}
 
-			sortFunctions := func(funcs []FunctionCall) {
-				sort.Slice(funcs, func(i, j int) bool {
-					return funcs[i].Name < funcs[j].Name
-				})
-			}
-
-			sortDependencies(got.ResourceDependencies)
-			sortDependencies(tt.wantResources)
-			sortFunctions(got.FunctionCalls)
-			sortFunctions(tt.wantFunctions)
-
+			slices.SortFunc(got.ResourceDependencies, sortDependencies)
+			slices.SortFunc(tt.wantResources, sortDependencies)
 			if !reflect.DeepEqual(got.ResourceDependencies, tt.wantResources) {
 				t.Errorf("ResourceDependencies = %v, want %v", got.ResourceDependencies, tt.wantResources)
 			}
 
-			// Only check function names, not arguments
-			gotFuncNames := make([]string, len(got.FunctionCalls))
-			wantFuncNames := make([]string, len(tt.wantFunctions))
-			for i, f := range got.FunctionCalls {
-				gotFuncNames[i] = f.Name
-			}
-			for i, f := range tt.wantFunctions {
-				wantFuncNames[i] = f.Name
-			}
-			sort.Strings(gotFuncNames)
-			sort.Strings(wantFuncNames)
-
-			if !reflect.DeepEqual(gotFuncNames, wantFuncNames) {
-				t.Errorf("Function names = %v, want %v", gotFuncNames, wantFuncNames)
+			slices.SortFunc(got.FunctionCalls, sortFunctions)
+			slices.SortFunc(tt.wantFunctions, sortFunctions)
+			if !reflect.DeepEqual(got.FunctionCalls, tt.wantFunctions) {
+				t.Errorf("FunctionCalls = %v, want %v", got.FunctionCalls, tt.wantFunctions)
 			}
 		})
 	}
@@ -412,6 +571,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
+				{Name: "createList"},
 				{Name: "map"},
 			},
 		},
@@ -427,6 +587,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{ID: "instances", Path: "instances"},
 			},
 			wantFunctions: []FunctionCall{
+				{Name: "createList"},
 				{Name: "map"},
 			},
 			wantUnknownRes: nil,

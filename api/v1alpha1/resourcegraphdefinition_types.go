@@ -70,9 +70,7 @@ type Schema struct {
 	// that the resourcegraphdefinition is managing. This is adhering to the
 	// SimpleSchema spec.
 	Status runtime.RawExtension `json:"status,omitempty"`
-	// Validation is a list of validation rules that are applied to the
-	// resourcegraphdefinition.
-	Validation []Validation `json:"validation,omitempty"`
+
 	// AdditionalPrinterColumns defines additional printer columns
 	// that will be passed down to the created CRD. If set, no
 	// default printer columns will be added to the created CRD,
@@ -83,15 +81,11 @@ type Schema struct {
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
 }
 
-type Validation struct {
-	Expression string `json:"expression,omitempty"`
-	Message    string `json:"message,omitempty"`
-}
-
 type ExternalRefMetadata struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
-	// +kubebuilder:validation:Required
+	// Namespace of the external resource. optional, if empty uses instance namespace
+	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
 }
 

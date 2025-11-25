@@ -37,6 +37,9 @@ const (
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
+	ManagedByLabelKey = "app.kubernetes.io/managed-by"
+	ManagedByKROValue = "kro"
+
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
@@ -50,6 +53,9 @@ const (
 // IsKROOwned returns true if the resource is owned by KRO.
 func IsKROOwned(meta metav1.Object) bool {
 	v, ok := meta.GetLabels()[OwnedLabel]
+	if !ok {
+		return meta.GetLabels()[ManagedByLabelKey] == ManagedByKROValue
+	}
 	return ok && booleanFromString(v)
 }
 
@@ -85,11 +91,13 @@ func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMat
 // SetKROOwned sets the OwnedLabel to true on the resource.
 func SetKROOwned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
+	setLabel(&meta, ManagedByLabelKey, ManagedByKROValue)
 }
 
 // SetKROUnowned sets the OwnedLabel to false on the resource.
 func SetKROUnowned(meta metav1.ObjectMeta) {
 	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
+	unsetLabel(&meta, ManagedByLabelKey, ManagedByKROValue)
 }
 
 var (
@@ -204,4 +212,17 @@ func setLabel(meta metav1.Object, key, value string) {
 	}
 	labels[key] = value
 	meta.SetLabels(labels)
+}
+
+// Helper function to unset a label
+func unsetLabel(meta metav1.Object, key, value string) {
+	labels := meta.GetLabels()
+	if labels == nil {
+		return
+	}
+	v := labels[key]
+	if v == value {
+		delete(labels, key)
+		meta.SetLabels(labels)
+	}
 }

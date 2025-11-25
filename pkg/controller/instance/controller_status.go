@@ -139,10 +139,10 @@ func (m *ConditionsMarker) ResourcesInProgress(format string, a ...any) {
 
 // prepareStatus creates the status object for the instance based on current state.
 func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
-	status := igr.getResolvedStatus()
+	status := igr.getStatusWithEmptyConditions()
 
 	// Set status.state based on readiness
-	instance := igr.runtime.GetInstance()
+	instance := igr.instance
 	conditionSet := instanceConditionTypes.For(wrapInstance(instance))
 	if conditionSet.IsRootReady() {
 		status["state"] = InstanceStateActive
@@ -151,41 +151,25 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 	}
 
 	// Get conditions from the instance (set by condition markers during reconciliation)
-	if conditions := conditionSet.List(); len(conditions) > 0 {
-		// Marshal conditions to JSON and then unmarshal to []interface{} to get map[string]interface{} representation
-		conditionsJSON, err := json.Marshal(conditions)
-		if err == nil {
-			var conditionsInterface []interface{}
-			if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err == nil {
-				status["conditions"] = conditionsInterface
-			}
-		}
-	}
+	_ = unstructured.SetNestedSlice(status, conditionSet.AsUnstructured(), "conditions")
 
 	return status
 }
 
-// getResolvedStatus retrieves the current status while preserving non-condition fields.
-func (igr *instanceGraphReconciler) getResolvedStatus() map[string]interface{} {
-	status := map[string]interface{}{
-		"conditions": []interface{}{},
+// getStatusWithEmptyConditions retrieves the current status while preserving non-condition fields.
+func (igr *instanceGraphReconciler) getStatusWithEmptyConditions() map[string]any {
+	base, ok, _ := unstructured.NestedMap(igr.instance.Object, "status")
+	if !ok {
+		base = map[string]interface{}{}
 	}
+	_ = unstructured.SetNestedSlice(base, []interface{}{}, "conditions") // Reset conditions in base
 
-	if existingStatus, ok := igr.runtime.GetInstance().Object["status"].(map[string]interface{}); ok {
-		// Copy existing status but reset conditions
-		for k, v := range existingStatus {
-			if k != "conditions" {
-				status[k] = v
-			}
-		}
-	}
-
-	return status
+	return base
 }
 
 // patchInstanceStatus updates the status subresource of the instance.
 func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, status map[string]interface{}) error {
-	instance := igr.runtime.GetInstance().DeepCopy()
+	instance := igr.instance.DeepCopy()
 	instance.Object["status"] = status
 
 	// We are using retry.RetryOnConflict to handle conflicts.

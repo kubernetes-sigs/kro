@@ -307,4 +307,121 @@ var _ = Describe("Unknown Fields", func() {
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
+
+	Context("Second RGD status referencing first RGD status", func() {
+		It("should not panic when the second RGD embeds the first RGD", func(ctx SpecContext) {
+			basicRGD := generator.NewResourceGraphDefinition(
+				"basic-app-"+rand.String(4),
+				generator.WithSchema(
+					"BasicApp", "v1alpha1",
+					map[string]any{
+						"name":     "string",
+						"image":    "string | default=\"nginx\"",
+						"replicas": "integer | default=3",
+					},
+					map[string]any{
+						"deploymentConditions": "${deployment.status.conditions}",
+						"availableReplicas":    "${deployment.status.availableReplicas}",
+					},
+				),
+				generator.WithResource(
+					"deployment",
+					map[string]any{
+						"apiVersion": "apps/v1",
+						"kind":       "Deployment",
+						"metadata": map[string]any{
+							"name": "${schema.spec.name}",
+						},
+						"spec": map[string]any{
+							"replicas": "${schema.spec.replicas}",
+							"selector": map[string]any{
+								"matchLabels": map[string]any{
+									"app": "${schema.spec.name}",
+								},
+							},
+							"template": map[string]any{
+								"metadata": map[string]any{
+									"labels": map[string]any{
+										"app": "${schema.spec.name}",
+									},
+								},
+								"spec": map[string]any{
+									"containers": []any{
+										map[string]any{
+											"name":  "${schema.spec.name}",
+											"image": "${schema.spec.image}",
+											"ports": []any{
+												map[string]any{
+													"containerPort": 80,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					nil,
+					nil,
+				),
+			)
+
+			Expect(env.Client.Create(ctx, basicRGD)).To(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx,
+					types.NamespacedName{Name: basicRGD.Name},
+					basicRGD,
+				)).To(Succeed())
+				g.Expect(basicRGD.Status.State).
+					To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			advancedRGD := generator.NewResourceGraphDefinition(
+				"advanced-app-"+rand.String(4),
+				generator.WithSchema(
+					"AdvancedApp", "v1alpha1",
+					map[string]any{
+						"name":     "string",
+						"replicas": "integer | default=3",
+						"image":    "string | default=\"nginx\"",
+					},
+					map[string]any{
+						// This line forces the second RGD to load the BasicApp status schema
+						"deploymentInfo": "${rgddep.status}",
+					},
+				),
+				generator.WithResource(
+					"rgddep",
+					map[string]any{
+						"apiVersion": "kro.run/v1alpha1",
+						"kind":       "BasicApp",
+						"metadata": map[string]any{
+							"name": "my-advanced-app-${schema.spec.name}",
+						},
+						"spec": map[string]any{
+							"name":     "${schema.spec.name}",
+							"replicas": "${schema.spec.replicas}",
+							"image":    "${schema.spec.image}",
+						},
+					},
+					nil,
+					nil,
+				),
+			)
+
+			Expect(env.Client.Create(ctx, advancedRGD)).To(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx,
+					types.NamespacedName{Name: advancedRGD.Name},
+					advancedRGD,
+				)).To(Succeed())
+
+				// IF THE PANIC STILL EXISTS: this never reaches Active
+				g.Expect(advancedRGD.Status.State).
+					To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		})
+	})
 })

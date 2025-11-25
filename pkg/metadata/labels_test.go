@@ -162,12 +162,16 @@ func TestSetKROOwned(t *testing.T) {
 		{
 			name:          "set owned on empty label",
 			initialLabels: map[string]string{},
-			expected:      map[string]string{OwnedLabel: "true"},
+			expected: map[string]string{
+				OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue,
+			},
 		},
 		{
-			name:          "override existing owned label",
-			initialLabels: map[string]string{OwnedLabel: "false"},
-			expected:      map[string]string{OwnedLabel: "true"},
+			name:          "override existing owned and mangedby labels",
+			initialLabels: map[string]string{OwnedLabel: "false", ManagedByLabelKey: "other"},
+			expected: map[string]string{
+				OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue,
+			},
 		},
 	}
 
@@ -189,12 +193,19 @@ func TestSetKROUnowned(t *testing.T) {
 		{
 			name:          "set unowned on empty label",
 			initialLabels: map[string]string{},
+			expected: map[string]string{
+				OwnedLabel: "false",
+			},
+		},
+		{
+			name:          "override existing owned label and remove managedBy label",
+			initialLabels: map[string]string{OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue},
 			expected:      map[string]string{OwnedLabel: "false"},
 		},
 		{
-			name:          "override existing owned label",
-			initialLabels: map[string]string{OwnedLabel: "true"},
-			expected:      map[string]string{OwnedLabel: "false"},
+			name:          "don't remove if mangedBy label if value is not kro",
+			initialLabels: map[string]string{OwnedLabel: "true", ManagedByLabelKey: "other"},
+			expected:      map[string]string{OwnedLabel: "false", ManagedByLabelKey: "other"},
 		},
 	}
 

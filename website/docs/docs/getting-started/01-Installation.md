@@ -132,7 +132,7 @@ export KRO_VARIANT=kro-core-install-manifests
 
 Install kro using Kubectl
 ```
-kubectl create namespace kro
+kubectl create namespace kro-system
 kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
 ```
 
@@ -143,7 +143,7 @@ correctly:
 
 Check the kro pods:
 ```sh
-kubectl get pods -n kro
+kubectl get pods -n kro-system
 ```
 Expected result: You should see kro-related pods running.
 ```

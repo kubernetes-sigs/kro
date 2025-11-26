@@ -306,12 +306,6 @@ deploy-kind-%: ko start-kind render-static-manifests ## Apply the static manifes
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
-
-.PHONY: deploy-kind
-deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
-	@true
-
 .PHONY: ko-apply
 ko-apply: ko
 	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
@@ -329,6 +323,20 @@ cli:
 test-e2e: chainsaw ## Run e2e tests
 	$(CHAINSAW) test ./test/e2e/chainsaw
 
-.PHONY: test-e2e-kind
-test-e2e-kind: deploy-kind
+
+.PHONY: test-e2e-kind-%
+test-e2e-kind-%: deploy-kind-%
 	make test-e2e
+
+
+# Default deployment uses helm deployments
+
+.PHONY: deploy-kind
+deploy-kind: export KO_DOCKER_REPO=kind.local
+deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
+	@true
+
+# Default end to end tests uses helm deployments
+.PHONY: test-e2e-kind
+test-e2e-kind: deploy-kind-helm
+	@true

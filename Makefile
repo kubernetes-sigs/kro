@@ -44,7 +44,7 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
-HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds --namespace kro
+HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds --namespace kro-system
 HELM_STATIC_MANIFEST_IMAGE_FLAGS ?= --set image.tag=${RELEASE_VERSION}
 
 ifeq ($(shell uname -s),Darwin)

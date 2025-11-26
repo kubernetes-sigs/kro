@@ -289,7 +289,7 @@ start-kind:
 
 .PHONY: deploy-kind-helm
 deploy-kind-helm: export KO_DOCKER_REPO=kind.local
-deploy-kind-helm: start-kind
+deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it

@@ -1,11 +1,11 @@
 ---
-sidebar_position: 20
+sidebar_position: 1
 ---
 
 # Access Control
 
 There are currently two modes of access control supported by **kro**, if you
-[install through the Helm chart](../getting-started/01-Installation.md#install-kro-using-helm):
+[install through the Helm chart](../getting-started/01-Installation.md#installation):
 
 - `unrestricted`
 

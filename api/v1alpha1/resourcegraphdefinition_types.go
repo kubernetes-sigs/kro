@@ -62,11 +62,12 @@ type Schema struct {
 	APIVersion string `json:"apiVersion,omitempty"`
 	// Group is the API group for the generated CRD. Together with APIVersion and Kind,
 	// it forms the complete GVK (Group-Version-Kind) identifier.
-	// If omitted, defaults to "kro.run".
+	// If omitted, defaults to "kro.run". This field is immutable after creation.
 	// Example: "mycompany.io", "databases.example.com"
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="kro.run"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="group is immutable"
 	Group string `json:"group,omitempty"`
 	// Spec defines the schema for the instance's spec section using SimpleSchema syntax.
 	// This becomes the OpenAPI schema for instances of the generated CRD.

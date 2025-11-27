@@ -1,0 +1,29 @@
+variants:
+- name: kro-core-install-manifests
+  values:
+    rbac:
+      mode: aggregation
+- name: kro-unrestricted-manifests
+  values:
+    rbac:
+      mode: unrestricted
+      legacy: true
+- name: kro-core-install-manifests-with-prometheus
+  values:
+    rbac:
+      mode: aggregation
+    metrics:
+      service:
+        create: true
+      serviceMonitor:
+        enabled: true
+- name: kro-unrestricted-manifests-with-prometheus
+  values:
+    rbac:
+      mode: unrestricted
+      legacy: true
+    metrics:
+      service:
+        create: true
+      serviceMonitor:
+        enabled: true

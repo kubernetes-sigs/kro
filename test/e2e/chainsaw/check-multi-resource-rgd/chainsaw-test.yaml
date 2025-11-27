@@ -10,6 +10,9 @@ spec:
     try:
     #description: Install the RGD that creates multiple resources
     - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
         file: rgd.yaml
       description: Apply RGD
     - assert:

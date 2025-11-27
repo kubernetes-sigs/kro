@@ -223,9 +223,12 @@ spec:
                     description: |-
                       Group is the API group for the generated CRD. Together with APIVersion and Kind,
                       it forms the complete GVK (Group-Version-Kind) identifier.
-                      If omitted, defaults to "kro.run".
+                      If omitted, defaults to "kro.run". This field is immutable after creation.
                       Example: "mycompany.io", "databases.example.com"
                     type: string
+                    x-kubernetes-validations:
+                    - message: group is immutable
+                      rule: self == oldSelf
                   kind:
                     description: |-
                       Kind is the name of the custom resource type that will be created.

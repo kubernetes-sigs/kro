@@ -88,18 +88,6 @@ func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMat
 	return kroOwned, nameMatch, idMatch
 }
 
-// SetKROOwned sets the OwnedLabel to true on the resource.
-func SetKROOwned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
-	setLabel(&meta, ManagedByLabelKey, ManagedByKROValue)
-}
-
-// SetKROUnowned sets the OwnedLabel to false on the resource.
-func SetKROUnowned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
-	unsetLabel(&meta, ManagedByLabelKey, ManagedByKROValue)
-}
-
 var (
 	ErrDuplicatedLabels = errors.New("duplicate labels")
 )
@@ -173,11 +161,12 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 }
 
 // NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ControllerPodID labels on a resource.
+// KROVersion, and ManagedBy labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:      "true",
-		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
+		OwnedLabel:        "true",
+		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
+		ManagedByLabelKey: ManagedByKROValue,
 	}
 }
 
@@ -197,13 +186,6 @@ func booleanFromString(s string) bool {
 	return s == "true"
 }
 
-func stringFromBoolean(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}
-
 // Helper function to set a label
 func setLabel(meta metav1.Object, key, value string) {
 	labels := meta.GetLabels()
@@ -212,17 +194,4 @@ func setLabel(meta metav1.Object, key, value string) {
 	}
 	labels[key] = value
 	meta.SetLabels(labels)
-}
-
-// Helper function to unset a label
-func unsetLabel(meta metav1.Object, key, value string) {
-	labels := meta.GetLabels()
-	if labels == nil {
-		return
-	}
-	v := labels[key]
-	if v == value {
-		delete(labels, key)
-		meta.SetLabels(labels)
-	}
 }

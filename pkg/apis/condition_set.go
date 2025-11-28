@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -60,6 +61,17 @@ func (c ConditionSet) List() []v1alpha1.Condition {
 		return nil
 	}
 	return c.object.GetConditions()
+}
+
+func (c ConditionSet) AsUnstructured() []any {
+	origin := c.List()
+	data := make([]any, 0, len(origin))
+	for _, condition := range origin {
+		if raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&condition); err == nil {
+			data = append(data, raw)
+		}
+	}
+	return data
 }
 
 // Get finds and returns the Condition that matches the ConditionType

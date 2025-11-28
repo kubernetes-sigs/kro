@@ -153,71 +153,6 @@ func TestCompareRGDOwnership(t *testing.T) {
 	}
 }
 
-func TestSetKROOwned(t *testing.T) {
-	cases := []struct {
-		name          string
-		initialLabels map[string]string
-		expected      map[string]string
-	}{
-		{
-			name:          "set owned on empty label",
-			initialLabels: map[string]string{},
-			expected: map[string]string{
-				OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue,
-			},
-		},
-		{
-			name:          "override existing owned and mangedby labels",
-			initialLabels: map[string]string{OwnedLabel: "false", ManagedByLabelKey: "other"},
-			expected: map[string]string{
-				OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue,
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKROOwned(meta)
-			assert.Equal(t, tc.expected, meta.Labels)
-		})
-	}
-}
-
-func TestSetKROUnowned(t *testing.T) {
-	cases := []struct {
-		name          string
-		initialLabels map[string]string
-		expected      map[string]string
-	}{
-		{
-			name:          "set unowned on empty label",
-			initialLabels: map[string]string{},
-			expected: map[string]string{
-				OwnedLabel: "false",
-			},
-		},
-		{
-			name:          "override existing owned label and remove managedBy label",
-			initialLabels: map[string]string{OwnedLabel: "true", ManagedByLabelKey: ManagedByKROValue},
-			expected:      map[string]string{OwnedLabel: "false"},
-		},
-		{
-			name:          "don't remove if mangedBy label if value is not kro",
-			initialLabels: map[string]string{OwnedLabel: "true", ManagedByLabelKey: "other"},
-			expected:      map[string]string{OwnedLabel: "false", ManagedByLabelKey: "other"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKROUnowned(meta)
-			assert.Equal(t, tc.expected, meta.Labels)
-		})
-	}
-}
-
 func TestGenericLabeler(t *testing.T) {
 	t.Run("ApplyLabels", func(t *testing.T) {
 		cases := []struct {
@@ -318,6 +253,10 @@ func TestNewInstanceLabeler(t *testing.T) {
 func TestNewKROMetaLabeler(t *testing.T) {
 	t.Run("NewKROMetaLabeler", func(t *testing.T) {
 		labeler := NewKROMetaLabeler()
-		assert.Equal(t, GenericLabeler{OwnedLabel: "true", KROVersionLabel: version.GetVersionInfo().GitVersion}, labeler)
+		assert.Equal(t, GenericLabeler{
+			OwnedLabel:        "true",
+			KROVersionLabel:   version.GetVersionInfo().GitVersion,
+			ManagedByLabelKey: ManagedByKROValue,
+		}, labeler)
 	})
 }

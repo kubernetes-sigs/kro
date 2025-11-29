@@ -69,6 +69,22 @@ type Interface interface {
 	// IgnoreResource ignores resource that has a condition expressison that evaluated
 	// to false
 	IgnoreResource(resourceID string)
+
+	// GetCELMetrics returns the CEL expression evaluation metrics for this runtime.
+	// This includes the total cost and cost breakdown per resource.
+	GetCELMetrics() CELMetrics
+
+	// ResetCELMetrics resets the CEL expression evaluation metrics.
+	// This is typically called at the start of a reconciliation cycle.
+	ResetCELMetrics()
+}
+
+// CELMetrics tracks CEL expression evaluation costs.
+type CELMetrics struct {
+	// TotalCost is the cumulative cost of all CEL expression evaluations.
+	TotalCost uint64
+	// CostPerResource maps resource IDs to their respective CEL evaluation costs.
+	CostPerResource map[string]uint64
 }
 
 // ResourceDescriptor provides metadata about a resource.

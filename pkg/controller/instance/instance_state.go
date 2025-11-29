@@ -14,7 +14,10 @@
 
 package instance
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 const (
 	InstanceStateInProgress = "IN_PROGRESS"
@@ -43,6 +46,12 @@ type ResourceState struct {
 
 // InstanceState tracks the overall state of resources being managed
 type InstanceState struct {
+	// mu guards all maps and sets in applySet.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
+	mu sync.RWMutex
+
 	// Current state of the instance
 	State string
 	// Map of resource IDs to their current states
@@ -51,9 +60,29 @@ type InstanceState struct {
 	ReconcileErr error
 }
 
-func (s *InstanceState) ResourceErrors() error {
+// SetResourceState safely sets or updates the state of a resource.
+// Thread-safe for concurrent writes.
+func (i *InstanceState) SetResourceState(resourceID string, state *ResourceState) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.ResourceStates[resourceID] = state
+}
+
+// GetResourceState safely retrieves the state of a resource.
+// Returns the state and a boolean indicating if it exists.
+// Thread-safe for concurrent reads.
+func (i *InstanceState) GetResourceState(resourceID string) (*ResourceState, bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	state, ok := i.ResourceStates[resourceID]
+	return state, ok
+}
+
+func (i *InstanceState) ResourceErrors() error {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	var errorsSeen []error
-	for _, resourceState := range s.ResourceStates {
+	for _, resourceState := range i.ResourceStates {
 		if resourceState.Err != nil {
 			errorsSeen = append(errorsSeen, resourceState.Err)
 		}

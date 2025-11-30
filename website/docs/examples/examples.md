@@ -27,3 +27,8 @@ corresponding YAML definitions.
 - [Deploying CoreDNS](./kubernetes/deploying-coredns.md) Learn how to deploy CoreDNS in a
   Kubernetes cluster using kro ResourceGraphDefinitions, including the necessary
   Deployment, Service, and ConfigMap.
+
+- [SaaS Multi-Tenant](./kubernetes/saas-multi-tenant.md) This example demonstrates
+  how to create a multi-tenant SaaS application using Kro ResourceGraphDefinitions.
+  It creates isolated tenant environments with dedicated applications,
+  following a hierarchical structure of ResourceGraphDefinitions.

@@ -2,7 +2,7 @@
 sidebar_position: 707
 ---
 
-# SaaS Multi-Tenant example
+# SaaS Multi-Tenant
 
 This example demonstrates how to create a multi-tenant SaaS application using Kro ResourceGraphDefinitions. It creates isolated tenant environments with dedicated applications, following a hierarchical structure of ResourceGraphDefinitions.
 

@@ -244,14 +244,13 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
-	// Create a CEL environment with only "schema" for includeWhen expressions
-	var schemaEnv *cel.Env
-	if schemas["schema"] != nil {
-		schemaEnv, err = krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemas["schema"]})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
-		}
-	}
+	
+	// Create CEL environment for includeWhen expressions including all resources (templates + externalRef)
+includeEnv, err := krocel.TypedEnvironment(schemas)
+if err != nil {
+    return nil, fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
+}
+
 
 	// Validate all CEL expressions for each resource node
 	for _, resource := range resources {
@@ -799,11 +798,12 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 	}
 
 	// Validate includeWhen expressions if present
-	if len(resource.includeWhenExpressions) > 0 {
-		if err := validateIncludeWhenExpressions(schemaEnv, resource); err != nil {
-			return err
-		}
-	}
+if len(resource.includeWhenExpressions) > 0 {
+    if err := validateIncludeWhenExpressions(includeEnv, resource); err != nil {
+        return err
+    }
+}
+
 
 	// Validate readyWhen expressions if present
 	if len(resource.readyWhenExpressions) > 0 {

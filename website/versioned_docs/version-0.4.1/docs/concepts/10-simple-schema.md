@@ -102,7 +102,7 @@ This disables the field-validation normally offered by kro, and forwards the val
 :::
 
 ```yaml
-kind: ResourceGraphDefintion
+kind: ResourceGraphDefinition
 metadata: {}
 spec:
   schema:

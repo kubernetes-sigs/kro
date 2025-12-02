@@ -180,7 +180,7 @@ aws_efs_csi_driver:
   releaseName: aws-efs-csi-driver
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: "4" # Needs to be after eck-efs 
-  namespace: "kube-sytem"
+  namespace: "kube-system"
   chartName: aws-efs-csi-driver
   chartRepository: https://kubernetes-sigs.github.io/aws-efs-csi-driver
   defaultVersion: "3.0.7"

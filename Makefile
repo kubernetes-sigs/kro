@@ -334,9 +334,7 @@ test-e2e-kind-%: deploy-kind-%
 .PHONY: deploy-kind
 deploy-kind: export KO_DOCKER_REPO=kind.local
 deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
-	@true
 
 # Default end to end tests uses helm deployments
 .PHONY: test-e2e-kind
 test-e2e-kind: deploy-kind-helm
-	@true

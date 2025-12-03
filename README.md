@@ -66,10 +66,9 @@ Kro is Kubernetes native and integrates seamlessly with existing tools to preser
     We want to help streamline and simplify building with Kubernetes. Building with Kubernetes means dealing with resources that need to operate and work together, and orchestrating this can get complex and difficult at scale.
    With this project, we're taking a step in reducing the complexity of resource dependency management and customization, paving the way for a simple and scalable way to create complex custom resources for Kubernetes.
 
-5. **Can I use this in production?**
+5. **What should I know about API changes?**
 
-   This project is in active development and not yet intended for production use.
-   The *ResourceGraphDefinition* CRD and other APIs used in this project are not yet solidified and highly subject to change.
+   kro's API is currently at `v1alpha1`. As kro evolves, we may introduce breaking changes to improve the API. We are committed to providing clear migration paths, deprecation notices, and comprehensive support to help users adapt to any breaking changes. Our goal is to ensure smooth transitions as the project continues to improve.
 
 ## Community Participation
 

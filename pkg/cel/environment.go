@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+	k8scellib "k8s.io/apiserver/pkg/cel/library"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
@@ -84,6 +85,11 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		ext.Strings(),
 		cel.OptionalTypes(),
 		ext.Encoders(),
+		// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
+		// See https://kubernetes.io/docs/reference/using-api/cel/ and
+		// https://github.com/kubernetes-sigs/kro/issues/880.
+		k8scellib.URLs(),
+		k8scellib.Regex(),
 		library.Random(),
 	}
 

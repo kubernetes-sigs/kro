@@ -15,11 +15,15 @@
 package ast
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/google/cel-go/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 func TestInspector_InspectionResults(t *testing.T) {
@@ -95,7 +99,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			)`,
 			wantResources: nil,
 			wantFunctions: []FunctionCall{
-				{Name: "process", Arguments: []string{`b"bytes123"`, "3.14", "42u", "null"}},
+				{Name: "process", Arguments: []string{`b"\142\171\164\145\163\061\062\063"`, "3.14", "42u", "null"}},
 			},
 		},
 		{
@@ -110,7 +114,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "validate", Arguments: []string{
-					"(conditions.ready || (conditions.initialized && _[_](list, 3)))",
+					"(conditions.ready || (conditions.initialized && list[3]))",
 				}},
 			},
 		},
@@ -199,7 +203,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 					`"0.0.0.0/0"`,
 				}},
 				{Name: "map", Arguments: []string{"r.ipRanges", "range", "concat(range.cidr, \"/\", range.description)"}},
-				{Name: "map", Arguments: []string{
+				{Name: "filter", Arguments: []string{
 					"securityGroup.spec.rules",
 					"(@result && contains(map(r.ipRanges, range, concat(range.cidr, \"/\", range.description)), \"0.0.0.0/0\"))",
 					"@result",
@@ -229,12 +233,12 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{Name: "contains", Arguments: []string{"map(iamRole.policies, p, p.actions)", `"eks:*"`}},
 				{Name: "createList", Arguments: []string{"[ng]"}},
 				{Name: "createList", Arguments: []string{"[s]"}},
-				{Name: "map", Arguments: []string{
+				{Name: "filter", Arguments: []string{
 					"nodeGroups",
 					"(((ng.status.state == \"ACTIVE\") && contains(ng.labels, \"environment\")) ? (@result + [ng]) : @result)",
 					"@result",
 				}},
-				{Name: "map", Arguments: []string{
+				{Name: "filter", Arguments: []string{
 					"vpc.subnets",
 					"(s.isPrivate ? (@result + [s]) : @result)",
 					"@result",
@@ -264,9 +268,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "calculateTax", Arguments: []string{"order.total", "customer.address.zipCode"}},
-				{Name: "map", Arguments: []string{
+				{Name: "filter", Arguments: []string{
 					"order.items",
-					"(@result && ((product.id == item.productId) && (_[_](inventory.stock, item.productId) >= item.quantity)))",
+					"(@result && ((product.id == item.productId) && (inventory.stock[item.productId] >= item.quantity)))",
 					"@result",
 				}},
 				{Name: "validateAddress", Arguments: []string{"customer.shippingAddress"}},
@@ -282,7 +286,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList", Arguments: []string{"[p]"}},
-				{Name: "map", Arguments: []string{
+				{Name: "filter", Arguments: []string{
 					"pods",
 					"((p.status == \"Running\") ? (@result + [p]) : @result)",
 					"@result",
@@ -470,7 +474,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "svc", Path: "svc.spec.ports"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "createList", Arguments: []string{`[{"port": _[_](svc.spec.ports, 0).port}]`}},
+				{Name: "createList", Arguments: []string{`[{"port": svc.spec.ports[0].port}]`}},
 			},
 		},
 		{
@@ -491,7 +495,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inspector, err := DefaultInspector(tt.resources, tt.functions)
+			inspector, err := testInspector(tt.resources, tt.functions)
 			if err != nil {
 				t.Fatalf("Failed to create inspector: %v", err)
 			}
@@ -572,7 +576,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
-				{Name: "map"},
+				{Name: "filter"},
 			},
 		},
 		{
@@ -588,7 +592,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
-				{Name: "map"},
+				{Name: "filter"},
 			},
 			wantUnknownRes: nil,
 		},
@@ -623,7 +627,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inspector, err := DefaultInspector(tt.resources, tt.functions)
+			inspector, err := testInspector(tt.resources, tt.functions)
 			if err != nil {
 				t.Fatalf("Failed to create inspector: %v", err)
 			}
@@ -689,7 +693,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 func Test_InvalidExpression(t *testing.T) {
 	_ = NewInspectorWithEnv(nil, []string{})
 
-	inspector, err := DefaultInspector([]string{}, []string{})
+	inspector, err := testInspector([]string{}, []string{})
 	if err != nil {
 		t.Fatalf("Failed to create inspector: %v", err)
 	}
@@ -697,4 +701,33 @@ func Test_InvalidExpression(t *testing.T) {
 	if err == nil {
 		t.Errorf("Expected error")
 	}
+}
+
+func testInspector(resources []string, functions []string) (*Inspector, error) {
+	decls := make([]cel.EnvOption, 0, len(resources)+len(functions))
+	resourceMap := make(map[string]struct{})
+	functionMap := make(map[string]struct{})
+
+	for _, r := range resources {
+		decls = append(decls, cel.Variable(r, cel.AnyType))
+		resourceMap[r] = struct{}{}
+	}
+
+	for _, fn := range functions {
+		decls = append(decls, cel.Function(fn,
+			cel.Overload(fn+"_any", []*cel.Type{cel.AnyType}, cel.AnyType)))
+		functionMap[fn] = struct{}{}
+	}
+
+	env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(decls))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL environment: %v", err)
+	}
+
+	return &Inspector{
+		env:       env,
+		resources: resourceMap,
+		functions: functionMap,
+		loopVars:  make(map[string]struct{}),
+	}, nil
 }

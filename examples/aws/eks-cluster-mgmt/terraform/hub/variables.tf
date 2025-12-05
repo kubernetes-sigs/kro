@@ -175,7 +175,7 @@ variable "cluster_name" {
 }
 
 variable "use_ack" {
-  description = "Defining to use ack or terraform for pod identity if this is true then we will use this label to deploy resouces with ack"
+  description = "Defining to use ack or terraform for pod identity if this is true then we will use this label to deploy resources with ack"
   type        = bool
   default     = true
 }

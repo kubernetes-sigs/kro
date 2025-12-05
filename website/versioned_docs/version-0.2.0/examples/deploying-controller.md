@@ -26,7 +26,7 @@ spec:
         iamRole:
           maxSessionDuration: integer | default=3600
           oidcProvider: string | required=true
-          roleDescription: string | default=IRSA role for ACK EKS controller deployement on EKS cluster using kro Resource group
+          roleDescription: string | default=IRSA role for ACK EKS controller deployment on EKS cluster using kro Resource group
         iamPolicy:
           # would prefer to add a policyDocument here, need to support multiline string here
           description: string | default="policy for eks controller"

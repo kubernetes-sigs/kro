@@ -306,11 +306,11 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    external-secrets   external-secrets-cert-controller-586c6cbfd7-m5x94   1/1     Running   0             5m14s
    external-secrets   external-secrets-d699ddc68-hhgps                    1/1     Running   0             5m14s
    external-secrets   external-secrets-webhook-7f467cd6bf-ppzd5           1/1     Running   0             5m14s
-   kube-sytem         efs-csi-controller-f7b568848-72rzc                  3/3     Running   0             4m12s
-   kube-sytem         efs-csi-controller-f7b568848-vh85b                  3/3     Running   0             4m12s
-   kube-sytem         efs-csi-node-5znbp                                  3/3     Running   0             4m13s
-   kube-sytem         efs-csi-node-gzpsn                                  3/3     Running   0             4m13s
-   kube-sytem         efs-csi-node-zbzlv                                  3/3     Running   0             4m13s
+   kube-system        efs-csi-controller-f7b568848-72rzc                  3/3     Running   0             4m12s
+   kube-system        efs-csi-controller-f7b568848-vh85b                  3/3     Running   0             4m12s
+   kube-system        efs-csi-node-5znbp                                  3/3     Running   0             4m13s
+   kube-system        efs-csi-node-gzpsn                                  3/3     Running   0             4m13s
+   kube-system        efs-csi-node-zbzlv                                  3/3     Running   0             4m13s
    kyverno            kyverno-admission-controller-5b4c74758b-kf2k7       1/1     Running   0             5m5s
    kyverno            kyverno-background-controller-7cf48d5b9d-f67h6      1/1     Running   0             5m5s
    kyverno            kyverno-cleanup-controller-cd4ccdd8c-4b4gp          1/1     Running   0             5m5s

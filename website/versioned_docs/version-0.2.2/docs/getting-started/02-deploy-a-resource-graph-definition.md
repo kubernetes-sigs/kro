@@ -136,7 +136,7 @@ spec:
    kubectl apply -f resourcegraphdefinition.yaml
    ```
 
-3. **Inpsect the `ResourceGraphDefinition`**: Check the status of the resources created by
+3. **Inspect the `ResourceGraphDefinition`**: Check the status of the resources created by
    the ResourceGraphDefinition using the `kubectl` command:
 
    ```bash

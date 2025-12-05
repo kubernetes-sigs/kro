@@ -142,7 +142,7 @@ var _ = Describe("ExternalRef", func() {
 
 		Expect(env.Client.Create(ctx, instance)).To(Succeed())
 
-		// this is the expected dpeloyment
+		// this is the expected deployment
 		deployment1 := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-deployment",

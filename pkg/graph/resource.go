@@ -54,7 +54,7 @@ type Resource struct {
 	// readyWhenExpressions is a list of the expressions that need to be evaluated
 	// before the resource is considered ready.
 	readyWhenExpressions []string
-	// includeWhenExpressions is a list of the expresisons that need to be evaluated
+	// includeWhenExpressions is a list of the expressions that need to be evaluated
 	// to decide whether to create a resource graph definition or not
 	includeWhenExpressions []string
 	// namespaced indicates if the resource is namespaced or cluster-scoped.

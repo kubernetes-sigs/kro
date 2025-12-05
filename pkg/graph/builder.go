@@ -467,6 +467,11 @@ func (b *Builder) buildInstanceResource(
 	rgDefinition *v1alpha1.Schema,
 	resources map[string]*Resource,
 ) (*Resource, error) {
+	scope := extv1.NamespaceScoped
+	if rgDefinition.Scope == v1alpha1.ScopeCluster {
+		scope = extv1.ClusterScoped
+	}
+
 	// The instance resource is the resource users will create in their cluster,
 	// to request the creation of the resources defined in the resource graph definition.
 	//
@@ -491,7 +496,7 @@ func (b *Builder) buildInstanceResource(
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
+	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, scope, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition.AdditionalPrinterColumns)
 
 	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
 	instanceSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)

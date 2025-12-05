@@ -516,10 +516,14 @@ func (igr *instanceGraphReconciler) setManaged(
 
 	igr.instanceLabeler.ApplyLabels(instancePatch)
 
-	updated, err := igr.client.Resource(igr.gvr).
-		Namespace(obj.GetNamespace()).
-		Apply(ctx, instancePatch.GetName(), instancePatch,
-			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+	instanceClient := igr.client.Resource(igr.gvr)
+	var namespacedClient dynamic.ResourceInterface = instanceClient
+	if ns := obj.GetNamespace(); ns != "" {
+		namespacedClient = instanceClient.Namespace(ns)
+	}
+
+	updated, err := namespacedClient.Apply(ctx, instancePatch.GetName(), instancePatch,
+		metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update managed state: %w", err)
 	}
@@ -552,10 +556,14 @@ func (igr *instanceGraphReconciler) setUnmanaged(
 		return nil, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 
-	updated, err := igr.client.Resource(igr.gvr).
-		Namespace(obj.GetNamespace()).
-		Apply(ctx, instancePatch.GetName(), instancePatch,
-			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+	instanceClient := igr.client.Resource(igr.gvr)
+	var namespacedClient dynamic.ResourceInterface = instanceClient
+	if ns := obj.GetNamespace(); ns != "" {
+		namespacedClient = instanceClient.Namespace(ns)
+	}
+
+	updated, err := namespacedClient.Apply(ctx, instancePatch.GetName(), instancePatch,
+		metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update unmanaged state: %w", err)
 	}

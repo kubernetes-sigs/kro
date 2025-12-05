@@ -9,6 +9,9 @@ spec:
   - name: setup
     try:
     - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
         file: allow-unknown-crd.yaml
       description: Apply CRD with field that allows unknown fields
     - apply:

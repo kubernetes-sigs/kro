@@ -27,6 +27,16 @@ Kro is Kubernetes native and integrates seamlessly with existing tools to preser
 | [Examples][kro-examples]               | Example resources               |
 | [Contributions](./CONTRIBUTING.md)       | How to get involved             |
 
+[kro-instance-scope]: https://kro.run/docs/concepts/resource-group-definitions
+
+### Instance scope (new)
+
+ResourceGraphDefinitions can now choose the scope of the generated instance CRD via `spec.schema.scope`:
+- `Namespaced` (default) — preserves current behavior.
+- `Cluster` — generates a cluster-scoped instance CRD when your graph needs to be cluster-level.
+
+The field is immutable after creation, matching Kubernetes CRD scope rules. See the concepts docs for details.
+
 [kro-overview]: https://kro.run/docs/overview
 [kro-installation]: https://kro.run/docs/getting-started/Installation
 [kro-getting-started]: https://kro.run/docs/getting-started/deploy-a-resource-graph-definition

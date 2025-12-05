@@ -593,6 +593,12 @@ func (b *Builder) buildInstanceNode(
 	nodes map[string]*Node,
 	nodeSchemas map[string]*spec.Schema,
 ) (*Node, *extv1.CustomResourceDefinition, error) {
+	// Determine the scope for the instance CRD based on the schema definition.
+	scope := extv1.NamespaceScoped
+	if rgDefinition.Scope == v1alpha1.ScopeCluster {
+		scope = extv1.ClusterScoped
+	}
+
 	// The instance resource is the resource users will create in their cluster,
 	// to request the creation of the resources defined in the resource graph definition.
 	//
@@ -617,7 +623,7 @@ func (b *Builder) buildInstanceNode(
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
-	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition)
+	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, scope, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition)
 
 	nodeNames := maps.Keys(nodes)
 	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(nodeNames))

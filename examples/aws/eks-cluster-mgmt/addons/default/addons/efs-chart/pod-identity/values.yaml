@@ -1,6 +1,6 @@
 podIdentityPolicyCreate: true
 podIdentityRole:
-  description: "EFS Controler Default Role"
+  description: "EFS Controller Default Role"
 podIdentityAssociation:
   serviceAccounts:
       - ack-efs-controller

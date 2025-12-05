@@ -1,154 +1,275 @@
-/**
- * CSS files with the .module.css suffix will be treated as CSS modules
- * and scoped locally.
- */
-
-.heroBanner {
-  padding: 4rem 0;
-  text-align: center;
+/* Hero Section */
+.hero {
   position: relative;
-  overflow: hidden;
-  background-image: url("/img/bg-large.png");
-  height: 420px;
-  opacity: 0.1;
-}
-
-.heroA {
-  background-image: linear-gradient(rgb(246, 248, 254), rgb(255, 255, 255));
-  padding: 48px;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  height: 100%;
-  opacity: 1;
-}
-
-.heroInner {
-  margin: 0 auto;
-  max-width: var(--ifm-container-width);
-  padding: 0 var(--ifm-spacing-horizontal);
-  width: 100%;
-}
-
-.heroProjectTagline {
-  padding-top: 30px;
-  color: #3c3c3c;
-  font-size: 100px;
-  margin: 0;
-}
-
-.heroProjectTaglineSubtitle {
-  color: #3c3c3c;
-  font-size: 40px;
-  margin: 0;
-  padding: 20px;
-}
-
-.heroTitleTextHtml b {
-  color: var(--ifm-color-primary);
-}
-
-.indexCtasGitHubButtonWrapper {
-  display: flex;
-}
-
-.indexCtasGitHubButton {
-  overflow: hidden;
-}
-
-.indexCtas {
+  min-height: 50vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  --ifm-button-size-multiplier: 1.6;
-}
-
-.indexCtas a {
-  background-color: var(--main-color);
-  border-color: var(--main-color);
-}
-
-.indexCtas a:hover {
-  border: 2px solid rgb(35, 80, 168);
-  background-color: rgb(35, 80, 168);
-  color: white;
-  border-color: rgb(35, 80, 168);
-  text-decoration: none;
-}
-
-[data-theme="dark"] .indexCtas a {
-  background-color: var(--main-color-dark);
-  border-color: var(--main-color-dark);
-}
-
-[data-theme="dark"] .indexCtas a:hover {
-  background-color: #fb8422;
-  border-color: #fb8422;
-  text-decoration: none;
-}
-
-[data-theme="dark"] .heroA {
-  background-image: linear-gradient(rgb(54, 54, 54), rgb(27, 27, 29));
-}
-
-[data-theme="dark"] .heroProjectTagline {
-  color: #fff;
-}
-
-[data-theme="dark"] .heroProjectTaglineSubtitle {
-  color: #fff;
-}
-
-.indexCtas a:last-of-type {
-  margin: 12px 30px;
-}
-
-.indexCtasGitHubButtonWrapper {
-  display: flex;
-}
-
-.indexCtasGitHubButton {
   overflow: hidden;
+  padding: 3rem 2rem;
 }
 
-.indexCtaTryNowButton:hover {
-  color: var(--ifm-color-primary);
+.heroBackground {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
+  opacity: 0.05;
+  z-index: 0;
 }
 
+[data-theme="dark"] .heroBackground {
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
+  opacity: 0.1;
+}
+
+.gridOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image:
+    linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+@keyframes gridMove {
+  0% {
+    transform: translate(0, 0);
+  }
+  100% {
+    transform: translate(50px, 50px);
+  }
+}
+
+.heroContent {
+  position: relative;
+  z-index: 1;
+  max-width: 1200px;
+  width: 100%;
+  text-align: center;
+}
+
+.heroTitle {
+  font-size: 2.2rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+  line-height: 1.2;
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+[data-theme="dark"] .heroTitle {
+  background: linear-gradient(135deg, #a4bae0 0%, #c8d6ed 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.heroSubtitle {
+  font-size: 1rem;
+  color: var(--ifm-color-emphasis-700);
+  max-width: 600px;
+  margin: 0 auto 1.5rem;
+  line-height: 1.5;
+}
+
+[data-theme="dark"] .heroSubtitle {
+  color: var(--ifm-color-emphasis-600);
+}
+
+.heroButtons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.heroButtons a {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.875rem;
+}
+
+.primaryButton {
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
+  border: none;
+  color: white !important;
+  font-weight: 550;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.primaryButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px -5px rgba(91, 127, 201, 0.4);
+  color: white !important;
+}
+
+.secondaryButton {
+  background: transparent;
+  border: 2px solid var(--ifm-color-emphasis-300);
+  color: var(--ifm-color-emphasis-900) !important;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.secondaryButton:hover {
+  border-color: #5b7fc9;
+  color: #5b7fc9 !important;
+  transform: translateY(-1px);
+}
+
+[data-theme="dark"] .secondaryButton {
+  border-color: #404040;
+  color: #d4d4d4 !important;
+}
+
+[data-theme="dark"] .secondaryButton:hover {
+  border-color: #a4bae0;
+  color: #a4bae0 !important;
+}
+
+/* Technical Features Section */
+.technicalFeatures {
+  padding: 2rem 0 3rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.technicalFeatures :global(.container) {
+  max-width: 1800px;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(280px, 380px));
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+  justify-content: center;
+}
+
+@media screen and (max-width: 1200px) {
+  .featuresGrid {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  }
+}
+
+.featureCard {
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  background: var(--ifm-background-color);
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.featureCard:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.1);
+  border-color: #5b7fc9;
+}
+
+[data-theme="dark"] .featureCard {
+  border-color: var(--ifm-color-emphasis-300);
+}
+
+[data-theme="dark"] .featureCard:hover {
+  border-color: #8fa8d4;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
+}
+
+.featureHeader h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.6rem;
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+[data-theme="dark"] .featureHeader h3 {
+  background: linear-gradient(135deg, #a4bae0 0%, #c8d6ed 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.featureDescription {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+  flex: 1;
+}
+
+.featureCode {
+  background: #f6f8fa;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border-left: 2px solid #5b7fc9;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+[data-theme="dark"] .featureCode {
+  background: #252526;
+  border-left-color: #8fa8d4;
+}
+
+.featureCode code {
+  color: #5b7fc9;
+  font-weight: 600;
+}
+
+[data-theme="dark"] .featureCode code {
+  color: #a4bae0;
+}
+
+/* Responsive Design */
 @media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem;
+  .heroTitle {
+    font-size: 1.8rem;
   }
 
-  .heroA {
-    padding-left: 20px;
-    padding-right: 20px;
+  .heroSubtitle {
+    font-size: 0.9rem;
   }
 
-  .heroInner {
-    padding: 0;
+  .heroButtons {
+    flex-direction: column;
+    align-items: center;
   }
 
-  .heroProjectTagline {
-    font-size: 60px;
-    text-align: center;
+  .heroButtons a {
+    width: 100%;
+    max-width: 280px;
   }
 
-  .heroLogo {
-    display: block;
-    float: none;
-    margin: 0 auto;
+  .featuresGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media screen and (max-width: 576px) {
+  .hero {
+    min-height: 40vh;
+    padding: 2rem 1rem;
   }
 
-  .indexCtas {
-    justify-content: center;
+  .heroTitle {
+    font-size: 1.5rem;
   }
 
-  .indexCtas a {
-    margin: 20px 12px;
+  .heroSubtitle {
+    font-size: 0.85rem;
   }
 
-  .indexCtasGitHubButton {
-    display: none;
+  .technicalFeatures {
+    padding: 1.5rem 0 2rem;
   }
 }

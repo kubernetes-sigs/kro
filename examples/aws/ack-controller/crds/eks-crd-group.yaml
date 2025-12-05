@@ -386,7 +386,7 @@ spec:
                       type: string
                     podIdentityAssociations:
                       description: |-
-                        An array of Pod Identity Assocations to be created. Each EKS Pod Identity
+                        An array of Pod Identity Associations to be created. Each EKS Pod Identity
                         association maps a Kubernetes service account to an IAM Role.
 
                         For more information, see Attach an IAM Role to an Amazon EKS add-on using

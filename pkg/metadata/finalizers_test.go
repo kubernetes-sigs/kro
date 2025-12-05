@@ -78,7 +78,7 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 		expectError   bool
 	}{
 		{
-			name: "Set instance finalizer on unstructred obj w/o finalizers",
+			name: "Set instance finalizer on unstructured obj w/o finalizers",
 			initialObject: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"metadata": map[string]interface{}{},

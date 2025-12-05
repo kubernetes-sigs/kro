@@ -5,7 +5,7 @@
 # podIdentityRole:
 #   description: "Test"
 #   # Only one of the two can be true Managed Policy or Policy Refs
-#   # If Policy is created it will automaticaly add it on managed Policies or PolicyRefs
+#   # If Policy is created it will automatically add it on managed Policies or PolicyRefs
 #   managedPolicies:
 #     - "arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess" 
 #     - "arn:aws:iam::aws:policy/Admin"

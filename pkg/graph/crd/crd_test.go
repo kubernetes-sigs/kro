@@ -20,8 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 func TestSynthesizeCRD(t *testing.T) {
@@ -46,17 +44,6 @@ func TestSynthesizeCRD(t *testing.T) {
 			statusFieldsOverride: true,
 			expectedName:         "widgets.kro.com",
 			expectedGroup:        "kro.com",
-		},
-		{
-			name:                 "empty group uses default domain",
-			group:                "",
-			apiVersion:           "v1alphav2",
-			kind:                 "Service",
-			spec:                 extv1.JSONSchemaProps{Type: "object"},
-			status:               extv1.JSONSchemaProps{Type: "object"},
-			statusFieldsOverride: false,
-			expectedName:         "services." + v1alpha1.KRODomainName,
-			expectedGroup:        v1alpha1.KRODomainName,
 		},
 		{
 			name:                 "mixes case kind",

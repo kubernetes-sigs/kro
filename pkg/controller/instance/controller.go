@@ -34,7 +34,7 @@ import (
 // ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
-	// DefaultRequeueDuration is the default duration to wait before requeueing a
+	// DefaultRequeueDuration is the default duration to wait before requeuing a
 	// a reconciliation if no specific requeue time is set.
 	DefaultRequeueDuration time.Duration
 	// DeletionGraceTimeDuration is the duration to wait after initializing a resource

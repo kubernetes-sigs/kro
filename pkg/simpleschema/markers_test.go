@@ -78,7 +78,7 @@ func TestParseMarkers(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:  "complex markers with json defaul value",
+			name:  "complex markers with json default value",
 			input: "default={\"key\": \"value\"} description=\"A complex \\\"description\\\"\" required=true",
 			want: []*Marker{
 				{MarkerType: MarkerTypeDefault, Key: "default", Value: "{\"key\": \"value\"}"},

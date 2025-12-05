@@ -23,7 +23,7 @@ spec:
         authorizerPasswordParameterARN: string | required=true
 
   resources:
-# Business logic data store (Amazon DynamoDB table) along with the permissiosn to access it (to be used by the AWS Lambda function that implements business logic)
+# Business logic data store (Amazon DynamoDB table) along with the permissions to access it (to be used by the AWS Lambda function that implements business logic)
   - id: itemsTable
     template:
       apiVersion: dynamodb.services.k8s.aws/v1alpha1

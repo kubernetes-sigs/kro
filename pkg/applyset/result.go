@@ -20,6 +20,7 @@ package applyset
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -61,6 +62,12 @@ type PrunedObject struct {
 // Any errors returned by the apply call is also recorded in it.
 // PrunedObject records any error returned by the delete call.
 type ApplyResult struct {
+	// mu guards AppliedObjects and PrunedObjects.
+	// These fields are accessed and mutated from multiple goroutines during
+	// parallel apply operations, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
+	mu sync.Mutex
+
 	DesiredCount   int
 	AppliedObjects []AppliedObject
 	PrunedObjects  []PrunedObject
@@ -116,6 +123,9 @@ func (a *ApplyResult) recordApplied(
 	lastApplied *unstructured.Unstructured,
 	err error,
 ) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	ao := AppliedObject{
 		ApplyableObject: obj,
 		LastApplied:     lastApplied,
@@ -128,6 +138,9 @@ func (a *ApplyResult) recordPruned(
 	obj PruneObject,
 	err error,
 ) PrunedObject {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	po := PrunedObject{
 		PruneObject: obj,
 		Error:       err,

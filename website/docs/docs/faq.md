@@ -70,7 +70,7 @@ sidebar_position: 100
 
    The following code needs to be added to each templated resource:
 
-   ```yaml
+   ```kro
    metadata:
       ownerReferences:
          - apiVersion: kro.run/v1alpha1

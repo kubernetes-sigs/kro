@@ -28,7 +28,7 @@ kro starts by validating your custom API schema:
 2. **Converts to OpenAPI schema** - Transforms SimpleSchema to standard OpenAPI format
 3. **Validates the CRD spec** - Ensures the generated CRD specification is valid
 
-```yaml
+```kro
 spec:
   schema:
     spec:
@@ -42,7 +42,7 @@ spec:
 
 For your custom API's `status` field, kro automatically infers the schema from CEL expressions:
 
-```yaml
+```kro
 status:
   endpoint: ${service.status.loadBalancer.ingress[0].hostname}
   replicas: ${deployment.status.availableReplicas}
@@ -56,7 +56,7 @@ kro validates that all resource IDs are valid CEL identifiers. Resource IDs must
 
 **Why?** CEL uses resource IDs as variables (like `${deployment.spec.replicas}`). Invalid identifiers would cause CEL syntax errors.
 
-```yaml
+```kro
 # ✓ Valid IDs
 resources:
   - id: deployment
@@ -78,7 +78,7 @@ For each resource template, kro:
    - **If the field contains a CEL expression**: kro extracts the expression and determines what type the target field expects based on the OpenAPI schema
    - **If the field is a literal value**: kro performs standard OpenAPI validation, just like the kube-api-server does
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -110,7 +110,7 @@ With expressions extracted and the dependency graph built, kro now performs comp
 3. **Validates type compatibility** - kro compares the inferred output type against the expected type (determined earlier from the target field's OpenAPI schema). First, it tries CEL's built-in type assignability check. If that fails, it performs deep structural compatibility checking, which handles complex cases like map/struct conversions and subset validation. See [Type Compatibility Deep Dive](#type-compatibility-deep-dive) for technical details.
 
 **Example:**
-```yaml
+```kro
 # Expression: ${schema.spec.replicas}
 # Inferred output type: integer (from schema.spec definition)
 # Expected type: integer (from Deployment.spec.replicas schema)
@@ -164,7 +164,7 @@ When kro encounters a CEL expression like `${deployment.spec.replicas}`, it:
 
 kro builds a directed acyclic graph (DAG) showing which resources depend on which:
 
-```yaml
+```kro
 resources:
   - id: configmap
     template:
@@ -197,7 +197,7 @@ This graph determines:
 kro validates all references during AST analysis:
 
 **Resource references**:
-```yaml
+```kro
 # ✓ Valid: deployment exists
 value: ${deployment.spec.replicas}
 
@@ -206,7 +206,7 @@ value: ${deployent.spec.replicas}  # Error: resource 'deployent' not found
 ```
 
 **Function references**:
-```yaml
+```kro
 # ✓ Valid: size() is a CEL builtin
 condition: ${schema.spec.items.size() > 0}
 
@@ -218,7 +218,7 @@ condition: ${schema.spec.items.length()}  # Error: function 'length' not declare
 
 kro detects circular dependencies by checking for cycles in the DAG:
 
-```yaml
+```kro
 # ✗ This fails validation
 resources:
   - id: serviceA
@@ -245,7 +245,7 @@ kro doesn't just check if types have the same name - it performs deep structural
 **For primitives**: Checks kind equality (int, string, bool, etc.)
 
 **For lists**: Recursively checks element type compatibility
-```yaml
+```kro
 # Expression returns: list<int>
 # Field expects: list<int>
 # Result: ✓ Compatible
@@ -256,7 +256,7 @@ kro doesn't just check if types have the same name - it performs deep structural
 ```
 
 **For maps**: Recursively checks key and value type compatibility
-```yaml
+```kro
 # Expression returns: map<string, int>
 # Field expects: map<string, int>
 # Result: ✓ Compatible
@@ -267,7 +267,7 @@ kro doesn't just check if types have the same name - it performs deep structural
 ```
 
 **For structs**: Validates that the output struct is a subset of the expected struct (subset semantics)
-```yaml
+```kro
 # Expression returns: {name: string, replicas: int}
 # Field expects: {name: string, replicas: int}
 # Result: ✓ Compatible (exact match)
@@ -286,7 +286,7 @@ kro doesn't just check if types have the same name - it performs deep structural
 Kubernetes often treats maps and structs interchangeably (like labels, annotations, data fields). kro handles this intelligently:
 
 **Map → Struct assignment**:
-```yaml
+```kro
 # Expression: ${schema.spec.labels} (type: map<string, string>)
 # Target field: labels (type: struct with string fields)
 # kro validates: map keys are strings, map values match struct field types
@@ -294,7 +294,7 @@ Kubernetes often treats maps and structs interchangeably (like labels, annotatio
 ```
 
 **Struct → Map assignment**:
-```yaml
+```kro
 # Expression: ${configmap.data} (type: struct with dynamic fields)
 # Target field: data (type: map<string, string>)
 # kro validates: all struct fields are string-compatible
@@ -305,7 +305,7 @@ Kubernetes often treats maps and structs interchangeably (like labels, annotatio
 
 kro validates types at any depth by recursively walking the type structure:
 
-```yaml
+```kro
 spec:
   template:
     spec:
@@ -323,7 +323,7 @@ spec:
 
 For fields with `x-kubernetes-preserve-unknown-fields: true`, kro uses permissive validation:
 
-```yaml
+```kro
 # ConfigMap.data has PreserveUnknownFields
 configmap:
   data:

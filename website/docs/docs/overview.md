@@ -16,6 +16,9 @@ the order in which objects should be created. You can define default values for 
 in the API specification, so end users can invoke these custom APIs to create
 grouped resources with minimal configuration.
 
+## Example: Complete ResourceGraphDefinition
+
+
 # How does kro work?
 
 ### Developer interface
@@ -111,6 +114,6 @@ We welcome questions, suggestions, and contributions from the community! To get
 involved, check out our
 [contributing guide](https://github.com/kubernetes-sigs/kro/blob/main/CONTRIBUTING.md).
 For bugs or feature requests, feel free to
-[submit an issue](https://github.com/kubernetes-sigs/kro/issues). You’re also invited to
+[submit an issue](https://github.com/kubernetes-sigs/kro/issues). You're also invited to
 join our
 [community](https://github.com/kubernetes-sigs/kro?tab=readme-ov-file#community-participation).

@@ -1,6 +1,6 @@
-import { themes as prismThemes } from "prism-react-renderer";
 import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
+import { kroLight, kroDark } from "./src/prism/kroTheme";
 
 const config: Config = {
   title: "kro",
@@ -8,7 +8,7 @@ const config: Config = {
   favicon: "img/favicon.ico",
   plugins: [
     require.resolve("docusaurus-lunr-search"),
-    require.resolve("plugin-image-zoom"),
+    require.resolve("docusaurus-plugin-image-zoom"),
     function rawYamlPlugin() {
       return {
         name: "raw-yaml-plugin",
@@ -202,9 +202,16 @@ const config: Config = {
         "kro is a subproject of Kubernetes SIG Cloud Provider. Kubernetes is a CNCF graduated project.",
     },
     prism: {
-      theme: prismThemes.oneLight,
-      darkTheme: prismThemes.oneDark,
+      theme: kroLight,
+      darkTheme: kroDark,
       additionalLanguages: ["bash", "yaml"],
+    },
+    zoom: {
+      selector: ".markdown img",
+      background: {
+        light: "rgb(255, 255, 255)",
+        dark: "rgb(30, 30, 30)",
+      },
     },
   } satisfies Preset.ThemeConfig,
 };

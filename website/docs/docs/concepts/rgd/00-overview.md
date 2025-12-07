@@ -26,7 +26,7 @@ When you apply an RGD, kro configures itself to serve your new API. It generates
 
 Here's an RGD that creates a new `Application` API. When users create an `Application`, kro automatically creates a Deployment:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -81,7 +81,7 @@ kro will create and manage the Deployment automatically.
 
 An RGD has the standard Kubernetes resource structure:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata: {}      # Standard Kubernetes metadata

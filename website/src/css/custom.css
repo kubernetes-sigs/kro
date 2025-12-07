@@ -3,38 +3,17 @@
  * bundles Infima by default. Infima is a CSS framework designed to
  * work well for content-centric websites.
  */
-@font-face {
-  font-family: 'Poppins-Regular';
-  src: url('@site/static/fonts/Poppins/Poppins-Regular.ttf') format('woff2');
-}
 
-@font-face {
-  font-family: 'Poppins-Bold';
-  src: url('@site/static/fonts/Poppins/Poppins-Bold.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Italic';
-  src: url('@site/static/fonts/Poppins/Poppins-Italic.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Thin';
-  src: url('@site/static/fonts/Poppins/Poppins-Thin.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Light';
-  src: url('@site/static/fonts/Poppins/Poppins-Light.ttf') format('woff2');
-}
-
-/* :root {
-  --ifm-font-family-base: 'Poppins-Light';
-  --ifm-heading-font-family: 'Poppins-Regular';
-  --ifm-font-family-monospace: 'Poppins-Light';
-} */
+/* Modern techy fonts from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
+  /* Fonts */
+  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-heading-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* Colors */
   --main-color: #5b7fc9;
   --main-color-dark: #7c9ad9;
   --ifm-color-primary: #5b7fc9;
@@ -44,10 +23,10 @@
   --ifm-color-primary-light: #6a89c9;
   --ifm-color-primary-lighter: #7c9ad9;
   --ifm-color-primary-lightest: #9bb3e3;
-  --ifm-code-font-size: 85%;
+  --ifm-code-font-size: 92%;
   --ifm-transition-fast: 200ms;
 
-  /* Smaller global typography */
+  /* Global typography */
   --ifm-font-size-base: 93%;
   --ifm-line-height-base: 1.5;
   --ifm-heading-font-weight: 600;
@@ -71,16 +50,23 @@
   --ifm-paragraph-margin-bottom: 0.75rem;
 }
 
-/* Smooth theme transitions */
-html {
-  transition: background-color 0.3s ease, color 0.3s ease;
+/* Disable font ligatures in code blocks */
+code, pre, .prism-code {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
 }
 
+/* Smooth theme transitions - targeted to avoid interfering with other plugins */
+html,
 body,
 .navbar,
 .footer,
 .main-wrapper,
-article {
+.menu,
+.sidebar,
+article,
+[class*="codeBlock"],
+[class*="DocSearch"] {
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
@@ -161,16 +147,6 @@ article {
   line-height: 1.6;
 }
 
-/* Smaller code blocks */
-pre {
-  font-size: 0.8rem !important;
-  padding: 0.75rem !important;
-}
-
-code {
-  font-size: 0.85em;
-  padding: 0.15rem 0.35rem;
-}
 
 /* Tighter sidebar */
 .menu__list {
@@ -283,11 +259,6 @@ code {
   background-color: #f0f6fc;
 }
 
-[data-theme='dark'] .kroFooter {
-  background-color: #1e1e1e;
-}
-
-
 .announcement-bar-style {
   color: white;
   font-size: 1.3rem;
@@ -337,4 +308,43 @@ html.fullWidthContent .row {
 html.fullWidthContent .col {
   padding: 1rem 2rem !important;
   max-width: 100% !important;
+}
+
+/* Default Prism code blocks - match kro style */
+div[class^="codeBlockContainer"],
+div[class*=" codeBlockContainer"] {
+  border-radius: 8px !important;
+  background: #fafafa !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+[data-theme='dark'] div[class^="codeBlockContainer"],
+[data-theme='dark'] div[class*=" codeBlockContainer"] {
+  background: #161616 !important;
+}
+
+div[class^="codeBlockTitle"],
+div[class*=" codeBlockTitle"] {
+  background: #f0f0f0 !important;
+  border-bottom: none !important;
+  font-size: 0.75rem !important;
+  color: #777 !important;
+}
+
+[data-theme='dark'] div[class^="codeBlockTitle"],
+[data-theme='dark'] div[class*=" codeBlockTitle"] {
+  background: #1f1f1f !important;
+  color: #777 !important;
+}
+
+pre[class^="prism-code"],
+pre[class*=" prism-code"] {
+  background: transparent !important;
+}
+
+/* Code block content area */
+div[class^="codeBlockContent"],
+div[class*=" codeBlockContent"] {
+  background: transparent !important;
 }

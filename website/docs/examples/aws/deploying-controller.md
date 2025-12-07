@@ -4,7 +4,7 @@ sidebar_position: 305
 
 # Controller Deployment
 
-```yaml title="controller-rg.yaml"
+```kro title="controller-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

@@ -18,14 +18,14 @@ The schema section specifies:
 
 ## Basic Structure
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: application
 spec:
   schema:
-    apiVersion: v1alpha1        # Your API version
+    apiVersion: v1alpha1         # Your API version
     kind: Application            # Your custom resource kind
 
     spec:                        # User-provided fields
@@ -44,7 +44,7 @@ spec:
 
 The `group` field sets the API group for your generated CRD. If omitted, it defaults to `kro.run`.
 
-```yaml
+```kro
 schema:
   apiVersion: v1alpha1
   kind: Application
@@ -61,7 +61,7 @@ The `spec` section defines what users can configure when they create an instance
 
 kro uses [SimpleSchema](../../../api/specifications/simple-schema.md) syntax for defining types:
 
-```yaml
+```simpleschema
 spec:
   # Basic types with validation
   name: string | required=true
@@ -95,7 +95,7 @@ The `status` section defines what runtime information kro exposes from your mana
 
 ### Status Fields with CEL Expressions
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -133,7 +133,7 @@ This means status fields have strongly-typed schemas in the generated CRD, not a
 
 Status fields can be scalar values, structured objects, or arrays:
 
-```yaml
+```kro
 status:
   # Scalar values
   replicas: ${deployment.status.replicas}
@@ -163,7 +163,7 @@ status:
 
 Status fields support the full power of CEL expressions, including built-in functions:
 
-```yaml
+```kro
 status:
   # Type conversions
   replicasAsString: ${string(deployment.status.replicas)}
@@ -188,7 +188,7 @@ status:
 
 Status fields can use multiple CEL expressions for string construction:
 
-```yaml
+```kro
 status:
   # Single expression - can be any type
   replicas: ${deployment.status.replicas}  # integer
@@ -202,7 +202,7 @@ status:
 kro automatically adds two fields to every instance status:
 
 **conditions**: An array tracking the instance state
-```yaml
+```kro
 status:
   conditions:
     - type: Ready              # Overall readiness
@@ -213,7 +213,7 @@ status:
 ```
 
 **state**: A high-level summary
-```yaml
+```kro
 status:
   state: ACTIVE  # ACTIVE | IN_PROGRESS | FAILED | DELETING | ERROR
 ```
@@ -228,7 +228,7 @@ status:
 
 When you create an RGD, kro converts your SimpleSchema into an OpenAPI v3 schema and generates a CRD:
 
-```yaml
+```kro
 # Your RGD schema
 schema:
   apiVersion: v1alpha1
@@ -271,7 +271,7 @@ kro continuously evaluates status expressions and updates instance status as res
 
 For complex schemas, you can define reusable custom types:
 
-```yaml
+```kro
 schema:
   types:
     ContainerConfig:
@@ -290,7 +290,7 @@ Custom types are expanded inline when kro generates the CRD.
 
 Control what `kubectl get` displays:
 
-```yaml
+```kro
 schema:
   spec:
     name: string
@@ -322,7 +322,7 @@ my-app   5          5           10m
 
 ## Complete Example
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -346,7 +346,7 @@ spec:
 
       # Collections
       env: "map[string]string"
-      ports: "[]integer" | default=[80]
+      ports: "[]integer | default=[80]"
 
     status:
       # Resource state

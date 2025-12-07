@@ -122,7 +122,7 @@ Instead, kro uses labels and the ApplySet specification for ownership tracking a
 :::warning Manual Owner References
 If you need owner references for specific use cases (like integration with Argo CD or other tools that rely on them), you can manually set them in your resource templates:
 
-```yaml
+```kro
 resources:
   - id: configmap
     template:

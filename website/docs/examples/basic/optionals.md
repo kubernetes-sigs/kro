@@ -8,7 +8,7 @@ sidebar_position: 104
 
 This example shows how to reference an existing ConfigMap and use the optional accessor `?` to safely extract values.
 
-```yaml title="config-map.yaml"
+```kro title="config-map.yaml"
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,7 +18,7 @@ data:
 ```
 
 
-```yaml title="deploymentservice-rg.yaml"
+```kro title="deploymentservice-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -66,7 +66,7 @@ spec:
 
 This example demonstrates referencing an existing Secret and transforming its base64-encoded data using CEL expressions with the optional accessor and base64 decoding functions.
 
-```yaml title="secret.yaml"
+```kro title="secret.yaml"
 apiVersion: v1
 kind: Secret
 metadata:
@@ -75,7 +75,7 @@ stringData:
   uri: api.test.com
 ```
 
-```yaml title="secret-transformation-rg.yaml"
+```kro title="secret-transformation-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

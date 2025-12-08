@@ -16,16 +16,22 @@ package resourcegraphdefinition
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -61,26 +67,50 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	crd := processedRGD.Instance.GetCRD()
 	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
 
-	// Ensure CRD exists and is up to date
+	// Ensure CRD exists and is up to date (non-blocking)
 	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
-		mark.KindUnready(err.Error())
-		return processedRGD.TopologicalOrder, resourcesInfo, err
+	if err := r.ensureCRD(ctx, crd); err != nil {
+		mark.KindUnready(err)
+		// CRD watch will trigger re-reconcile when CRD becomes established
+		return processedRGD.TopologicalOrder, resourcesInfo, nil
 	}
-	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
-		mark.KindUnready(err.Error())
-	} else {
-		mark.KindReady(crd.Status.AcceptedNames.Kind)
+
+	// Get fresh CRD to check establishment status
+	crd, err = r.crdClient.Get(ctx, crd.Name, metav1.GetOptions{})
+	if err != nil {
+		mark.KindUnready(err)
+		// CRD watch will trigger re-reconcile when CRD becomes established
+		return processedRGD.TopologicalOrder, resourcesInfo, nil
 	}
+
+	// Check if CRD is established - if not, return early
+	// CRD watch will trigger re-reconcile when CRD becomes established
+	if !kroclient.IsEstablished(crd) {
+		mark.KindUnready(errors.New("CRD not yet established"))
+		return processedRGD.TopologicalOrder, resourcesInfo, nil
+	}
+	mark.KindReady(crd.Status.AcceptedNames.Kind)
 
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
 	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
 	// rather than have it ignore this context and use the background context.
-	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, processedRGD, graphExecLabeler); err != nil {
+	gvr := processedRGD.Instance.GetGroupVersionResource()
+	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, gvr, processedRGD, graphExecLabeler); err != nil {
 		mark.ControllerFailedToStart(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
-	mark.ControllerRunning()
+
+	// Set condition based on sync state
+	if r.dynamicController.HasSynced(gvr) {
+		mark.ControllerRunning()
+	} else {
+		mark.ControllerSyncing()
+	}
+
+	// Check watch health for instance GVR and all child resource GVRs
+	resourceGVRs := r.getResourceGVRsToWatchForRGD(processedRGD)
+	allGVRs := append([]schema.GroupVersionResource{gvr}, resourceGVRs...)
+	r.checkWatchHealth(mark, allGVRs)
 
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
@@ -157,10 +187,58 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 	}
 }
 
-// reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
-		return newCRDError(err)
+// ensureCRD ensures the CRD exists and is up to date. This is non-blocking -
+// it creates or updates the CRD but doesn't wait for establishment.
+func (r *ResourceGraphDefinitionReconciler) ensureCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	existing, err := r.crdClient.Get(ctx, crd.Name, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return newCRDError(fmt.Errorf("failed to check for existing CRD: %w", err))
+		}
+
+		// CRD doesn't exist - create it
+		log.Info("Creating CRD", "name", crd.Name)
+		if _, err := r.crdClient.Create(ctx, crd, metav1.CreateOptions{}); err != nil {
+			return newCRDError(fmt.Errorf("failed to create CRD: %w", err))
+		}
+		return nil
+	}
+
+	// CRD exists - check ownership before updating
+	kroOwned, nameMatch, idMatch := metadata.CompareRGDOwnership(existing.ObjectMeta, crd.ObjectMeta)
+	if !kroOwned {
+		return NewTerminalError(newCRDError(fmt.Errorf(
+			"CRD %s already exists and is not owned by KRO", crd.Name,
+		)))
+	}
+
+	if !nameMatch {
+		existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+		return NewTerminalError(newCRDError(fmt.Errorf(
+			"CRD %s is owned by another ResourceGraphDefinition %s", crd.Name, existingRGDName,
+		)))
+	}
+
+	if nameMatch && !idMatch {
+		log.Info(
+			"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
+			"crd", crd.Name,
+			"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
+			"newRGDID", crd.Labels[metadata.ResourceGraphDefinitionIDLabel],
+		)
+	}
+
+	// Update existing CRD
+	log.V(1).Info("Updating existing CRD", "name", crd.Name)
+	patchBytes, err := json.Marshal(crd)
+	if err != nil {
+		return newCRDError(fmt.Errorf("failed to marshal CRD for patch: %w", err))
+	}
+
+	if _, err := r.crdClient.Patch(ctx, crd.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{}); err != nil {
+		return newCRDError(fmt.Errorf("failed to patch CRD: %w", err))
 	}
 	return nil
 }
@@ -168,6 +246,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 // reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(
 	ctx context.Context,
+	gvr schema.GroupVersionResource,
 	processedRGD *graph.Graph,
 	graphExecLabeler metadata.Labeler,
 ) error {
@@ -179,7 +258,6 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	controller := r.setupMicroController(processedRGD, graphExecLabeler)
 
 	ctrl.LoggerFrom(ctx).V(1).Info("reconciling resource graph definition micro controller")
-	gvr := processedRGD.Instance.GetGroupVersionResource()
 
 	err := r.dynamicController.Register(ctx, gvr, controller.Reconcile, resourceGVRsToWatch...)
 	if err != nil {
@@ -188,24 +266,60 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	return nil
 }
 
+// checkWatchHealth checks the health of all watches and sets the WatchResourcesHealthy condition.
+func (r *ResourceGraphDefinitionReconciler) checkWatchHealth(mark *ConditionsMarker, gvrs []schema.GroupVersionResource) {
+	var degradedGVRs []string
+	for _, gvr := range gvrs {
+		state, found := r.dynamicController.GetWatchState(gvr)
+		if found && state.HasError {
+			degradedGVRs = append(degradedGVRs, gvr.String())
+		}
+	}
+
+	if len(degradedGVRs) > 0 {
+		mark.WatchResourcesDegraded(fmt.Sprintf("watch errors on: %v", degradedGVRs))
+	} else {
+		mark.WatchResourcesHealthy()
+	}
+}
+
 // Error types for the resourcegraphdefinition controller
 type (
 	graphError           struct{ err error }
 	crdError             struct{ err error }
 	microControllerError struct{ err error }
+	// terminalError wraps errors that are unrecoverable and won't self-heal.
+	// Examples: CRD ownership conflicts, invalid schema definitions.
+	terminalError struct{ err error }
 )
 
 // Error interface implementation
 func (e *graphError) Error() string           { return e.err.Error() }
 func (e *crdError) Error() string             { return e.err.Error() }
 func (e *microControllerError) Error() string { return e.err.Error() }
+func (e *terminalError) Error() string        { return e.err.Error() }
 
 // Unwrap interface implementation
 func (e *graphError) Unwrap() error           { return e.err }
 func (e *crdError) Unwrap() error             { return e.err }
 func (e *microControllerError) Unwrap() error { return e.err }
+func (e *terminalError) Unwrap() error        { return e.err }
 
 // Error constructors
 func newGraphError(err error) error           { return &graphError{err} }
 func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
+
+// NewTerminalError wraps an error to indicate it's unrecoverable.
+func NewTerminalError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &terminalError{err}
+}
+
+// IsTerminalError returns true if the error (or any wrapped error) is terminal.
+func IsTerminalError(err error) bool {
+	var t *terminalError
+	return errors.As(err, &t)
+}

@@ -40,9 +40,16 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource graph definition status and conditions")
 
-	// Set status.state.
-	if rgdConditionTypes.For(o).IsRootReady() {
-		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
+	// Set status.state based on conditions.
+	cs := rgdConditionTypes.For(o)
+	if cs.IsRootReady() {
+		if hasWatchErrors(o) {
+			o.Status.State = v1alpha1.ResourceGraphDefinitionStateDegraded
+		} else {
+			o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
+		}
+	} else if isActivating(o) {
+		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActivating
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
 	}
@@ -110,6 +117,7 @@ const (
 	ResourceGraphAccepted = "ResourceGraphAccepted"
 	KindReady             = "KindReady"
 	ControllerReady       = "ControllerReady"
+	WatchResourcesHealthy = "WatchResourcesHealthy"
 )
 
 var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady)
@@ -129,7 +137,8 @@ func NewConditionsMarkerFor(o apis.Object) *ConditionsMarker {
 
 // A ConditionsMarker provides an API to mark conditions onto a ResourceGraphDefinition as the controller does work.
 type ConditionsMarker struct {
-	cs apis.ConditionSet
+	cs             apis.ConditionSet
+	hasWatchErrors bool
 }
 
 // ResourceGraphValid signals the rgd.spec.schema and rgd.spec.resources fields have been accepted.
@@ -148,8 +157,13 @@ func (m *ConditionsMarker) FailedLabelerSetup(msg string) {
 }
 
 // KindUnready signals the CustomResourceDefinition has either not been synced or has not become ready to use.
-func (m *ConditionsMarker) KindUnready(msg string) {
-	m.cs.SetFalse(KindReady, "Failed", msg)
+// If the error is terminal (e.g., ownership conflict), uses "TerminalError" reason.
+func (m *ConditionsMarker) KindUnready(err error) {
+	reason := "Failed"
+	if IsTerminalError(err) {
+		reason = "TerminalError"
+	}
+	m.cs.SetFalse(KindReady, reason, err.Error())
 }
 
 // TODO: it would be nice to know if the Kind was not accepted at all OR if a CRD exists.
@@ -164,7 +178,69 @@ func (m *ConditionsMarker) ControllerFailedToStart(msg string) {
 	m.cs.SetFalse(ControllerReady, "FailedToStart", msg)
 }
 
+// ControllerSyncing signals the microcontroller is registered but waiting for informer cache to sync.
+func (m *ConditionsMarker) ControllerSyncing() {
+	m.cs.SetFalse(ControllerReady, "Syncing", "waiting for informer cache to sync")
+}
+
 // ControllerRunning signals the microcontroller is up and running for this RGD-Kind.
 func (m *ConditionsMarker) ControllerRunning() {
 	m.cs.SetTrueWithReason(ControllerReady, "Running", "controller is running")
+}
+
+// WatchResourcesHealthy signals all watched resources are healthy.
+func (m *ConditionsMarker) WatchResourcesHealthy() {
+	m.hasWatchErrors = false
+	m.cs.SetTrueWithReason(WatchResourcesHealthy, "Healthy", "all resource watches are healthy")
+}
+
+// WatchResourcesDegraded signals one or more watched resources are experiencing errors.
+func (m *ConditionsMarker) WatchResourcesDegraded(msg string) {
+	m.hasWatchErrors = true
+	m.cs.SetFalse(WatchResourcesHealthy, "WatchErrors", msg)
+}
+
+// HasWatchErrors returns true if watch errors have been recorded.
+func (m *ConditionsMarker) HasWatchErrors() bool {
+	return m.hasWatchErrors
+}
+
+// isActivating returns true if the RGD is in a startup/activation state.
+// This is when either:
+// - The controller is registered but informer cache hasn't synced (ControllerReady=False/Syncing)
+// - The CRD is created but not yet established (ResourceGraphAccepted=True, KindReady=False)
+//
+// Note: Terminal errors (indicated by "TerminalError" reason) are NOT considered activating state.
+func isActivating(o *v1alpha1.ResourceGraphDefinition) bool {
+	var graphAccepted, kindReady, controllerSyncing, kindTerminalError bool
+
+	for _, c := range o.Status.Conditions {
+		switch string(c.Type) {
+		case ResourceGraphAccepted:
+			graphAccepted = c.IsTrue()
+		case KindReady:
+			kindReady = c.IsTrue()
+			kindTerminalError = c.Reason != nil && *c.Reason == "TerminalError"
+		case ControllerReady:
+			controllerSyncing = c.Reason != nil && *c.Reason == "Syncing"
+		}
+	}
+
+	// Terminal errors are not activating state - they won't self-heal
+	if kindTerminalError {
+		return false
+	}
+
+	// Activating if controller is syncing OR if graph is accepted but CRD not ready yet
+	return controllerSyncing || (graphAccepted && !kindReady)
+}
+
+// hasWatchErrors returns true if the WatchResourcesHealthy condition is False.
+func hasWatchErrors(o *v1alpha1.ResourceGraphDefinition) bool {
+	for _, c := range o.Status.Conditions {
+		if string(c.Type) == WatchResourcesHealthy {
+			return c.IsFalse()
+		}
+	}
+	return false
 }

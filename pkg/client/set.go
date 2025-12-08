@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
@@ -39,14 +40,17 @@ type SetInterface interface {
 	// Dynamic returns the dynamic client
 	Dynamic() dynamic.Interface
 
+	// APIExtensions returns the full API extensions clientset
+	APIExtensions() apiextensions.Interface
+
 	// APIExtensionsV1 returns the API extensions client
 	APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface
 
 	// RESTConfig returns a copy of the underlying REST config
 	RESTConfig() *rest.Config
 
-	// CRD returns a new CRDInterface instance
-	CRD(cfg CRDWrapperConfig) CRDInterface
+	// CRD returns the CustomResourceDefinition client
+	CRD() apiextensionsv1.CustomResourceDefinitionInterface
 
 	// WithImpersonation returns a new client that impersonates the given user
 	WithImpersonation(user string) (SetInterface, error)
@@ -61,6 +65,7 @@ type Set struct {
 	kubernetes      *kubernetes.Clientset
 	dynamic         *dynamic.DynamicClient
 	metadata        metadata.Interface
+	apiExtensions   *apiextensions.Clientset
 	apiExtensionsV1 *apiextensionsv1.ApiextensionsV1Client
 	// restMapper is a REST mapper for the Kubernetes API server
 	restMapper meta.RESTMapper
@@ -137,6 +142,11 @@ func (c *Set) init() error {
 		return err
 	}
 
+	c.apiExtensions, err = apiextensions.NewForConfigAndClient(c.config, c.httpClient)
+	if err != nil {
+		return err
+	}
+
 	c.apiExtensionsV1, err = apiextensionsv1.NewForConfigAndClient(c.config, c.httpClient)
 	if err != nil {
 		return err
@@ -169,6 +179,11 @@ func (c *Set) Dynamic() dynamic.Interface {
 	return c.dynamic
 }
 
+// APIExtensions returns the full API extensions clientset
+func (c *Set) APIExtensions() apiextensions.Interface {
+	return c.apiExtensions
+}
+
 // APIExtensionsV1 returns the API extensions client
 func (c *Set) APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface {
 	return c.apiExtensionsV1
@@ -184,13 +199,9 @@ func (c *Set) RESTMapper() meta.RESTMapper {
 	return c.restMapper
 }
 
-// CRD returns a new CRDInterface instance
-func (c *Set) CRD(cfg CRDWrapperConfig) CRDInterface {
-	if cfg.Client == nil {
-		cfg.Client = c.apiExtensionsV1
-	}
-
-	return newCRDWrapper(cfg)
+// CRD returns the CustomResourceDefinition client
+func (c *Set) CRD() apiextensionsv1.CustomResourceDefinitionInterface {
+	return c.apiExtensionsV1.CustomResourceDefinitions()
 }
 
 // WithImpersonation returns a new client that impersonates the given user

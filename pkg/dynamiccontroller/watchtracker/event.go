@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package watchtracker
 
-import (
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+import "k8s.io/apimachinery/pkg/runtime/schema"
+
+// EventType represents the type of watch event from an informer.
+type EventType string
+
+const (
+	// EventTypeSynced indicates the informer cache has synced.
+	EventTypeSynced EventType = "Synced"
+	// EventTypeError indicates a watch error occurred.
+	EventTypeError EventType = "Error"
 )
 
-// IsEstablished checks if a CRD is established and ready to use.
-func IsEstablished(crd *v1.CustomResourceDefinition) bool {
-	if crd == nil {
-		return false
-	}
-	for _, cond := range crd.Status.Conditions {
-		if cond.Type == v1.Established && cond.Status == v1.ConditionTrue {
-			return true
-		}
-	}
-	return false
+// Event represents a watch event from an informer (sync complete or error).
+type Event struct {
+	GVR   schema.GroupVersionResource
+	Error error
+	Type  EventType
 }

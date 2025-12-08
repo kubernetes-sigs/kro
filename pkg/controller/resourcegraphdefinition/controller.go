@@ -17,19 +17,20 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/go-logr/logr"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/types"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -48,13 +49,16 @@ type ResourceGraphDefinitionReconciler struct {
 
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
+	clientSet kroclient.SetInterface
+	crdClient apiextensionsv1.CustomResourceDefinitionInterface
 
 	metadataLabeler         metadata.Labeler
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
+
+	// crdInformer is our own informer for CRDs to reliably detect establishment
+	crdInformer *CRDInformer
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -64,12 +68,10 @@ func NewResourceGraphDefinitionReconciler(
 	builder *graph.Builder,
 	maxConcurrentReconciles int,
 ) *ResourceGraphDefinitionReconciler {
-	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
-
 	return &ResourceGraphDefinitionReconciler{
 		clientSet:               clientSet,
 		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
+		crdClient:               clientSet.CRD(),
 		dynamicController:       dynamicController,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
@@ -95,6 +97,21 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		return log
 	}
 
+	// Create channel for external events (watch state + CRD events)
+	externalEventsChan := make(chan event.GenericEvent)
+
+	// Start goroutine to forward watch state events
+	go r.watchStateEvents(externalEventsChan)
+
+	// Create and start our own CRD informer for reliable establishment detection
+	r.crdInformer = NewCRDInformer(
+		mgr.GetLogger(),
+		r.clientSet,
+		externalEventsChan,
+		0, // No resync - we only care about real events
+	)
+	r.crdInformer.Start()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
 		For(&v1alpha1.ResourceGraphDefinition{}).
@@ -105,50 +122,45 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
-		WatchesMetadata(
-			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
-			builder.WithPredicates(predicate.Funcs{
-				UpdateFunc: func(e event.UpdateEvent) bool {
-					return true
-				},
-				CreateFunc: func(e event.CreateEvent) bool {
-					return false
-				},
-				DeleteFunc: func(e event.DeleteEvent) bool {
-					return false
-				},
-			}),
+		WatchesRawSource(
+			source.Channel(externalEventsChan, &handler.EnqueueRequestForObject{}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 
-// findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
-// that owns the given CRD. It is used to trigger reconciliation when a CRD is updated.
-func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, obj client.Object) []reconcile.Request {
-	mobj, err := meta.Accessor(obj)
-	if err != nil {
-		return nil
+// watchStateEvents listens for watch state change events and triggers RGD reconciliation.
+func (r *ResourceGraphDefinitionReconciler) watchStateEvents(eventsChan chan<- event.GenericEvent) {
+	for stateEvent := range r.dynamicController.WatchStateEvents() {
+		r.enqueueRGDForGVR(stateEvent.GVR, eventsChan)
+	}
+}
+
+// enqueueRGDForGVR finds the RGD that owns the CRD for the given GVR and enqueues a reconcile event.
+func (r *ResourceGraphDefinitionReconciler) enqueueRGDForGVR(gvr schema.GroupVersionResource, eventsChan chan<- event.GenericEvent) {
+	crdName := fmt.Sprintf("%s.%s", gvr.Resource, gvr.Group)
+
+	crd := &metav1.PartialObjectMetadata{}
+	crd.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "apiextensions.k8s.io",
+		Version: "v1",
+		Kind:    "CustomResourceDefinition",
+	})
+	if err := r.Client.Get(context.Background(), client.ObjectKey{Name: crdName}, crd); err != nil {
+		return
 	}
 
-	// Check if the CRD is owned by a ResourceGraphDefinition
-	if !metadata.IsKROOwned(mobj) {
-		return nil
+	if !metadata.IsKROOwned(crd) {
+		return
 	}
-
-	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
+	rgdName, ok := crd.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
 	if !ok {
-		return nil
+		return
 	}
 
-	// Return a reconcile request for the corresponding RGD
-	return []reconcile.Request{
-		{
-			NamespacedName: types.NamespacedName{
-				Name: rgdName,
-			},
-		},
-	}
+	rgd := &v1alpha1.ResourceGraphDefinition{}
+	rgd.SetName(rgdName)
+
+	eventsChan <- event.GenericEvent{Object: rgd}
 }
 
 func (r *ResourceGraphDefinitionReconciler) Reconcile(
@@ -156,9 +168,15 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
-		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
+		cleanupComplete, err := r.cleanupResourceGraphDefinition(ctx, o)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if !cleanupComplete {
+			// Waiting for microcontroller to stop - Stopped event will trigger re-reconcile
+			return ctrl.Result{}, nil
+		}
+		// Cleanup complete - remove finalizer
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}

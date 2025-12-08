@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,6 +37,9 @@ import (
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/watchtracker"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 // NOTE(a-hilaly): I'm just playing around with the dynamic controller code here
@@ -208,7 +210,8 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 	assert.True(t, watchExists)
 
 	// Deregister and verify cleanup
-	require.NoError(t, ctrl.Deregister(ctx, deployGVR))
+	ctrl.Deregister(ctx, deployGVR)
+	time.Sleep(100 * time.Millisecond) // wait for async deregister
 	_, registrationExists = ctrl.registrations[deployGVR]
 	assert.False(t, registrationExists)
 	_, watchExists = ctrl.watches[deployGVR]
@@ -285,8 +288,8 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	// Unregister GVK
 	shutdownContext, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	err = dc.Deregister(shutdownContext, gvr)
-	require.NoError(t, err)
+	dc.Deregister(shutdownContext, gvr)
+	time.Sleep(100 * time.Millisecond) // wait for async deregister
 
 	_, exists = dc.registrations[gvr]
 	assert.False(t, exists)
@@ -349,6 +352,11 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	err := dc.Register(t.Context(), gvr, handlerFunc)
 	assert.NoError(t, err)
 
+	// Wait for cache to sync (Register is now non-blocking)
+	require.Eventually(t, func() bool {
+		return dc.HasSynced(gvr)
+	}, 5*time.Second, 10*time.Millisecond, "cache should sync")
+
 	// simulate reconciling the instances
 	for dc.queue.Len() > 0 {
 		item, _ := dc.queue.Get()
@@ -361,10 +369,305 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	assert.NoError(t, err)
 
 	// check if the expected objects are queued
-	assert.Equal(t, dc.queue.Len(), 2)
+	// Note: On re-register, the existing 2 objects should be re-queued
+	require.Eventually(t, func() bool {
+		return dc.queue.Len() == 2
+	}, 5*time.Second, 10*time.Millisecond, "expected 2 items in queue after re-register")
 	for dc.queue.Len() > 0 {
 		name, _ := dc.queue.Get()
 		_, ok := objs[name.String()]
 		assert.True(t, ok)
+	}
+}
+
+func TestHasSynced(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+	dc.ctx = t.Context()
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	// Not registered yet
+	assert.False(t, dc.HasSynced(gvr))
+
+	// Register
+	err := dc.Register(t.Context(), gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}))
+	require.NoError(t, err)
+
+	// Should sync eventually
+	require.Eventually(t, func() bool {
+		return dc.HasSynced(gvr)
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestGetWatchState(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+
+	// Wait for controller to start
+	require.Eventually(t, func() bool {
+		return dc.ctx != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	// Not registered yet
+	_, found := dc.GetWatchState(gvr)
+	assert.False(t, found)
+
+	// Register
+	err := dc.Register(ctx, gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}))
+	require.NoError(t, err)
+
+	// State should exist after registration
+	require.Eventually(t, func() bool {
+		state, found := dc.GetWatchState(gvr)
+		return found && state.Status == watchtracker.StatusSynced
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestWatchStateEvents_Synced(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return dc.ctx != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	stateEvents := dc.WatchStateEvents()
+
+	// Register
+	err := dc.Register(ctx, gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}))
+	require.NoError(t, err)
+
+	// Should receive synced state event
+	select {
+	case event := <-stateEvents:
+		assert.Equal(t, gvr, event.GVR)
+		assert.Equal(t, watchtracker.StatusSynced, event.NewState.Status)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for state event")
+	}
+}
+
+func TestWatchStateEvents_Deregister(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return dc.ctx != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	stateEvents := dc.WatchStateEvents()
+
+	// Register
+	err := dc.Register(ctx, gvr, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}))
+	require.NoError(t, err)
+
+	// Wait for synced event
+	select {
+	case <-stateEvents:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for synced event")
+	}
+
+	// Deregister
+	dc.Deregister(ctx, gvr)
+
+	// Should receive stopped state event
+	select {
+	case event := <-stateEvents:
+		assert.Equal(t, gvr, event.GVR)
+		assert.Equal(t, watchtracker.StatusStopped, event.NewState.Status)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stopped event")
+	}
+}
+
+
+func TestRegisterWithMultipleChildren(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	// Register GVKs in mapper
+	deployGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
+	configMapGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	mapper.Add(deployGVK, meta.RESTScopeNamespace)
+	mapper.Add(secretGVK, meta.RESTScopeNamespace)
+	mapper.Add(configMapGVK, meta.RESTScopeNamespace)
+
+	parentGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	child1GVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+	child2GVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return dc.ctx != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	stateEvents := dc.WatchStateEvents()
+
+	// Register parent with two children
+	err := dc.Register(ctx, parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}), child1GVR, child2GVR)
+	require.NoError(t, err)
+
+	// Should receive synced events for parent and both children (3 total)
+	syncedCount := 0
+	timeout := time.After(10 * time.Second)
+	for syncedCount < 3 {
+		select {
+		case event := <-stateEvents:
+			if event.NewState.Status == watchtracker.StatusSynced {
+				syncedCount++
+				t.Logf("received synced event for %v (%d/3)", event.GVR, syncedCount)
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for synced events, got %d/3", syncedCount)
+		}
+	}
+
+	// Verify all watches exist
+	dc.mu.Lock()
+	_, parentExists := dc.watches[parentGVR]
+	_, child1Exists := dc.watches[child1GVR]
+	_, child2Exists := dc.watches[child2GVR]
+	dc.mu.Unlock()
+
+	assert.True(t, parentExists, "parent watch should exist")
+	assert.True(t, child1Exists, "child1 watch should exist")
+	assert.True(t, child2Exists, "child2 watch should exist")
+
+	// Verify registration has both children
+	dc.mu.Lock()
+	reg := dc.registrations[parentGVR]
+	dc.mu.Unlock()
+	assert.Len(t, reg.childHandlerIDs, 2)
+}
+
+func TestChildWatchError_PropagesToParent(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	deployGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	secretGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"}
+	mapper.Add(deployGVK, meta.RESTScopeNamespace)
+	mapper.Add(secretGVK, meta.RESTScopeNamespace)
+
+	parentGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	childGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}
+
+	dc := NewDynamicController(noopLogger(), Config{}, client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return dc.ctx != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	stateEvents := dc.WatchStateEvents()
+
+	// Register parent with child
+	err := dc.Register(ctx, parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	}), childGVR)
+	require.NoError(t, err)
+
+	// Wait for both to sync (2 events, both show parent GVR)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-stateEvents:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for synced events")
+		}
+	}
+
+	// Inject error event for child GVR directly into watchEventCh
+	dc.watchEventCh <- watchtracker.Event{
+		GVR:   childGVR,
+		Type:  watchtracker.EventTypeError,
+		Error: fmt.Errorf("simulated child watch error"),
+	}
+
+	// Should receive degraded event for PARENT GVR (child error propagates to parent)
+	select {
+	case event := <-stateEvents:
+		assert.Equal(t, parentGVR, event.GVR, "error should propagate to parent GVR")
+		assert.Equal(t, watchtracker.StatusDegraded, event.NewState.Status)
+		assert.NotNil(t, event.NewState.LastError)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for degraded event")
 	}
 }

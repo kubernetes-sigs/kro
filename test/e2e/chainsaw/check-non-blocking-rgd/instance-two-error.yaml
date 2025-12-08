@@ -1,0 +1,6 @@
+# This file is used with chainsaw's "error" directive to verify
+# that the Deployment was NOT created (because RGD Two is stuck in Initializing)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-two

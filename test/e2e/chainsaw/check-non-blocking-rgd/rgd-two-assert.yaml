@@ -1,0 +1,13 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: rgd-two
+  finalizers:
+    - kro.run/finalizer
+status:
+  state: Initializing
+  (conditions[?type == 'ControllerReady']):
+    - status: 'False'
+      reason: Syncing
+  topologicalOrder:
+    - deployment

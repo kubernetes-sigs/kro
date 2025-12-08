@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: YourAppThree
+metadata:
+  name: test-three
+spec:
+  name: test
+  data: "hello-from-rgd-three"

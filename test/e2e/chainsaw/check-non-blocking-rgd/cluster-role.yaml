@@ -1,0 +1,39 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro:controller:check-non-blocking-rgd
+  labels:
+    rbac.kro.run/aggregate-to-controller: "true"
+rules:
+  # Grant access to healthy RGDs' instance CRDs (One and Three)
+  - apiGroups:
+    - "kro.run"
+    resources:
+    - "yourappones"
+    - "yourappones/status"
+    - "yourappthrees"
+    - "yourappthrees/status"
+    verbs:
+    - "create"
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "patch"
+  # Grant access to ConfigMaps (for healthy RGDs)
+  - apiGroups:
+    - ""
+    resources:
+    - "configmaps"
+    verbs:
+    - "create"
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "patch"
+    - "delete"
+  # NOTE: We intentionally do NOT grant access to:
+  # - yourapptwos (instance CRD for unhealthy RGD Two)
+  # - apps/deployments (resource used by unhealthy RGD Two)
+  # This simulates the RBAC restriction scenario from issue #886

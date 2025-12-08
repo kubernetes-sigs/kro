@@ -175,9 +175,25 @@ type Resource struct {
 type ResourceGraphDefinitionState string
 
 const (
-	// ResourceGraphDefinitionStateActive represents the active state of the resource definition.
+	// ResourceGraphDefinitionStateActive indicates the RGD is fully operational.
+	// The CRD is established and the controller is running and healthy.
 	ResourceGraphDefinitionStateActive ResourceGraphDefinitionState = "Active"
-	// ResourceGraphDefinitionStateInactive represents the inactive state of the resource graph definition
+
+	// ResourceGraphDefinitionStateActivating indicates the RGD is starting up.
+	// This includes CRD creation/establishment and controller synchronization
+	ResourceGraphDefinitionStateActivating ResourceGraphDefinitionState = "Activating"
+
+	// ResourceGraphDefinitionStateDeactivating indicates the RGD is shutting down.
+	// The controller is being stopped and CRD is being deleted, if the controller
+	// is configured to do so.
+	ResourceGraphDefinitionStateDeactivating ResourceGraphDefinitionState = "Deactivating"
+
+	// ResourceGraphDefinitionStateDegraded indicates the RGD is operational but
+	// experiencing issues such as watch errors on some resources.
+	ResourceGraphDefinitionStateDegraded ResourceGraphDefinitionState = "Degraded"
+
+	// ResourceGraphDefinitionStateInactive indicates the RGD has encountered an error
+	// and is not operational. Check conditions for details.
 	ResourceGraphDefinitionStateInactive ResourceGraphDefinitionState = "Inactive"
 )
 

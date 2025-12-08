@@ -15,11 +15,10 @@
 package fake
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/kubernetes-sigs/kro/pkg/client"
-	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
@@ -29,12 +28,13 @@ import (
 
 // FakeSet is a fake implementation of SetInterface for testing
 type FakeSet struct {
-	DynamicClient       dynamic.Interface
-	KubernetesClient    kubernetes.Interface
-	ApiExtensionsClient apiextensionsv1.ApiextensionsV1Interface
-	Config              *rest.Config
-	restMapper          meta.RESTMapper
-	HTTP                *http.Client
+	DynamicClient         dynamic.Interface
+	KubernetesClient      kubernetes.Interface
+	ApiExtensionsClientV1 apiextensionsv1.ApiextensionsV1Interface
+	ApiExtensionsClient   apiextensions.Interface
+	Config                *rest.Config
+	restMapper            meta.RESTMapper
+	HTTP                  *http.Client
 }
 
 var _ client.SetInterface = (*FakeSet)(nil)
@@ -61,9 +61,14 @@ func (f *FakeSet) Dynamic() dynamic.Interface {
 	return f.DynamicClient
 }
 
+// APIExtensions returns the full API extensions clientset
+func (f *FakeSet) APIExtensions() apiextensions.Interface {
+	return f.ApiExtensionsClient
+}
+
 // APIExtensionsV1 returns the API extensions client
 func (f *FakeSet) APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface {
-	return f.ApiExtensionsClient
+	return f.ApiExtensionsClientV1
 }
 
 // RESTConfig returns a copy of the underlying REST config
@@ -71,10 +76,12 @@ func (f *FakeSet) RESTConfig() *rest.Config {
 	return f.Config
 }
 
-// CRD returns a new CRD interface instance
-func (f *FakeSet) CRD(cfg client.CRDWrapperConfig) client.CRDInterface {
-	// Return a fake CRD implementation for testing
-	return &FakeCRD{}
+// CRD returns the CustomResourceDefinition client
+func (f *FakeSet) CRD() apiextensionsv1.CustomResourceDefinitionInterface {
+	if f.ApiExtensionsClientV1 == nil {
+		return nil
+	}
+	return f.ApiExtensionsClientV1.CustomResourceDefinitions()
 }
 
 // WithImpersonation returns a new client that impersonates the given user
@@ -89,27 +96,4 @@ func (f *FakeSet) RESTMapper() meta.RESTMapper {
 
 func (f *FakeSet) SetRESTMapper(restMapper meta.RESTMapper) {
 	f.restMapper = restMapper
-}
-
-// FakeCRD is a fake implementation of CRDInterface for testing
-type FakeCRD struct{}
-
-var _ client.CRDInterface = (*FakeCRD)(nil)
-
-// Ensure ensures a CRD exists, up-to-date, and is ready
-func (f *FakeCRD) Ensure(ctx context.Context, crd v1.CustomResourceDefinition) error {
-	// For testing, just return success
-	return nil
-}
-
-// Get retrieves a CRD by name
-func (f *FakeCRD) Get(ctx context.Context, name string) (*v1.CustomResourceDefinition, error) {
-	// For testing, return an empty CRD
-	return &v1.CustomResourceDefinition{}, nil
-}
-
-// Delete removes a CRD if it exists
-func (f *FakeCRD) Delete(ctx context.Context, name string) error {
-	// For testing, just return success
-	return nil
 }

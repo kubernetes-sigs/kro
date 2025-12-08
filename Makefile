@@ -269,6 +269,18 @@ deploy-kind: ko ## Deploy kro to a kind cluster
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
+.PHONY: deploy-kind-aggregation
+deploy-kind-aggregation: export KO_DOCKER_REPO=kind.local
+deploy-kind-aggregation: ko ## Deploy kro to a kind cluster with aggregation RBAC mode
+	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
+	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
+	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system
+	make install
+	# Deploy with aggregation RBAC mode - requires ClusterRoles with rbac.kro.run/aggregate-to-controller label
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true --set rbac.mode=aggregation | $(KO) apply -f -
+	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
+	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
+
 .PHONY: ko-apply
 ko-apply: ko
 	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
@@ -289,3 +301,11 @@ test-e2e: chainsaw ## Run e2e tests
 .PHONY: test-e2e-kind
 test-e2e-kind: deploy-kind
 	make test-e2e
+
+.PHONY: test-e2e-kind-aggregation
+test-e2e-kind-aggregation: deploy-kind-aggregation ## Run e2e tests with aggregation RBAC mode
+	make test-e2e
+
+.PHONY: test-e2e-non-blocking
+test-e2e-non-blocking: chainsaw ## Run the non-blocking RGD test (requires aggregation RBAC mode)
+	$(CHAINSAW) test ./test/e2e/chainsaw/check-non-blocking-rgd

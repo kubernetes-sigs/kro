@@ -1,0 +1,20 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: rgd-one
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: YourAppOne
+    spec:
+      name: string
+      data: string
+  resources:
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-one
+      data:
+        key: ${schema.spec.data}

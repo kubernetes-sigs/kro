@@ -1,0 +1,12 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: rgd-three
+  finalizers:
+    - kro.run/finalizer
+status:
+  state: Active
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  topologicalOrder:
+    - configmap

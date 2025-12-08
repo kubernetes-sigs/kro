@@ -78,6 +78,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/internal"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/watchtracker"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -89,6 +90,10 @@ const (
 	eventTypeUpdate = "update"
 	// eventTypeDelete is emitted to the queue when an existing object was deleted
 	eventTypeDelete = "delete"
+
+	// defaultWatchRecoveryTimeout is the default time to wait without errors
+	// before considering a watch recovered from error state.
+	defaultWatchRecoveryTimeout = 30 * time.Second
 )
 
 // Config holds the configuration for DynamicController
@@ -199,6 +204,16 @@ type DynamicController struct {
 	// queue is the work queue used to process items received via watches.
 	// The queue is shared between all informers and is used to propagate events to the handlers.
 	queue workqueue.TypedRateLimitingInterface[ObjectIdentifiers]
+
+	// watchEventCh receives all watch events (sync completed, errors) from LazyInformers.
+	watchEventCh chan watchtracker.Event
+
+	// watchStateTracker tracks the state of each watch (synced, errors, etc.)
+	watchStateTracker *watchtracker.Tracker
+
+	// stateEventsCh is the channel exposed via WatchStateEvents().
+	// Events are translated so child GVR events become parent GVR events.
+	stateEventsCh chan watchtracker.StateChangeEvent
 }
 
 // NewDynamicController creates a new DynamicController.
@@ -221,7 +236,35 @@ func NewDynamicController(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](config.MinRetryDelay, config.MaxRetryDelay),
 			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(config.RateLimit), config.BurstLimit)},
 		), workqueue.TypedRateLimitingQueueConfig[ObjectIdentifiers]{Name: "dynamic-controller-queue"}),
+		watchEventCh:      make(chan watchtracker.Event, 100),
+		watchStateTracker: watchtracker.NewTracker(defaultWatchRecoveryTimeout, 1000),
+		stateEventsCh:     make(chan watchtracker.StateChangeEvent, 1000),
 	}
+}
+
+// HasSynced returns true if the informer for the given GVR has synced.
+func (dc *DynamicController) HasSynced(gvr schema.GroupVersionResource) bool {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+
+	w, exists := dc.watches[gvr]
+	if !exists {
+		return false
+	}
+	return w.HasSynced()
+}
+
+// GetWatchState returns the current state of the watch for a GVR.
+// Returns false if the GVR is not found (never registered or already stopped).
+func (dc *DynamicController) GetWatchState(gvr schema.GroupVersionResource) (watchtracker.State, bool) {
+	return dc.watchStateTracker.GetState(gvr)
+}
+
+// WatchStateEvents returns a channel that receives watch state change events.
+// Events are translated so child GVR events appear as parent GVR events.
+// Consumers should use this to react to watch state transitions (e.g., healthy -> degraded).
+func (dc *DynamicController) WatchStateEvents() <-chan watchtracker.StateChangeEvent {
+	return dc.stateEventsCh
 }
 
 // Start starts workers and blocks until ctx.Done().
@@ -237,6 +280,9 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 
 	dc.ctx = ctx
 
+	// Start watch event handler - reads events from LazyInformers, updates state, forwards syncs to external
+	go dc.watchEventHandler(ctx)
+
 	// Workers.
 	for i := 0; i < dc.config.Workers; i++ {
 		go wait.UntilWithContext(ctx, dc.worker, time.Second)
@@ -244,6 +290,61 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 
 	<-ctx.Done()
 	return dc.gracefulShutdown()
+}
+
+// watchEventHandler reads watch events from LazyInformers, updates watch state,
+// and forwards translated state change events to stateEventsCh.
+func (dc *DynamicController) watchEventHandler(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-dc.watchEventCh:
+			switch event.Type {
+			case watchtracker.EventTypeSynced:
+				dc.watchStateTracker.MarkSynced(event.GVR)
+			case watchtracker.EventTypeError:
+				dc.watchStateTracker.RecordError(event.GVR, event.Error)
+			}
+		case stateEvent := <-dc.watchStateTracker.StateEvents():
+			dc.forwardStateEvent(stateEvent)
+		}
+	}
+}
+
+// forwardStateEvent translates a state change event and forwards it to stateEventsCh.
+// If the event is for a child GVR, it emits events for all parent GVRs that watch it.
+func (dc *DynamicController) forwardStateEvent(event watchtracker.StateChangeEvent) {
+	dc.mu.Lock()
+	targets := dc.getEventTargetsLocked(event.GVR)
+	dc.mu.Unlock()
+
+	for _, target := range targets {
+		select {
+		case dc.stateEventsCh <- watchtracker.StateChangeEvent{
+			GVR:      target,
+			OldState: event.OldState,
+			NewState: event.NewState,
+		}:
+		default:
+		}
+	}
+}
+
+// getEventTargetsLocked returns GVRs that should receive state events for the given GVR.
+// If gvr is a parent, returns [gvr]. If gvr is a child, returns all parents watching it.
+// Must be called with dc.mu held.
+func (dc *DynamicController) getEventTargetsLocked(gvr schema.GroupVersionResource) []schema.GroupVersionResource {
+	if _, isParent := dc.registrations[gvr]; isParent {
+		return []schema.GroupVersionResource{gvr}
+	}
+	var targets []schema.GroupVersionResource
+	for parent, reg := range dc.registrations {
+		if _, ok := reg.childHandlerIDs[gvr]; ok {
+			targets = append(targets, parent)
+		}
+	}
+	return targets
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
@@ -406,13 +507,18 @@ func (dc *DynamicController) Register(
 }
 
 // Deregister clears parent and children and drops any queued items for the parent GVR.
-func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) error {
+// This is non-blocking - cleanup happens asynchronously.
+func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) {
+	go dc.deregisterAsync(parent)
+}
+
+func (dc *DynamicController) deregisterAsync(parent schema.GroupVersionResource) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 
 	reg, exists := dc.registrations[parent]
 	if !exists {
-		return nil
+		return
 	}
 
 	gvrKey := keyFromGVR(parent)
@@ -425,22 +531,35 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 	}
 
 	delete(dc.registrations, parent)
+	dc.watchStateTracker.RemoveState(parent)
+
+	// Send stopped event directly - this is a deregistration signal, not a watch state
+	select {
+	case dc.stateEventsCh <- watchtracker.StateChangeEvent{
+		GVR:      parent,
+		NewState: watchtracker.State{Status: watchtracker.StatusStopped},
+	}:
+	default:
+	}
 
 	dc.log.V(1).Info("Successfully unregistered GVR", "gvr", gvrKey)
-	return nil
 }
 
 // ----- internal helpers -----
 
 func (dc *DynamicController) ensureWatchLocked(
 	gvr schema.GroupVersionResource,
+	eventCh chan<- watchtracker.Event,
 ) *internal.LazyInformer {
 	if w, ok := dc.watches[gvr]; ok {
 		return w
 	}
 
+	// Initialize watch state tracking
+	dc.watchStateTracker.InitState(gvr)
+
 	// Create per-GVR watch wrapper (informer created lazily on first handler)
-	w := internal.NewLazyInformer(dc.client, gvr, dc.config.ResyncPeriod, nil, dc.log)
+	w := internal.NewLazyInformer(dc.client, gvr, dc.config.ResyncPeriod, nil, dc.log, eventCh)
 	dc.watches[gvr] = w
 	return w
 }
@@ -471,8 +590,8 @@ func (dc *DynamicController) reconcileParentLocked(
 		return nil
 	}
 
-	// ensure watch
-	w := dc.ensureWatchLocked(parent)
+	// ensure watch - parent gets watch events (sync, errors)
+	w := dc.ensureWatchLocked(parent, dc.watchEventCh)
 
 	// create handler if missing
 	if reg.parentHandlerID == "" {
@@ -533,7 +652,7 @@ func (dc *DynamicController) reconcileChildrenLocked(
 		if _, exists := reg.childHandlerIDs[child]; exists {
 			continue
 		}
-		w := dc.ensureWatchLocked(child)
+		w := dc.ensureWatchLocked(child, dc.watchEventCh)
 		childHandlerID := childHandlerID(parent, child)
 		if err := w.AddHandler(dc.ctx, childHandlerID, dc.handlerForChildGVR(parent, child)); err != nil {
 			return fmt.Errorf("add child handler %s: %w", child, err)
@@ -564,6 +683,8 @@ func (dc *DynamicController) removeHandlerLocked(gvr schema.GroupVersionResource
 	}
 	if stopped {
 		delete(dc.watches, gvr)
+		// Clean up watch state tracking
+		dc.watchStateTracker.RemoveState(gvr)
 	}
 	return nil
 }
@@ -620,6 +741,9 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 
 func (dc *DynamicController) gracefulShutdown() error {
 	dc.log.Info("Starting graceful shutdown")
+
+	// Shutdown watch state tracker (stops recovery timers)
+	dc.watchStateTracker.Shutdown()
 
 	dc.mu.Lock()
 	for gvr, w := range dc.watches {

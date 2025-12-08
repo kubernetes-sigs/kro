@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: YourAppTwo
+metadata:
+  name: test-two
+spec:
+  name: test
+  image: "nginx:latest"

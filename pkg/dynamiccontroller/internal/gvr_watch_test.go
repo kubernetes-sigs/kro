@@ -27,8 +27,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/metadata/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/watchtracker"
 )
 
 func noopLogger() logr.Logger {
@@ -46,7 +49,7 @@ func TestLazyInformer_AddAndRemoveHandler(t *testing.T) {
 	defer cancel()
 
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, nil)
 
 	// Adding first handler should start informer
 	err := li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})
@@ -73,7 +76,7 @@ func TestLazyInformer_MultipleHandlers(t *testing.T) {
 	defer cancel()
 
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, nil)
 
 	require.NoError(t, li.AddHandler(ctx, "a", cache.ResourceEventHandlerFuncs{}))
 	require.NoError(t, li.AddHandler(ctx, "b", cache.ResourceEventHandlerFuncs{}))
@@ -104,7 +107,7 @@ func TestLazyInformer_Shutdown(t *testing.T) {
 	defer cancel()
 
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, nil)
 
 	require.NoError(t, li.AddHandler(ctx, "h", cache.ResourceEventHandlerFuncs{}))
 	assert.NotNil(t, li.Informer())
@@ -123,7 +126,7 @@ func TestLazyInformer_RecreateAfterStop(t *testing.T) {
 
 	ctx := t.Context()
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, time.Second, nil, logger) // avoid tiny resync
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, nil) // avoid tiny resync
 
 	// Add first handler and remove it -> stops informer
 	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
@@ -154,7 +157,7 @@ func TestLazyInformer_ShutdownSafetyAndRestart(t *testing.T) {
 
 	ctx := t.Context()
 	logger := noopLogger()
-	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, nil)
 
 	// shutdown before start should not panic
 	assert.NotPanics(t, li.Shutdown, "shutdown before any AddHandler must be safe")
@@ -182,4 +185,84 @@ func TestLazyInformer_ShutdownSafetyAndRestart(t *testing.T) {
 	assert.Len(t, li.handlers, 1)
 	assert.NotNil(t, li.cancel)
 	assert.NotNil(t, li.done)
+}
+
+func TestLazyInformer_EventChannel_Synced(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx := t.Context()
+	logger := noopLogger()
+	eventCh := make(chan watchtracker.Event, 10)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, eventCh)
+
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+
+	select {
+	case event := <-eventCh:
+		assert.Equal(t, watchtracker.EventTypeSynced, event.Type)
+		assert.Equal(t, gvr, event.GVR)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for synced event")
+	}
+}
+
+func TestLazyInformer_EventChannel_Cancelled(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	logger := noopLogger()
+	eventCh := make(chan watchtracker.Event, 10)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, eventCh)
+
+	// Cancel immediately so sync can't complete
+	cancel()
+
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+
+	// Should not receive synced event since context was cancelled
+	select {
+	case event := <-eventCh:
+		t.Fatalf("unexpected event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+		// Expected - no event when cancelled
+	}
+}
+
+func TestLazyInformer_EventChannel_DelayedSync(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	// Add reactor to delay list by 500ms
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		time.Sleep(500 * time.Millisecond)
+		return false, nil, nil // continue to default handler
+	})
+
+	ctx := t.Context()
+	logger := noopLogger()
+	eventCh := make(chan watchtracker.Event, 10)
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger, eventCh)
+
+	start := time.Now()
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+
+	// Should NOT receive event before 500ms
+	select {
+	case event := <-eventCh:
+		elapsed := time.Since(start)
+		if elapsed < 400*time.Millisecond {
+			t.Fatalf("received event too early (%v): %+v", elapsed, event)
+		}
+		assert.Equal(t, watchtracker.EventTypeSynced, event.Type)
+	case <-time.After(1000 * time.Millisecond):
+		t.Fatal("timed out waiting for synced event")
+	}
 }

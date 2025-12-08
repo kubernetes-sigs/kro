@@ -16,7 +16,6 @@ package internal
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +25,8 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/watchtracker"
 )
 
 // LazyInformer manages a SharedIndexInformer per GVR with multiple handlers.
@@ -44,6 +45,9 @@ type LazyInformer struct {
 	done   <-chan struct{}
 	cancel context.CancelFunc
 
+	// eventCh receives all watch events (sync completed, errors).
+	eventCh chan<- watchtracker.Event
+
 	log logr.Logger
 }
 
@@ -53,6 +57,7 @@ func NewLazyInformer(
 	resync time.Duration,
 	tweak metadatainformer.TweakListOptionsFunc,
 	logger logr.Logger,
+	eventCh chan<- watchtracker.Event,
 ) *LazyInformer {
 	li := &LazyInformer{
 		gvr:      gvr,
@@ -61,6 +66,7 @@ func NewLazyInformer(
 		tweak:    tweak,
 		handlers: make(map[string]cache.ResourceEventHandlerRegistration),
 		log:      logger.WithValues("gvr", gvr.String()),
+		eventCh:  eventCh,
 	}
 	return li
 }
@@ -84,19 +90,25 @@ func (w *LazyInformer) ensureInformer() {
 
 	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		w.log.V(1).Error(err, "watch error for lazy informer", "gvr", w.gvr)
+		if w.eventCh != nil {
+			select {
+			case w.eventCh <- watchtracker.Event{GVR: w.gvr, Type: watchtracker.EventTypeError, Error: err}:
+			default:
+				w.log.V(1).Info("Event channel full, dropping error event", "gvr", w.gvr)
+			}
+		}
 	})
 
 	w.informer = inf
 }
 
 // AddHandler registers a new event handler and starts the informer if needed.
+// Non-blocking - sync completion is signaled via eventCh.
 func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.ResourceEventHandler) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// If informer was fully stopped, reset context before re-creating it.
 	if w.cancel == nil {
-		// recreate context
 		w.resetContext(ctx)
 	}
 
@@ -108,24 +120,36 @@ func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.Resour
 	}
 	w.handlers[id] = reg
 
-	// Start informer if first handler
 	if len(w.handlers) == 1 {
 		go w.run()
-
-		if !cache.WaitForCacheSync(w.done, w.informer.HasSynced) {
-			w.log.Error(fmt.Errorf("cache sync failed"), "lazy informer sync failure", "gvr", w.gvr)
-			w.cancel()
-			w.cancel = nil
-			w.informer = nil
-			w.handlers = make(map[string]cache.ResourceEventHandlerRegistration)
-			return fmt.Errorf("failed to sync informer for %s", w.gvr)
-		}
 	}
 	return nil
 }
 
 func (w *LazyInformer) run() {
-	w.informer.Run(w.done)
+	w.mu.Lock()
+	if w.informer == nil {
+		w.mu.Unlock()
+		return
+	}
+	informer, done := w.informer, w.done
+	w.mu.Unlock()
+
+	go informer.Run(done)
+
+	if !cache.WaitForCacheSync(done, informer.HasSynced) {
+		w.log.V(1).Info("cache sync failed or cancelled", "gvr", w.gvr)
+		return
+	}
+
+	w.eventCh <- watchtracker.Event{GVR: w.gvr, Type: watchtracker.EventTypeSynced}
+}
+
+// HasSynced returns true if the informer cache has synced.
+func (w *LazyInformer) HasSynced() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.informer != nil && w.informer.HasSynced()
 }
 
 // RemoveHandler unregisters a handler. Returns true if informer was stopped.

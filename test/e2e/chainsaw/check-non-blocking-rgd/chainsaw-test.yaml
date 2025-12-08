@@ -1,0 +1,106 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-non-blocking-rgd
+spec:
+  description: |
+    Tests that an unhealthy ResourceGraphDefinition (missing RBAC permissions)
+    does not block other healthy ResourceGraphDefinitions from becoming Active.
+    This validates the fix for issue #886.
+
+    Test sequence:
+    1. Create RGD One (healthy - ConfigMaps)
+    2. Create RGD Two (unhealthy - Deployments, NO permission)
+    3. Wait and verify RGD Two stays stuck in Initializing
+    4. Create RGD Three (healthy - ConfigMaps) AFTER the unhealthy one
+    5. Verify: RGD One & Three -> Active, RGD Two -> Initializing
+    6. Verify: instances of RGD One & Three work correctly
+    7. Verify: instance of RGD Two is NOT reconciled
+  steps:
+  - name: setup-rgds
+    try:
+    # Apply ClusterRole for healthy RGDs only
+    - apply:
+        file: cluster-role.yaml
+      description: Apply ClusterRole for healthy RGDs only
+    # Apply RGD One (healthy - uses ConfigMaps)
+    - apply:
+        file: rgd-one.yaml
+      description: Apply RGD One (healthy, uses ConfigMaps)
+    # Apply RGD Two (unhealthy - uses Deployments, NO permission)
+    - apply:
+        file: rgd-two.yaml
+      description: Apply RGD Two (unhealthy, uses Deployments - no RBAC)
+    # Verify RGD Two is stuck in Initializing state
+    - assert:
+        file: rgd-two-assert.yaml
+      description: Verify RGD Two is in Initializing state
+    # Wait 10 seconds to ensure RGD Two stays stuck
+    - sleep:
+        duration: 10s
+      description: Wait to ensure RGD Two remains stuck
+    # Verify RGD Two is STILL stuck after 10 seconds
+    - assert:
+        file: rgd-two-assert.yaml
+      description: Verify RGD Two is still Initializing after 10s
+    # Apply RGD Three (healthy - uses ConfigMaps) AFTER the unhealthy one
+    - apply:
+        file: rgd-three.yaml
+      description: Apply RGD Three (healthy, created after unhealthy)
+    # Verify RGD One is Active
+    - assert:
+        file: rgd-one-assert.yaml
+      description: Verify RGD One reaches Active state
+    # Verify RGD Two is still Initializing
+    - assert:
+        file: rgd-two-assert.yaml
+      description: Verify RGD Two stays in Initializing state
+    # Verify RGD Three is Active (not blocked by RGD Two)
+    - assert:
+        file: rgd-three-assert.yaml
+      description: Verify RGD Three reaches Active state
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: verify-healthy-rgds-work
+    try:
+    # Create instance of RGD One
+    - apply:
+        file: instance-one.yaml
+      description: Create instance of RGD One
+    - assert:
+        file: instance-one-assert.yaml
+      description: Verify RGD One instance creates ConfigMap
+    # Create instance of RGD Three
+    - apply:
+        file: instance-three.yaml
+      description: Create instance of RGD Three
+    - assert:
+        file: instance-three-assert.yaml
+      description: Verify RGD Three instance creates ConfigMap
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+  - name: verify-unhealthy-rgd-instance-not-reconciled
+    try:
+    # Create instance of RGD Two (unhealthy)
+    - apply:
+        file: instance-two.yaml
+      description: Create instance of RGD Two (unhealthy)
+    # Wait a bit for any potential reconciliation
+    - sleep:
+        duration: 5s
+      description: Wait to see if instance gets reconciled
+    # Verify no Deployment was created (instance not reconciled)
+    - error:
+        file: instance-two-error.yaml
+      description: Verify RGD Two instance did NOT create a Deployment
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

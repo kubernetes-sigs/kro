@@ -20,53 +20,75 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/watchtracker"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-// cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
-// microcontroller and cleaning up the CRD if enabled. It executes cleanup operations in order:
-// 1. Shuts down the microcontroller
-// 2. Deletes the associated CRD (if CRD deletion is enabled)
-func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
+// cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition.
+// Returns true if cleanup is complete and finalizer can be removed.
+// Returns false if still waiting for microcontroller to stop.
+func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (bool, error) {
+	log := ctrl.LoggerFrom(ctx)
+	log.V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
-	// shutdown microcontroller
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
-	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
-		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
+	watchState, found := r.dynamicController.GetWatchState(gvr)
+
+	// Not found means never registered or already stopped - proceed with cleanup
+	if !found {
+		log.V(1).Info("watch state not found, proceeding with CRD cleanup", "gvr", gvr)
+		return r.cleanupCRD(ctx, rgd)
 	}
 
-	// cleanup CRD
-	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
-	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
-		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
+	// Stopped means deregistration completed - proceed with cleanup
+	if watchState.Status == watchtracker.StatusStopped {
+		log.V(1).Info("microcontroller stopped, proceeding with CRD cleanup", "gvr", gvr)
+		return r.cleanupCRD(ctx, rgd)
 	}
 
-	return nil
+	// Still active - trigger deregistration and wait
+	log.V(1).Info("microcontroller still active, triggering deregistration", "gvr", gvr, "watchStatus", watchState.Status)
+	r.dynamicController.Deregister(ctx, gvr)
+
+	if rgd.Status.State != v1alpha1.ResourceGraphDefinitionStateDeactivating {
+		r.setDeactivatingState(ctx, rgd)
+	}
+	return false, nil
 }
 
-// shutdownResourceGraphDefinitionMicroController stops the dynamic controller associated with the given GVR.
-// This ensures no new reconciliations occur for this resource type.
-func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicroController(ctx context.Context, gvr *schema.GroupVersionResource) error {
-	if err := r.dynamicController.Deregister(ctx, *gvr); err != nil {
-		return fmt.Errorf("error stopping service: %w", err)
+func (r *ResourceGraphDefinitionReconciler) cleanupCRD(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (bool, error) {
+	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
+		return false, fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}
-	return nil
+	return true, nil
+}
+
+func (r *ResourceGraphDefinitionReconciler) setDeactivatingState(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) {
+	rgd.Status.State = v1alpha1.ResourceGraphDefinitionStateDeactivating
+	if err := r.Status().Update(ctx, rgd); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to set deactivating state")
+	}
 }
 
 // cleanupResourceGraphDefinitionCRD deletes the CRD with the given name if CRD deletion is enabled.
 // If CRD deletion is disabled, it logs the skip and returns nil.
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	if !r.allowCRDDeletion {
-		ctrl.LoggerFrom(ctx).Info("skipping CRD deletion (disabled)", "crd", crdName)
+		log.Info("skipping CRD deletion (disabled)", "crd", crdName)
 		return nil
 	}
 
-	if err := r.crdManager.Delete(ctx, crdName); err != nil {
+	log.Info("Deleting CRD", "name", crdName)
+	err := r.crdClient.Delete(ctx, crdName, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("error deleting CRD: %w", err)
 	}
 	return nil

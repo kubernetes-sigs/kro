@@ -14,4 +14,8 @@ mkdir -p ./bin
 curl -Lo ./bin/kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64
 chmod +x ./bin/kind
 
+# Helm based end to end tests, with helm defaults
 make test-e2e-kind KIND=./bin/kind
+
+# Raw manifests based end to end tests, with minimal installation and "aggregated" mode
+make test-e2e-kind-core-install-manifests KIND=./bin/kind

@@ -4,7 +4,7 @@ sidebar_position: 304
 
 # Valkey cluster
 
-```yaml title="valkey-cachecluster.yaml"
+```kro title="valkey-cachecluster.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

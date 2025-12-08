@@ -4,7 +4,7 @@ sidebar_position: 10
 
 # CoreDNS Deployment
 
-```yaml title="coredns-rg.yaml"
+```kro title="coredns-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

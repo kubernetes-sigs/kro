@@ -1,0 +1,162 @@
+/* Container and layout */
+.codeBlockContainer {
+  margin-bottom: var(--ifm-leading);
+  border-radius: 8px;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+:global([data-theme='dark']) .codeBlockContainer {
+  background: #161616;
+}
+
+.codeBlockTitle {
+  padding: 0.5rem var(--ifm-pre-padding);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #777;
+  background: #f0f0f0;
+  border-bottom: none;
+}
+
+:global([data-theme='dark']) .codeBlockTitle {
+  background: #1f1f1f;
+  color: #777;
+}
+
+.codeBlockContent {
+  position: relative;
+}
+
+.copyButton {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  z-index: 1;
+}
+
+.codeBlockContent:hover .copyButton {
+  opacity: 0.6;
+}
+
+.copyButton:hover {
+  opacity: 1 !important;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+:global([data-theme='dark']) .copyButton:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.copyIcon {
+  width: 14px;
+  height: 14px;
+  fill: #999;
+  transition: fill 0.15s ease;
+}
+
+.copyButton:hover .copyIcon {
+  fill: #666;
+}
+
+:global([data-theme='dark']) .copyIcon {
+  fill: #666;
+}
+
+:global([data-theme='dark']) .copyButton:hover .copyIcon {
+  fill: #999;
+}
+
+.kroCodeBlock {
+  margin: 0;
+  padding: var(--ifm-pre-padding);
+  overflow-x: auto;
+  font-size: var(--ifm-code-font-size);
+  line-height: var(--ifm-pre-line-height);
+  background-color: transparent;
+}
+
+/* YAML keys */
+.yamlKey {
+  color: #6b7280 !important;
+}
+
+:global([data-theme='dark']) .yamlKey {
+  color: #a8a29e !important;
+}
+
+/* kro structural keywords: id, template, readyWhen, includeWhen, externalRef */
+.kroKeyword {
+  color: #475569 !important;
+}
+
+:global([data-theme='dark']) .kroKeyword {
+  color: #d6d3d1 !important;
+}
+
+/* CEL expressions: ${...} */
+.celExpression {
+  color: #5b7fc9 !important;
+}
+
+:global([data-theme='dark']) .celExpression {
+  color: #93c5fd !important;
+}
+
+/* Simple Schema types: string, integer, boolean, etc. - Warm amber/yellow */
+.schemaType {
+  color: #be7b8a !important;
+}
+
+:global([data-theme='dark']) .schemaType {
+  color: #e0c080 !important;
+}
+
+/* Simple Schema pipe operator: | and - markers - Subtle */
+.schemaPipe {
+  color: #9ca3af !important;
+}
+
+:global([data-theme='dark']) .schemaPipe {
+  color: #78716c !important;
+}
+
+/* Simple Schema keywords: default, required, optional - Soft teal */
+.schemaKeyword {
+  color: #6b8cae !important;
+}
+
+:global([data-theme='dark']) .schemaKeyword {
+  color: #94a3b8 !important;
+}
+
+/* Simple Schema values: "nginx", 3, true - Soft blue */
+.schemaValue {
+  color: #5b7fc9 !important;
+}
+
+:global([data-theme='dark']) .schemaValue {
+  color: #c4b5dc !important;
+}
+
+/* Comments - Muted warm gray */
+.comment {
+  color: #9ca3af !important;
+}
+
+:global([data-theme='dark']) .comment {
+  color: #6b6b6b !important;
+}

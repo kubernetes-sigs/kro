@@ -18,7 +18,7 @@ import TabItem from '@theme/TabItem';
 
 The parent RGD uses instances of other RGDs as resources:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -65,7 +65,7 @@ spec:
 
 The Database RGD creates a StatefulSet and exposes connection info:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -137,7 +137,7 @@ spec:
 
 The WebApplication RGD creates a Deployment, Service, and Ingress:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

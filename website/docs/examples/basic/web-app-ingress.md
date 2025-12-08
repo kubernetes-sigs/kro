@@ -4,7 +4,7 @@ sidebar_position: 102
 
 # Web Application w/ Ingress
 
-```yaml title="webapp-ingress.yaml"
+```kro title="webapp-ingress.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

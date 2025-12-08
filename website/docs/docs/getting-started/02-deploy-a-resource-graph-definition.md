@@ -36,7 +36,7 @@ Before you begin, make sure you have the following:
 Let's create an RGD that combines a `Deployment`, a `Service` and
 `Ingress`. Save this as `resourcegraphdefinition.yaml`:
 
-```yaml title="resourcegraphdefinition.yaml"
+```kro title="resourcegraphdefinition.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

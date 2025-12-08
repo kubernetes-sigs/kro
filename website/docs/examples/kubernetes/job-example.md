@@ -6,7 +6,7 @@ sidebar_position: 708
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```yaml title="rgd.yaml"
+  ```kro title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

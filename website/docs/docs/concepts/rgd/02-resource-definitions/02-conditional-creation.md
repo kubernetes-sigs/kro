@@ -12,7 +12,7 @@ kro provides the `includeWhen` field to make resources optional. When you add `i
 
 Here's a simple example where an Ingress resource is only created if the user enables it in their instance spec:
 
-```yaml
+```kro
 resources:
   - id: ingress
     includeWhen:
@@ -27,7 +27,7 @@ resources:
 
 When a user creates an instance:
 
-```yaml
+```kro
 apiVersion: example.com/v1
 kind: Application
 metadata:
@@ -52,7 +52,7 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 
 Currently, `includeWhen` expressions can only reference `schema.spec` fields:
 
-```yaml
+```kro
 # ✓ Valid - references schema.spec and returns boolean
 includeWhen:
   - ${schema.spec.ingress.enabled}
@@ -60,7 +60,7 @@ includeWhen:
   - ${schema.spec.replicas > 3}
 ```
 
-```yaml
+```kro
 # ✗ Invalid - must return boolean
 includeWhen:
   - ${schema.spec.appName}  # returns string, not boolean
@@ -90,7 +90,7 @@ This ensures that the resource graph remains consistent and prevents resources f
 
 All conditions in `includeWhen` must be true (logical AND):
 
-```yaml
+```kro
 resources:
   - id: certificate
     includeWhen:
@@ -108,7 +108,7 @@ The certificate is created **only if**:
 
 For OR logic, combine in a single expression:
 
-```yaml
+```kro
 includeWhen:
   - ${schema.spec.env == "staging" || schema.spec.env == "production"}
 ```

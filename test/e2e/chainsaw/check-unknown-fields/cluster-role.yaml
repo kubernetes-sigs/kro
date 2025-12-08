@@ -19,6 +19,7 @@ rules:
     - "watch"
     - "update"
     - "patch"
+    - "delete"
   - apiGroups:
     - ""
     resources:

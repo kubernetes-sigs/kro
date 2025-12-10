@@ -7,6 +7,10 @@ fullnameOverride: ""
 additionalLabels: {}
   # app: kro
 
+metadata:
+  includeHelmChart: true
+  includeManagedBy: true
+
 image:
   # The location of the container image repository
   repository: registry.k8s.io/kro/kro

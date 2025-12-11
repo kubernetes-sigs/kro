@@ -112,6 +112,9 @@ config:
       secretName: ""
       # Key in the secret containing the kubeconfig data
       secretKey: "kubeconfig"
+    # API server URL for RGD resources (alternative to kubeconfig)
+    # If set, uses in-cluster credentials with this server (CA reset to system roots)
+    rgdServer: ""
     # Kubeconfig for CRDs and CR instances (workload cluster)
     # If not specified, uses in-cluster config
     workloadKubeconfig:
@@ -119,6 +122,9 @@ config:
       secretName: ""
       # Key in the secret containing the kubeconfig data
       secretKey: "kubeconfig"
+    # API server URL for CRDs and CR instances (alternative to kubeconfig)
+    # If set, uses in-cluster credentials with this server (CA reset to system roots)
+    workloadServer: ""
   # The maximum number of queries per second to allow
   clientQps: 100
   # The number of requests that can be stored for processing before the server starts enforcing the QPS limit

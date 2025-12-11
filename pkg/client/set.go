@@ -85,14 +85,38 @@ func BuildRestConfig(kubeconfigPath string) (*rest.Config, error) {
 	return ctrlrtconfig.GetConfig()
 }
 
+// BuildRestConfigWithServer builds a REST config using in-cluster credentials
+// but targeting a different API server. The CA and server name from in-cluster
+// config are cleared, using system CA roots instead.
+func BuildRestConfigWithServer(serverURL string) (*rest.Config, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+	}
+	// Override server URL
+	cfg.Host = serverURL
+	// Clear CA data to use system roots
+	cfg.CAData = nil
+	cfg.CAFile = ""
+	cfg.TLSClientConfig.CAData = nil
+	cfg.TLSClientConfig.CAFile = ""
+	// Clear server name override
+	cfg.TLSClientConfig.ServerName = ""
+	return cfg, nil
+}
+
 // Config holds configuration for client creation
 type Config struct {
 	// RestConfig is an optional pre-built REST config. If provided, it takes precedence
-	// over KubeconfigPath.
+	// over KubeconfigPath and ServerURL.
 	RestConfig *rest.Config
 	// KubeconfigPath is the path to a kubeconfig file. If empty and RestConfig is nil,
-	// in-cluster config will be used.
-	KubeconfigPath  string
+	// ServerURL or in-cluster config will be used.
+	KubeconfigPath string
+	// ServerURL is an optional API server URL. If set (and KubeconfigPath is empty),
+	// in-cluster credentials are used with this server URL, and CA is reset to use
+	// system roots.
+	ServerURL       string
 	ImpersonateUser string
 	QPS             float32
 	Burst           int
@@ -104,7 +128,14 @@ func NewSet(cfg Config) (*Set, error) {
 	config := cfg.RestConfig
 
 	if config == nil {
-		config, err = BuildRestConfig(cfg.KubeconfigPath)
+		switch {
+		case cfg.KubeconfigPath != "":
+			config, err = BuildRestConfig(cfg.KubeconfigPath)
+		case cfg.ServerURL != "":
+			config, err = BuildRestConfigWithServer(cfg.ServerURL)
+		default:
+			config, err = BuildRestConfig("")
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to build REST config: %w", err)
 		}

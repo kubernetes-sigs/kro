@@ -100,9 +100,17 @@ spec:
             - --rgd-kubeconfig
             - /etc/kro/rgd-kubeconfig/{{ .Values.config.multiCluster.rgdKubeconfig.secretKey }}
             {{- end }}
+            {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.rgdServer }}
+            - --rgd-server
+            - {{ .Values.config.multiCluster.rgdServer | quote }}
+            {{- end }}
             {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadKubeconfig.secretName }}
             - --workload-kubeconfig
             - /etc/kro/workload-kubeconfig/{{ .Values.config.multiCluster.workloadKubeconfig.secretKey }}
+            {{- end }}
+            {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadServer }}
+            - --workload-server
+            - {{ .Values.config.multiCluster.workloadServer | quote }}
             {{- end }}
           {{- if .Values.config.multiCluster.enabled }}
           volumeMounts:

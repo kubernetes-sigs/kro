@@ -74,7 +74,9 @@ func main() {
 		burst int
 		// kubeconfig paths for multi-cluster support
 		rgdKubeconfig      string
+		rgdServer          string
 		workloadKubeconfig string
+		workloadServer     string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -121,8 +123,12 @@ func main() {
 	// kubeconfig paths for multi-cluster support
 	flag.StringVar(&rgdKubeconfig, "rgd-kubeconfig", "",
 		"Path to kubeconfig for RGD resources. Uses in-cluster config if not specified.")
+	flag.StringVar(&rgdServer, "rgd-server", "",
+		"API server URL for RGD resources. If set, uses in-cluster credentials with this server (CA reset to system roots).")
 	flag.StringVar(&workloadKubeconfig, "workload-kubeconfig", "",
 		"Path to kubeconfig for CRDs and CR instances. Uses in-cluster config if not specified.")
+	flag.StringVar(&workloadServer, "workload-server", "",
+		"API server URL for CRDs and CR instances. If set, uses in-cluster credentials with this server (CA reset to system roots).")
 
 	opts := zap.Options{
 		Development: true,
@@ -175,11 +181,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// RGD cluster: use separate cluster if rgdKubeconfig is specified, otherwise reuse manager
+	// RGD cluster: use separate cluster if rgdKubeconfig or rgdServer is specified, otherwise reuse manager
 	var rgdCluster cluster.Cluster
-	if rgdKubeconfig != "" {
+	if rgdKubeconfig != "" || rgdServer != "" {
 		rgdSet, err := kroclient.NewSet(kroclient.Config{
 			KubeconfigPath: rgdKubeconfig,
+			ServerURL:      rgdServer,
 			QPS:            float32(qps),
 			Burst:          burst,
 		})
@@ -203,12 +210,13 @@ func main() {
 		rgdCluster = mgr
 	}
 
-	// Workload cluster and client set: use separate if workloadKubeconfig is specified
+	// Workload cluster and client set: use separate if workloadKubeconfig or workloadServer is specified
 	var workloadCluster cluster.Cluster
 	var workloadSet kroclient.SetInterface
-	if workloadKubeconfig != "" {
+	if workloadKubeconfig != "" || workloadServer != "" {
 		workloadSet, err = kroclient.NewSet(kroclient.Config{
 			KubeconfigPath: workloadKubeconfig,
+			ServerURL:      workloadServer,
 			QPS:            float32(qps),
 			Burst:          burst,
 		})

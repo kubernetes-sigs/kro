@@ -86,22 +86,27 @@ func BuildRestConfig(kubeconfigPath string) (*rest.Config, error) {
 }
 
 // BuildRestConfigWithServer builds a REST config using in-cluster credentials
-// but targeting a different API server. The CA and server name from in-cluster
-// config are cleared, using system CA roots instead.
-func BuildRestConfigWithServer(serverURL string) (*rest.Config, error) {
+// but targeting a different API server. If caFile is empty, the CA from in-cluster
+// config is cleared and system CA roots are used instead.
+func BuildRestConfigWithServer(serverURL, caFile string) (*rest.Config, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
 	}
 	// Override server URL
 	cfg.Host = serverURL
-	// Clear CA data to use system roots
-	cfg.CAData = nil
-	cfg.CAFile = ""
-	cfg.TLSClientConfig.CAData = nil
-	cfg.TLSClientConfig.CAFile = ""
 	// Clear server name override
 	cfg.TLSClientConfig.ServerName = ""
+	// Set CA file or clear to use system roots
+	cfg.CAData = nil
+	cfg.TLSClientConfig.CAData = nil
+	if caFile != "" {
+		cfg.CAFile = caFile
+		cfg.TLSClientConfig.CAFile = caFile
+	} else {
+		cfg.CAFile = ""
+		cfg.TLSClientConfig.CAFile = ""
+	}
 	return cfg, nil
 }
 
@@ -114,9 +119,11 @@ type Config struct {
 	// ServerURL or in-cluster config will be used.
 	KubeconfigPath string
 	// ServerURL is an optional API server URL. If set (and KubeconfigPath is empty),
-	// in-cluster credentials are used with this server URL, and CA is reset to use
-	// system roots.
-	ServerURL       string
+	// in-cluster credentials are used with this server URL.
+	ServerURL string
+	// CAFile is an optional path to a CA certificate file. Used with ServerURL.
+	// If empty when ServerURL is set, system CA roots are used.
+	CAFile          string
 	ImpersonateUser string
 	QPS             float32
 	Burst           int
@@ -132,7 +139,7 @@ func NewSet(cfg Config) (*Set, error) {
 		case cfg.KubeconfigPath != "":
 			config, err = BuildRestConfig(cfg.KubeconfigPath)
 		case cfg.ServerURL != "":
-			config, err = BuildRestConfigWithServer(cfg.ServerURL)
+			config, err = BuildRestConfigWithServer(cfg.ServerURL, cfg.CAFile)
 		default:
 			config, err = BuildRestConfig("")
 		}

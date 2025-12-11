@@ -75,8 +75,10 @@ func main() {
 		// kubeconfig paths for multi-cluster support
 		rgdKubeconfig      string
 		rgdServer          string
+		rgdCA              string
 		workloadKubeconfig string
 		workloadServer     string
+		workloadCA         string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -124,11 +126,15 @@ func main() {
 	flag.StringVar(&rgdKubeconfig, "rgd-kubeconfig", "",
 		"Path to kubeconfig for RGD resources. Uses in-cluster config if not specified.")
 	flag.StringVar(&rgdServer, "rgd-server", "",
-		"API server URL for RGD resources. If set, uses in-cluster credentials with this server (CA reset to system roots).")
+		"API server URL for RGD resources. If set, uses in-cluster credentials with this server.")
+	flag.StringVar(&rgdCA, "rgd-ca", "",
+		"Path to CA certificate file for RGD server. If empty with --rgd-server, uses system CA roots.")
 	flag.StringVar(&workloadKubeconfig, "workload-kubeconfig", "",
 		"Path to kubeconfig for CRDs and CR instances. Uses in-cluster config if not specified.")
 	flag.StringVar(&workloadServer, "workload-server", "",
-		"API server URL for CRDs and CR instances. If set, uses in-cluster credentials with this server (CA reset to system roots).")
+		"API server URL for CRDs and CR instances. If set, uses in-cluster credentials with this server.")
+	flag.StringVar(&workloadCA, "workload-ca", "",
+		"Path to CA certificate file for workload server. If empty with --workload-server, uses system CA roots.")
 
 	opts := zap.Options{
 		Development: true,
@@ -187,6 +193,7 @@ func main() {
 		rgdSet, err := kroclient.NewSet(kroclient.Config{
 			KubeconfigPath: rgdKubeconfig,
 			ServerURL:      rgdServer,
+			CAFile:         rgdCA,
 			QPS:            float32(qps),
 			Burst:          burst,
 		})
@@ -217,6 +224,7 @@ func main() {
 		workloadSet, err = kroclient.NewSet(kroclient.Config{
 			KubeconfigPath: workloadKubeconfig,
 			ServerURL:      workloadServer,
+			CAFile:         workloadCA,
 			QPS:            float32(qps),
 			Burst:          burst,
 		})

@@ -104,6 +104,10 @@ spec:
             - --rgd-server
             - {{ .Values.config.multiCluster.rgdServer | quote }}
             {{- end }}
+            {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.rgdCA.secretName }}
+            - --rgd-ca
+            - /etc/kro/rgd-ca/{{ .Values.config.multiCluster.rgdCA.secretKey }}
+            {{- end }}
             {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadKubeconfig.secretName }}
             - --workload-kubeconfig
             - /etc/kro/workload-kubeconfig/{{ .Values.config.multiCluster.workloadKubeconfig.secretKey }}
@@ -112,6 +116,10 @@ spec:
             - --workload-server
             - {{ .Values.config.multiCluster.workloadServer | quote }}
             {{- end }}
+            {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadCA.secretName }}
+            - --workload-ca
+            - /etc/kro/workload-ca/{{ .Values.config.multiCluster.workloadCA.secretKey }}
+            {{- end }}
           {{- if .Values.config.multiCluster.enabled }}
           volumeMounts:
             {{- if .Values.config.multiCluster.rgdKubeconfig.secretName }}
@@ -119,9 +127,19 @@ spec:
               mountPath: /etc/kro/rgd-kubeconfig
               readOnly: true
             {{- end }}
+            {{- if .Values.config.multiCluster.rgdCA.secretName }}
+            - name: rgd-ca
+              mountPath: /etc/kro/rgd-ca
+              readOnly: true
+            {{- end }}
             {{- if .Values.config.multiCluster.workloadKubeconfig.secretName }}
             - name: workload-kubeconfig
               mountPath: /etc/kro/workload-kubeconfig
+              readOnly: true
+            {{- end }}
+            {{- if .Values.config.multiCluster.workloadCA.secretName }}
+            - name: workload-ca
+              mountPath: /etc/kro/workload-ca
               readOnly: true
             {{- end }}
             {{- with .Values.deployment.extraVolumeMounts }}
@@ -162,10 +180,20 @@ spec:
           secret:
             secretName: {{ .Values.config.multiCluster.rgdKubeconfig.secretName }}
         {{- end }}
+        {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.rgdCA.secretName }}
+        - name: rgd-ca
+          secret:
+            secretName: {{ .Values.config.multiCluster.rgdCA.secretName }}
+        {{- end }}
         {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadKubeconfig.secretName }}
         - name: workload-kubeconfig
           secret:
             secretName: {{ .Values.config.multiCluster.workloadKubeconfig.secretName }}
+        {{- end }}
+        {{- if and .Values.config.multiCluster.enabled .Values.config.multiCluster.workloadCA.secretName }}
+        - name: workload-ca
+          secret:
+            secretName: {{ .Values.config.multiCluster.workloadCA.secretName }}
         {{- end }}
         {{- with .Values.deployment.extraVolumes }}
         {{- toYaml . | nindent 8 }}

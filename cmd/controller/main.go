@@ -25,6 +25,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -71,6 +72,9 @@ func main() {
 		// var dynamicControllerDefaultResyncPeriod int
 		qps   float64
 		burst int
+		// kubeconfig paths for multi-cluster support
+		rgdKubeconfig      string
+		workloadKubeconfig string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -114,6 +118,12 @@ func main() {
 	flag.IntVar(&burst, "client-burst", 150,
 		"The number of requests that can be stored for processing before the server starts enforcing the QPS limit")
 
+	// kubeconfig paths for multi-cluster support
+	flag.StringVar(&rgdKubeconfig, "rgd-kubeconfig", "",
+		"Path to kubeconfig for RGD resources. Uses in-cluster config if not specified.")
+	flag.StringVar(&workloadKubeconfig, "workload-kubeconfig", "",
+		"Path to kubeconfig for CRDs and CR instances. Uses in-cluster config if not specified.")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -124,6 +134,7 @@ func main() {
 	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
 
+	// Manager uses in-cluster config for leader election and health probes
 	set, err := kroclient.NewSet(kroclient.Config{
 		QPS:   float32(qps),
 		Burst: burst,
@@ -164,6 +175,65 @@ func main() {
 		os.Exit(1)
 	}
 
+	// RGD cluster: use separate cluster if rgdKubeconfig is specified, otherwise reuse manager
+	var rgdCluster cluster.Cluster
+	if rgdKubeconfig != "" {
+		rgdSet, err := kroclient.NewSet(kroclient.Config{
+			KubeconfigPath: rgdKubeconfig,
+			QPS:            float32(qps),
+			Burst:          burst,
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to create RGD client set")
+			os.Exit(1)
+		}
+		rgdCluster, err = cluster.New(rgdSet.RESTConfig(), func(o *cluster.Options) {
+			o.Scheme = scheme
+			o.HTTPClient = rgdSet.HTTPClient()
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to create RGD cluster")
+			os.Exit(1)
+		}
+		if err := mgr.Add(rgdCluster); err != nil {
+			setupLog.Error(err, "unable to add RGD cluster to manager")
+			os.Exit(1)
+		}
+	} else {
+		rgdCluster = mgr
+	}
+
+	// Workload cluster and client set: use separate if workloadKubeconfig is specified
+	var workloadCluster cluster.Cluster
+	var workloadSet kroclient.SetInterface
+	if workloadKubeconfig != "" {
+		workloadSet, err = kroclient.NewSet(kroclient.Config{
+			KubeconfigPath: workloadKubeconfig,
+			QPS:            float32(qps),
+			Burst:          burst,
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to create workload client set")
+			os.Exit(1)
+		}
+		workloadCluster, err = cluster.New(workloadSet.RESTConfig(), func(o *cluster.Options) {
+			o.Scheme = scheme
+			o.HTTPClient = workloadSet.HTTPClient()
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to create workload cluster")
+			os.Exit(1)
+		}
+		if err := mgr.Add(workloadCluster); err != nil {
+			setupLog.Error(err, "unable to add workload cluster to manager")
+			os.Exit(1)
+		}
+	} else {
+		workloadCluster = mgr
+		workloadSet = set
+	}
+
+	// Dynamic controller uses workload client set for watching CR instances
 	dc := dynamiccontroller.NewDynamicController(rootLogger, dynamiccontroller.Config{
 		Workers:         dynamicControllerConcurrentReconciles,
 		ResyncPeriod:    time.Duration(resyncPeriod) * time.Second,
@@ -172,16 +242,19 @@ func main() {
 		MaxRetryDelay:   maxRetryDelay,
 		RateLimit:       rateLimit,
 		BurstLimit:      burstLimit,
-	}, set.Metadata(), set.RESTMapper())
+	}, workloadSet.Metadata(), workloadSet.RESTMapper())
 
-	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(restConfig, set.HTTPClient())
+	// Graph builder uses workload client set to discover API resources in workload cluster
+	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(workloadSet.RESTConfig(), workloadSet.HTTPClient())
 	if err != nil {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")
 		os.Exit(1)
 	}
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
-		set,
+		workloadSet,
+		rgdCluster,
+		workloadCluster,
 		allowCRDDeletion,
 		dc,
 		resourceGraphDefinitionGraphBuilder,

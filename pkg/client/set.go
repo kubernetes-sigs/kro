@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	ctrlrtconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/release-utils/version"
@@ -38,6 +39,9 @@ type SetInterface interface {
 
 	// Dynamic returns the dynamic client
 	Dynamic() dynamic.Interface
+
+	// Metadata returns the metadata client
+	Metadata() metadata.Interface
 
 	// APIExtensionsV1 returns the API extensions client
 	APIExtensionsV1() apiextensionsv1.ApiextensionsV1Interface
@@ -69,9 +73,26 @@ type Set struct {
 
 var _ SetInterface = (*Set)(nil)
 
+// BuildRestConfig builds a REST config from a kubeconfig path.
+// If kubeconfigPath is empty, it falls back to in-cluster config or the default
+// kubeconfig loading rules (KUBECONFIG env var, ~/.kube/config).
+func BuildRestConfig(kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath != "" {
+		return clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	}
+	// Use controller-runtime's config loader which handles in-cluster config
+	// and KUBECONFIG env var properly
+	return ctrlrtconfig.GetConfig()
+}
+
 // Config holds configuration for client creation
 type Config struct {
-	RestConfig      *rest.Config
+	// RestConfig is an optional pre-built REST config. If provided, it takes precedence
+	// over KubeconfigPath.
+	RestConfig *rest.Config
+	// KubeconfigPath is the path to a kubeconfig file. If empty and RestConfig is nil,
+	// in-cluster config will be used.
+	KubeconfigPath  string
 	ImpersonateUser string
 	QPS             float32
 	Burst           int
@@ -83,9 +104,9 @@ func NewSet(cfg Config) (*Set, error) {
 	config := cfg.RestConfig
 
 	if config == nil {
-		config, err = ctrlrtconfig.GetConfig()
+		config, err = BuildRestConfig(cfg.KubeconfigPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to build REST config: %w", err)
 		}
 	}
 

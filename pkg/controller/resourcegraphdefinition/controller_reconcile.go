@@ -111,6 +111,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		"controllerKind", processedRGD.Instance.GetCRD().Spec.Names.Kind,
 	)
 
+	// Instance controller uses workload client set for managing CRs and child resources
 	return instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
@@ -120,8 +121,8 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		},
 		gvr,
 		processedRGD,
-		r.clientSet,
-		r.clientSet.RESTMapper(),
+		r.workloadClientSet,
+		r.workloadClientSet.RESTMapper(),
 		labeler,
 	)
 }

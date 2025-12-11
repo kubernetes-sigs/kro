@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 )
 
@@ -31,6 +32,7 @@ import (
 type FakeSet struct {
 	DynamicClient       dynamic.Interface
 	KubernetesClient    kubernetes.Interface
+	MetadataClient      metadata.Interface
 	ApiExtensionsClient apiextensionsv1.ApiextensionsV1Interface
 	Config              *rest.Config
 	restMapper          meta.RESTMapper
@@ -59,6 +61,11 @@ func (f *FakeSet) Kubernetes() kubernetes.Interface {
 // Dynamic returns the dynamic client
 func (f *FakeSet) Dynamic() dynamic.Interface {
 	return f.DynamicClient
+}
+
+// Metadata returns the metadata client
+func (f *FakeSet) Metadata() metadata.Interface {
+	return f.MetadataClient
 }
 
 // APIExtensionsV1 returns the API extensions client

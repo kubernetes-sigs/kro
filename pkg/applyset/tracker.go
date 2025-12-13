@@ -17,6 +17,7 @@ package applyset
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -63,14 +64,24 @@ type k8sObjectKey struct {
 	types.NamespacedName
 }
 
+// tracker manages a collection of resources to be applied.
 type tracker struct {
+	// mu guards all maps and sets in tracker.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
+	mu sync.Mutex
+
 	// objects is a list of objects we are applying.
+	// Protected by mu.
 	objects []ApplyableObject
 
 	// serverIDs is a map of object key to object.
+	// Protected by mu.
 	serverIDs map[k8sObjectKey]bool
 
 	// clientIDs is a map of object key to object.
+	// Protected by mu.
 	clientIDs map[string]bool
 }
 
@@ -82,6 +93,9 @@ func NewTracker() *tracker {
 }
 
 func (t *tracker) Add(obj ApplyableObject) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	gvk := obj.GroupVersionKind()
 
 	// Server side uniqueness check
@@ -120,5 +134,19 @@ func (t *tracker) Add(obj ApplyableObject) error {
 }
 
 func (t *tracker) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return len(t.objects)
+}
+
+// Objects returns a thread-safe snapshot of all tracked objects.
+// The returned slice is a copy, so callers can safely iterate or modify it
+// without worrying about concurrent changes to the underlying tracker.
+func (t *tracker) Objects() []ApplyableObject {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// Return a copy to prevent concurrent modification
+	result := make([]ApplyableObject, len(t.objects))
+	copy(result, t.objects)
+	return result
 }

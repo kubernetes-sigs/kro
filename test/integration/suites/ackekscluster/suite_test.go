@@ -92,15 +92,15 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
 				"clusterRole",
 				"clusterVPC",
+				"clusterAdminRole",
+				"clusterElasticIPAddress",
+				"clusterNodeRole",
 				"clusterInternetGateway",
 				"clusterRouteTable",
 				"clusterSubnetA",
 				"clusterSubnetB",
 				"cluster",
-				"clusterAdminRole",
-				"clusterElasticIPAddress",
 				"clusterNATGateway",
-				"clusterNodeRole",
 				"clusterNodeGroup",
 			}))
 
@@ -134,6 +134,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+		// 1. Verify Cluster Role
 		roleGVK := schema.GroupVersionKind{
 			Group:   "iam.services.k8s.aws",
 			Version: "v1alpha1",
@@ -179,7 +180,68 @@ var _ = Describe("EKSCluster", func() {
 		}
 		Expect(env.Client.Status().Update(ctx, vpc)).To(Succeed())
 
-		// 3. Verify Internet Gateway
+		// 3. Verify Admin Role
+		adminRole := &unstructured.Unstructured{}
+		adminRole.SetGroupVersionKind(roleGVK)
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "kro-cluster-pia-role",
+				Namespace: namespace,
+			}, adminRole)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		adminRole.Object["status"] = map[string]interface{}{
+			"ackResourceMetadata": map[string]interface{}{
+				"ownerAccountID": "123456789012",
+				"region":         "us-west-2",
+				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-pia-role",
+			},
+		}
+		Expect(env.Client.Status().Update(ctx, adminRole)).To(Succeed())
+
+		// 4. Verify Elastic IP
+		eipGVK := schema.GroupVersionKind{
+			Group:   "ec2.services.k8s.aws",
+			Version: "v1alpha1",
+			Kind:    "ElasticIPAddress",
+		}
+		eip := &unstructured.Unstructured{}
+		eip.SetGroupVersionKind(eipGVK)
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "kro-cluster-eip",
+				Namespace: namespace,
+			}, eip)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		eip.Object["status"] = map[string]interface{}{
+			"allocationID": "eipalloc-12345",
+		}
+		Expect(env.Client.Status().Update(ctx, eip)).To(Succeed())
+
+		// 5. Verify Node Role
+		nodeRole := &unstructured.Unstructured{}
+		nodeRole.SetGroupVersionKind(roleGVK)
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "kro-cluster-node-role",
+				Namespace: namespace,
+			}, nodeRole)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		nodeRole.Object["status"] = map[string]interface{}{
+			"ackResourceMetadata": map[string]interface{}{
+				"ownerAccountID": "123456789012",
+				"region":         "us-west-2",
+				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-node-role",
+			},
+		}
+		Expect(env.Client.Status().Update(ctx, nodeRole)).To(Succeed())
+
+		// 6. Verify Internet Gateway
 		igwGVK := schema.GroupVersionKind{
 			Group:   "ec2.services.k8s.aws",
 			Version: "v1alpha1",
@@ -204,7 +266,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 		Expect(env.Client.Status().Update(ctx, igw)).To(Succeed())
 
-		// 4. Verify Route Table
+		// 7. Verify Route Table
 		rtGVK := schema.GroupVersionKind{
 			Group:   "ec2.services.k8s.aws",
 			Version: "v1alpha1",
@@ -225,7 +287,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 		Expect(env.Client.Status().Update(ctx, rt)).To(Succeed())
 
-		// 5-6. Verify Subnets A and B
+		// 8-9. Verify Subnets A and B
 		subnetGVK := schema.GroupVersionKind{
 			Group:   "ec2.services.k8s.aws",
 			Version: "v1alpha1",
@@ -264,7 +326,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 		Expect(env.Client.Status().Update(ctx, subnetB)).To(Succeed())
 
-		// 7. Verify EKS Cluster
+		// 10. Verify EKS Cluster
 		clusterGVK := schema.GroupVersionKind{
 			Group:   "eks.services.k8s.aws",
 			Version: "v1alpha1",
@@ -289,48 +351,7 @@ var _ = Describe("EKSCluster", func() {
 		}
 		Expect(env.Client.Status().Update(ctx, cluster)).To(Succeed())
 
-		// 8. Verify Admin Role
-		adminRole := &unstructured.Unstructured{}
-		adminRole.SetGroupVersionKind(roleGVK)
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "kro-cluster-pia-role",
-				Namespace: namespace,
-			}, adminRole)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		adminRole.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
-				"ownerAccountID": "123456789012",
-				"region":         "us-west-2",
-				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-pia-role",
-			},
-		}
-		Expect(env.Client.Status().Update(ctx, adminRole)).To(Succeed())
-
-		// 9. Verify Elastic IP
-		eipGVK := schema.GroupVersionKind{
-			Group:   "ec2.services.k8s.aws",
-			Version: "v1alpha1",
-			Kind:    "ElasticIPAddress",
-		}
-		eip := &unstructured.Unstructured{}
-		eip.SetGroupVersionKind(eipGVK)
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "kro-cluster-eip",
-				Namespace: namespace,
-			}, eip)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		eip.Object["status"] = map[string]interface{}{
-			"allocationID": "eipalloc-12345",
-		}
-		Expect(env.Client.Status().Update(ctx, eip)).To(Succeed())
-
-		// 10. Verify NAT Gateway
+		// 11. Verify NAT Gateway
 		natGVK := schema.GroupVersionKind{
 			Group:   "ec2.services.k8s.aws",
 			Version: "v1alpha1",
@@ -350,26 +371,6 @@ var _ = Describe("EKSCluster", func() {
 			"natGatewayID": "nat-12345",
 		}
 		Expect(env.Client.Status().Update(ctx, nat)).To(Succeed())
-
-		// 11. Verify Node Role
-		nodeRole := &unstructured.Unstructured{}
-		nodeRole.SetGroupVersionKind(roleGVK)
-		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      "kro-cluster-node-role",
-				Namespace: namespace,
-			}, nodeRole)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		nodeRole.Object["status"] = map[string]interface{}{
-			"ackResourceMetadata": map[string]interface{}{
-				"ownerAccountID": "123456789012",
-				"region":         "us-west-2",
-				"arn":            "arn:aws:iam::123456789012:role/kro-cluster-node-role",
-			},
-		}
-		Expect(env.Client.Status().Update(ctx, nodeRole)).To(Succeed())
 
 		// 12. Verify Node Group
 		nodeGroupGVK := schema.GroupVersionKind{

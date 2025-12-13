@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -218,8 +219,16 @@ func Test_RuntimeWorkflow(t *testing.T) {
 		"service":    service,
 	}
 
-	// 2. Create runtime
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"configmap", "secret", "deployment", "service"})
+	// 2. Create runtime with DAG
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("configmap", 0)
+	_ = d.AddVertex("secret", 1)
+	_ = d.AddVertex("deployment", 2)
+	_ = d.AddVertex("service", 3)
+	_ = d.AddDependencies("deployment", []string{"configmap", "secret"})
+	_ = d.AddDependencies("service", []string{"deployment"})
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, d)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}
@@ -446,7 +455,12 @@ func Test_NewResourceGraphDefinitionRuntime(t *testing.T) {
 		"service":    service,
 	}
 
-	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, []string{"deployment", "service"})
+	d := dag.NewDirectedAcyclicGraph[string]()
+	_ = d.AddVertex("deployment", 0)
+	_ = d.AddVertex("service", 1)
+	_ = d.AddDependencies("service", []string{"deployment"})
+
+	rt, err := NewResourceGraphDefinitionRuntime(instance, resources, d)
 	if err != nil {
 		t.Fatalf("NewResourceGraphDefinitionRuntime() error = %v", err)
 	}

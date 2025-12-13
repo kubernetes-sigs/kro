@@ -140,6 +140,23 @@ func TestDefaultEnvironment(t *testing.T) {
 		})
 	}
 }
+
+// TestDefaultEnvironment_KubernetesLibraries verifies that the default
+// environment includes the Kubernetes CEL libraries we rely on, such as
+// the URL library used by expressions like:
+//   ${url(test.testList[0].uriTemplate).getHost()}
+
+func TestDefaultEnvironment_KubernetesLibraries(t *testing.T) {
+	env, err := DefaultEnvironment()
+	require.NoError(t, err, "failed to create CEL env")
+
+	// The expression should compile without an "undeclared reference to 'url'"
+	// error once the Kubernetes URL library is wired in.
+	expr := `url("https://example.com/foo").getHost()`
+	_, issues := env.Compile(expr)
+	require.NoError(t, issues.Err(), "expected URL expression to compile without errors")
+}
+
 func Test_CELEnvHasFunction(t *testing.T) {
 	env, err := DefaultEnvironment()
 	require.NoError(t, err, "failed to create CEL env")

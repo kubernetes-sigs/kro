@@ -44,6 +44,15 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
 
+HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds --namespace kro-system
+HELM_STATIC_MANIFEST_IMAGE_FLAGS ?= --set image.tag=${RELEASE_VERSION}
+
+ifeq ($(shell uname -s),Darwin)
+	SED_INPLACE_FLAGS ?= -i ''
+else
+	SED_INPLACE_FLAGS ?= -i
+endif
+
 HELM_DIR = ./helm
 WHAT ?= unit
 
@@ -90,6 +99,10 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
+	@echo "Copying CRD to website docs..."
+	@mkdir -p website/static/crds
+	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/static/crds/kro.run_resourcegraphdefinitions.yaml
+	@echo "CRD copied successfully"
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -224,16 +237,32 @@ publish-image: ko ## Publish the kro controller images
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
 
+.PHONY: inject-helm-version
+inject-helm-version:
+	sed $(SED_INPLACE_FLAGS) 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
+	sed $(SED_INPLACE_FLAGS) 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
+	sed $(SED_INPLACE_FLAGS) 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+
 .PHONY: package-helm
-package-helm: ## Package Helm chart
-	sed -i 's/tag: .*/tag: "$(RELEASE_VERSION)"/' helm/values.yaml
-	sed -i 's/version: .*/version: $(RELEASE_VERSION)/' helm/Chart.yaml
-	sed -i 's/appVersion: .*/appVersion: "$(RELEASE_VERSION)"/' helm/Chart.yaml
+package-helm: inject-helm-version ## Package Helm chart
 	${HELM} package helm
 
 .PHONY: publish-helm
 publish-helm: ## Helm publish
 	${HELM} push ./kro-${RELEASE_VERSION}.tgz oci://${HELM_IMAGE}
+
+.PHONY: render-static-manifests
+render-static-manifests: inject-helm-version
+	mkdir -p manifests/rendered
+	@command -v yq >/dev/null 2>&1 || { echo >&2 "yq is required but not installed. Please install yq v4+"; exit 1; }
+	@variants=$$(yq -r '.variants[].name' manifests/variants.yaml); \
+	for v in $$variants; do \
+		echo "Rendering variant: $$v"; \
+		tmpfile=$$(mktemp); \
+		yq -r ".variants[] | select(.name==\"$${v}\") | .values" manifests/variants.yaml > $$tmpfile; \
+		${HELM} template ${HELM_STATIC_MANIFESTS_FLAGS} ${HELM_STATIC_MANIFEST_IMAGE_FLAGS} -f $$tmpfile kro ./helm > manifests/rendered/$${v}.yaml; \
+		rm -f $$tmpfile; \
+	done
 
 .PHONY:
 release: build-image publish-image package-helm publish-helm
@@ -252,16 +281,28 @@ install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/con
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config
 	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f ./helm/crds
 
-.PHONY: deploy-kind
-deploy-kind: export KO_DOCKER_REPO=kind.local
-deploy-kind: ko
-	$(KIND) delete clusters ${KIND_CLUSTER_NAME} || true
+.PHONY: start-kind
+start-kind:
+	$(KIND) delete cluster --name ${KIND_CLUSTER_NAME} || true
 	$(KIND) create cluster --name ${KIND_CLUSTER_NAME}
-	$(KUBECTL) --context kind-$(KIND_CLUSTER_NAME) create namespace kro-system
+	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} create namespace kro-system
+
+.PHONY: deploy-kind-helm
+deploy-kind-helm: export KO_DOCKER_REPO=kind.local
+deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
 	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
+	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
+	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
+
+.PHONY: deploy-kind-%
+deploy-kind-%: export KO_DOCKER_REPO=kind.local
+deploy-kind-%: export HELM_STATIC_MANIFEST_IMAGE_FLAGS=--set image.pullPolicy=Never --set image.ko=true
+deploy-kind-%: export RELEASE_VERSION=v0.0.0-dev
+deploy-kind-%: ko start-kind render-static-manifests ## Apply the static manifests for the given variant
+	$(KO) apply -f manifests/rendered/kro-$*.yaml
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -282,6 +323,18 @@ cli:
 test-e2e: chainsaw ## Run e2e tests
 	$(CHAINSAW) test ./test/e2e/chainsaw
 
-.PHONY: test-e2e-kind
-test-e2e-kind: deploy-kind
+
+.PHONY: test-e2e-kind-%
+test-e2e-kind-%: deploy-kind-%
 	make test-e2e
+
+
+# Default deployment uses helm deployments
+
+.PHONY: deploy-kind
+deploy-kind: export KO_DOCKER_REPO=kind.local
+deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
+
+# Default end to end tests uses helm deployments
+.PHONY: test-e2e-kind
+test-e2e-kind: deploy-kind-helm

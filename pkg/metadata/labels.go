@@ -37,6 +37,9 @@ const (
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
+	ManagedByLabelKey = "app.kubernetes.io/managed-by"
+	ManagedByKROValue = "kro"
+
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
@@ -50,6 +53,9 @@ const (
 // IsKROOwned returns true if the resource is owned by KRO.
 func IsKROOwned(meta metav1.Object) bool {
 	v, ok := meta.GetLabels()[OwnedLabel]
+	if !ok {
+		return meta.GetLabels()[ManagedByLabelKey] == ManagedByKROValue
+	}
 	return ok && booleanFromString(v)
 }
 
@@ -80,16 +86,6 @@ func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMat
 	idMatch = existingOwnerID == desiredOwnerID
 
 	return kroOwned, nameMatch, idMatch
-}
-
-// SetKROOwned sets the OwnedLabel to true on the resource.
-func SetKROOwned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
-}
-
-// SetKROUnowned sets the OwnedLabel to false on the resource.
-func SetKROUnowned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
 }
 
 var (
@@ -165,11 +161,12 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 }
 
 // NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ControllerPodID labels on a resource.
+// KROVersion, and ManagedBy labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:      "true",
-		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
+		OwnedLabel:        "true",
+		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
+		ManagedByLabelKey: ManagedByKROValue,
 	}
 }
 
@@ -187,13 +184,6 @@ func booleanFromString(s string) bool {
 	// of parsing here. Since those labels are set by the controller
 	// it self. We'll expect the same values back.
 	return s == "true"
-}
-
-func stringFromBoolean(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }
 
 // Helper function to set a label

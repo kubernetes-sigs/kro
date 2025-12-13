@@ -11,7 +11,7 @@ This example show how you can use KRO to deploy GCP Cloud SQL instance in 2 regi
 The administrator needs to install the RGD first.
 The end user creates a `CloudSQL` resource that looks like this:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: CloudSQL
 metadata:
@@ -58,7 +58,7 @@ Once all user created instances are deleted, the administrator can choose to del
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```yaml title="rgd.yaml"
+  ```kro title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

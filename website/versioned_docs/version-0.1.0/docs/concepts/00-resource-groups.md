@@ -21,7 +21,7 @@ defining:
 - What status to expose (status)
 
 When you create a **ResourceGroup**, kro generates a new API (a.k.a Custom
-Resource Defintion) in your cluster that others can use to deploy resources in a
+Resource Definition) in your cluster that others can use to deploy resources in a
 consistent, controlled way.
 
 ## Anatomy of a ResourceGroup

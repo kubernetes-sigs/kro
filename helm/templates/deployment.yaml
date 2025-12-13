@@ -77,7 +77,7 @@ spec:
             - "$(KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES)"
             - --dynamic-controller-concurrent-reconciles
             - "$(KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES)"
-            - --log-level
+            - --zap-log-level
             - "$(KRO_LOG_LEVEL)"
             - --graceful-shutdown-timeout
             - "$(KRO_GRACEFUL_SHUTDOWN_TIMEOUT)"

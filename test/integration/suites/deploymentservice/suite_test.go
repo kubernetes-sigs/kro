@@ -163,6 +163,8 @@ var _ = Describe("DeploymentService", func() {
 			g.Expect(service.ObjectMeta.Labels).To(HaveKeyWithValue(metadata.OwnedLabel, "true"))
 			g.Expect(service.ObjectMeta.Labels).
 				To(HaveKeyWithValue(metadata.KROVersionLabel, version.GetVersionInfo().GitVersion))
+			g.Expect(service.ObjectMeta.Labels).
+				To(HaveKeyWithValue(metadata.ManagedByLabelKey, metadata.ManagedByKROValue))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify instance status is updated

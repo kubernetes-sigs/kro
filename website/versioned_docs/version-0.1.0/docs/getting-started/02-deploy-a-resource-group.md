@@ -136,7 +136,7 @@ spec:
    kubectl apply -f resourcegroup.yaml
    ```
 
-3. **Inpsect the `ResourceGroup`**: Check the status of the resources created by
+3. **Inspect the `ResourceGroup`**: Check the status of the resources created by
    the ResourceGroup using the `kubectl` command:
 
    ```bash

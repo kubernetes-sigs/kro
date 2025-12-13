@@ -40,12 +40,8 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 	}
 
-	group := rgd.Spec.Schema.Group
-	if group == "" {
-		group = v1alpha1.KRODomainName
-	}
 	// cleanup CRD
-	crdName := extractCRDName(group, rgd.Spec.Schema.Kind)
+	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
 	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
 		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}

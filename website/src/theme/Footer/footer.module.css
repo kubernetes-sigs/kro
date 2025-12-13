@@ -2,17 +2,53 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--main-color);
+  background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
   color: white;
+  padding: 0.6rem 1rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.kroFooter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 30px 30px;
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 [data-theme='dark'] .kroFooter {
-  background-color: var(--main-color-dark);
+  background: linear-gradient(135deg, #5472b8 0%, #6380b8 100%);
 }
 
 .kroFooterText {
-  padding: 2.5px;
-  font-size: 1.1rem;
-  font-weight: bold;
-  margin: auto;
+  position: relative;
+  z-index: 1;
+  font-size: 1rem;
+  font-weight: 500;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+
+.kroFooterText a {
+  color: white;
+  text-decoration: none;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.4);
+  padding-bottom: 2px;
+  transition: all 0.2s ease;
+  font-weight: 600;
+}
+
+.kroFooterText a:hover {
+  border-bottom-color: white;
+  padding-bottom: 3px;
 }

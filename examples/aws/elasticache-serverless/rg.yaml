@@ -1,0 +1,66 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: elasticache-serverless.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ElastiCacheServerless
+    spec:
+      name: string
+      namespace: string | default="default"
+      vpcID: string
+      subnetIDs: "[]string"
+      engine: string | default="redis"
+      dataStorageLimit: integer | default=1
+      ecpuLimit: integer | default=1000
+      description: string | default="Redis Serverless cache"
+    status:
+      endpoint: ${serverlesscache.status.endpoint.address}
+      securityGroupId: ${securitygroup.status.id}
+      status: ${serverlesscache.status.status}
+
+  resources:
+  - id: securitygroup
+    readyWhen:
+      - ${has(securitygroup.status.id)}
+    template:
+      apiVersion: ec2.services.k8s.aws/v1alpha1
+      kind: SecurityGroup
+      metadata:
+        name: ${schema.spec.name}-redis-sg
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}-redis-sg
+        description: "Redis ElastiCache security group"
+        vpcID: ${schema.spec.vpcID}
+        ingressRules:
+        - fromPort: 6379
+          toPort: 6379
+          ipProtocol: tcp
+          ipRanges:
+          - cidrIP: "10.0.0.0/16"
+
+  - id: serverlesscache
+    readyWhen:
+      - ${serverlesscache.status.status == "available"}
+      - ${has(serverlesscache.status.endpoint.address)}
+    template:
+      apiVersion: elasticache.services.k8s.aws/v1alpha1
+      kind: ServerlessCache
+      metadata:
+        name: ${schema.spec.name}-redis
+        namespace: ${schema.spec.namespace}
+      spec:
+        serverlessCacheName: ${schema.spec.name}-redis
+        engine: ${schema.spec.engine}
+        description: ${schema.spec.description}
+        cacheUsageLimits:
+          dataStorage:
+            maximum: ${schema.spec.dataStorageLimit}
+            unit: GB
+          eCPUPerSecond:
+            maximum: ${schema.spec.ecpuLimit}
+        subnetIDs: ${schema.spec.subnetIDs}
+        securityGroupIDs:
+        - ${securitygroup.status.id}

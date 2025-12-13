@@ -1,0 +1,290 @@
+/* Main Container */
+.rgdReference {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Intro */
+.intro {
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(91, 127, 201, 0.05) 0%, rgba(91, 127, 201, 0.02) 100%);
+  border-left: 4px solid var(--ifm-color-primary);
+  border-radius: 6px;
+  margin-bottom: 2rem;
+}
+
+[data-theme='dark'] .intro {
+  background: linear-gradient(135deg, rgba(122, 156, 230, 0.05) 0%, rgba(122, 156, 230, 0.02) 100%);
+}
+
+.intro p {
+  margin: 0;
+  color: var(--ifm-color-emphasis-800);
+  line-height: 1.6;
+}
+
+/* Sections */
+.section {
+  margin-bottom: 3rem;
+}
+
+.section h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+  color: var(--ifm-color-emphasis-900);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section h3::before {
+  content: '';
+  width: 4px;
+  height: 1.5rem;
+  background: linear-gradient(180deg, #5b7fc9 0%, #4a6fb8 100%);
+  border-radius: 2px;
+}
+
+[data-theme='dark'] .section h3::before {
+  background: linear-gradient(180deg, #7a9ce6 0%, #6a8cd6 100%);
+}
+
+/* Field Tables */
+.tableWrapper {
+  overflow-x: auto;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 8px;
+  background-color: var(--ifm-background-surface-color);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.fieldTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.fieldTable thead {
+  background: linear-gradient(180deg, var(--ifm-color-emphasis-100) 0%, var(--ifm-color-emphasis-50) 100%);
+}
+
+.fieldTable th {
+  text-align: left;
+  padding: 1rem;
+  font-weight: 600;
+  color: var(--ifm-color-emphasis-900);
+  border-bottom: 2px solid var(--ifm-color-emphasis-300);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fieldRow {
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  transition: background-color 0.15s ease;
+}
+
+.fieldRow:hover {
+  background-color: var(--ifm-color-emphasis-50);
+}
+
+.fieldRow:last-child {
+  border-bottom: none;
+}
+
+.fieldName {
+  padding: 0.875rem 1rem;
+  font-family: var(--ifm-font-family-monospace);
+  vertical-align: top;
+  position: relative;
+}
+
+.fieldNameContent {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.expandIconSpace {
+  width: 20px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+}
+
+.expandIcon {
+  background: none;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ifm-color-emphasis-700);
+  padding: 0;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+}
+
+.expandIcon:hover {
+  color: var(--ifm-color-primary);
+  border-color: var(--ifm-color-primary);
+  background-color: var(--ifm-color-emphasis-100);
+}
+
+.fieldNameCode {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ifm-color-emphasis-900);
+  background-color: var(--ifm-color-emphasis-100);
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+}
+
+.requiredBadge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background-color: #1e8e3e;
+  color: white;
+  border-radius: 3px;
+}
+
+.immutableBadge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background-color: #5b7fc9;
+  color: white;
+  border-radius: 3px;
+}
+
+.fieldType {
+  padding: 0.875rem 1rem;
+  vertical-align: top;
+  width: 15%;
+}
+
+.typeBadge {
+  display: inline-block;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 4px;
+  text-transform: lowercase;
+  font-family: var(--ifm-font-family-monospace);
+}
+
+.typeString {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.typeNumber {
+  background-color: #fce7f3;
+  color: #9f1239;
+}
+
+.typeBoolean {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.typeObject {
+  background-color: #e0e7ff;
+  color: #3730a3;
+}
+
+.typeArray {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+[data-theme='dark'] .typeString {
+  background-color: #1e3a8a;
+  color: #bfdbfe;
+}
+
+[data-theme='dark'] .typeNumber {
+  background-color: #831843;
+  color: #fbcfe8;
+}
+
+[data-theme='dark'] .typeBoolean {
+  background-color: #78350f;
+  color: #fef3c7;
+}
+
+[data-theme='dark'] .typeObject {
+  background-color: #312e81;
+  color: #c7d2fe;
+}
+
+[data-theme='dark'] .typeArray {
+  background-color: #064e3b;
+  color: #a7f3d0;
+}
+
+.fieldDescription {
+  padding: 0.875rem 1rem;
+  vertical-align: top;
+  line-height: 1.5;
+  color: var(--ifm-color-emphasis-800);
+}
+
+.fieldDescription code {
+  background-color: var(--ifm-color-emphasis-100);
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-size: 0.875em;
+}
+
+.noDescription {
+  color: var(--ifm-color-emphasis-500);
+  font-style: italic;
+}
+
+/* Responsive Design */
+@media (max-width: 996px) {
+  .fieldTable {
+    font-size: 0.8125rem;
+  }
+
+  .fieldName,
+  .fieldType,
+  .fieldDescription {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .fieldNameCode {
+    font-size: 0.75rem;
+  }
+
+  .typeBadge {
+    font-size: 0.6875rem;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Hide type column on mobile */
+  .fieldTable th:nth-child(2),
+  .fieldTable td:nth-child(2) {
+    display: none;
+  }
+}

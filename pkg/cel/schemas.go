@@ -22,9 +22,9 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
-	"k8s.io/apiserver/pkg/cel/common"
-
 	apiservercel "k8s.io/apiserver/pkg/cel"
+	"k8s.io/apiserver/pkg/cel/common"
+	celopenapi "k8s.io/apiserver/pkg/cel/openapi"
 )
 
 // XKubernetesPreserveUnknownFields is the key for the named open api extension, declaration type metadata field
@@ -104,7 +104,20 @@ func SchemaDeclTypeWithMetadata(s common.Schema, isResourceRoot bool) *apiserver
 		return nil
 	case "object":
 		if s.AdditionalProperties() != nil && s.AdditionalProperties().Schema() != nil {
-			propsType := SchemaDeclTypeWithMetadata(s.AdditionalProperties().Schema(), s.AdditionalProperties().Schema().IsXEmbeddedResource())
+			additional := s.AdditionalProperties().Schema()
+			var propsType *apiservercel.DeclType
+			// TODO(jakobmoellerdev): revisit this once upstream is fixed
+			// upstream bug in apiserver where SchemaOrBool returns a non nil pointer with nil content
+			// if the underlying schema
+			// is nil instead of returning nil
+			// has been fixed in upstream api server but not part of main codebase as of kubernetes 1.34
+			// https://github.com/kubernetes/apiserver/blob/master/pkg/cel/openapi/adaptor.go
+			// https://github.com/kubernetes/apiserver/blob/v0.34.2/pkg/cel/openapi/adaptor.go
+			if openapi, ok := additional.(*celopenapi.Schema); ok {
+				if openapi.Schema != nil {
+					propsType = SchemaDeclTypeWithMetadata(openapi, s.AdditionalProperties().Schema().IsXEmbeddedResource())
+				}
+			}
 			mt := apiservercel.NewMapType(apiservercel.StringType, apiservercel.DynType, math.MaxInt)
 			if propsType != nil {
 				var maxProperties int64

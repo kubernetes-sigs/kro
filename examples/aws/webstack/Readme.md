@@ -63,7 +63,7 @@ a new file called instance.yaml.
 ```shell
 envsubst < "webstack/instance-tmpl.yaml" > "webstack/instance.yaml"
 ```
-`clusterName` is a required field to achieve pod identity association. If your cluster name is not 'kro' then replace the value assigned to this field in the `webstack/instance.yaml` file with the name of your cluter. 
+`clusterName` is a required field to achieve pod identity association. If your cluster name is not 'kro' then replace the value assigned to this field in the `webstack/instance.yaml` file with the name of your cluster. 
 
 <pre>
 apiVersion: kro.run/v1alpha1

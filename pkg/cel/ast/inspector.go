@@ -19,9 +19,8 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
-	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
-
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	celast "github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/types"
 )
 
 // ResourceDependency represents a resource and its accessed path within a CEL expression.
@@ -84,6 +83,13 @@ type ExpressionInspection struct {
 	UnknownFunctions []UnknownFunction
 }
 
+func (e *ExpressionInspection) merge(other ExpressionInspection) {
+	e.ResourceDependencies = append(e.ResourceDependencies, other.ResourceDependencies...)
+	e.FunctionCalls = append(e.FunctionCalls, other.FunctionCalls...)
+	e.UnknownResources = append(e.UnknownResources, other.UnknownResources...)
+	e.UnknownFunctions = append(e.UnknownFunctions, other.UnknownFunctions...)
+}
+
 // Inspector analyzes CEL expressions to discover resource and function dependencies.
 // It maintains the CEL environment and tracks which resources and functions are known.
 type Inspector struct {
@@ -107,48 +113,16 @@ var knownFunctions = []string{
 	"base64.encode",
 }
 
-// DefaultInspector creates a new Inspector instance with the given resources and functions.
-//
-// TODO(a-hilaly): unify CEL environment creation with the rest of the codebase.
-func DefaultInspector(resources []string, functions []string) (*Inspector, error) {
-	declarations := make([]cel.EnvOption, 0, len(resources)+len(functions))
-
-	resourceMap := make(map[string]struct{})
-	for _, resource := range resources {
-		declarations = append(declarations, cel.Variable(resource, cel.AnyType))
-		resourceMap[resource] = struct{}{}
-	}
-
-	functionMap := make(map[string]struct{})
-	for _, function := range functions {
-		fn := cel.Function(function, cel.Overload(function+"_any", []*cel.Type{cel.AnyType}, cel.AnyType))
-		declarations = append(declarations, fn)
-		functionMap[function] = struct{}{}
-	}
-
-	env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(declarations))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %v", err)
-	}
-
-	return &Inspector{
-		env:       env,
-		resources: resourceMap,
-		functions: functionMap,
-		loopVars:  make(map[string]struct{}),
-	}, nil
-}
-
 // NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.
 func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
-	resourceMap := make(map[string]struct{})
-	for _, resource := range resources {
-		resourceMap[resource] = struct{}{}
+	resourceMap := map[string]struct{}{}
+	for _, r := range resources {
+		resourceMap[r] = struct{}{}
 	}
 
-	functionMap := make(map[string]struct{})
-	for _, function := range knownFunctions {
-		functionMap[function] = struct{}{}
+	functionMap := map[string]struct{}{}
+	for _, fn := range knownFunctions {
+		functionMap[fn] = struct{}{}
 	}
 
 	return &Inspector{
@@ -164,358 +138,319 @@ func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 // This function can be called multiple times with different expressions using the same
 // Inspector instance (AND environment).
 func (a *Inspector) Inspect(expression string) (ExpressionInspection, error) {
-	ast, iss := a.env.Parse(expression)
+	parsed, iss := a.env.Parse(expression)
 	if iss.Err() != nil {
-		return ExpressionInspection{}, fmt.Errorf("failed to parse expression: %v", iss.Err())
+		return ExpressionInspection{}, fmt.Errorf("parse error: %v", iss.Err())
 	}
-
-	parsed, err := cel.AstToParsedExpr(ast)
-	if err != nil {
-		return ExpressionInspection{}, fmt.Errorf("failed to check expression: %v", err)
-	}
-	return a.inspectAst(parsed.GetExpr(), ""), nil
+	native := parsed.NativeRep()
+	return a.inspectExpr(native, native.Expr(), ""), nil
 }
 
-// inspectAst recursively traverses a CEL expressions AST and collects all resource
-// dependencies and function calls. It builds paths for nested field access and handles
-// different expression types.
-func (a *Inspector) inspectAst(expr *exprpb.Expr, currentPath string) ExpressionInspection {
-	switch e := expr.ExprKind.(type) {
-	case *exprpb.Expr_SelectExpr:
-		// build the path in **reverse order** /!\
-		newPath := e.SelectExpr.Field
-		if currentPath != "" {
-			newPath = newPath + "." + currentPath
+// inspectExpr dispatches analysis based on the expression's syntactic kind.
+//
+// It recursively walks the CEL native AST and accumulates inspection results:
+//   - Identifier resolution (resource vs. unknown).
+//   - Field selections forming access paths.
+//   - Function and operator calls.
+//   - List/map/struct traversal.
+//   - Comprehension constructs such as list filters and transforms.
+//
+// This is the central traversal function from which all specialized inspectors
+// are invoked.
+func (a *Inspector) inspectExpr(ast *celast.AST, expr celast.Expr, path string) ExpressionInspection {
+	switch expr.Kind() {
+	case celast.IdentKind:
+		return a.inspectIdent(expr, path)
+	case celast.SelectKind:
+		s := expr.AsSelect()
+		newPath := s.FieldName()
+		if path != "" {
+			newPath = newPath + "." + path
 		}
-		return a.inspectAst(e.SelectExpr.Operand, newPath)
-	case *exprpb.Expr_CallExpr:
-		return a.inspectCall(e.CallExpr, currentPath)
-	case *exprpb.Expr_IdentExpr:
-		return a.inspectIdent(e.IdentExpr, currentPath)
-	case *exprpb.Expr_ComprehensionExpr:
-		return a.inspectComprehension(e.ComprehensionExpr, currentPath)
+		return a.inspectExpr(ast, s.Operand(), newPath)
+	case celast.CallKind:
+		return a.inspectCall(ast, expr.AsCall(), path)
+	case celast.ComprehensionKind:
+		return a.inspectComprehension(ast, expr.AsComprehension(), path)
+	case celast.ListKind:
+		return a.inspectList(ast, expr)
+	case celast.MapKind, celast.StructKind:
+		return a.inspectChildren(ast, expr)
 	default:
 		return ExpressionInspection{}
 	}
 }
 
-// inspectCall analyzes function calls and method invocations within a CEL expression.
-// It tracks three types of calls:
-// 1. Custom functions (declared in Inspector initialization)
-// 2. Method calls on resources ( list.filter(...))
-// 3. Unknown functions (neither custom nor internal)
-func (a *Inspector) inspectCall(call *exprpb.Expr_Call, currentPath string) ExpressionInspection {
-	inspection := ExpressionInspection{}
-
-	// First process arguments to get their dependencies
-	for _, arg := range call.Args {
-		argInspection := a.inspectAst(arg, "")
-		inspection.ResourceDependencies = append(inspection.ResourceDependencies, argInspection.ResourceDependencies...)
-		inspection.FunctionCalls = append(inspection.FunctionCalls, argInspection.FunctionCalls...)
-		inspection.UnknownResources = append(inspection.UnknownResources, argInspection.UnknownResources...)
-		inspection.UnknownFunctions = append(inspection.UnknownFunctions, argInspection.UnknownFunctions...)
+// inspectChildren analyzes all direct child nodes of the given expression.
+//
+// It uses celast.NavigateExpr to enumerate sub-expressions and merges the
+// analysis results of each child. This is used for AST nodes that simply
+// aggregate other expressions, such as structs, maps, and list literals.
+func (a *Inspector) inspectChildren(ast *celast.AST, expr celast.Expr) ExpressionInspection {
+	out := ExpressionInspection{}
+	nav := celast.NavigateExpr(ast, expr)
+	for _, ch := range nav.Children() {
+		out.merge(a.inspectExpr(ast, ch, ""))
 	}
-
-	// Handle namespaced function calls (e.g., random.seededString)
-	if target := call.Target; target != nil {
-		if ident, ok := target.ExprKind.(*exprpb.Expr_IdentExpr); ok {
-			fullName := ident.IdentExpr.Name + "." + call.Function
-			if _, ok := a.functions[fullName]; ok {
-				// This is a known namespaced function, record the call
-				args := make([]string, 0, len(call.Args))
-				for _, arg := range call.Args {
-					args = append(args, a.exprToString(arg))
-				}
-				inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
-					Name:      fullName,
-					Arguments: args,
-				})
-				return inspection
-			}
-		}
-	}
-
-	// Handle the current function - only if it's not part of a chain
-	if _, isFunction := a.functions[call.Function]; isFunction && call.Target == nil {
-		functionCall := FunctionCall{
-			Name: call.Function,
-		}
-		for _, arg := range call.Args {
-			functionCall.Arguments = append(functionCall.Arguments, a.exprToString(arg))
-		}
-		inspection.FunctionCalls = append(inspection.FunctionCalls, functionCall)
-	}
-
-	// Then handle the target if it exists
-	if call.Target != nil {
-		targetInspection := a.inspectAst(call.Target, currentPath)
-		inspection.ResourceDependencies = append(inspection.ResourceDependencies, targetInspection.ResourceDependencies...)
-		inspection.FunctionCalls = append(inspection.FunctionCalls, targetInspection.FunctionCalls...)
-		inspection.UnknownResources = append(inspection.UnknownResources, targetInspection.UnknownResources...)
-		inspection.UnknownFunctions = append(inspection.UnknownFunctions, targetInspection.UnknownFunctions...)
-
-		// Add the chained call representation
-		inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
-			Name: fmt.Sprintf("%s.%s", a.exprToString(call.Target), call.Function),
-		})
-	} else if !a.env.HasFunction(call.Function) {
-		// This is an unknown function, but not an internal one
-		inspection.UnknownFunctions = append(inspection.UnknownFunctions, UnknownFunction{Name: call.Function})
-	}
-
-	return inspection
+	return out
 }
 
-// inspectIdent analyzes identifier expressions in CEL and determines if they are known resources
-// or unknown references. It handles the base identifiers in field access chains and distinguishes
-// between declared resources and unknown/internal identifiers.
-func (a *Inspector) inspectIdent(ident *exprpb.Expr_Ident, currentPath string) ExpressionInspection {
-	// Check if it's a loop variable
-	if _, isLoopVar := a.loopVars[ident.Name]; isLoopVar {
-		return ExpressionInspection{} // Loop variables are not resources
+// inspectIdent analyzes an identifier reference.
+//
+// Behavior:
+//   - If the identifier is a loop variable, it is ignored.
+//   - If it matches a declared resource, a ResourceDependency is recorded.
+//   - If it is not internal and not declared, it is treated as an UnknownResource.
+//
+// The `path` argument provides any accumulated field-access suffix when the
+// identifier is part of a Select chain such as deployment.spec.replicas.
+func (a *Inspector) inspectIdent(expr celast.Expr, path string) ExpressionInspection {
+	name := expr.AsIdent()
+	if _, ok := a.loopVars[name]; ok {
+		return ExpressionInspection{}
 	}
 
-	if _, isResource := a.resources[ident.Name]; isResource {
-		fullPath := ident.Name
-		if currentPath != "" {
-			fullPath += "." + currentPath
+	if _, ok := a.resources[name]; ok {
+		full := name
+		if path != "" {
+			full += "." + path
 		}
 		return ExpressionInspection{
-			ResourceDependencies: []ResourceDependency{{
-				ID:   ident.Name,
-				Path: fullPath,
-			}},
+			ResourceDependencies: []ResourceDependency{{ID: name, Path: full}},
 		}
 	}
-	// If it's not a known resource, it's an unknown resource
-	if !isInternalIdentifier(ident.Name) {
-		path := ident.Name
-		if currentPath != "" {
-			path += "." + currentPath
+
+	if !isInternalIdentifier(name) {
+		full := name
+		if path != "" {
+			full += "." + path
 		}
 		return ExpressionInspection{
-			UnknownResources: []UnknownResource{{
-				ID:   ident.Name,
-				Path: path,
-			}},
+			UnknownResources: []UnknownResource{{ID: name, Path: full}},
 		}
 	}
+
 	return ExpressionInspection{}
 }
 
-// inspectComprehension analyzes list comprehensions in CEL expressions (filter and map operations).
-// It tracks dependencies from the iteration range, condition, step, and result expressions.
-func (a *Inspector) inspectComprehension(comp *exprpb.Expr_Comprehension, currentPath string) ExpressionInspection {
-	inspection := ExpressionInspection{}
+// inspectCall analyzes a function or method invocation.
+//
+// Responsibilities:
+//   - Recursively inspect all argument expressions.
+//   - For member functions, inspect the target expression and record a synthetic
+//     function name of the form "<target>.<method>".
+//   - For direct calls, record known functions and their arguments.
+//   - If the function is neither known nor registered in the CEL environment,
+//     record it as an UnknownFunction.
+//
+// Operators represented as CEL internal functions (e.g., "_+_") are handled
+// separately within exprToString and callToString and do not affect dependency
+// detection.
+func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path string) ExpressionInspection {
+	out := ExpressionInspection{}
 
-	// Variable scoping in CEL expressions requires careful handling of identifiers.
-	// Consider this example of variable shadowing:
-	//
-	// given:
-	//   - a declared resource: "deployment"
-	//   - an expression: `i + deployment.metadata.labels.filter(i, i == "something")`
-	//
-	// The identifier 'i' appears in two contexts:
-	//   1. As a free variable: `i +` (should be marked as unknown resource)
-	//   2. As a loop variable: `filter(i, i == "something")` (should be ignored)
-	//
-	// Even though the same identifier 'i' is used, it has different semantics:
-	//   - The first 'i' is a reference to an undeclared resource
-	//   - The second 'i' is a scoped variable within the filter comprehension
-	//   - The third 'i' refers to the loop variable from the filter
-	//
-	// This demonstrates why we need to:
-	//   1. Track loop variables separately from resources
-	//   2. Consider the scope of each identifier
-	//   3. Properly handle variable shadowing
-	a.loopVars[comp.IterVar] = struct{}{}
-	defer delete(a.loopVars, comp.IterVar)
-
-	// Inspect the range we're iterating over
-	iterRangeInspection := a.inspectAst(comp.IterRange, currentPath)
-	inspection.ResourceDependencies = append(inspection.ResourceDependencies, iterRangeInspection.ResourceDependencies...)
-	inspection.FunctionCalls = append(inspection.FunctionCalls, iterRangeInspection.FunctionCalls...)
-	inspection.UnknownResources = append(inspection.UnknownResources, iterRangeInspection.UnknownResources...)
-	inspection.UnknownFunctions = append(inspection.UnknownFunctions, iterRangeInspection.UnknownFunctions...)
-
-	// For filters, inspect the condition
-	if comp.LoopCondition != nil {
-		conditionInspection := a.inspectAst(comp.LoopCondition, "")
-		inspection.ResourceDependencies = append(inspection.ResourceDependencies, conditionInspection.ResourceDependencies...)
-		inspection.FunctionCalls = append(inspection.FunctionCalls, conditionInspection.FunctionCalls...)
-		inspection.UnknownResources = append(inspection.UnknownResources, conditionInspection.UnknownResources...)
-		inspection.UnknownFunctions = append(inspection.UnknownFunctions, conditionInspection.UnknownFunctions...)
+	for _, arg := range call.Args() {
+		out.merge(a.inspectExpr(ast, arg, ""))
 	}
 
-	// For maps, inspect the loop step (transformation)
-	if comp.LoopStep != nil {
-		stepInspection := a.inspectAst(comp.LoopStep, "")
-		inspection.ResourceDependencies = append(inspection.ResourceDependencies, stepInspection.ResourceDependencies...)
-		inspection.FunctionCalls = append(inspection.FunctionCalls, stepInspection.FunctionCalls...)
-		inspection.UnknownResources = append(inspection.UnknownResources, stepInspection.UnknownResources...)
-		inspection.UnknownFunctions = append(inspection.UnknownFunctions, stepInspection.UnknownFunctions...)
+	fn := call.FunctionName()
+
+	// Namespaced (member) function: target.method
+	if call.IsMemberFunction() {
+		t := call.Target()
+		if t != nil {
+			targetName := a.exprToString(ast, t)
+			full := fmt.Sprintf("%s.%s", targetName, fn)
+
+			// Still inspect target for resource usage
+			out.merge(a.inspectExpr(ast, t, path))
+
+			// Treat chained method call as unknown unless known
+			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
+				Name: full,
+			})
+		}
+		return out
 	}
 
-	// Inspect the result expression
-	resultInspection := a.inspectAst(comp.Result, "")
-	inspection.ResourceDependencies = append(inspection.ResourceDependencies, resultInspection.ResourceDependencies...)
-	inspection.FunctionCalls = append(inspection.FunctionCalls, resultInspection.FunctionCalls...)
-	inspection.UnknownResources = append(inspection.UnknownResources, resultInspection.UnknownResources...)
-	inspection.UnknownFunctions = append(inspection.UnknownFunctions, resultInspection.UnknownFunctions...)
-
-	// Record the comprehension operation
-	if comp.LoopStep == nil {
-		inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
-			Name: "filter",
-			Arguments: []string{
-				a.exprToString(comp.IterRange),
-				a.exprToString(comp.LoopCondition), // Add filter condition
-				a.exprToString(comp.Result),
-			},
+	// Direct function call
+	if _, ok := a.functions[fn]; ok {
+		args := make([]string, len(call.Args()))
+		for i, arg := range call.Args() {
+			args[i] = a.exprToString(ast, arg)
+		}
+		out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
+			Name:      fn,
+			Arguments: args,
 		})
-	} else {
-		inspection.FunctionCalls = append(inspection.FunctionCalls, FunctionCall{
-			Name: "map",
-			Arguments: []string{
-				a.exprToString(comp.IterRange),
-				a.exprToString(comp.LoopStep), // Add map transformation
-				a.exprToString(comp.Result),
-			},
-		})
+	} else if !a.env.HasFunction(fn) {
+		out.UnknownFunctions = append(out.UnknownFunctions, UnknownFunction{Name: fn})
 	}
 
-	return inspection
+	return out
 }
 
-// exprToString converts a CEL expression to its string representation.
-// This is used primarily for recording function arguments and creating readable output.
-func (a *Inspector) exprToString(expr *exprpb.Expr) string {
-	if expr == nil {
-		return "<nil>"
+// inspectComprehension analyzes CEL comprehension expressions.
+//
+// A comprehension represents constructs such as filtering or mapping, expressed
+// as:
+//
+//	{iterVar in iterRange | loopCondition : result}
+//
+// Steps performed:
+//   - Track `iterVar` as a loop variable for the duration of the analysis.
+//   - Inspect the iteration range, loop condition, step expression, and result.
+//   - Synthesize a "filter" FunctionCall capturing the comprehension structure.
+//     (This is informational metadata for consumers of the inspector.)
+//
+// Loop variables are excluded from normal identifier handling to avoid falsely
+// reporting them as unknown resources.
+func (a *Inspector) inspectComprehension(ast *celast.AST, comp celast.ComprehensionExpr, path string) ExpressionInspection {
+	out := ExpressionInspection{}
+
+	iterVar := comp.IterVar()
+	a.loopVars[iterVar] = struct{}{}
+	defer delete(a.loopVars, iterVar)
+
+	out.merge(a.inspectExpr(ast, comp.IterRange(), path))
+
+	if cond := comp.LoopCondition(); cond != nil {
+		out.merge(a.inspectExpr(ast, cond, ""))
 	}
 
-	switch e := expr.ExprKind.(type) {
-	case *exprpb.Expr_ConstExpr:
-		return a.constantExpressionToString(e.ConstExpr)
+	if step := comp.LoopStep(); step != nil {
+		out.merge(a.inspectExpr(ast, step, ""))
+	}
 
-	case *exprpb.Expr_IdentExpr:
-		return e.IdentExpr.Name
+	out.merge(a.inspectExpr(ast, comp.Result(), ""))
 
-	case *exprpb.Expr_SelectExpr:
-		return fmt.Sprintf("%s.%s", a.exprToString(e.SelectExpr.Operand), e.SelectExpr.Field)
+	// Now add synthetic "filter"
+	call := FunctionCall{Name: "filter", Arguments: []string{
+		a.exprToString(ast, comp.IterRange()),
+		a.exprToString(ast, comp.LoopStep()),
+		a.exprToString(ast, comp.Result()),
+	}}
+	out.FunctionCalls = append(out.FunctionCalls, call)
 
-	case *exprpb.Expr_CallExpr:
-		return a.callExpressionToString(e.CallExpr)
+	return out
+}
 
-	case *exprpb.Expr_ListExpr:
-		return a.listExpressionToString(e.ListExpr)
+// inspectList analyzes a list literal.
+//
+// It inspects all child elements (expressions inside the list) and records a
+// synthetic FunctionCall named "createList" whose argument is the string
+// representation of the list literal. This provides consistent function-like
+// tracking for structural constructs that implicitly create new values.
+func (a *Inspector) inspectList(ast *celast.AST, expr celast.Expr) ExpressionInspection {
+	out := a.inspectChildren(ast, expr)
+	out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
+		Name:      "createList",
+		Arguments: []string{a.listExpressionToString(ast, expr)},
+	})
+	return out
+}
 
-	case *exprpb.Expr_StructExpr:
-		return a.structExpressionToString(e.StructExpr)
-
+// exprToString produces a deterministic string representation of an expression.
+//
+// It is used to serialize argument expressions when recording FunctionCall
+// metadata and for debugging or tooling consumers. The representation reflects
+// CEL syntax closely but is not guaranteed to round-trip.
+func (a *Inspector) exprToString(ast *celast.AST, expr celast.Expr) string {
+	switch expr.Kind() {
+	case celast.IdentKind:
+		return expr.AsIdent()
+	case celast.LiteralKind:
+		return types.Format(expr.AsLiteral())
+	case celast.SelectKind:
+		s := expr.AsSelect()
+		return fmt.Sprintf("%s.%s", a.exprToString(ast, s.Operand()), s.FieldName())
+	case celast.CallKind:
+		return a.callToString(ast, expr.AsCall())
+	case celast.ListKind:
+		return a.listExpressionToString(ast, expr)
+	case celast.MapKind:
+		m := expr.AsMap()
+		parts := make([]string, 0, len(m.Entries()))
+		for _, entry := range m.Entries() {
+			entry := entry.AsMapEntry()
+			key := a.exprToString(ast, entry.Key())
+			val := a.exprToString(ast, entry.Value())
+			parts = append(parts, key+": "+val)
+		}
+		return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+	case celast.StructKind:
+		s := expr.AsStruct()
+		fields := make([]string, 0, len(s.Fields()))
+		for _, f := range s.Fields() {
+			f := f.AsStructField()
+			fields = append(fields, f.Name()+": "+a.exprToString(ast, f.Value()))
+		}
+		return fmt.Sprintf("%s{%s}", s.TypeName(), strings.Join(fields, ", "))
 	default:
-		return fmt.Sprintf("<unknown expression type: %T>", e)
+		return "<unknown>"
 	}
 }
 
-// constantExpressionToString converts a constant expression to its string representation.
-func (a *Inspector) constantExpressionToString(c *exprpb.Constant) string {
-	switch kind := c.ConstantKind.(type) {
-	case *exprpb.Constant_BoolValue:
-		return fmt.Sprintf("%v", kind.BoolValue)
-	case *exprpb.Constant_BytesValue:
-		return fmt.Sprintf("b\"%s\"", kind.BytesValue)
-	case *exprpb.Constant_DoubleValue:
-		return fmt.Sprintf("%v", kind.DoubleValue)
-	case *exprpb.Constant_Int64Value:
-		return fmt.Sprintf("%v", kind.Int64Value)
-	case *exprpb.Constant_StringValue:
-		return fmt.Sprintf("%q", kind.StringValue)
-	case *exprpb.Constant_Uint64Value:
-		return fmt.Sprintf("%vu", kind.Uint64Value)
-	case *exprpb.Constant_NullValue:
-		return "null"
-	default:
-		return "<unknown constant>"
-	}
-}
-
-// callExpressionToString converts a function call expression to its string representation.
-// This includes both regular function calls and operator calls.
-func (a *Inspector) callExpressionToString(call *exprpb.Expr_Call) string {
-	args := make([]string, len(call.Args))
-	for i, arg := range call.Args {
-		args[i] = a.exprToString(arg)
+// callToString formats a function or operator invocation into a human-readable
+// string.
+//
+// Operator functions with CEL’s internal names (e.g., "_+_") are converted into
+// their infix forms where applicable. Member functions are rendered as
+// "<target>.<method>(args...)". All other calls are rendered as standard
+// function calls "fn(arg1, arg2, ...)".
+//
+// This function is used only for metadata representation and does not affect
+// analysis logic.
+func (a *Inspector) callToString(ast *celast.AST, call celast.CallExpr) string {
+	fn := call.FunctionName()
+	args := call.Args()
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		parts[i] = a.exprToString(ast, arg)
 	}
 
-	// Handle special operators
-	if strings.HasPrefix(call.Function, "_") && strings.HasSuffix(call.Function, "_") {
-		switch call.Function {
+	// Binary/unary operators
+	if strings.HasPrefix(fn, "_") {
+		switch fn {
 		case "_+_", "_-_", "_*_", "_/_", "_%_", "_<_", "_<=_", "_>_", "_>=_", "_==_", "_!=_":
-			if len(args) == 2 {
-				op := strings.Trim(call.Function, "_")
-				return fmt.Sprintf("(%s %s %s)", args[0], op, args[1])
+			if len(parts) == 2 {
+				op := strings.Trim(fn, "_")
+				return fmt.Sprintf("(%s %s %s)", parts[0], op, parts[1])
 			}
 		case "_&&_":
-			if len(args) == 2 {
-				return fmt.Sprintf("(%s && %s)", args[0], args[1])
-			}
+			return fmt.Sprintf("(%s && %s)", parts[0], parts[1])
 		case "_||_":
-			if len(args) == 2 {
-				return fmt.Sprintf("(%s || %s)", args[0], args[1])
-			}
+			return fmt.Sprintf("(%s || %s)", parts[0], parts[1])
 		case "_?_:_":
-			if len(args) == 3 {
-				return fmt.Sprintf("(%s ? %s : %s)", args[0], args[1], args[2])
-			}
+			return fmt.Sprintf("(%s ? %s : %s)", parts[0], parts[1], parts[2])
 		case "_[_]":
-			if len(args) == 2 {
-				return fmt.Sprintf("%s[%s]", args[0], args[1])
-			}
+			return fmt.Sprintf("%s[%s]", parts[0], parts[1])
 		}
 	}
 
-	if call.Target != nil {
-		// Method call e.g bucket.metadata.labels.keys()
-		return fmt.Sprintf("%s.%s(%s)", a.exprToString(call.Target), call.Function, strings.Join(args, ", "))
+	if call.IsMemberFunction() && call.Target() != nil {
+		return fmt.Sprintf("%s.%s(%s)",
+			a.exprToString(ast, call.Target()),
+			fn,
+			strings.Join(parts, ", "),
+		)
 	}
 
-	// Regular function call
-	return fmt.Sprintf("%s(%s)", call.Function, strings.Join(args, ", "))
+	return fmt.Sprintf("%s(%s)", fn, strings.Join(parts, ", "))
 }
 
-func (a *Inspector) listExpressionToString(list *exprpb.Expr_CreateList) string {
-	elements := make([]string, len(list.Elements))
-	for i, elem := range list.Elements {
-		elements[i] = a.exprToString(elem)
-	}
-	return fmt.Sprintf("[%s]", strings.Join(elements, ", "))
-}
+// listExpressionToString formats a list literal by serializing each element via
+// exprToString and joining them within brackets.
+func (a *Inspector) listExpressionToString(ast *celast.AST, expr celast.Expr) string {
+	nav := celast.NavigateExpr(ast, expr)
+	children := nav.Children()
 
-func (a *Inspector) structExpressionToString(s *exprpb.Expr_CreateStruct) string {
-	if s.MessageName != "" {
-		// Message construction
-		entries := make([]string, len(s.Entries))
-		for i, entry := range s.Entries {
-			if field := entry.GetFieldKey(); field != "" {
-				value := a.exprToString(entry.GetValue())
-				entries[i] = fmt.Sprintf("%s: %s", field, value)
-			}
-		}
-		return fmt.Sprintf("%s{%s}", s.MessageName, strings.Join(entries, ", "))
+	out := make([]string, len(children))
+	for i, ch := range children {
+		out[i] = a.exprToString(ast, ch)
 	}
 
-	// Regular struct/map creation
-	entries := make([]string, len(s.Entries))
-	for i, entry := range s.Entries {
-		value := a.exprToString(entry.GetValue())
-		if field := entry.GetFieldKey(); field != "" {
-			entries[i] = fmt.Sprintf("%s: %s", field, value)
-		} else if key := entry.GetMapKey(); key != nil {
-			entries[i] = fmt.Sprintf("%s: %s", a.exprToString(key), value)
-		}
-	}
-	return fmt.Sprintf("{%s}", strings.Join(entries, ", "))
+	return fmt.Sprintf("[%s]", strings.Join(out, ", "))
 }
 
 func isInternalIdentifier(name string) bool {

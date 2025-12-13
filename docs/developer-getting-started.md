@@ -23,13 +23,12 @@ To test and run the project with your local changes, follow these steps to set u
 
 3. Install the Custom Resource Definitions (CRDs): Apply the latest CRDs to your cluster:
     ```bash
-    make manifests
-    kubectl apply -k ./config/crd
+    make install
     ```
 
 4. Run the kro Controller Locally: Execute the controller with your changes:
     ```bash
-    go run ./cmd/controller --log-level 2
+    go run ./cmd/controller --zap-log-level=info
     ```
     This will connect to the default Kubernetes context in your local kubeconfig (`~/.kube/config`). Ensure the context is pointing to your local cluster.
 

@@ -61,7 +61,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 		withIncludeWhenExpressions([]string{"schema.spec.secret.include == true"}),
 		withObject(map[string]interface{}{
 			"metadata": map[string]interface{}{
-				// this shound not be evaluated since the
+				// this should not be evaluated since the
 				// resource should not be included
 				"name": "${schema.spec.secret.name}",
 			},

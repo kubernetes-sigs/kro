@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .header { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 18px; font-weight: 600; fill: #333; }
+      .step { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; font-weight: 500; fill: #555; }
+      .step-box { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; font-weight: 500; fill: #f57c00; }
+      .line { stroke: #ddd; stroke-width: 2; }
+      .arrow-user { stroke: #1976d2; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-blue); }
+      .arrow-watch { stroke: #7c4dff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-purple); }
+      .arrow-kro { stroke: #f57c00; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-orange); }
+      .box-kro { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#1976d2" />
+    </marker>
+    <marker id="arrowhead-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#7c4dff" />
+    </marker>
+    <marker id="arrowhead-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#f57c00" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="900" height="500" fill="white"/>
+
+  <!-- Column Headers -->
+  <text x="150" y="35" class="header" text-anchor="middle">User</text>
+  <text x="450" y="35" class="header" text-anchor="middle">Kubernetes API Server</text>
+  <text x="750" y="35" class="header" text-anchor="middle">kro</text>
+
+  <!-- Vertical Lines -->
+  <line x1="150" y1="55" x2="150" y2="460" class="line"/>
+  <line x1="450" y1="55" x2="450" y2="460" class="line"/>
+  <line x1="750" y1="55" x2="750" y2="460" class="line"/>
+
+  <!-- Step 1: Apply RGD -->
+  <path d="M 150 90 L 450 90" class="arrow-user"/>
+  <text x="300" y="78" class="step" text-anchor="middle">1. Apply RGD</text>
+
+  <!-- Step 2: Watch RGDs -->
+  <path d="M 450 135 L 750 135" class="arrow-watch"/>
+  <text x="600" y="123" class="step" text-anchor="middle">2. Watch RGDs</text>
+
+  <!-- Step 3: Validate RGD (box) -->
+  <rect x="690" y="165" width="120" height="40" class="box-kro" rx="4"/>
+  <text x="750" y="190" class="step-box" text-anchor="middle">3. Validate RGD</text>
+
+  <!-- Step 4: Create CRD -->
+  <path d="M 750 230 L 450 230" class="arrow-kro"/>
+  <text x="600" y="218" class="step" text-anchor="middle">4. Create CRD</text>
+
+  <!-- Step 5: Apply Instance -->
+  <path d="M 150 290 L 450 290" class="arrow-user"/>
+  <text x="300" y="278" class="step" text-anchor="middle">5. Apply Instance</text>
+
+  <!-- Step 6: Watch Instances -->
+  <path d="M 450 335 L 750 335" class="arrow-watch"/>
+  <text x="600" y="323" class="step" text-anchor="middle">6. Watch Instances</text>
+
+  <!-- Step 7: Reconcile (box) -->
+  <rect x="690" y="365" width="120" height="40" class="box-kro" rx="4"/>
+  <text x="750" y="390" class="step-box" text-anchor="middle">7. Reconcile</text>
+
+  <!-- Step 8: Create Resources -->
+  <path d="M 750 430 L 450 430" class="arrow-kro"/>
+  <text x="600" y="418" class="step" text-anchor="middle">8. Create Resources</text>
+
+</svg>

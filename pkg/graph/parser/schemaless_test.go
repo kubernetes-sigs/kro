@@ -283,7 +283,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Complex strcture with various expressions combinations",
+			name: "Complex structure with various expressions combinations",
 			resource: map[string]interface{}{
 				"string": "${string.value}",
 				"number": 42,

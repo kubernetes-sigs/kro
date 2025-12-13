@@ -12,7 +12,7 @@ kro provides the `readyWhen` field to define when a resource is considered ready
 
 Here's a simple example where a database must be fully ready before the application deployment is created:
 
-```yaml
+```kro
 resources:
   - id: database
     template:
@@ -65,7 +65,7 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
 
 `readyWhen` expressions can only reference the resource itself (by its `id`):
 
-```yaml
+```kro
 # ✓ Valid - references the resource itself and returns boolean
 - id: deployment
   readyWhen:
@@ -73,7 +73,7 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
     - ${deployment.status.conditions.exists(c, c.type == "Available" && c.status == "True")}
 ```
 
-```yaml
+```kro
 # ✗ Invalid - cannot reference other resources or schema
 - id: deployment
   readyWhen:
@@ -103,7 +103,7 @@ This ensures your resources always have valid data and prevents race conditions.
 
 Use the optional operator `?` when accessing fields that are truly optional or have unknown structure:
 
-```yaml
+```kro
 readyWhen:
   # Use ? for optional fields that might never exist
   - ${service.status.?loadBalancer.?ingress.size() > 0}

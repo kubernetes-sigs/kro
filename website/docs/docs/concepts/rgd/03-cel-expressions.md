@@ -37,7 +37,7 @@ Because CEL prevents behaviors that would make it slower, expressions evaluate i
 
 In kro, CEL expressions are wrapped in `${` and `}`:
 
-```yaml
+```kro
 metadata:
   name: ${schema.spec.appName}
 ```
@@ -50,7 +50,7 @@ Everything between `${` and `}` is a CEL expression that gets evaluated at runti
 
 A **standalone expression** is a field whose value is exactly one expression - nothing else:
 
-```yaml
+```kro
 spec:
   replicas: ${schema.spec.replicaCount}
 ```
@@ -61,7 +61,7 @@ The expression result **replaces the entire field value**. The result type must 
 - etc.
 
 **Examples:**
-```yaml
+```kro
 # Integer field
 replicas: ${schema.spec.count}
 
@@ -82,7 +82,7 @@ volumes: ${schema.spec.volumeMounts}
 
 A **string template** contains one or more expressions embedded in a string:
 
-```yaml
+```kro
 metadata:
   name: "${schema.spec.prefix}-${schema.spec.name}"
 ```
@@ -90,7 +90,7 @@ metadata:
 All expressions in a string template **must return strings**, and the result is always a string (concatenation of all parts).
 
 **Examples:**
-```yaml
+```kro
 # Simple concatenation
 name: "app-${schema.spec.name}"
 
@@ -103,12 +103,12 @@ message: "Application ${schema.spec.name} is running version ${schema.spec.versi
 
 :::warning
 Expressions in string templates **must return strings**. This won't work:
-```yaml
+```kro
 name: "app-${schema.spec.replicas}"  # Error: replicas is an integer
 ```
 
 Use `string()` to convert:
-```yaml
+```kro
 name: "app-${string(schema.spec.replicas)}"
 ```
 :::
@@ -120,7 +120,7 @@ name: "app-${string(schema.spec.replicas)}"
 The `schema` variable represents the **instance spec** - the values users provide when creating an instance of your API.
 
 **Instance:**
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: WebApplication
 metadata:
@@ -131,7 +131,7 @@ spec:
 ```
 
 **In your RGD, access via `schema.spec`:**
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -145,7 +145,7 @@ resources:
 
 Each resource in your RGD can be referenced by its `id`:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -169,7 +169,7 @@ This **automatically creates a dependency**: the service depends on the deployme
 
 Use dot notation to navigate nested fields:
 
-```yaml
+```kro
 # Access nested objects
 ${deployment.spec.template.spec.containers[0].image}
 
@@ -184,7 +184,7 @@ ${deployment.status.availableReplicas}
 
 Access array elements using `[index]`:
 
-```yaml
+```kro
 # First container's image
 ${deployment.spec.template.spec.containers[0].image}
 
@@ -207,7 +207,7 @@ Use the optional operator when:
 
 Place `?` before the field that might not exist:
 
-```yaml
+```kro
 ${configmap.data.?DATABASE_URL}
 ```
 
@@ -216,7 +216,7 @@ If `data.DATABASE_URL` doesn't exist, this returns `null` instead of erroring.
 ### Examples
 
 **Referencing a ConfigMap:**
-```yaml
+```kro
 resources:
   - id: config
     externalRef:
@@ -236,13 +236,13 @@ resources:
 ```
 
 **Optional status fields:**
-```yaml
+```kro
 # Some resources might not have this status field immediately
 ready: ${deployment.status.?readyReplicas > 0}
 ```
 
 **Chaining optional accessors:**
-```yaml
+```kro
 # Multiple fields might not exist
 ${service.status.?loadBalancer.?ingress[0].?hostname}
 ```
@@ -259,6 +259,8 @@ The `?` operator prevents kro from validating the field's existence at build tim
 | Strings | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
 | Encoders | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
 | Random | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go) |
+| URLs | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs) |
+| Regex | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
 
 For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).
 
@@ -275,7 +277,7 @@ When you create an RGD, kro:
 4. Reports errors **before** any instances are created
 
 **Example:**
-```yaml
+```kro
 spec:
   replicas: ${schema.spec.appName}  # Error: appName is string, replicas expects integer
 ```
@@ -287,7 +289,7 @@ kro will reject this RGD with a clear error message.
 kro checks two forms of compatibility:
 
 #### 1. Exact Type Match
-```yaml
+```kro
 # ✓ Correct: integer to integer
 replicas: ${schema.spec.replicaCount}
 
@@ -300,7 +302,7 @@ replicas: ${schema.spec.appName}
 kro supports structural compatibility for complex types through deep type inspection:
 
 **Map ↔ Struct compatibility**:
-```yaml
+```kro
 # Map can be assigned to struct
 # Map keys must be strings matching struct field names
 # Map values must be compatible with corresponding field types
@@ -316,16 +318,18 @@ annotations: ${deployment.metadata.labels}
 
 The expression result can have fewer fields than the target expects, but cannot have extra fields the target doesn't define:
 
-```yaml
+```kro
 # Target field: containers expects objects with name, image, ports, env, etc.
+spec:
+  template:
+    spec:
+      # ✓ Valid: subset of expected fields
+      containers:
+        - ${{"name": "app", "image": schema.spec.image}}
 
-# ✓ Valid: subset of expected fields
-containers:
-  - ${{"name": "app", "image": schema.spec.image}}
-
-# ✗ Invalid: "foo" is not a valid container field
-containers:
-  - ${{"name": "app", "image": schema.spec.image, "foo": "bar"}}
+      # ✗ Invalid: "foo" is not a valid container field
+      containers:
+        - ${{"name": "app", "image": schema.spec.image, "foo": "bar"}}
 ```
 
 **List and Map recursive checking**:
@@ -339,7 +343,7 @@ containers:
 
 Use ternary operator for conditional values:
 
-```yaml
+```kro
 # If-then-else
 image: ${schema.spec.env == "prod" ? "nginx:stable" : "nginx:latest"}
 
@@ -351,7 +355,7 @@ replicas: ${schema.spec.?replicas.orValue(3)}
 
 Create objects inline:
 
-```yaml
+```kro
 env:
   - name: DATABASE_URL
     value: ${database.status.endpoint}
@@ -361,7 +365,7 @@ env:
 
 Or use CEL to construct them:
 
-```yaml
+```kro
 labels: ${{"app": schema.spec.name, "env": schema.spec.environment}}
 ```
 
@@ -369,19 +373,19 @@ labels: ${{"app": schema.spec.name, "env": schema.spec.environment}}
 
 Build connection strings and URLs:
 
-```yaml
+```kro
 # Connection string
 connectionString: "postgresql://${db.status.endpoint}:${db.status.port}/${schema.spec.dbName}"
 
 # ARN format
-roleArn: "arn:aws:iam::%s:role/%s".format([schema.spec.accountId, schema.spec.roleName])
+roleArn: ${"arn:aws:iam::%s:role/%s".format([schema.spec.accountId, schema.spec.roleName])}
 ```
 
 ### Working with Lists
 
 Filter, map, and transform lists:
 
-```yaml
+```kro
 # Extract specific fields
 containerNames: ${deployment.spec.template.spec.containers.map(c, c.name)}
 
@@ -396,7 +400,7 @@ allReady: ${schema.spec.services.all(s, s.enabled)}
 
 Collect status from multiple resources:
 
-```yaml
+```kro
 status:
   # From single resource
   endpoint: ${service.status.loadBalancer.ingress[0].hostname}

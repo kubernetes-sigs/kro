@@ -12,7 +12,7 @@ An instance represents your deployed application. When you create an instance, y
 
 Here's an example instance:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: WebApplication
 metadata:

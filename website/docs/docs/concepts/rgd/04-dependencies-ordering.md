@@ -10,7 +10,7 @@ kro automatically infers dependencies from CEL expressions. You don't specify th
 
 When you reference one resource from another using a CEL expression, you create a dependency:
 
-```yaml
+```kro
 resources:
   - id: configmap
     template:
@@ -58,7 +58,7 @@ In a linear chain, each resource depends on the previous one. This pattern is co
 configmap ──▶ deployment ──▶ service
 ```
 
-```yaml
+```kro
 resources:
   - id: configmap
     template:
@@ -112,7 +112,7 @@ In a diamond pattern, multiple independent resources converge into a single depe
        └─────────┘
 ```
 
-```yaml
+```kro
 resources:
   - id: database
     template:
@@ -162,7 +162,7 @@ When resources only reference `schema` (not each other), they have no interdepen
 └─────┘ └───────┘ └──────┘
 ```
 
-```yaml
+```kro
 resources:
   - id: api
     template:
@@ -208,7 +208,7 @@ kubectl get rgd my-app -o jsonpath='{.status.topologicalOrder}'
 ```
 
 Example output:
-```yaml
+```kro
 status:
   topologicalOrder:
     - configmap
@@ -220,7 +220,7 @@ status:
 
 Circular dependencies are not allowed and will cause validation to fail:
 
-```yaml
+```kro
 # ✗ This will fail
 resources:
   - id: serviceA
@@ -235,7 +235,7 @@ resources:
 ```
 
 **Fix:** Break the cycle by using `schema.spec` instead:
-```yaml
+```kro
 resources:
   - id: serviceA
     template:

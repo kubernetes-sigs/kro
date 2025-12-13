@@ -13,7 +13,7 @@ Resources define the Kubernetes objects that kro creates and manages when users 
 
 Every resource in an RGD requires an `id` and a `template`:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -60,7 +60,7 @@ Resource IDs must be in **lowerCamelCase** format because they're used as identi
 
 Resource templates are structured Kubernetes manifests where specific fields contain CEL expressions that reference your schema or other resources:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -97,49 +97,50 @@ When you reference another resource in a CEL expression, it automatically create
 
 Here's a simple example showing all types of references:
 
-```yaml
-resources:
-  - id: database
-    template:
-      apiVersion: database.example.com/v1
-      kind: PostgreSQL
-      metadata:
-        # Reference instance spec
-        name: ${schema.spec.name}-db
-        # Reference instance metadata
-        namespace: ${schema.metadata.namespace}
-        labels: ${schema.metadata.labels}
-      spec:
-        version: "15"
-        storage: ${schema.spec.storageSize}
-        replicas: 2
+```kro
+spec:
+  resources:
+    - id: database
+      template:
+        apiVersion: database.example.com/v1
+        kind: PostgreSQL
+        metadata:
+          # Reference instance spec
+          name: ${schema.spec.name}-db
+          # Reference instance metadata
+          namespace: ${schema.metadata.namespace}
+          labels: ${schema.metadata.labels}
+        spec:
+          version: "15"
+          storage: ${schema.spec.storageSize}
+          replicas: 2
 
-  - id: deployment
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.metadata.namespace}
-        # Reference another resource's metadata
-        annotations: ${database.metadata.annotations}
-      spec:
-        replicas: ${schema.spec.replicas}
-        selector:
-          matchLabels:
-            app: ${schema.spec.name}
-        template:
-          spec:
-            containers:
-              - name: app
-                image: ${schema.spec.image}
-                env:
-                  # Reference another resource's status
-                  - name: DATABASE_HOST
-                    value: ${database.status.endpoint}
-                  # Reference another resource's spec
-                  - name: DATABASE_VERSION
-                    value: ${database.spec.version}
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.metadata.namespace}
+          # Reference another resource's metadata
+          annotations: ${database.metadata.annotations}
+        spec:
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            spec:
+              containers:
+                - name: app
+                  image: ${schema.spec.image}
+                  env:
+                    # Reference another resource's status
+                    - name: DATABASE_HOST
+                      value: ${database.status.endpoint}
+                    # Reference another resource's spec
+                    - name: DATABASE_VERSION
+                      value: ${database.spec.version}
 ```
 
 In this example:
@@ -158,27 +159,33 @@ kro performs extensive validation and type checking on CEL expressions **before 
 
 When you create a ResourceGraphDefinition, kro validates every CEL expression:
 
-<div style={{height: '600px', overflowY: 'auto'}}>
+<div style={{height: '650px', overflowY: 'auto'}}>
 <Tabs>
 <TabItem value="template" label="Template Syntax">
 
 kro looks for `${` and expects to find a matching `}`.
 
 ```yaml
-# ✓ Valid - kro finds ${ and matching }
-name: ${schema.spec.name}
+resources:
+  - id: configMap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        # ✓ Valid - kro finds ${ and matching }
+        name: ${schema.spec.name}
+      data:
+        # ✓ Valid - no ${, treated as literal string
+        staticKey: "my-app"
 
-# ✓ Valid - no ${, treated as literal string
-name: "my-app"
+        # ✗ Error - ${ found but missing closing }
+        broken: ${schema.spec.name
 
-# ✗ Error - ${ found but missing closing }
-name: ${schema.spec.name
+        # ✗ Error - nested expressions not allowed
+        nested: ${outer(${inner})}
 
-# ✗ Error - nested expressions not allowed
-command: ${outer(${inner})}
-
-# ✓ Valid - nested ${} inside string literals is allowed
-command: ${outer("${inner}")}
+        # ✓ Valid - nested ${} inside string literals is allowed
+        valid: ${outer("${inner}")}
 ```
 
 </TabItem>
@@ -186,24 +193,30 @@ command: ${outer("${inner}")}
 
 Once kro extracts the expression between `${` and `}`, it must be valid CEL:
 
-```yaml
-# ✓ Valid CEL expression
-${schema.spec.name}
+```kro
+resources:
+  - id: configMap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        # ✓ Valid CEL expression
+        name: ${schema.spec.name}
+      data:
+        # ✗ Incomplete expression
+        broken1: ${schema.spec.name +}
 
-# ✗ Incomplete expression
-${schema.spec.name +}
+        # ✗ Unclosed string literal
+        broken2: ${schema.spec.name + "suffix}
 
-# ✗ Unclosed string literal
-${schema.spec.name + "suffix}
+        # ✗ Invalid operator
+        broken3: ${schema.spec.name ++ "suffix"}
 
-# ✗ Invalid operator
-${schema.spec.name ++ "suffix"}
+        # ✗ Missing closing parenthesis
+        broken4: ${(schema.spec.replicas + 1}
 
-# ✗ Missing closing parenthesis
-${(schema.spec.replicas + 1}
-
-# ✗ Invalid syntax
-${schema..spec.name}
+        # ✗ Invalid syntax
+        broken5: ${schema..spec.name}
 ```
 
 </TabItem>
@@ -211,7 +224,7 @@ ${schema..spec.name}
 
 kro verifies that referenced fields exist in the actual Kubernetes resource schemas, that expression output types match the target field types, and that operations are valid for the data types involved.
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -230,7 +243,7 @@ resources:
 
 kro validates that referenced fields actually exist:
 
-```yaml
+```kro
 resources:
   - id: service
     template:
@@ -247,7 +260,7 @@ resources:
 
 For your custom schema, kro validates that fields referenced in templates exist in your schema definition, that types are compatible, and that required fields are present.
 
-```yaml
+```kro
 spec:
   schema:
     spec:
@@ -270,7 +283,7 @@ spec:
 
 kro also validates static fields (those without CEL expressions) against Kubernetes schemas, just like the API server:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -322,7 +335,7 @@ When an instance is updated, kro re-evaluates expressions with new instance valu
 <Tabs>
 <TabItem value="integer" label="Integer Fields">
 
-```yaml
+```kro
 # Deployment requires integer for replicas
 resources:
   - id: deployment
@@ -341,7 +354,7 @@ resources:
 </TabItem>
 <TabItem value="string" label="String Fields">
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -359,7 +372,7 @@ resources:
 </TabItem>
 <TabItem value="object" label="Object/Map Fields">
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -375,7 +388,7 @@ resources:
 </TabItem>
 <TabItem value="array" label="Array/List Fields">
 
-```yaml
+```kro
 # Assuming deployment1 exists with containers defined
 resources:
   - id: deployment2
@@ -406,7 +419,7 @@ When kro detects validation errors, the RGD is rejected and detailed error messa
 
 If a resource references an API version or kind that doesn't exist in the cluster:
 
-```yaml
+```kro
 resources:
   - id: database
     template:
@@ -430,7 +443,7 @@ status:
 
 If a template contains a field that doesn't exist in the Kubernetes schema:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:
@@ -454,7 +467,7 @@ status:
 
 If a CEL expression references a field that doesn't exist on another resource:
 
-```yaml
+```kro
 resources:
   - id: service
     template:
@@ -476,7 +489,7 @@ status:
 
 If an expression's output type doesn't match what the target field expects:
 
-```yaml
+```kro
 resources:
   - id: deployment
     template:

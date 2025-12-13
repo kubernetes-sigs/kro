@@ -4,7 +4,7 @@ sidebar_position: 302
 
 # EKS Cluster
 
-```yaml title="eks.yaml"
+```kro title="eks.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

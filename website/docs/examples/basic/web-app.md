@@ -4,7 +4,7 @@ sidebar_position: 103
 
 # Web Application
 
-```yaml title="deploymentservice-rg.yaml"
+```kro title="deploymentservice-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

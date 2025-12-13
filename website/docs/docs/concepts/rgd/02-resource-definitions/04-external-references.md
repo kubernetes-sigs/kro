@@ -12,7 +12,7 @@ kro provides the `externalRef` field to reference existing resources. When you a
 
 Here's a simple example where an application references a shared ConfigMap that exists in the cluster:
 
-```yaml
+```kro
 resources:
   - id: sharedConfig
     externalRef:
@@ -61,7 +61,7 @@ This allows multiple instances to share the same configuration without duplicati
 
 External references require these fields:
 
-```yaml
+```kro
 # Required fields
 - id: myExternal
   externalRef:
@@ -86,7 +86,7 @@ Common examples include:
 - **Custom resources**: CRDs with free-form `spec` or `status` fields
 - **Any resource with dynamic fields**: Fields whose structure isn't known at RGD creation time
 
-```yaml
+```kro
 # ✓ Safe: returns null if platformUrl doesn't exist
 value: ${config.data.?platformUrl}
 
@@ -98,7 +98,7 @@ value: ${config.data.platformUrl}
 
 Combine `?` with `.orValue()` to provide defaults when fields don't exist:
 
-```yaml
+```kro
 env:
   - name: LOG_LEVEL
     value: ${config.data.?LOG_LEVEL.orValue("info")}
@@ -115,7 +115,7 @@ When you use `?`, kro cannot validate the field exists at build time. If the res
 
 External references participate in the dependency graph just like managed resources. If you reference an external resource's data, kro automatically creates a dependency:
 
-```yaml
+```kro
 resources:
   - id: platformConfig
     externalRef:

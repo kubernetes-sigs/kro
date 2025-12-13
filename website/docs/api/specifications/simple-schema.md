@@ -9,7 +9,7 @@ sidebar_label: SimpleSchema
 uses a human-friendly and readable syntax that is OpenAPI specification
 compatible. Here's an example:
 
-```yaml
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -64,7 +64,7 @@ kro supports these foundational types:
 
 For example:
 
-```yaml
+```simpleschema
 name: string
 age: integer
 enabled: boolean
@@ -76,7 +76,7 @@ price: float
 You can create complex objects by nesting fields. Each field can use any type,
 including other structures:
 
-```yaml
+```simpleschema
 # Simple structure
 address:
   street: string
@@ -102,8 +102,8 @@ This disables the field-validation normally offered by kro, and forwards the val
 
 :::
 
-```yaml
-kind: ResourceGraphDefinition
+```kro
+kind: ResourceGraphDefintion
 metadata: {}
 spec:
   schema:
@@ -140,7 +140,7 @@ Arrays are denoted using `[]` syntax:
 
 Examples:
 
-```yaml
+```simpleschema
 tags: []string
 ports: []integer
 ```
@@ -154,7 +154,7 @@ Maps are key-value pairs denoted as `map[keyType]valueType`:
 
 Examples:
 
-```yaml
+```simpleschema
 labels: "map[string]string"
 metrics: "map[string]float"
 ```
@@ -166,21 +166,21 @@ They provide a map of names to type specifications that follow the simple schema
 
 Example:
 
-```yaml
+```simpleschema
 schema:
   types:
     Person:
       name: string
       age: integer
   spec:
-    people: '[]Person | required=true`
+    people: '[]Person | required=true'
 ```
 
 ## Validation and Documentation
 
 Fields can have multiple markers for validation and documentation:
 
-```yaml
+```simpleschema
 name: string | required=true default="app" description="Application name"
 replicas: integer | default=3 minimum=1 maximum=10
 mode: string | enum="debug,info,warn,error" default="info"
@@ -214,7 +214,7 @@ String fields support additional validation markers:
 
 Examples:
 
-```yaml
+```simpleschema
 # Email validation
 email: string | pattern="^[\\w\\.-]+@[\\w\\.-]+\\.\\w+$" required=true
 
@@ -239,26 +239,26 @@ Array fields support validation markers to ensure data quality:
 
 Examples:
 
-```yaml
+```simpleschema
 # Unique tags with size constraints
-tags: "[]string" | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"
+tags: '[]string | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"'
 
 # Unique port numbers with minimum requirement
-ports: "[]integer" | uniqueItems=true minItems=1 description="At least one unique port"
+ports: '[]integer | uniqueItems=true minItems=1 description="At least one unique port"'
 
 # Allow duplicate comments with size limits
-comments: "[]string" | uniqueItems=false maxItems=50 description="Up to 50 comments"
+comments: '[]string | uniqueItems=false maxItems=50 description="Up to 50 comments"'
 
 # Complex validation with multiple markers
-roles: "[]string" | uniqueItems=true minItems=1 maxItems=5 required=true description="1-5 unique user roles"
+roles: '[]string | uniqueItems=true minItems=1 maxItems=5 required=true description="1-5 unique user roles"'
 
 # Optional array with size constraints
-priorities: "[]integer" | minItems=0 maxItems=3 description="Up to 3 priority levels"
+priorities: '[]integer | minItems=0 maxItems=3 description="Up to 3 priority levels"'
 ```
 
 For example:
 
-```yaml
+```simpleschema
 name: string | required=true default="app" description="Application name"
 id: string | required=true immutable=true description="Unique identifier"
 replicas: integer | default=3 minimum=1 maximum=10
@@ -266,7 +266,7 @@ price: float | minimum=0.01 maximum=999.99
 mode: string | enum="debug,info,warn,error" default="info"
 email: string | pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" description="Valid email address"
 username: string | minLength=3 maxLength=20 pattern="^[a-zA-Z0-9_]+$"
-tags: "[]string" | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"
+tags: '[]string | uniqueItems=true minItems=1 maxItems=10 description="1-10 unique tags"'
 ```
 
 :::warning Floating Point Precision
@@ -283,7 +283,7 @@ automatically:
 - Updates values when the underlying resources change
 - Validates type compatibility using CEL's native type system
 
-```yaml
+```kro
 status:
   # Types are inferred from the referenced fields
   availableReplicas: ${deployment.status.availableReplicas}  # integer
@@ -296,7 +296,7 @@ status:
 Status fields can contain either a single CEL expression or multiple expressions concatenated together:
 
 **Single Expression Fields** can be any type:
-```yaml
+```kro
 status:
   replicas: ${deployment.status.replicas}  # integer
   metadata: ${deployment.metadata}  # object
@@ -305,7 +305,7 @@ status:
 ```
 
 **Multi-Expression Fields** (string templating) must contain only string expressions:
-```yaml
+```kro
 status:
   # ✓ Valid - all expressions return strings
   endpoint: "https://${service.metadata.name}.${service.metadata.namespace}.svc.cluster.local"
@@ -319,7 +319,7 @@ status:
 
 Multi-expression fields are useful for string templating scenarios like constructing URLs, connection strings, or IAM policies:
 
-```yaml
+```kro
 status:
   iamPolicy: |
     {
@@ -333,7 +333,7 @@ status:
 Use explicit `string()` conversions when concatenating non-string values to ensure type compatibility.
 
 Alternatively, you can use CEL's built-in `format()` function for string formatting:
-```yaml
+```kro
 status:
   endpoint: ${"https://%s.%s.svc.cluster.local".format([service.metadata.name, service.metadata.namespace])}
 ```
@@ -349,7 +349,7 @@ kro automatically injects two fields to every instance's status:
 
 An array of condition objects tracking the instance's state:
 
-```yaml
+```kro
 status:
   conditions:
     - type: string # e.g., "Ready", "InstanceManaged", "GraphResolved", "ResourcesReady"
@@ -373,7 +373,7 @@ The `Ready` condition aggregates the state of all sub-conditions and only become
 
 A high-level summary of the instance's status:
 
-```yaml
+```kro
 status:
   state: string # ACTIVE, IN_PROGRESS, FAILED, DELETING, ERROR
 ```
@@ -389,7 +389,7 @@ override them with its own values.
 
 You can define `additionalPrinterColumns` for the created CRD through the ResourceGraphDefinition by setting them on `spec.schema.additionalPrinterColumns`.
 
-```yaml
+```kro
 schema:
   spec:
     image: string | default="nginx"

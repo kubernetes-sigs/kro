@@ -45,12 +45,16 @@ Create the name of the service account to use
 Common labels
 */}}
 {{- define "kro.labels" -}}
+{{- if .Values.metadata.includeHelmChart }}
 helm.sh/chart: {{ include "kro.chart" . }}
+{{- end }}
 {{ include "kro.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
+{{- if .Values.metadata.includeManagedBy }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
 app.kubernetes.io/component: controller
 app.kubernetes.io/part-of: kro
 {{- if .Values.additionalLabels }}

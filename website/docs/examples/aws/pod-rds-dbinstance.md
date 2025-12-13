@@ -4,7 +4,7 @@ sidebar_position: 306
 
 # Pod with RDS DBInstance
 
-```yaml title="deploymentdbinstance-rg.yaml"
+```kro title="deploymentdbinstance-rg.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

@@ -1,0 +1,65 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-external-references
+spec:
+  description: | 
+    Tests if a ResourceGraphDefinition creates an Instance CRD
+  steps:
+  - name: setup
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - apply:
+        file: instance.yaml
+      description: Apply ExternalReferenceTest Instance
+    finally:
+    - description: sleep operation to let instance settle
+      sleep:
+        duration: 3s
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: check-instance-state
+    try:
+    - assert:
+        file: instance-assert-in-progress.yaml
+      description: Verify Instance State is in progress (waiting for external resource)
+    - error:
+        file: configmap.yaml
+      description: Verify ConfigMap does not exist
+    - error:
+        file: owned.yaml
+      description: Verify Owned Resource does not exist
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: ensure-external-ref
+    try:
+    - apply:
+        file: configmap.yaml
+      description: Apply External Reference ConfigMap
+    - assert:
+        file: instance-assert.yaml
+      description: Verify Instance becomes Ready after Reference is fulfilled
+    - assert:
+        file: owned.yaml
+      description: Verify Owned Resource based on External Reference is created
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

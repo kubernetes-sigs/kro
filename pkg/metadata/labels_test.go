@@ -65,116 +65,90 @@ func TestIsKROOwned(t *testing.T) {
 	}
 }
 
-func TestHasMatchingKROOwner(t *testing.T) {
+func TestCompareRGDOwnership(t *testing.T) {
 	cases := []struct {
-		name       string
-		aOwnerName string
-		aOwnerID   string
-		bOwnerName string
-		bOwnerID   string
-		expected   bool
+		name              string
+		existingLabels    map[string]string
+		desiredLabels     map[string]string
+		expectedKROOwned  bool
+		expectedNameMatch bool
+		expectedIDMatch   bool
 	}{
 		{
-			name:       "matching owners",
-			aOwnerName: "test-rgd",
-			aOwnerID:   "test-uid-123",
-			bOwnerName: "test-rgd",
-			bOwnerID:   "test-uid-123",
-			expected:   true,
+			name: "same RGD - normal update",
+			existingLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
 		},
 		{
-			name:       "different owner names",
-			aOwnerName: "test-rgd-a",
-			aOwnerID:   "test-uid-123",
-			bOwnerName: "test-rgd-b",
-			bOwnerID:   "test-uid-123",
-			expected:   false,
+			name: "not owned by KRO",
+			existingLabels: map[string]string{
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  false,
+			expectedNameMatch: false,
+			expectedIDMatch:   false,
 		},
 		{
-			name:       "different owner IDs",
-			aOwnerName: "test-rgd",
-			aOwnerID:   "test-uid-123",
-			bOwnerName: "test-rgd",
-			bOwnerID:   "test-uid-456",
-			expected:   false,
+			name: "different RGD name - conflict",
+			existingLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "existing-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "new-rgd",
+				ResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: false,
+			expectedIDMatch:   true,
 		},
 		{
-			name:     "no owner labels",
-			expected: true,
+			name: "same RGD name, different ID - adoption",
+			existingLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "existing-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                       "true",
+				ResourceGraphDefinitionNameLabel: "test-rgd",
+				ResourceGraphDefinitionIDLabel:   "new-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			labelsA := map[string]string{}
-			labelsB := map[string]string{}
-			if tc.aOwnerName != "" {
-				labelsA[ResourceGraphDefinitionNameLabel] = tc.aOwnerName
-				labelsA[ResourceGraphDefinitionIDLabel] = tc.aOwnerID
-			}
-			if tc.bOwnerName != "" {
-				labelsB[ResourceGraphDefinitionNameLabel] = tc.bOwnerName
-				labelsB[ResourceGraphDefinitionIDLabel] = tc.bOwnerID
-			}
+			existing := metav1.ObjectMeta{Labels: tc.existingLabels}
+			desired := metav1.ObjectMeta{Labels: tc.desiredLabels}
 
-			metaA := metav1.ObjectMeta{Labels: labelsA}
-			metaB := metav1.ObjectMeta{Labels: labelsB}
-			result := HasMatchingKROOwner(metaA, metaB)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
+			kroOwned, nameMatch, idMatch := CompareRGDOwnership(existing, desired)
 
-func TestSetKROOwned(t *testing.T) {
-	cases := []struct {
-		name          string
-		initialLabels map[string]string
-		expected      map[string]string
-	}{
-		{
-			name:          "set owned on empty label",
-			initialLabels: map[string]string{},
-			expected:      map[string]string{OwnedLabel: "true"},
-		},
-		{
-			name:          "override existing owned label",
-			initialLabels: map[string]string{OwnedLabel: "false"},
-			expected:      map[string]string{OwnedLabel: "true"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKROOwned(meta)
-			assert.Equal(t, tc.expected, meta.Labels)
-		})
-	}
-}
-
-func TestSetKROUnowned(t *testing.T) {
-	cases := []struct {
-		name          string
-		initialLabels map[string]string
-		expected      map[string]string
-	}{
-		{
-			name:          "set unowned on empty label",
-			initialLabels: map[string]string{},
-			expected:      map[string]string{OwnedLabel: "false"},
-		},
-		{
-			name:          "override existing owned label",
-			initialLabels: map[string]string{OwnedLabel: "true"},
-			expected:      map[string]string{OwnedLabel: "false"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			meta := metav1.ObjectMeta{Labels: tc.initialLabels}
-			SetKROUnowned(meta)
-			assert.Equal(t, tc.expected, meta.Labels)
+			assert.Equal(t, tc.expectedKROOwned, kroOwned)
+			assert.Equal(t, tc.expectedNameMatch, nameMatch)
+			assert.Equal(t, tc.expectedIDMatch, idMatch)
 		})
 	}
 }
@@ -279,6 +253,10 @@ func TestNewInstanceLabeler(t *testing.T) {
 func TestNewKROMetaLabeler(t *testing.T) {
 	t.Run("NewKROMetaLabeler", func(t *testing.T) {
 		labeler := NewKROMetaLabeler()
-		assert.Equal(t, GenericLabeler{OwnedLabel: "true", KROVersionLabel: version.GetVersionInfo().GitVersion}, labeler)
+		assert.Equal(t, GenericLabeler{
+			OwnedLabel:        "true",
+			KROVersionLabel:   version.GetVersionInfo().GitVersion,
+			ManagedByLabelKey: ManagedByKROValue,
+		}, labeler)
 	})
 }

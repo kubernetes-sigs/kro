@@ -1,0 +1,26 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-external-references
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ExternalReferenceTest
+    spec:
+      name: string | default=foobar
+  resources:
+    - id: input
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: check-external-references
+          namespace: default
+    - id: owned
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: config
+        data:
+          ECHO_VALUE: '${input.?data.ECHO_VALUE.orValue("not found")}'

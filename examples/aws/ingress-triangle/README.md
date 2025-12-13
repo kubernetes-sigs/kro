@@ -62,7 +62,7 @@ annotations:
 
 ### 2. ServiceIngress RGD - Resources
 
-ServiceIngress demonstrates how to use multipel RGDs:
+ServiceIngress demonstrates how to use multiple RGDs:
 
 ```yaml
 resources:

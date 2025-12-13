@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -130,6 +131,22 @@ func TestInferSchemaFromCELType_Collections(t *testing.T) {
 		})
 	}
 }
+func TestGenerateSchemaFromCELTypes_Timestamp(t *testing.T) {
+	typeMap := map[string]*cel.Type{
+		"ts": cel.TimestampType,
+	}
+
+	result, err := GenerateSchemaFromCELTypes(typeMap, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	prop, ok := result.Properties["ts"]
+	require.True(t, ok)
+
+	assert.Equal(t, "string", prop.Type)
+	assert.Equal(t, "datetime", prop.Format)
+	assert.Equal(t, "Timestamp representing a creation time", prop.Description)
+}
 
 func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 	addressFields := map[string]*apiservercel.DeclField{
@@ -151,7 +168,7 @@ func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 		"extra":    apiservercel.NewDeclField("extra", apiservercel.DynType, false, nil, nil),
 	}
 	userType := apiservercel.NewObjectType("User", userFields)
-	provider := apiservercel.NewDeclTypeProvider(userType, addressType)
+	provider := krocel.NewDeclTypeProvider(userType, addressType)
 
 	typeMap := map[string]*cel.Type{
 		"user": userType.CelType(),

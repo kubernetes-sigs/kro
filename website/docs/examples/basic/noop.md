@@ -4,7 +4,7 @@ sidebar_position: 101
 
 # Empty ResourceGraphDefinition
 
-```yaml title="noop.yaml"
+```kro title="noop.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

@@ -1,0 +1,47 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-external-references
+spec:
+  description: | 
+    Tests if a ResourceGraphDefinition creates an Instance CRD
+  steps:
+  - name: setup
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: allow-unknown-crd.yaml
+      description: Apply CRD with field that allows unknown fields
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - apply:
+        file: instance.yaml
+      description: Apply Instance
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: ensure-unknown-field-resolution
+    try:
+    - apply:
+        file: instance.yaml
+      description: Apply Instance that triggers Ref Resolution
+    - assert:
+        file: instance-assert.yaml
+      description: Verify Instance becomes Ready after Reference is fulfilled
+    - assert:
+        file: owned.yaml
+      description: Verify Owned Resource based on External Reference is created
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

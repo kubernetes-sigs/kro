@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+	k8scellib "k8s.io/apiserver/pkg/cel/library"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
@@ -84,6 +85,11 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		ext.Strings(),
 		cel.OptionalTypes(),
 		ext.Encoders(),
+		// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
+		// See https://kubernetes.io/docs/reference/using-api/cel/ and
+		// https://github.com/kubernetes-sigs/kro/issues/880.
+		k8scellib.URLs(),
+		k8scellib.Regex(),
 		library.Random(),
 	}
 
@@ -97,15 +103,15 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	if len(opts.typedResources) > 0 {
 		// We need both a TypeProvider (for field resolution) and variable declarations.
 		// To avoid conflicts, we use different names for types vs variables:
-		//  - Types are registered with "__type_<name>" prefix (e.g "__type_schema")
+		//  - Types are registered with TypeNamePrefix + "<name>" (e.g "__type_schema")
 		//  - Variables use the original names (e.g "pod", "schema"...)
 
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
 
 		for name, schema := range opts.typedResources {
-			declType := openapi.SchemaDeclType(schema, false)
+			declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 			if declType != nil {
-				typeName := "__type_" + name
+				typeName := TypeNamePrefix + name
 				declType = declType.MaybeAssignTypeName(typeName)
 
 				// add type declaration
@@ -119,7 +125,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		}
 
 		if len(declTypes) > 0 {
-			baseProvider := apiservercel.NewDeclTypeProvider(declTypes...)
+			baseProvider := NewDeclTypeProvider(declTypes...)
 			// Enable recognition of CEL reserved keywords as field names
 			baseProvider.SetRecognizeKeywordAsFieldName(true)
 
@@ -159,14 +165,14 @@ func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
 // CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
 // This is used for deep introspection of type structures when generating schemas.
 // The provider maps CEL type names to their full DeclType definitions with all fields.
-func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclTypeProvider {
+func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
 	if len(schemas) == 0 {
 		return nil
 	}
 
 	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
 	for name, schema := range schemas {
-		declType := openapi.SchemaDeclType(schema, false)
+		declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 		if declType != nil {
 			declType = declType.MaybeAssignTypeName(name)
 			declTypes = append(declTypes, declType)
@@ -177,7 +183,7 @@ func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *apiservercel.DeclT
 		return nil
 	}
 
-	provider := apiservercel.NewDeclTypeProvider(declTypes...)
+	provider := NewDeclTypeProvider(declTypes...)
 	// Enable recognition of CEL reserved keywords as field names.
 	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
 	provider.SetRecognizeKeywordAsFieldName(true)

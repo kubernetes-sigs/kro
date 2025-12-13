@@ -16,7 +16,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: repositories.ecr.services.k8s.aws
       spec:
         group: ecr.services.k8s.aws
@@ -222,7 +222,7 @@ spec:
       kind: CustomResourceDefinition
       metadata:
         annotations:
-          controller-gen.kubebuilder.io/version: v0.16.2
+          controller-gen.kubebuilder.io/version: v0.19.0
         name: pullthroughcacherules.ecr.services.k8s.aws
       spec:
         group: ecr.services.k8s.aws

@@ -1,6 +1,8 @@
 module github.com/kro-run/kro/cmd/kro
 
-go 1.24.0
+go 1.25.0
+
+toolchain go1.25.4
 
 require (
 	github.com/go-echarts/go-echarts/v2 v2.6.5

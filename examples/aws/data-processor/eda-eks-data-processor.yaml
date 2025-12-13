@@ -267,7 +267,7 @@ spec:
             ]
             }
   # SNS email subscription for status notifications
-    - id: dataProcessingNotificationEmailSubsription
+    - id: dataProcessingNotificationEmailSubscription
       template:
         apiVersion: sns.services.k8s.aws/v1alpha1
         kind: Subscription

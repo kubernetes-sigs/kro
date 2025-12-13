@@ -270,7 +270,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	}
 
 	err := dc.syncFunc(ctx, item, handler.(Handler))
-	if err == nil || apierrors.IsNotFound(err) {
+	if err == nil {
 		dc.queue.Forget(item)
 		return true
 	}
@@ -291,6 +291,12 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 		requeueTotal.WithLabelValues(gvrKey, "requeue_after").Inc()
 		dc.queue.AddAfter(item, typedErr.Duration())
 	default:
+		// we only check here for this not found error here because we want explicit requeue signals to have priority
+		if apierrors.IsNotFound(err) {
+			dc.log.V(1).Info("item no longer exists, dropping from queue", "item", item)
+			dc.queue.Forget(item)
+			return true
+		}
 		requeueTotal.WithLabelValues(gvrKey, "rate_limited").Inc()
 		if dc.queue.NumRequeues(item) < dc.config.QueueMaxRetries {
 			dc.log.Error(err, "Error syncing item, requeuing with rate limit", "item", item)
@@ -324,7 +330,7 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 	return err
 }
 
-func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj interface{}, eventType string) {
+func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource, obj any, eventType string) {
 	mobj, err := meta.Accessor(obj)
 	if err != nil {
 		dc.log.Error(err, "Failed to get meta for object to enqueue", "eventType", eventType)
@@ -341,7 +347,7 @@ func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource
 	dc.queue.Add(oi)
 }
 
-func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, oldObj, newObj interface{}) {
+func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, oldObj, newObj any) {
 	newMeta, err := meta.Accessor(newObj)
 	if err != nil {
 		dc.log.Error(err, "failed to access new object meta")
@@ -529,7 +535,12 @@ func (dc *DynamicController) reconcileChildrenLocked(
 		}
 		w := dc.ensureWatchLocked(child)
 		childHandlerID := childHandlerID(parent, child)
-		if err := w.AddHandler(dc.ctx, childHandlerID, dc.handlerForChildGVR(parent, child)); err != nil {
+		childHandler, err := dc.handlerForChildGVR(parent, child)
+		if err != nil {
+			return fmt.Errorf("creating child handler for %s for parent %s failed: %w", child, parent, err)
+		}
+
+		if err := w.AddHandler(dc.ctx, childHandlerID, childHandler); err != nil {
 			return fmt.Errorf("add child handler %s: %w", child, err)
 		}
 		reg.childHandlerIDs[child] = childHandlerID
@@ -562,8 +573,12 @@ func (dc *DynamicController) removeHandlerLocked(gvr schema.GroupVersionResource
 	return nil
 }
 
-func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersionResource) cache.ResourceEventHandler {
+func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersionResource) (cache.ResourceEventHandler, error) {
 	parentGVRKey, childGVRKey := keyFromGVR(parent), keyFromGVR(child)
+	parentGVK, err := dc.mapper.KindFor(parent)
+	if err != nil {
+		return nil, fmt.Errorf("failed ot get parent gvk from %s for child handler: %w", parentGVRKey, err)
+	}
 	handle := func(obj interface{}, eventType string) {
 		objMeta, err := meta.Accessor(obj)
 		if err != nil {
@@ -584,11 +599,6 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 			return
 		}
 
-		parentGVK, err := dc.mapper.KindFor(parent)
-		if err != nil {
-			dc.log.Error(err, "failed to get parent GVK", "parent", parentGVRKey)
-			return
-		}
 		pom := &metav1.PartialObjectMetadata{}
 		pom.SetGroupVersionKind(parentGVK)
 		pom.SetName(name)
@@ -609,7 +619,7 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 		AddFunc:    func(obj interface{}) { handle(obj, eventTypeAdd) },
 		UpdateFunc: func(oldObj, newObj interface{}) { handle(newObj, eventTypeUpdate) },
 		DeleteFunc: func(obj interface{}) { handle(obj, eventTypeDelete) },
-	}
+	}, nil
 }
 
 func (dc *DynamicController) gracefulShutdown() error {

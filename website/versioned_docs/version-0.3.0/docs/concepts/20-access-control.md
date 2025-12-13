@@ -25,7 +25,7 @@ effectively also has admin access to the cluster.
 
 ## `aggregation` Access
 
-In the `aggreagation` access mode, the chart includes an [_aggregated_ `ClusterRole`](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles)
+In the `aggregation` access mode, the chart includes an [_aggregated_ `ClusterRole`](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles)
 which dynamically includes all rules from all `ClusterRoles` that have the label
 `rbac.kro.run/aggregate-to-controller: "true"`.
 

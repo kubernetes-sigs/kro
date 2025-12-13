@@ -3,54 +3,89 @@
  * bundles Infima by default. Infima is a CSS framework designed to
  * work well for content-centric websites.
  */
-@font-face {
-  font-family: 'Poppins-Regular';
-  src: url('@site/static/fonts/Poppins/Poppins-Regular.ttf') format('woff2');
-}
 
-@font-face {
-  font-family: 'Poppins-Bold';
-  src: url('@site/static/fonts/Poppins/Poppins-Bold.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Italic';
-  src: url('@site/static/fonts/Poppins/Poppins-Italic.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Thin';
-  src: url('@site/static/fonts/Poppins/Poppins-Thin.ttf') format('woff2');
-}
-
-@font-face {
-  font-family: 'Poppins-Light';
-  src: url('@site/static/fonts/Poppins/Poppins-Light.ttf') format('woff2');
-}
-
-/* :root {
-  --ifm-font-family-base: 'Poppins-Light';
-  --ifm-heading-font-family: 'Poppins-Regular';
-  --ifm-font-family-monospace: 'Poppins-Light';
-} */
+/* Modern techy fonts from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --main-color: #3970df;
-  --main-color-dark: rgb(152, 212, 248);
-  --ifm-color-primary: #3970df;
-  --ifm-button-border-color: red;
-  --ifm-color-primary-dark: #1d68e1;
-  --ifm-color-primary-darker: #1b62d4;
-  --ifm-color-primary-darkest: #1751af;
-  --ifm-color-primary-light: #4e89e8;
-  --ifm-color-primary-lighter: #5a91ea;
-  --ifm-color-primary-lightest: #80aaef;
-  --ifm-code-font-size: 98%;
+  /* Fonts */
+  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-heading-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* Colors */
+  --main-color: #5b7fc9;
+  --main-color-dark: #7c9ad9;
+  --ifm-color-primary: #5b7fc9;
+  --ifm-color-primary-dark: #4a6db8;
+  --ifm-color-primary-darker: #3f5fa8;
+  --ifm-color-primary-darkest: #344e8a;
+  --ifm-color-primary-light: #6a89c9;
+  --ifm-color-primary-lighter: #7c9ad9;
+  --ifm-color-primary-lightest: #9bb3e3;
+  --ifm-code-font-size: 92%;
+  --ifm-transition-fast: 200ms;
+
+  /* Global typography */
+  --ifm-font-size-base: 93%;
+  --ifm-line-height-base: 1.5;
+  --ifm-heading-font-weight: 600;
+  --ifm-h1-font-size: 1.75rem;
+  --ifm-h2-font-size: 1.4rem;
+  --ifm-h3-font-size: 1.15rem;
+  --ifm-h4-font-size: 1rem;
+  --ifm-h5-font-size: 0.9rem;
+  --ifm-h6-font-size: 0.85rem;
+
+  /* Tighter spacing */
+  --ifm-spacing-vertical: 0.75rem;
+  --ifm-spacing-horizontal: 1rem;
+  --ifm-navbar-height: 3.25rem;
+  --ifm-navbar-item-padding-horizontal: 0.65rem;
+  --ifm-navbar-item-padding-vertical: 0.4rem;
+  --ifm-menu-link-padding-vertical: 0.3rem;
+  --ifm-menu-link-padding-horizontal: 0.6rem;
+  --ifm-toc-padding-vertical: 0.4rem;
+  --ifm-toc-padding-horizontal: 0.6rem;
+  --ifm-paragraph-margin-bottom: 0.75rem;
+}
+
+/* Disable font ligatures in code blocks */
+code, pre, .prism-code {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+/* Smooth theme transitions - targeted to avoid interfering with other plugins */
+html,
+body,
+.navbar,
+.footer,
+.main-wrapper,
+.menu,
+.sidebar,
+article,
+[class*="codeBlock"],
+[class*="DocSearch"] {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 .button {
-  margin-right: 10px;
-  margin-left: 10px;
+  margin-right: 8px;
+  margin-left: 8px;
+  font-size: 0.875rem;
+  font-weight: 200;
+  letter-spacing: 0.02em;
+  padding: 0.5rem 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.button:hover {
+  transform: translateY(-1px);
 }
 
 @media (max-width: 768px) {
@@ -66,8 +101,8 @@
 
 .button.button--primary:hover {
   color: white;
-  border: 2px solid rgb(35, 80, 168);
-  background-color: rgb(35, 80, 168);
+  border: 2px solid #4a6db8;
+  background-color: #4a6db8;
 }
 
 .button.button--secondary {
@@ -87,19 +122,19 @@
 }
 
 [data-theme='dark'] .button.button--primary:hover {
-  color: white;
-  border: 2px solid rgb(116, 177, 215);
-  background-color: rgb(113, 178, 218);
+  color: #1e1e1e;
+  border: 2px solid #a4bae0;
+  background-color: #a4bae0;
 }
 
 [data-theme='dark'] .button.button--secondary {
   color: var(--main-color);
   border: 2px solid var(--main-color);
-  background-color: white;
+  background-color: transparent;
 }
 
 [data-theme='dark'] .button.button--secondary:hover {
-  color: white;
+  color: #1e1e1e;
   border: 2px solid var(--main-color);
   background-color: var(--main-color);
 }
@@ -108,6 +143,50 @@ article {
   max-width: 95%;
   margin-left: auto;
   margin-right: auto;
+  font-size: 0.925rem;
+  line-height: 1.6;
+}
+
+
+/* Tighter sidebar */
+.menu__list {
+  font-size: 0.875rem;
+}
+
+.menu__link {
+  padding: 0.35rem 0.6rem;
+}
+
+/* Smaller table of contents */
+.table-of-contents {
+  font-size: 0.8rem;
+}
+
+.table-of-contents__link {
+  padding: 0.25rem 0;
+}
+
+/* Smaller breadcrumbs */
+.breadcrumbs {
+  font-size: 0.8rem;
+}
+
+/* Compact footer */
+.footer {
+  padding: 2rem 0 1.5rem;
+}
+
+.footer__title {
+  font-size: 0.9rem;
+}
+
+.footer__link-item {
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+
+.footer__copyright {
+  font-size: 0.8rem;
 }
 
 .navbar__item {
@@ -115,19 +194,47 @@ article {
   padding: var(--ifm-navbar-item-padding-vertical) var(--ifm-navbar-item-padding-horizontal);
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
+/* Dark theme - Clean neutral */
 [data-theme='dark'] {
-  --main-color: rgb(51, 109, 145);
-  --ifm-background-color: #2e66b0;
-  --ifm-background-surface-color: #c83939;
-  --ifm-color-primary: var(--main-color-dark);
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+
+  /* Accent - muted blue, same family as light mode */
+  --main-color: #8fa8d4;
+  --ifm-color-primary: #8fa8d4;
+  --ifm-color-primary-dark: #7a96c8;
+  --ifm-color-primary-darker: #6584bc;
+  --ifm-color-primary-darkest: #5070a8;
+  --ifm-color-primary-light: #a4bae0;
+  --ifm-color-primary-lighter: #b9ccec;
+  --ifm-color-primary-lightest: #d4e2f5;
+
+  /* Backgrounds */
+  --ifm-background-color: #1e1e1e;
+  --ifm-background-surface-color: #252526;
+  --ifm-navbar-background-color: #1e1e1e;
+  --ifm-footer-background-color: #1e1e1e;
+  --ifm-card-background-color: #252526;
+
+  /* Text */
+  --ifm-color-content: #d4d4d4;
+  --ifm-heading-color: #e8e8e8;
+  --ifm-navbar-link-color: #cccccc;
+  --ifm-navbar-link-hover-color: #ffffff;
+  --ifm-footer-link-color: #a0a0a0;
+  --ifm-menu-color: #cccccc;
+  --ifm-menu-color-active: #ffffff;
+
+  /* Borders */
+  --ifm-menu-color-background-active: #303030;
+  --ifm-toc-border-color: #333333;
+  --ifm-color-emphasis-200: #333333;
+  --ifm-color-emphasis-300: #404040;
+  --ifm-color-emphasis-400: #505050;
+  --ifm-color-emphasis-500: #707070;
+  --ifm-color-emphasis-600: #909090;
+  --ifm-color-emphasis-700: #b0b0b0;
+
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
 }
 
 .header-github-link::before {
@@ -144,10 +251,13 @@ article {
   background-color: var(--ifm-navbar-link-hover-color);
 }
 
-[data-theme='dark'] .kroFooter {
-  background-color: var(--main-color-dark);
+[data-theme='dark'] .header-github-link::before {
+  background-color: #c9d1d9;
 }
 
+[data-theme='dark'] .header-github-link:hover::before {
+  background-color: #f0f6fc;
+}
 
 .announcement-bar-style {
   color: white;
@@ -174,4 +284,67 @@ div[class^="announcementBar_"] {
   overflow: hidden;
   height: 100%;
   opacity: 1;
+  transition: background-image 0.3s ease;
+}
+
+[data-theme='dark'] .heroA {
+  background-image: linear-gradient(#252526, #1e1e1e);
+}
+
+/* Full-width layout for API reference page */
+html.fullWidthContent main > .container {
+  max-width: 100% !important;
+  padding: 0 !important;
+}
+
+html.fullWidthContent article {
+  max-width: 100% !important;
+}
+
+html.fullWidthContent .row {
+  margin: 0 !important;
+}
+
+html.fullWidthContent .col {
+  padding: 1rem 2rem !important;
+  max-width: 100% !important;
+}
+
+/* Default Prism code blocks - match kro style */
+div[class^="codeBlockContainer"],
+div[class*=" codeBlockContainer"] {
+  border-radius: 8px !important;
+  background: #fafafa !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+[data-theme='dark'] div[class^="codeBlockContainer"],
+[data-theme='dark'] div[class*=" codeBlockContainer"] {
+  background: #161616 !important;
+}
+
+div[class^="codeBlockTitle"],
+div[class*=" codeBlockTitle"] {
+  background: #f0f0f0 !important;
+  border-bottom: none !important;
+  font-size: 0.75rem !important;
+  color: #777 !important;
+}
+
+[data-theme='dark'] div[class^="codeBlockTitle"],
+[data-theme='dark'] div[class*=" codeBlockTitle"] {
+  background: #1f1f1f !important;
+  color: #777 !important;
+}
+
+pre[class^="prism-code"],
+pre[class*=" prism-code"] {
+  background: transparent !important;
+}
+
+/* Code block content area */
+div[class^="codeBlockContent"],
+div[class*=" codeBlockContent"] {
+  background: transparent !important;
 }

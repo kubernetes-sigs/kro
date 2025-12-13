@@ -37,6 +37,9 @@ const (
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
+	ManagedByLabelKey = "app.kubernetes.io/managed-by"
+	ManagedByKROValue = "kro"
+
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
@@ -50,30 +53,39 @@ const (
 // IsKROOwned returns true if the resource is owned by KRO.
 func IsKROOwned(meta metav1.Object) bool {
 	v, ok := meta.GetLabels()[OwnedLabel]
+	if !ok {
+		return meta.GetLabels()[ManagedByLabelKey] == ManagedByKROValue
+	}
 	return ok && booleanFromString(v)
 }
 
-// HasMatchingKROOwner returns true if resources have the same RGD owner.
-// Note: The caller is responsible for ensuring that KRO labels exist on both
-// resources before calling this function.
-func HasMatchingKROOwner(a, b metav1.ObjectMeta) bool {
-	aOwnerName := a.Labels[ResourceGraphDefinitionNameLabel]
-	aOwnerID := a.Labels[ResourceGraphDefinitionIDLabel]
+// CompareRGDOwnership compares RGD ownership labels between two resources.
+// Returns three booleans:
+//   - kroOwned: whether the existing resource is owned by KRO
+//   - nameMatch: whether both resources have the same RGD name
+//   - idMatch: whether both resources have the same RGD ID
+//
+// This allows callers to distinguish between different ownership scenarios:
+//   - kroOwned=true, nameMatch=true, idMatch=true: same RGD, normal update
+//   - kroOwned=true, nameMatch=true, idMatch=false: same RGD name, different ID (adoption)
+//   - kroOwned=true, nameMatch=false: different RGD (conflict)
+//   - kroOwned=false: not owned by KRO (conflict)
+func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMatch, idMatch bool) {
+	kroOwned = IsKROOwned(&existing)
+	if !kroOwned {
+		return false, false, false
+	}
 
-	bOwnerName := b.Labels[ResourceGraphDefinitionNameLabel]
-	bOwnerID := b.Labels[ResourceGraphDefinitionIDLabel]
+	existingOwnerName := existing.Labels[ResourceGraphDefinitionNameLabel]
+	existingOwnerID := existing.Labels[ResourceGraphDefinitionIDLabel]
 
-	return aOwnerName == bOwnerName && aOwnerID == bOwnerID
-}
+	desiredOwnerName := desired.Labels[ResourceGraphDefinitionNameLabel]
+	desiredOwnerID := desired.Labels[ResourceGraphDefinitionIDLabel]
 
-// SetKROOwned sets the OwnedLabel to true on the resource.
-func SetKROOwned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(true))
-}
+	nameMatch = existingOwnerName == desiredOwnerName
+	idMatch = existingOwnerID == desiredOwnerID
 
-// SetKROUnowned sets the OwnedLabel to false on the resource.
-func SetKROUnowned(meta metav1.ObjectMeta) {
-	setLabel(&meta, OwnedLabel, stringFromBoolean(false))
+	return kroOwned, nameMatch, idMatch
 }
 
 var (
@@ -149,11 +161,12 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 }
 
 // NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ControllerPodID labels on a resource.
+// KROVersion, and ManagedBy labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:      "true",
-		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
+		OwnedLabel:        "true",
+		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
+		ManagedByLabelKey: ManagedByKROValue,
 	}
 }
 
@@ -171,13 +184,6 @@ func booleanFromString(s string) bool {
 	// of parsing here. Since those labels are set by the controller
 	// it self. We'll expect the same values back.
 	return s == "true"
-}
-
-func stringFromBoolean(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }
 
 // Helper function to set a label

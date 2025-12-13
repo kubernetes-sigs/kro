@@ -3,12 +3,15 @@ kind: Test
 metadata:
   name: check-rgd-deletion
 spec:
-  description: | 
-    Tests if deleting a ResourceGraphDefinition deletes the Instance CRD
+  description: |
+    Tests if deleting a ResourceGraphDefinition properly cleans up resources (with CRD deletion disabled, CRD should persist)
   steps:
   - name: install-rgd
     try:
     #- description: Install the RGD that creates an Instance CRD
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
     - apply:
         file: rgd.yaml
       description: Apply RGD
@@ -46,10 +49,10 @@ spec:
     - description: sleep operation
       sleep:
         duration: 20s # wait for the RGD to be deleted. Running the test with 5s is flaky (passes locally but fails in CI)
-  - name: check-that-crd-is-deleted
+  - name: check-that-crd-still-exists
     try:
-    - error:
-        file: instancecrd-assert.yaml        
+    - assert:
+        file: instancecrd-assert.yaml
     catch:
     - description: kro controller pod logs collector
       podLogs:

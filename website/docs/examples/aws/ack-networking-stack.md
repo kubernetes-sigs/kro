@@ -4,7 +4,7 @@ sidebar_position: 303
 
 # Networking Stack
 
-```yaml title="networking-stack.yaml"
+```kro title="networking-stack.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:

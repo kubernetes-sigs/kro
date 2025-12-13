@@ -510,7 +510,7 @@ func doTestSetTrueAccessor(t *testing.T, cases []ConditionSetTrueTest) {
 
 			if tc.set == cts.root {
 				// Skip validation the happy condition because we can't be sure
-				// seting it true was correct. Use tc.happyWant to test that case.
+				// setting it true was correct. Use tc.happyWant to test that case.
 				return
 			}
 

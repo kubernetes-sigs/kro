@@ -949,8 +949,11 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	crdCopy := crd.DeepCopy()
 
 	// TODO(a-hilaly) expand this function when we start support CRD upgrades.
-	if len(crdCopy.Spec.Versions) != 1 || crdCopy.Spec.Versions[0].Schema == nil {
-		panic("Expected CRD to have exactly one version with schema defined")
+	if len(crdCopy.Spec.Versions) != 1 {
+		return nil, fmt.Errorf("expected CRD to have exactly one version, got %d versions: multi-version CRDs not yet supported", len(crdCopy.Spec.Versions))
+	}
+	if crdCopy.Spec.Versions[0].Schema == nil {
+		return nil, fmt.Errorf("expected CRD version to have schema defined, but schema is nil")
 	}
 
 	openAPISchema := crdCopy.Spec.Versions[0].Schema.OpenAPIV3Schema

@@ -1,0 +1,18 @@
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: vote-webstack
+  namespace: default
+spec:
+  name: vote-webstack
+  namespace: default
+  appType: "vote"
+  image: "dogsvscats/vote:latest"
+  replicas: 2
+  redisEndpoint: "redis-endpoint.example.com"  # Replace with actual Redis endpoint
+  service:
+    enabled: true
+  ingress:
+    enabled: true
+  elasticache:
+    enabled: true

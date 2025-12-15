@@ -1,0 +1,19 @@
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: result-webstack
+  namespace: default
+spec:
+  name: result-webstack
+  namespace: default
+  appType: "result"
+  image: "dogsvscats/result:latest"
+  replicas: 1
+  postgresEndpoint: "postgres-endpoint.example.com"  # Replace with actual Postgres endpoint
+  postgresSecretName: "postgres-secret"  # Replace with actual secret name
+  service:
+    enabled: true
+  ingress:
+    enabled: true
+  postgres:
+    enabled: true

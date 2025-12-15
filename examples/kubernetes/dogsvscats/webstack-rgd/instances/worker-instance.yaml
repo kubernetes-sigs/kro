@@ -1,0 +1,16 @@
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: worker-webstack
+  namespace: default
+spec:
+  name: worker-webstack
+  namespace: default
+  appType: "worker"
+  image: "dogsvscats/worker:latest"
+  replicas: 1
+  redisEndpoint: "redis-endpoint.example.com"  # Replace with actual Redis endpoint
+  postgresEndpoint: "postgres-endpoint.example.com"  # Replace with actual Postgres endpoint
+  postgresSecretName: "postgres-secret"  # Replace with actual secret name
+  service:
+    enabled: false

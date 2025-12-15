@@ -1,0 +1,122 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webstack.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebStack
+    additionalPrinterColumns:
+    - name: STATE
+      type: string
+      jsonPath: .status.state
+    - name: SYNCED
+      type: boolean
+      jsonPath: .status.synced
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    spec:
+      name: string
+      namespace: string | default="default"
+      # Application type (vote, result, or worker)
+      appType: string
+      # Application Configuration
+      image: string
+      replicas: integer | default=1
+      # Infrastructure endpoints
+      redisEndpoint: string | default=""
+      postgresEndpoint: string | default=""
+      postgresSecretName: string | default=""
+      # Feature flags
+      service:
+        enabled: boolean | default=true
+      ingress:
+        enabled: boolean | default=false
+      elasticache:
+        enabled: boolean | default=false
+      postgres:
+        enabled: boolean | default=false
+    status:
+      deploymentConditions: ${webapp.status.deploymentConditions}
+      availableReplicas: ${webapp.status.availableReplicas}
+      serviceName: ${webapp.status.serviceName}
+      url: ${webapp.status.url}
+
+  resources:
+  # --- Vote WebStack ---
+  - id: webapp
+    includeWhen:
+      - ${schema.spec.appType == "vote"}
+    readyWhen:
+      - ${has(webapp.status.availableReplicas)}
+      - ${webapp.status.availableReplicas > 0}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: VoteWebStack
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        image: ${schema.spec.image}
+        replicas: ${schema.spec.replicas}
+        redisEndpoint: ${schema.spec.redisEndpoint}
+        service:
+          enabled: ${schema.spec.service.enabled}
+        ingress:
+          enabled: ${schema.spec.ingress.enabled}
+        elasticache:
+          enabled: ${schema.spec.elasticache.enabled}
+
+  # --- Result WebStack ---
+  - id: webapp
+    includeWhen:
+      - ${schema.spec.appType == "result"}
+    readyWhen:
+      - ${has(webapp.status.availableReplicas)}
+      - ${webapp.status.availableReplicas > 0}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: ResultWebStack
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        image: ${schema.spec.image}
+        replicas: ${schema.spec.replicas}
+        postgresEndpoint: ${schema.spec.postgresEndpoint}
+        postgresSecretName: ${schema.spec.postgresSecretName}
+        service:
+          enabled: ${schema.spec.service.enabled}
+        ingress:
+          enabled: ${schema.spec.ingress.enabled}
+        postgres:
+          enabled: ${schema.spec.postgres.enabled}
+
+  # --- Worker WebStack ---
+  - id: webapp
+    includeWhen:
+      - ${schema.spec.appType == "worker"}
+    readyWhen:
+      - ${has(webapp.status.availableReplicas)}
+      - ${webapp.status.availableReplicas > 0}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: WorkerWebStack
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        image: ${schema.spec.image}
+        replicas: ${schema.spec.replicas}
+        redisEndpoint: ${schema.spec.redisEndpoint}
+        postgresEndpoint: ${schema.spec.postgresEndpoint}
+        postgresSecretName: ${schema.spec.postgresSecretName}
+        service:
+          enabled: ${schema.spec.service.enabled}

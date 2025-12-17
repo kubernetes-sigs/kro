@@ -38,19 +38,19 @@ spec:
       postgres:
         enabled: boolean | default=false
     status:
-      deploymentConditions: ${webapp.status.deploymentConditions}
-      availableReplicas: ${webapp.status.availableReplicas}
-      serviceName: ${webapp.status.serviceName}
-      url: ${webapp.status.url}
+      deploymentConditions: ${voteapp.status.deploymentConditions || resultapp.status.deploymentConditions || workerapp.status.deploymentConditions}
+      availableReplicas: ${voteapp.status.availableReplicas || resultapp.status.availableReplicas || workerapp.status.availableReplicas}
+      serviceName: ${voteapp.status.serviceName || resultapp.status.serviceName}
+      url: ${voteapp.status.url || resultapp.status.url}
 
   resources:
   # --- Vote WebStack ---
-  - id: webapp
+  - id: voteapp
     includeWhen:
       - ${schema.spec.appType == "vote"}
     readyWhen:
-      - ${has(webapp.status.availableReplicas)}
-      - ${webapp.status.availableReplicas > 0}
+      - ${has(voteapp.status.availableReplicas)}
+      - ${voteapp.status.availableReplicas > 0}
     template:
       apiVersion: kro.run/v1alpha1
       kind: VoteWebStack
@@ -71,12 +71,12 @@ spec:
           enabled: ${schema.spec.elasticache.enabled}
 
   # --- Result WebStack ---
-  - id: webapp
+  - id: resultapp
     includeWhen:
       - ${schema.spec.appType == "result"}
     readyWhen:
-      - ${has(webapp.status.availableReplicas)}
-      - ${webapp.status.availableReplicas > 0}
+      - ${has(resultapp.status.availableReplicas)}
+      - ${resultapp.status.availableReplicas > 0}
     template:
       apiVersion: kro.run/v1alpha1
       kind: ResultWebStack
@@ -98,12 +98,12 @@ spec:
           enabled: ${schema.spec.postgres.enabled}
 
   # --- Worker WebStack ---
-  - id: webapp
+  - id: workerapp
     includeWhen:
       - ${schema.spec.appType == "worker"}
     readyWhen:
-      - ${has(webapp.status.availableReplicas)}
-      - ${webapp.status.availableReplicas > 0}
+      - ${has(workerapp.status.availableReplicas)}
+      - ${workerapp.status.availableReplicas > 0}
     template:
       apiVersion: kro.run/v1alpha1
       kind: WorkerWebStack

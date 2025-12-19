@@ -160,7 +160,7 @@ an `Ingress`. Let's use it!
    with the following content:
 
    ```yaml title="instance.yaml"
-   apiVersion: v1alpha1
+   apiVersion: kro.run/v1alpha1
    kind: Application
    metadata:
      name: my-app-instance
@@ -242,10 +242,13 @@ kro continuously reconciles your resources. Try these experiments:
    ```
 
 2. Apply the change:
+
    ```bash
    kubectl apply -f instance.yaml
    ```
+
 3. Watch the deployment scale up:
+
    ```bash
    kubectl get deployment my-app
    ```
@@ -253,10 +256,13 @@ kro continuously reconciles your resources. Try these experiments:
 **See kro's automatic reconciliation:**
 
 1. Delete the service:
+
    ```bash
    kubectl delete service my-app-svc
    ```
+
 2. Watch kro recreate it automatically:
+
    ```bash
    kubectl get service my-app-svc -w
    ```

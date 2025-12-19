@@ -19,23 +19,33 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
-// with the provided spec and status schemas~
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
+// with the provided spec and status schemas.
+func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
+	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), rgSchema.AdditionalPrinterColumns, rgSchema.Labels, rgSchema.Annotations)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, labels map[string]string, annotations map[string]string) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
+
+	objectMeta := metav1.ObjectMeta{
+		Name:            fmt.Sprintf("%s.%s", pluralKind, group),
+		OwnerReferences: nil, // Injecting owner references is the responsibility of the caller.
+	}
+	if len(labels) > 0 {
+		objectMeta.Labels = labels
+	}
+	if len(annotations) > 0 {
+		objectMeta.Annotations = annotations
+	}
+
 	return &extv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s.%s", pluralKind, group),
-			OwnerReferences: nil, // Injecting owner references is the responsibility of the caller.
-		},
+		ObjectMeta: objectMeta,
 		Spec: extv1.CustomResourceDefinitionSpec{
 			Group: group,
 			Names: extv1.CustomResourceDefinitionNames{

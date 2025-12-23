@@ -20,7 +20,7 @@ spec:
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        namespace: ${schema.spec.namespace}
         name: ${random.seededString(10, schema.metadata.uid)}
+        namespace: ${schema.spec.spec.namespace}
       data:
         uid: ${schema.metadata.uid}

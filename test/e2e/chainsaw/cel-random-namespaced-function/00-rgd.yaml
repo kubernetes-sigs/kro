@@ -4,7 +4,7 @@ metadata:
   name: cel-random-fn
 spec:
   schema:
-    apiVersion: test.kro.run/v1alpha1
+    apiVersion: v1alpha1
     kind: RandomFnApp
     spec:
       properties:

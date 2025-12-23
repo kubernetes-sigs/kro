@@ -7,13 +7,13 @@ spec:
   - name: Apply RGD
     try:
     - apply:
-        file: 00-rgd.yaml
+        file: rgd.yaml
     - assert:
-        file: 10-assert-rgd-active.yaml
+        file: assert-rgd-active.yaml
   - name: Create instance
     try:
     - apply:
-        file: 01-instance.yaml
+        file: instance.yaml
     - wait:
         apiVersion: test.kro.run/v1alpha1
         kind: RandomFnApp

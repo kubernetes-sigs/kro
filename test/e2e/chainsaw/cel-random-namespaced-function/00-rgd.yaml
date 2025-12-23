@@ -10,7 +10,10 @@ spec:
     spec:
       type: object
       properties:
-        namespace: string
+        spec:
+          type: object
+          properties:
+            namespace: string
   resources:
   - id: cm
     template:

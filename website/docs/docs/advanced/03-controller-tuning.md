@@ -121,3 +121,23 @@ config:
   clientQps: 200
   clientBurst: 300
 ```
+
+## Debug Image and Profiling
+
+For performance testing and debugging, kro provides a debug image variant with [pprof](https://pkg.go.dev/net/http/pprof) profiling enabled.
+
+:::warning
+The debug image exposes sensitive performance data through pprof endpoints. **Do not use in production environments.**
+:::
+
+### Using the Debug Image
+
+Enable debug mode in your Helm values:
+
+```yaml
+debug:
+  enabled: true      # Uses the -debug tagged image
+  pprofPort: 6060    # Port for pprof HTTP server
+  service:
+    enabled: true    # Create a Service for port-forwarding
+```

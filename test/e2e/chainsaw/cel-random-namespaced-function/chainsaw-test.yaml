@@ -1,0 +1,19 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: cel-random-namespaced-function
+spec:
+  steps:
+  - name: Apply RGD
+    try:
+    - apply:
+        file: 00-rgd.yaml
+    - assert:
+        file: 10-assert-rgd-active.yaml
+
+  - name: Create instance
+    try:
+    - apply:
+        file: 01-instance.yaml
+    - assert:
+        file: 11-assert-instance-ready.yaml

@@ -262,21 +262,11 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 			targetName := a.exprToString(ast, t)
 			full := fmt.Sprintf("%s.%s", targetName, fn)
 
-			// If this is a known namespaced function then "random" is NOT a resource .
-			if _, ok := a.functions[full]; ok {
-				out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
-					Name: full,
-				})
-				return out
+			// Inspect when its not a known namespaced function
+			if _, ok := a.functions[full]; !ok {
+				out.merge(a.inspectExpr(ast, t, path))
 			}
-
-			// Otherwise, it will be a normal method call on a value
-			out.merge(a.inspectExpr(ast, t, path))
-			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
-				Name: full,
-			})
-
-			// Treat chained method call as unknown unless known
+			// Record the member function invocation as part of CEL dependency graph construction.
 			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
 				Name: full,
 			})

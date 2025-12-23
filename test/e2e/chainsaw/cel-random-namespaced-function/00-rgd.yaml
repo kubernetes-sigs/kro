@@ -8,16 +8,15 @@ spec:
     group: test.kro.run
     kind: RandomFnApp
     spec:
-      type: object
-      properties:
-        namespace: string
+      namespace: string
   resources:
   - id: cm
     template:
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        namespace: ${schema.spec.namespace}
         name: ${random.seededString(10, schema.metadata.uid)}
+        namespace: ${schema.spec.namespace}
       data:
         uid: ${schema.metadata.uid}
+

@@ -10,10 +10,18 @@ spec:
         file: 00-rgd.yaml
     - assert:
         file: 10-assert-rgd-active.yaml
-
   - name: Create instance
     try:
     - apply:
         file: 01-instance.yaml
-    - assert:
-        file: 11-assert-instance-ready.yaml
+    - wait:
+        apiVersion: test.kro.run/v1alpha1
+        kind: RandomFnApp
+        name: random-fn-app
+        namespace: ($namespace)
+        timeout: 2m
+        for:
+          jsonPath:
+            path: "{.status.conditions[?(@.type=='Ready')].status}"
+            value: "True"
+

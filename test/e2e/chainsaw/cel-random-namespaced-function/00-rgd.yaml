@@ -5,7 +5,7 @@ metadata:
 spec:
   schema:
     apiVersion: v1alpha1
-    group: kro.run
+    group: test.kro.run
     kind: RandomFnApp
     spec:
       properties:

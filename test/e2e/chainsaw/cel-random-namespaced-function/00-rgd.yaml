@@ -8,6 +8,7 @@ spec:
     group: test.kro.run
     kind: RandomFnApp
     spec:
+      type: object
       properties:
         namespace:
           type: string

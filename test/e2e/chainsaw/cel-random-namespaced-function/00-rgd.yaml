@@ -8,12 +8,9 @@ spec:
     group: test.kro.run
     kind: RandomFnApp
     spec:
-      openAPIV3Schema:
-        type: object
-        properties:
-          namespace:
-            type: string
-            default: "default"
+      type: object
+      properties:
+        namespace: string
   resources:
   - id: cm
     template:

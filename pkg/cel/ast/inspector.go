@@ -262,10 +262,11 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 			targetName := a.exprToString(ast, t)
 			full := fmt.Sprintf("%s.%s", targetName, fn)
 
-			// Still inspect target for resource usage
-			out.merge(a.inspectExpr(ast, t, path))
-
-			// Treat chained method call as unknown unless known
+			// Inspect when its not a known namespaced function
+			if _, ok := a.functions[full]; !ok {
+				out.merge(a.inspectExpr(ast, t, path))
+			}
+			// Treat chained method calls as unknown unless they resolve to a known namespaced function
 			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
 				Name: full,
 			})

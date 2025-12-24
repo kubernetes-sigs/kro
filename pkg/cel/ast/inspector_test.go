@@ -491,6 +491,18 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{Name: "toLower", Arguments: []string{"user.name"}},
 			},
 		},
+		{
+			name:       "resource id collides with function namespace",
+			resources:  []string{"random"},
+			functions:  []string{"random.seededString"},
+			expression: `random.status.field == "x" && random.seededString(10, "abc") != ""`,
+			wantResources: []ResourceDependency{
+				{ID: "random", Path: "random.status.field"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "random.seededString"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

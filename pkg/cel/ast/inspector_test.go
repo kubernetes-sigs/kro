@@ -500,7 +500,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "random", Path: "random.status.field"},
 			},
 			wantFunctions: []FunctionCall{
-				{Name: "random.seededString", Arguments: []string{"10", `"abc"`}},
+				{Name: "random.seededString"},
 			},
 		},
 	}

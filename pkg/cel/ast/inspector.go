@@ -262,21 +262,13 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 			targetName := a.exprToString(ast, t)
 			full := fmt.Sprintf("%s.%s", targetName, fn)
 
-			// Collect args as strings
-			callArgs := call.Args()
-			args := make([]string, 0, len(callArgs))
-			for _, aExpr := range callArgs {
-				args = append(args, a.exprToString(ast, aExpr))
-			}
-
 			// Inspect when its not a known namespaced function
 			if _, ok := a.functions[full]; !ok {
 				out.merge(a.inspectExpr(ast, t, path))
 			}
 			// Record the member function invocation as part of CEL dependency graph construction.
 			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
-				Name:      full,
-				Arguments: args,
+				Name: full,
 			})
 		}
 		return out

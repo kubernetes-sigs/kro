@@ -1,0 +1,224 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: webstack.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebStack
+    additionalPrinterColumns:
+    - name: STATE
+      type: string
+      jsonPath: .status.state
+    - name: SYNCED
+      type: boolean
+      jsonPath: .status.synced
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
+    spec:
+      name: string
+      namespace: string | default="default"
+      # Application Configuration, defered from usign nginx as discussed with CA & PK!!!
+      image: string | default="dogsvscats/result:latest"
+      replicas: integer | default=1
+      # Feature flags
+      service:
+        enabled: boolean | default=true
+      ingress:
+        enabled: boolean | default=false
+      # Infrastructure flags - create new resources
+      elasticache:
+        enabled: boolean | default=false
+      rds:
+        enabled: boolean | default=false
+      # External reference flags - reference existing resources
+      externalElasticache:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
+      externalRds:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
+      externalPostgresSecret:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
+    status:
+      deploymentConditions: ${deployment.status.conditions}
+      availableReplicas: ${deployment.status.availableReplicas}
+      serviceName: ${service.metadata.name}
+      url: ${ingress.status.loadBalancer.ingress[0].hostname}
+      redisEndpoint: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
+      postgresEndpoint: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
+
+  resources:
+
+  # --- External ElastiCache Reference (read existing, don't manage) ---
+  - id: externalElasticacheRef
+    includeWhen:
+      - ${schema.spec.externalElasticache.enabled}
+    externalRef:
+      apiVersion: kro.run/v1alpha1
+      kind: ElastiCache
+      metadata:
+        name: ${schema.spec.externalElasticache.name}
+        namespace: ${schema.spec.externalElasticache.namespace}
+
+  # --- External RDS Reference (read existing, don't manage) ---
+  - id: externalRdsRef
+    includeWhen:
+      - ${schema.spec.externalRds.enabled}
+    externalRef:
+      apiVersion: kro.run/v1alpha1
+      kind: RDSPostgres
+      metadata:
+        name: ${schema.spec.externalRds.name}
+        namespace: ${schema.spec.externalRds.namespace}
+
+  # --- External Postgres Secret Reference (read existing, don't manage) ---
+  - id: externalPostgresSecretRef
+    includeWhen:
+      - ${schema.spec.externalPostgresSecret.enabled}
+    externalRef:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ${schema.spec.externalPostgresSecret.name}
+        namespace: ${schema.spec.externalPostgresSecret.namespace}
+
+  # --- WebApp Deployment (always created) ---
+  - id: deployment
+    readyWhen:
+      - ${deployment.spec.replicas == deployment.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              # Redis endpoint - from managed ElastiCache or external ref
+              - name: REDIS_HOST
+                value: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
+              # Postgres endpoint - from managed RDS or external ref
+              - name: POSTGRES_HOST
+                value: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
+              - name: POSTGRES_USER
+                value: postgres
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ${rds.status.?secretName.orValue(externalPostgresSecretRef.metadata.?name.orValue(""))}
+                    key: password
+              - name: POSTGRES_DB
+                value: postgres
+            restartPolicy: Always
+
+  # --- Service (conditional) ---
+  - id: service
+    includeWhen:
+      - ${schema.spec.service.enabled}
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.name}-service
+        namespace: ${schema.spec.namespace}
+        labels:
+          app: ${schema.spec.name}
+      spec:
+        type: ClusterIP
+        selector:
+          app: ${schema.spec.name}
+        ports:
+        - name: http
+          protocol: TCP
+          port: 80
+          targetPort: 80
+
+  # --- Ingress (conditional) ---
+  - id: ingress
+    includeWhen:
+      - ${schema.spec.ingress.enabled}
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ${schema.spec.name}-ingress
+        namespace: ${schema.spec.namespace}
+        annotations:
+          kubernetes.io/ingress.class: alb
+          alb.ingress.kubernetes.io/scheme: internet-facing
+          alb.ingress.kubernetes.io/target-type: ip
+        labels:
+          app: ${schema.spec.name}
+      spec:
+        ingressClassName: alb
+        rules:
+        - http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: ${service.metadata.name}
+                  port:
+                    number: 80
+
+  # --- ElastiCache (conditional - managed) ---
+  - id: elasticache
+    includeWhen:
+      - ${schema.spec.elasticache.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: ElastiCache
+      metadata:
+        name: ${schema.spec.name}-redis
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}-redis
+        namespace: ${schema.spec.namespace}
+
+  # --- RDS Postgres (conditional - managed) ---
+  - id: rds
+    includeWhen:
+      - ${schema.spec.rds.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: RDSPostgres
+      metadata:
+        name: ${schema.spec.name}-postgres
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}-postgres
+        namespace: ${schema.spec.namespace}

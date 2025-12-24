@@ -1,0 +1,35 @@
+# Worker Instance
+# WebApp with service:false - uses external refs to existing ElastiCache and RDS
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: worker-instance
+  namespace: default
+spec:
+  name: worker
+  namespace: default
+  image: "dogsvscats/worker:latest"
+  replicas: 1
+  # WebApp flags - no service exposure
+  service:
+    enabled: false
+  ingress:
+    enabled: false
+  # Infrastructure flags - disabled (not creating new resources)
+  elasticache:
+    enabled: false
+  rds:
+    enabled: false
+  # External references - point to existing resources created by other instances
+  externalElasticache:
+    enabled: true
+    name: vote-redis           # References ElastiCache created by vote-instance
+    namespace: default
+  externalRds:
+    enabled: true
+    name: result-postgres      # References RDS created by result-instance
+    namespace: default
+  externalPostgresSecret:
+    enabled: true
+    name: result-postgres-secret
+    namespace: default

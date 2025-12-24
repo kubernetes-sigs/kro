@@ -266,7 +266,7 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 			if _, ok := a.functions[full]; !ok {
 				out.merge(a.inspectExpr(ast, t, path))
 			}
-			// Record the member function invocation as part of CEL dependency graph construction.
+			// Treat chained method calls as unknown unless they resolve to a known namespaced function
 			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
 				Name: full,
 			})

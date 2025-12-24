@@ -87,7 +87,7 @@ echo $KRO_VERSION
 
 ```bash
 kubectl create namespace kro-system
-kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
   </TabItem>
 </Tabs>

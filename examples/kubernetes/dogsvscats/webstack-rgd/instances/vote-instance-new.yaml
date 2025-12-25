@@ -1,0 +1,22 @@
+# Vote Instance
+# WebApp with Ingress:true and ElastiCache:true
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: vote-instance
+  namespace: default
+spec:
+  name: vote
+  namespace: default
+  image: "dogsvscats/vote:latest"
+  replicas: 2
+  # WebApp flags
+  service:
+    enabled: true
+  ingress:
+    enabled: true
+  # Infrastructure flags
+  elasticache:
+    enabled: true
+  rds:
+    enabled: false

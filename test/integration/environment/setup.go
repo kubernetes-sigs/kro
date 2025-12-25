@@ -167,8 +167,11 @@ func (e *Environment) setupController() error {
 		},
 		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
 
+	// For integration tests, use single-cluster mode (manager as both rgdCluster and workloadCluster)
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
+		e.CtrlManager, // manager implements cluster.Cluster - used for RGD watching
+		e.CtrlManager, // manager implements cluster.Cluster - used for CRD watching
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,

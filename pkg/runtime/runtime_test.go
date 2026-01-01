@@ -219,3 +219,35 @@ func testInstance(name string) *unstructured.Unstructured {
 		},
 	}
 }
+
+func TestGetCELMetrics(t *testing.T) {
+	rt := &Runtime{
+		nodes: map[string]*Node{
+			"a": {
+				Spec: &graph.Node{Meta: graph.NodeMeta{ID: "a"}},
+				templateExprs: []*expressionEvaluationState{
+					{EvaluationCost: 10},
+				},
+			},
+			"b": {
+				Spec: &graph.Node{Meta: graph.NodeMeta{ID: "b"}},
+				readyWhenExprs: []*expressionEvaluationState{
+					{EvaluationCost: 20},
+				},
+			},
+		},
+		order: []string{"a", "b"},
+		instance: &Node{
+			Spec: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID}},
+			templateExprs: []*expressionEvaluationState{
+				{EvaluationCost: 5},
+			},
+		},
+	}
+
+	total, perResource := rt.GetCELMetrics()
+	assert.Equal(t, uint64(35), total)
+	assert.Equal(t, uint64(10), perResource["a"])
+	assert.Equal(t, uint64(20), perResource["b"])
+	assert.Equal(t, uint64(5), perResource[graph.InstanceNodeID])
+}

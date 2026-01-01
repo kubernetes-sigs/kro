@@ -177,6 +177,20 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"conditions": arr,
 	}
+
+	totalCost, costPerResource := rcx.Runtime.GetCELMetrics()
+	celMetrics := map[string]any{
+		"totalCost": totalCost,
+	}
+	if len(costPerResource) > 0 {
+		costMap := make(map[string]any)
+		for k, v := range costPerResource {
+			costMap[k] = v
+		}
+		celMetrics["costPerResource"] = costMap
+	}
+	status["celMetrics"] = celMetrics
+
 	if condSet.For(&unstructuredWrapper{inst}).IsRootReady() {
 		status["state"] = InstanceStateActive
 	} else {

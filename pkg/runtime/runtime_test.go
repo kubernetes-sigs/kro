@@ -2549,7 +2549,7 @@ func Test_evaluateExpression(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evaluateExpression(env, tt.context, tt.expression)
+			got, _, err := evaluateExpression(env, tt.context, tt.expression)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return

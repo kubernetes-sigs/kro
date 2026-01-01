@@ -151,3 +151,8 @@ func (r ResourceVariableKind) IsDynamic() bool {
 func (r ResourceVariableKind) IsIncludeWhen() bool {
 	return r == ResourceVariableKindIncludeWhen
 }
+
+// IsReadyWhen returns true if the ResourceVariableKind is readyWhen
+func (r ResourceVariableKind) IsReadyWhen() bool {
+	return r == ResourceVariableKindReadyWhen
+}

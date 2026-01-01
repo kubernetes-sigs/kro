@@ -251,3 +251,86 @@ func TestGetCELMetrics(t *testing.T) {
 	assert.Equal(t, uint64(20), perResource["b"])
 	assert.Equal(t, uint64(5), perResource[graph.InstanceNodeID])
 }
+
+func Test_GetCELMetrics(t *testing.T) {
+	tests := []struct {
+		name             string
+		runtimeVariables map[string][]*expressionEvaluationState
+		expressionsCache map[string]*expressionEvaluationState
+		wantTotalCost    uint64
+		wantResourceIDs  []string
+	}{
+		{
+			name:             "empty runtime returns zero costs",
+			runtimeVariables: make(map[string][]*expressionEvaluationState),
+			expressionsCache: make(map[string]*expressionEvaluationState),
+			wantTotalCost:    0,
+			wantResourceIDs:  []string{},
+		},
+		{
+			name: "static expressions cost per resource",
+			runtimeVariables: map[string][]*expressionEvaluationState{
+				"configmap": {
+					{Expression: "schema.spec.name", Kind: variable.ResourceVariableKindStatic, EvaluationCost: 10},
+				},
+				"deployment": {
+					{Expression: "schema.spec.replicas", Kind: variable.ResourceVariableKindStatic, EvaluationCost: 15},
+					{Expression: "schema.spec.image", Kind: variable.ResourceVariableKindStatic, EvaluationCost: 12},
+				},
+			},
+			expressionsCache: make(map[string]*expressionEvaluationState),
+			wantTotalCost:    37, // 10 + 15 + 12
+			wantResourceIDs:  []string{"configmap", "deployment"},
+		},
+		{
+			name:             "readyWhen expressions grouped under _conditions",
+			runtimeVariables: make(map[string][]*expressionEvaluationState),
+			expressionsCache: map[string]*expressionEvaluationState{
+				"deployment.status.ready": {
+					Expression: "deployment.status.ready", Kind: variable.ResourceVariableKindReadyWhen, EvaluationCost: 20,
+				},
+			},
+			wantTotalCost:   20,
+			wantResourceIDs: []string{"_conditions"},
+		},
+		{
+			name: "mixed resource and condition costs",
+			runtimeVariables: map[string][]*expressionEvaluationState{
+				"deployment": {
+					{Expression: "schema.spec.replicas", Kind: variable.ResourceVariableKindStatic, EvaluationCost: 10},
+				},
+			},
+			expressionsCache: map[string]*expressionEvaluationState{
+				"deployment.status.ready": {
+					Expression: "deployment.status.ready", Kind: variable.ResourceVariableKindReadyWhen, EvaluationCost: 5,
+				},
+				"schema.spec.enabled": {
+					Expression: "schema.spec.enabled", Kind: variable.ResourceVariableKindIncludeWhen, EvaluationCost: 3,
+				},
+			},
+			wantTotalCost:   18, // 10 + 5 + 3
+			wantResourceIDs: []string{"deployment", "_conditions"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				runtimeVariables: tt.runtimeVariables,
+				expressionsCache: tt.expressionsCache,
+			}
+
+			totalCost, costPerResource := rt.GetCELMetrics()
+
+			if totalCost != tt.wantTotalCost {
+				t.Errorf("GetCELMetrics() totalCost = %d, want %d", totalCost, tt.wantTotalCost)
+			}
+
+			for _, id := range tt.wantResourceIDs {
+				if _, ok := costPerResource[id]; !ok {
+					t.Errorf("GetCELMetrics() missing expected resource ID %q", id)
+				}
+			}
+		})
+	}
+}

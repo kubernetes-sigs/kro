@@ -100,28 +100,7 @@ var _ = Describe("Validation", func() {
 				)
 
 				Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-				//nolint:dupl // we have many test cases checking for inactivity but with different conditions
-				Eventually(func(g Gomega, ctx SpecContext) {
-					err := env.Client.Get(ctx, types.NamespacedName{
-						Name: rgd.Name,
-					}, rgd)
-					g.Expect(err).ToNot(HaveOccurred())
-					g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-
-					// Verify validation condition
-					var condition *krov1alpha1.Condition
-					for _, cond := range rgd.Status.Conditions {
-						if cond.Type == resourcegraphdefinition.Ready {
-							condition = &cond
-							break
-						}
-					}
-					g.Expect(condition).ToNot(BeNil())
-					g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-					g.Expect(*condition.Message).To(ContainSubstring("naming convention violation"))
-				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
+				expectRGDInactiveWithError(ctx, rgd, "naming convention violation")
 				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 			}
 		})
@@ -140,28 +119,7 @@ var _ = Describe("Validation", func() {
 			)
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
-
-			//nolint:dupl // we have many test cases checking for inactivity but with different conditions
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{
-					Name: rgd.Name,
-				}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
-
-				// Verify validation condition
-				var condition *krov1alpha1.Condition
-				for _, cond := range rgd.Status.Conditions {
-					if cond.Type == resourcegraphdefinition.Ready {
-						condition = &cond
-						break
-					}
-				}
-				g.Expect(condition).ToNot(BeNil())
-				g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(*condition.Message).To(ContainSubstring("found duplicate resource IDs"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
+			expectRGDInactiveWithError(ctx, rgd, "found duplicate resource IDs")
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
@@ -350,6 +308,137 @@ var _ = Describe("Validation", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 	})
+
+	Context("ForEach Collections", func() {
+		It("should accept valid forEach with single iterator from schema list", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-collection-valid",
+				generator.WithSchema(
+					"TestCollection", "v1alpha1",
+					map[string]interface{}{
+						"name":   "string",
+						"labels": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("labeledConfigMaps", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${label}",
+					},
+					"data": map[string]interface{}{
+						"label": "${label}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"label": "${schema.spec.labels}"},
+					},
+					nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name: rgd.Name,
+				}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject forEach expression that does not return a list", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-collection-invalid-type",
+				generator.WithSchema(
+					"TestInvalidType", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("badConfigMaps", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${element}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"element": "${schema.spec.name}"}, // string, not a list
+					},
+					nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "must return a list")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject forEach with reserved keyword iterator name", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-collection-reserved",
+				generator.WithSchema(
+					"TestReserved", "v1alpha1",
+					map[string]interface{}{
+						"name":  "string",
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("badIterator", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-test",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"item": "${schema.spec.items}"}, // "item" is reserved
+					},
+					nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "reserved keyword")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		It("should reject forEach iterator name that conflicts with resource ID", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-collection-conflict",
+				generator.WithSchema(
+					"TestConflict", "v1alpha1",
+					map[string]interface{}{
+						"name":  "string",
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithResource("myConfig", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-base",
+					},
+				}, nil, nil),
+				generator.WithResourceCollection("otherConfigs", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${myConfig}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"myConfig": "${schema.spec.items}"}, // conflicts with resource ID
+					},
+					nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			expectRGDInactiveWithError(ctx, rgd, "conflicts with resource ID")
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+	})
 })
 
 func validResourceDef() map[string]interface{} {
@@ -360,4 +449,31 @@ func validResourceDef() map[string]interface{} {
 			"name": "test-config",
 		},
 	}
+}
+
+// expectRGDInactiveWithError waits for the RGD to become inactive and validates
+// that the Ready condition contains the expected error message substring.
+func expectRGDInactiveWithError(
+	ctx SpecContext,
+	rgd *krov1alpha1.ResourceGraphDefinition,
+	expectedErrorSubstring string,
+) {
+	Eventually(func(g Gomega, ctx SpecContext) {
+		err := env.Client.Get(ctx, types.NamespacedName{
+			Name: rgd.Name,
+		}, rgd)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+
+		var condition *krov1alpha1.Condition
+		for _, cond := range rgd.Status.Conditions {
+			if cond.Type == resourcegraphdefinition.Ready {
+				condition = &cond
+				break
+			}
+		}
+		g.Expect(condition).ToNot(BeNil())
+		g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(*condition.Message).To(ContainSubstring(expectedErrorSubstring))
+	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 }

@@ -107,10 +107,14 @@ type Inspector struct {
 }
 
 // knownFunctions contains the list of all CEL functions that are supported
+//
+// we need a better way to manage this list going forward... perhaps a Check
+// call is better suited than maintaining a hardcoded list.
 var knownFunctions = []string{
 	"random.seededString",
 	"base64.decode",
 	"base64.encode",
+	"lists.range",
 }
 
 // NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.

@@ -17,6 +17,7 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,11 @@ const (
 
 const (
 	NodeIDLabel = LabelKROPrefix + "node-id"
+
+	// Collection labels for tracking collection membership and position.
+	// These enable querying collection resources and understanding their position.
+	CollectionIndexLabel = LabelKROPrefix + "collection-index"
+	CollectionSizeLabel  = LabelKROPrefix + "collection-size"
 
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
@@ -167,6 +173,19 @@ func NewKROMetaLabeler() GenericLabeler {
 		OwnedLabel:        "true",
 		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
 		ManagedByLabelKey: ManagedByKROValue,
+	}
+}
+
+// NewCollectionItemLabeler returns a new labeler that sets collection-specific
+// labels on a resource that is part of a collection (forEach expansion).
+// - node-id: the resource ID from the RGD (e.g "workerPods")
+// - collection-index: the position in the collection (e.g "0", "1", "2")
+// - collection-size: the total number of items in the collection (e.g "3")
+func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
+	return map[string]string{
+		NodeIDLabel:          nodeID,
+		CollectionIndexLabel: strconv.Itoa(index),
+		CollectionSizeLabel:  strconv.Itoa(size),
 	}
 }
 

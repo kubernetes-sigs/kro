@@ -417,4 +417,4 @@ status:
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - Learn how CEL expressions create dependencies
 - **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Use CEL for `includeWhen` conditions
 - **[Readiness](./02-resource-definitions/03-readiness.md)** - Use CEL for `readyWhen` conditions
-- **[External References](./02-resource-definitions/04-external-references.md)** - Reference external resources with CEL
+- **[External References](./02-resource-definitions/05-external-references.md)** - Reference external resources with CEL

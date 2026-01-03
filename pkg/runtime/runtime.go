@@ -55,6 +55,9 @@ func NewResourceGraphDefinitionRuntime(
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
 		ignoredByConditionsResources: make(map[string]bool),
+		celMetrics: CELMetrics{
+			CostPerResource: make(map[string]uint64),
+		},
 	}
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
@@ -182,12 +185,24 @@ func (rt *ResourceGraphDefinitionRuntime) RecordCELCost(resourceID string, cost 
 		rt.celMetrics.CostPerResource = make(map[string]uint64)
 	}
 	rt.celMetrics.CostPerResource[resourceID] += cost
+	// Debug: log when costs are recorded (can be removed later)
+	// fmt.Printf("DEBUG: RecordCELCost - resourceID=%s, cost=%d, totalCost=%d\n", resourceID, cost, rt.celMetrics.TotalCost)
 }
 
 // GetCELMetrics returns the current CEL expression evaluation metrics.
 // This includes the total cost across all expressions and the cost breakdown per resource.
 func (rt *ResourceGraphDefinitionRuntime) GetCELMetrics() CELMetrics {
-	return rt.celMetrics
+	metrics := CELMetrics{
+		TotalCost:       rt.celMetrics.TotalCost,
+		CostPerResource: make(map[string]uint64),
+	}
+	// Deep copy the map to avoid exposing internal state
+	if rt.celMetrics.CostPerResource != nil {
+		for k, v := range rt.celMetrics.CostPerResource {
+			metrics.CostPerResource[k] = v
+		}
+	}
+	return metrics
 }
 
 // ResetCELMetrics resets the CEL expression evaluation metrics to zero.

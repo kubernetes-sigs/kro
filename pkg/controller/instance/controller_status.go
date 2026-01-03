@@ -142,7 +142,13 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 	status := igr.getStatusWithEmptyConditions()
 
 	// Set status.state based on readiness
-	instance := igr.instance
+	// Note: runtime might be nil if runtime creation failed
+	var instance *unstructured.Unstructured
+	if igr.runtime != nil {
+		instance = igr.runtime.GetInstance()
+	} else {
+		instance = igr.instance
+	}
 	conditionSet := instanceConditionTypes.For(wrapInstance(instance))
 	if conditionSet.IsRootReady() {
 		status["state"] = InstanceStateActive
@@ -153,12 +159,17 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 	// Get conditions from the instance (set by condition markers during reconciliation)
 	_ = unstructured.SetNestedSlice(status, conditionSet.AsUnstructured(), "conditions")
 
-	// Add CEL metrics to the status
-	celMetrics := igr.runtime.GetCELMetrics()
-	if celMetrics.TotalCost > 0 {
+	// Add CEL metrics to the status (only if runtime exists)
+	if igr.runtime != nil {
+		celMetrics := igr.runtime.GetCELMetrics()
+		// Always include celMetrics, even if totalCost is 0, to verify it's being tracked
 		status["celMetrics"] = map[string]interface{}{
 			"totalCost":       celMetrics.TotalCost,
 			"costPerResource": celMetrics.CostPerResource,
+		}
+		// Log for debugging (can be removed later)
+		if celMetrics.TotalCost > 0 {
+			igr.log.V(1).Info("CEL metrics tracked", "totalCost", celMetrics.TotalCost, "resources", len(celMetrics.CostPerResource))
 		}
 	}
 
@@ -178,7 +189,13 @@ func (igr *instanceGraphReconciler) getStatusWithEmptyConditions() map[string]an
 
 // patchInstanceStatus updates the status subresource of the instance.
 func (igr *instanceGraphReconciler) patchInstanceStatus(ctx context.Context, status map[string]interface{}) error {
-	instance := igr.instance.DeepCopy()
+	// Get instance - use runtime if available, otherwise use the original instance
+	var instance *unstructured.Unstructured
+	if igr.runtime != nil {
+		instance = igr.runtime.GetInstance().DeepCopy()
+	} else {
+		instance = igr.instance.DeepCopy()
+	}
 	instance.Object["status"] = status
 
 	// We are using retry.RetryOnConflict to handle conflicts.

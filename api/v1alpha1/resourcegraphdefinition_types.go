@@ -95,6 +95,14 @@ type Schema struct {
 	//
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+
+	// Labels to apply to the generated CRD
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations to apply to the generated CRD
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 type ExternalRefMetadata struct {

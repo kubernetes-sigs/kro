@@ -76,6 +76,14 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 		if _, ok := status.Properties["conditions"]; !ok {
 			status.Properties["conditions"] = defaultConditionsType
 		}
+		// Always add celMetrics as a default status field to support CEL cost tracking
+		if _, ok := status.Properties["celMetrics"]; !ok {
+			status.Properties["celMetrics"] = defaultCELMetricsType
+		}
+	}
+	// Allow additional properties in status to support controller-injected fields like celMetrics
+	status.AdditionalProperties = &extv1.JSONSchemaPropsOrBool{
+		Allows: true,
 	}
 
 	return &extv1.JSONSchemaProps{

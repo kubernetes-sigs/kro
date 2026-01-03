@@ -36,12 +36,20 @@ spec:
           {{- if .Values.image.ko }}
           image: "ko://github.com/kubernetes-sigs/kro/cmd/controller"
           {{- else }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
+          {{- if .Values.debug.enabled }}
+          {{- $tag = printf "%s-debug" $tag }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ $tag }}"
           {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: metricsport
               containerPort: {{ .Values.deployment.containerPort }}
+            {{- if .Values.debug.enabled }}
+            - name: pprof
+              containerPort: {{ .Values.debug.pprofPort }}
+            {{- end }}
           resources:
             {{- toYaml .Values.deployment.resources | nindent 12 }}
           env:
@@ -95,6 +103,10 @@ spec:
             - --leader-election-namespace
             - {{ .Values.config.leaderElectionNamespace | quote }}
             {{- end }}
+            {{- end }}
+            {{- if .Values.debug.enabled }}
+            - --pprof-bind-address
+            - ":{{ .Values.debug.pprofPort }}"
             {{- end }}
           livenessProbe:
             httpGet:

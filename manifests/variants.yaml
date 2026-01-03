@@ -12,3 +12,11 @@ variants:
         create: true
       serviceMonitor:
         enabled: true
+- name: kro-core-install-manifests-debug
+  values:
+    rbac:
+      mode: aggregation
+    debug:
+      enabled: true
+      service:
+        enabled: true

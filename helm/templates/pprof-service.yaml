@@ -1,0 +1,19 @@
+{{- if and .Values.debug.enabled .Values.debug.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kro.fullname" . }}-pprof
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kro.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pprof
+spec:
+  type: {{ .Values.debug.service.type }}
+  ports:
+    - port: {{ .Values.debug.pprofPort }}
+      targetPort: pprof
+      protocol: TCP
+      name: pprof
+  selector:
+    {{- include "kro.selectorLabels" . | nindent 4 }}
+{{- end }}

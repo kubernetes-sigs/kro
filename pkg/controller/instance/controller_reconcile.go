@@ -17,6 +17,8 @@ package instance
 import (
 	"context"
 	"fmt"
+	"crypto/sha256"
+	"encoding/json"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,9 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
-
 	"sigs.k8s.io/release-utils/version"
-
 	"github.com/kubernetes-sigs/kro/pkg/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -51,6 +51,9 @@ const (
 
 	FieldManagerForApplyset = "kro.run/applyset"
 	FieldManagerForLabeler  = "kro.run/labeller"
+	allowUpdatesAnnotation  = "kro.run/allow-updates"
+	statusRGGenerationKey   = "resourceGroupGeneration"
+	statusRGRevisionKey     = "resourceRevision"
 )
 
 var (
@@ -92,6 +95,26 @@ type instanceGraphReconciler struct {
 	reconcileConfig ReconcileConfig
 	// state holds the current state of the instance and its sub-resources.
 	state *InstanceState
+}
+
+func instanceOptedIn(inst *unstructured.Unstructured) bool {
+	ann := inst.GetAnnotations()
+	if ann == nil {
+		return false
+	}
+	return ann[allowUpdatesAnnotation] == "true"
+}
+func computeRGDRevision(rgd *graph.Graph) (string, error) {
+	b, err := json.Marshal(rgd)
+	// Hash the compiled ResourceGraphDefinition graph.
+// The graph is a deterministic representation of the effective RGD,
+// and changes whenever the RGD meaningfully changes.
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("sha256:%x", sum[:]), nil
 }
 
 // reconcile performs the reconciliation of the instance and its sub-resources.
@@ -167,7 +190,54 @@ func (igr *instanceGraphReconciler) areDependenciesReady(resourceID string) bool
 func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error {
 	instance := igr.runtime.GetInstance()
 	mark := NewConditionsMarkerFor(instance)
+	// --- BEGIN RGD change tracking ---
 
+	// Read instance status
+	status, _, _ := unstructured.NestedMap(instance.Object, "status")
+
+	instGen, _, _ := unstructured.NestedInt64(status, statusRGGenerationKey)
+	instRev, _, _ := unstructured.NestedString(status, statusRGRevisionKey)
+
+	// Current RGD values
+	
+	currRev, err := computeRGDRevision(igr.rgd)
+	if err != nil {
+		return fmt.Errorf("failed to compute RGD revision: %w", err)
+	}
+	var currGen int64
+
+// resourceGroupGeneration is an effective generation counter derived
+// from changes in the compiled ResourceGraphDefinition graph.
+if instRev == "" {
+	// First-time instance
+	currGen = 1
+} else if instRev != currRev {
+	// Graph changed → increment generation
+	currGen = instGen + 1
+} else {
+	// No change
+	currGen = instGen
+}
+
+
+	outOfDate := instGen != currGen || instRev != currRev
+	// First-time or legacy instance: initialize tracking fields
+	if instRev == "" {
+		_ = unstructured.SetNestedField(status, currGen, statusRGGenerationKey)
+		_ = unstructured.SetNestedField(status, currRev, statusRGRevisionKey)
+
+		_ = unstructured.SetNestedMap(instance.Object, status, "status")
+
+		mark.ResourcesReady()
+		return nil
+	}
+	if outOfDate && !instanceOptedIn(instance) {
+		mark.ResourcesInProgress(
+			"instance opted in; applying ResourceGraphDefinition updates",
+		)
+	}
+	// --- END RGD change tracking ---
+	// RGD has changed since last reconciliation
 	// Set managed state and handle instance labels
 	if err := igr.setupInstance(ctx, instance); err != nil {
 		return fmt.Errorf("failed to setup instance: %w", err)
@@ -305,6 +375,11 @@ func (igr *instanceGraphReconciler) reconcileInstance(ctx context.Context) error
 	if result.HasClusterMutation() {
 		mark.ResourcesInProgress("reconciling cluster mutation after apply")
 		return igr.delayedRequeue(fmt.Errorf("changes applied to cluster"))
+	}
+	if outOfDate {
+		_ = unstructured.SetNestedField(status, currGen, statusRGGenerationKey)
+		_ = unstructured.SetNestedField(status, currRev, statusRGRevisionKey)
+		_ = unstructured.SetNestedMap(instance.Object, status, "status")
 	}
 
 	// All resources have been successfully reconciled

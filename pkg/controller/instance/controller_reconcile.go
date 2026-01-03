@@ -103,8 +103,6 @@ func (igr *instanceGraphReconciler) reconcile(ctx context.Context) error {
 	igr.state = newInstanceState()
 
 	// Create runtime - if this fails, the defer in Controller.Reconcile handles status
-	// Note: A new runtime is created each reconciliation cycle, so CEL metrics start fresh.
-	// We don't need to call ResetCELMetrics() because the runtime is initialized with zero metrics.
 	rgRuntime, err := igr.rgd.NewGraphRuntime(igr.instance)
 	if err != nil {
 		mark := NewConditionsMarkerFor(igr.instance)

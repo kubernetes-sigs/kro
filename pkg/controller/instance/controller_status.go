@@ -159,17 +159,11 @@ func (igr *instanceGraphReconciler) prepareStatus() map[string]interface{} {
 	// Get conditions from the instance (set by condition markers during reconciliation)
 	_ = unstructured.SetNestedSlice(status, conditionSet.AsUnstructured(), "conditions")
 
-	// Add CEL metrics to the status (only if runtime exists)
 	if igr.runtime != nil {
 		celMetrics := igr.runtime.GetCELMetrics()
-		// Always include celMetrics, even if totalCost is 0, to verify it's being tracked
 		status["celMetrics"] = map[string]interface{}{
 			"totalCost":       celMetrics.TotalCost,
 			"costPerResource": celMetrics.CostPerResource,
-		}
-		// Log for debugging (can be removed later)
-		if celMetrics.TotalCost > 0 {
-			igr.log.V(1).Info("CEL metrics tracked", "totalCost", celMetrics.TotalCost, "resources", len(celMetrics.CostPerResource))
 		}
 	}
 

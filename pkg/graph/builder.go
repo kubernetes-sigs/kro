@@ -203,16 +203,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		}
 	}
 
-	// include the instance spec schema in the context as "schema". This will let us
-	// validate expressions such as ${schema.spec.someField}.
-	//
-	// not that we only include the spec and metadata fields, instance status references
-	// are not allowed in RGDs (yet)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instance.crd)
+	// include the instance schema in the context as "schema". This will let us
+	// validate expressions such as ${schema.spec.someField}, ${schema.metadata.name},
+	// and ${schema.status.someField}.
+	instanceSchema, err := getInstanceSchema(instance.crd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema without status: %w", err)
+		return nil, fmt.Errorf("failed to get instance schema: %w", err)
 	}
-	schemas["schema"] = schemaWithoutStatus
+	schemas["schema"] = instanceSchema
 
 	// Create a DeclTypeProvider for introspecting type structures during validation
 	typeProvider := krocel.CreateDeclTypeProvider(schemas)
@@ -944,8 +942,28 @@ func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
 	return nil
 }
 
-// getSchemaWithoutStatus returns a schema from the CRD with the status field removed.
-func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
+// unrequireStatus modifies the schema to ensure "status" is not in the required fields list.
+// This prevents CEL type-checking from treating status as a required field, which would incorrectly
+// fail validation when status is legitimately absent (e.g., resources that haven't reconciled yet).
+func unrequireStatus(s *spec.Schema) {
+	if s == nil || len(s.Required) == 0 {
+		return
+	}
+
+	// Remove "status" from required fields if present
+	required := make([]string, 0, len(s.Required))
+	for _, field := range s.Required {
+		if field != "status" {
+			required = append(required, field)
+		}
+	}
+	s.Required = required
+}
+
+// getInstanceSchema returns a schema from the CRD including spec, status, and metadata fields.
+// This schema is used for CEL expression validation, allowing references to instance fields like
+// ${schema.spec.field}, ${schema.status.field}, and ${schema.metadata.name}.
+func getInstanceSchema(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	crdCopy := crd.DeepCopy()
 
 	// TODO(a-hilaly) expand this function when we start support CRD upgrades.
@@ -962,8 +980,6 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 		openAPISchema.Properties = make(map[string]extv1.JSONSchemaProps)
 	}
 
-	delete(openAPISchema.Properties, "status")
-
 	specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(openAPISchema)
 	if err != nil {
 		return nil, err
@@ -973,5 +989,11 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
 	specSchema.Properties["metadata"] = schema.ObjectMetaSchema
+
+	// Unrequire status before type-checking. This allows CEL expressions
+	// in dependent resources to reference instance status (e.g., ${schema.status.endpoint})
+	// without validation errors when the instance status hasn't been populated yet.
+	unrequireStatus(specSchema)
+
 	return specSchema, nil
 }

@@ -672,10 +672,14 @@ func evaluateExpression(env *cel.Env, context map[string]interface{}, expression
 	if issues != nil && issues.Err() != nil {
 		return nil, nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 	}
+	// Enable cost tracking when creating the program
 	program, err := env.Program(ast, cel.EvalOptions(cel.OptTrackCost))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
 	}
+	// We get an error here when the value field we're looking for is not yet defined
+	// For now leaving it as error, in the future when we see different scenarios
+	// of this error, we can make some a reason, and others an error
 	val, details, err := program.Eval(context)
 	if err != nil {
 		return nil, details, fmt.Errorf("failed evaluating expression %s: %w", expression, err)

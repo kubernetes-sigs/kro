@@ -25,11 +25,11 @@ import (
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas~
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
+func SynthesizeCRD(group, apiVersion, kind string, scope extv1.ResourceScope, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+	return newCRD(group, apiVersion, kind, scope, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
+func newCRD(group, apiVersion, kind string, scope extv1.ResourceScope, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
@@ -44,7 +44,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 				Plural:   pluralKind,
 				Singular: strings.ToLower(kind),
 			},
-			Scope: extv1.NamespaceScoped,
+			Scope: scope,
 			Versions: []extv1.CustomResourceDefinitionVersion{
 				{
 					Name:    apiVersion,

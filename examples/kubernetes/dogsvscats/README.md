@@ -38,8 +38,8 @@ dogsvscats/
 ```
 
 ## Prerequisites
-
-- ACK controllers installed for RDS and ElastiCache
+## You can use any DB & Cache, for this example we are using AWS RDS & ElasticCache 
+- ACK controllers installed for EC2, RDS and ElastiCache
 - The dependent RGDs applied:
   - `../../aws/rds-postgres/rg.yaml` → creates `RDSPostgres` kind
   - `../../aws/elasticache-serverless/rg.yaml` → creates `ElastiCacheServerless` kind

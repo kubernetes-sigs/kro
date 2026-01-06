@@ -215,6 +215,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
    --region ${AWS_REGION})
 
    echo ${ARGOCD_SERVER}
+   export ARGOCD_SERVER=${ARGOCD_SERVER#https://}
    ```
 
 1. Generate an account token from the Argo CD UI (Settings → Accounts → admin → Generate New Token), then set it as an environment variable:

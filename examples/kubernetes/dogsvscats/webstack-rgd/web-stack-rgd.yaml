@@ -19,7 +19,7 @@ spec:
     spec:
       name: string
       namespace: string | default="default"
-      # Application Configuration, defered from usign nginx as discussed with CA & PK!!!
+      # Application Configuration
       image: string | default="dogsvscats/result:latest"
       replicas: integer | default=1
       # Feature flags
@@ -32,6 +32,10 @@ spec:
         enabled: boolean | default=false
       rds:
         enabled: boolean | default=false
+      # AWS Infrastructure parameters (required when elasticache or rds enabled)
+      aws:
+        vpcID: string | default=""
+        subnetIDs: "[]string | default=[]"
       # External reference flags - reference existing resources
       externalElasticache:
         enabled: boolean | default=false
@@ -61,7 +65,7 @@ spec:
       - ${schema.spec.externalElasticache.enabled}
     externalRef:
       apiVersion: kro.run/v1alpha1
-      kind: ElastiCache
+      kind: ElastiCacheServerless
       metadata:
         name: ${schema.spec.externalElasticache.name}
         namespace: ${schema.spec.externalElasticache.namespace}
@@ -195,19 +199,21 @@ spec:
                   port:
                     number: 80
 
-  # --- ElastiCache (conditional - managed) ---
+  # --- ElastiCache Serverless (conditional - managed) ---
   - id: elasticache
     includeWhen:
       - ${schema.spec.elasticache.enabled}
     template:
       apiVersion: kro.run/v1alpha1
-      kind: ElastiCache
+      kind: ElastiCacheServerless
       metadata:
         name: ${schema.spec.name}-redis
         namespace: ${schema.spec.namespace}
       spec:
         name: ${schema.spec.name}-redis
         namespace: ${schema.spec.namespace}
+        vpcID: ${schema.spec.aws.vpcID}
+        subnetIDs: ${schema.spec.aws.subnetIDs}
 
   # --- RDS Postgres (conditional - managed) ---
   - id: rds
@@ -222,3 +228,5 @@ spec:
       spec:
         name: ${schema.spec.name}-postgres
         namespace: ${schema.spec.namespace}
+        vpcID: ${schema.spec.aws.vpcID}
+        subnetIDs: ${schema.spec.aws.subnetIDs}

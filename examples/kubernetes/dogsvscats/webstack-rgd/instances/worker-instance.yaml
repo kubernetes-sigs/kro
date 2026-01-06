@@ -23,13 +23,13 @@ spec:
   # External references - point to existing resources created by other instances
   externalElasticache:
     enabled: true
-    name: vote-redis           # References ElastiCache created by vote-instance
+    name: vote-redis               # References ElastiCacheServerless created by vote-instance
     namespace: default
   externalRds:
     enabled: true
-    name: result-postgres      # References RDS created by result-instance
+    name: result-postgres          # References RDSPostgres created by result-instance
     namespace: default
   externalPostgresSecret:
     enabled: true
-    name: result-postgres-secret
+    name: result-postgres-postgres-password
     namespace: default

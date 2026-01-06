@@ -19,104 +19,206 @@ spec:
     spec:
       name: string
       namespace: string | default="default"
-      # Application type (vote, result, or worker)
-      appType: string
-      # Application Configuration
-      image: string
+      # Application Configuration, defered from usign nginx as discussed with CA & PK!!!
+      image: string | default="dogsvscats/result:latest"
       replicas: integer | default=1
-      # Infrastructure endpoints
-      redisEndpoint: string | default=""
-      postgresEndpoint: string | default=""
-      postgresSecretName: string | default=""
       # Feature flags
       service:
         enabled: boolean | default=true
       ingress:
         enabled: boolean | default=false
+      # Infrastructure flags - create new resources
       elasticache:
         enabled: boolean | default=false
-      postgres:
+      rds:
         enabled: boolean | default=false
+      # External reference flags - reference existing resources
+      externalElasticache:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
+      externalRds:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
+      externalPostgresSecret:
+        enabled: boolean | default=false
+        name: string | default=""
+        namespace: string | default=""
     status:
-      deploymentConditions: ${voteapp.status.deploymentConditions || resultapp.status.deploymentConditions || workerapp.status.deploymentConditions}
-      availableReplicas: ${voteapp.status.availableReplicas || resultapp.status.availableReplicas || workerapp.status.availableReplicas}
-      serviceName: ${voteapp.status.serviceName || resultapp.status.serviceName}
-      url: ${voteapp.status.url || resultapp.status.url}
+      deploymentConditions: ${deployment.status.conditions}
+      availableReplicas: ${deployment.status.availableReplicas}
+      serviceName: ${service.metadata.name}
+      url: ${ingress.status.loadBalancer.ingress[0].hostname}
+      redisEndpoint: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
+      postgresEndpoint: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
 
   resources:
-  # --- Vote WebStack ---
-  - id: voteapp
-    includeWhen:
-      - ${schema.spec.appType == "vote"}
-    readyWhen:
-      - ${has(voteapp.status.availableReplicas)}
-      - ${voteapp.status.availableReplicas > 0}
-    template:
-      apiVersion: kro.run/v1alpha1
-      kind: VoteWebStack
-      metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-        image: ${schema.spec.image}
-        replicas: ${schema.spec.replicas}
-        redisEndpoint: ${schema.spec.redisEndpoint}
-        service:
-          enabled: ${schema.spec.service.enabled}
-        ingress:
-          enabled: ${schema.spec.ingress.enabled}
-        elasticache:
-          enabled: ${schema.spec.elasticache.enabled}
 
-  # --- Result WebStack ---
-  - id: resultapp
+  # --- External ElastiCache Reference (read existing, don't manage) ---
+  - id: externalElasticacheRef
     includeWhen:
-      - ${schema.spec.appType == "result"}
-    readyWhen:
-      - ${has(resultapp.status.availableReplicas)}
-      - ${resultapp.status.availableReplicas > 0}
-    template:
+      - ${schema.spec.externalElasticache.enabled}
+    externalRef:
       apiVersion: kro.run/v1alpha1
-      kind: ResultWebStack
+      kind: ElastiCache
       metadata:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-      spec:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-        image: ${schema.spec.image}
-        replicas: ${schema.spec.replicas}
-        postgresEndpoint: ${schema.spec.postgresEndpoint}
-        postgresSecretName: ${schema.spec.postgresSecretName}
-        service:
-          enabled: ${schema.spec.service.enabled}
-        ingress:
-          enabled: ${schema.spec.ingress.enabled}
-        postgres:
-          enabled: ${schema.spec.postgres.enabled}
+        name: ${schema.spec.externalElasticache.name}
+        namespace: ${schema.spec.externalElasticache.namespace}
 
-  # --- Worker WebStack ---
-  - id: workerapp
+  # --- External RDS Reference (read existing, don't manage) ---
+  - id: externalRdsRef
     includeWhen:
-      - ${schema.spec.appType == "worker"}
-    readyWhen:
-      - ${has(workerapp.status.availableReplicas)}
-      - ${workerapp.status.availableReplicas > 0}
-    template:
+      - ${schema.spec.externalRds.enabled}
+    externalRef:
       apiVersion: kro.run/v1alpha1
-      kind: WorkerWebStack
+      kind: RDSPostgres
+      metadata:
+        name: ${schema.spec.externalRds.name}
+        namespace: ${schema.spec.externalRds.namespace}
+
+  # --- External Postgres Secret Reference (read existing, don't manage) ---
+  - id: externalPostgresSecretRef
+    includeWhen:
+      - ${schema.spec.externalPostgresSecret.enabled}
+    externalRef:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ${schema.spec.externalPostgresSecret.name}
+        namespace: ${schema.spec.externalPostgresSecret.namespace}
+
+  # --- WebApp Deployment (always created) ---
+  - id: deployment
+    readyWhen:
+      - ${deployment.spec.replicas == deployment.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
       metadata:
         name: ${schema.spec.name}
         namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
       spec:
-        name: ${schema.spec.name}
-        namespace: ${schema.spec.namespace}
-        image: ${schema.spec.image}
         replicas: ${schema.spec.replicas}
-        redisEndpoint: ${schema.spec.redisEndpoint}
-        postgresEndpoint: ${schema.spec.postgresEndpoint}
-        postgresSecretName: ${schema.spec.postgresSecretName}
-        service:
-          enabled: ${schema.spec.service.enabled}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              # Redis endpoint - from managed ElastiCache or external ref
+              - name: REDIS_HOST
+                value: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
+              # Postgres endpoint - from managed RDS or external ref
+              - name: POSTGRES_HOST
+                value: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
+              - name: POSTGRES_USER
+                value: postgres
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ${rds.status.?secretName.orValue(externalPostgresSecretRef.metadata.?name.orValue(""))}
+                    key: password
+              - name: POSTGRES_DB
+                value: postgres
+            restartPolicy: Always
+
+  # --- Service (conditional) ---
+  - id: service
+    includeWhen:
+      - ${schema.spec.service.enabled}
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.name}-service
+        namespace: ${schema.spec.namespace}
+        labels:
+          app: ${schema.spec.name}
+      spec:
+        type: ClusterIP
+        selector:
+          app: ${schema.spec.name}
+        ports:
+        - name: http
+          protocol: TCP
+          port: 80
+          targetPort: 80
+
+  # --- Ingress (conditional) ---
+  - id: ingress
+    includeWhen:
+      - ${schema.spec.ingress.enabled}
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ${schema.spec.name}-ingress
+        namespace: ${schema.spec.namespace}
+        annotations:
+          kubernetes.io/ingress.class: alb
+          alb.ingress.kubernetes.io/scheme: internet-facing
+          alb.ingress.kubernetes.io/target-type: ip
+        labels:
+          app: ${schema.spec.name}
+      spec:
+        ingressClassName: alb
+        rules:
+        - http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: ${service.metadata.name}
+                  port:
+                    number: 80
+
+  # --- ElastiCache (conditional - managed) ---
+  - id: elasticache
+    includeWhen:
+      - ${schema.spec.elasticache.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: ElastiCache
+      metadata:
+        name: ${schema.spec.name}-redis
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}-redis
+        namespace: ${schema.spec.namespace}
+
+  # --- RDS Postgres (conditional - managed) ---
+  - id: rds
+    includeWhen:
+      - ${schema.spec.rds.enabled}
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: RDSPostgres
+      metadata:
+        name: ${schema.spec.name}-postgres
+        namespace: ${schema.spec.namespace}
+      spec:
+        name: ${schema.spec.name}-postgres
+        namespace: ${schema.spec.namespace}

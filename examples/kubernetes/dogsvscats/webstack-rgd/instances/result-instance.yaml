@@ -1,19 +1,22 @@
+# Result Instance
+# WebApp with Ingress:true and RDS Postgres:true
 apiVersion: kro.run/v1alpha1
 kind: WebStack
 metadata:
-  name: result-webstack
+  name: result-instance
   namespace: default
 spec:
-  name: result-webstack
+  name: result
   namespace: default
-  appType: "result"
   image: "dogsvscats/result:latest"
   replicas: 1
-  postgresEndpoint: "postgres-endpoint.example.com"  # Replace with actual Postgres endpoint
-  postgresSecretName: "postgres-secret"  # Replace with actual secret name
+  # WebApp flags
   service:
     enabled: true
   ingress:
     enabled: true
-  postgres:
+  # Infrastructure flags
+  elasticache:
+    enabled: false
+  rds:
     enabled: true

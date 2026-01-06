@@ -1,9 +1,0 @@
-# values for the addon
-deployment:
-  tolerations:
-    - key: CriticalAddonsOnly
-      operator: Exists
-  nodeSelector:
-    eks.amazonaws.com/compute-type: auto
-    kubernetes.io/os: linux
-    karpenter.sh/nodepool: system

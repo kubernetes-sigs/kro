@@ -2,17 +2,19 @@
 
 This example demonstrates how to manage a fleet of Amazon EKS clusters using kro, ACK (AWS Controllers for Kubernetes), and Argo CD across multiple regions and accounts. You'll learn how to create EKS clusters and bootstrap them with required add-ons.
 
-The solution implements a hub-spoke model where a management cluster (hub) is created during initial setup, and controllers needed for provisioning and bootstrapping workload clusters (spokes) are installed on it.
+The solution implements a hub-spoke model where a management cluster (hub) is created during initial setup, with EKS capabilities (kro, ACK and Argo CD) enabled for provisioning and bootstrapping workload clusters (spokes) via a GitOps flow.
 
 ![EKS cluster management using kro & ACK](docs/eks-cluster-mgmt-central.drawio.png)
 
 ## Prerequisites
 
 1. AWS account for the management cluster, and optional AWS accounts for spoke clusters (management account can be reused for spokes)
-2. GitHub account and a valid GitHub Token
-3. GitHub [cli](https://cli.github.com/)
-4. Argo CD [cli](https://argo-cd.readthedocs.io/en/stable/cli_installation/)
-5. Terraform [cli](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli)
+2. AWS IAM Identity Center (IdC) is enabled in the management account 
+3. GitHub account and a valid GitHub Token
+4. GitHub [cli](https://cli.github.com/)
+5. Argo CD [cli](https://argo-cd.readthedocs.io/en/stable/cli_installation/)
+6. Terraform [cli](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli)
+7. AWS [cli v2.32.27+](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 
 ## Instructions
 
@@ -23,19 +25,18 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
    First, set these environment variables that typically don't need modification:
 
    ```sh
-   export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account) # Or update to the AWS account to use for your management cluster
    export KRO_REPO_URL="https://github.com/kubernetes-sigs/kro.git"
-   export WORKING_REPO="eks-cluster-mgmt" # Try to keep this default name as it's referenced in terraform and gitops configs
+   export WORKING_REPO="eks-cluster-mgmt" # Try to keep this default name as it is referenced in terraform and gitops configs
    export TF_VAR_FILE="terraform.tfvars" # the name of terraform configuration file to use
    ```
 
    Then customize these variables for your specific environment:
 
    ```sh
-   export MGMT_ACCOUNT_ID="012345678910" # specify your management AWS account ID
+   export MGMT_ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account) # Or update to the AWS account to use for your management cluster
    export AWS_REGION="eu-west-2" # change to your preferred region
-   export WORKSPACE_PATH="$HOME/environment" # the directory where repos will be cloned e.g. ~/environment
-   export GITHUB_ORG_NAME="xxxxx" # your Github username or organization name
+   export WORKSPACE_PATH="$HOME" # the directory where repos will be cloned
+   export GITHUB_ORG_NAME="iamahgoub" # your Github username or organization name
    ```
 
 2. Clone kro repository
@@ -64,9 +65,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
    cp -r $WORKSPACE_PATH/kro/examples/aws/eks-cluster-mgmt/* $WORKSPACE_PATH/$WORKING_REPO/
    ```
 
-6. Configure Spoke accounts in gitops for ACK controller
-
-   ACK controllers can work across AWS accounts but require resources to be isolated into specific namespaces. This solution implements this isolation for ACK resources.
+6. Update the Spoke accounts
 
    If deploying EKS clusters across multiple AWS accounts, update the configuration below. Even for single account deployments, you must specify the AWS account for each namespace.
 
@@ -82,8 +81,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
       workload-cluster2: "123456789101" # AWS account for workload cluster 2
    ```
 
-   > Note: The gitops tooling uses workload-clusterX namespace names, where X can be 1 to 6. Please don't change these names, just update the account values.
-   > If you only want to use 1 AWS account, reuse the AWS account of your management cluster for the other workload clusters.
+   > Note: If you only want to use 1 AWS account, reuse the AWS account of your management cluster for the other workload clusters.
 
 7. Add, Commit and Push changes
 
@@ -100,17 +98,17 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
 1. Update the terraform.tfvars with your values
 
    Modify the terraform.tfvars file with your GitHub working repo details:
-   - Set git_org_name
-   - Update any gitops_xxx values if you modified the proposed setup (git path, branch...)
-   - Confirm gitops_xxx_repo_name is "eks-cluster-mgmt" (or update if modified)
-   - Configure accounts_ids with the list of AWS accounts for spoke clusters (use management account ID if creating spoke clusters in the same account)
+   - Set `git_org_name`
+   - Update any `gitops_xxx` values if you modified the proposed setup (git path, branch...)
+   - Confirm `gitops_xxx_repo_name` is "eks-cluster-mgmt" (or update if modified)
+   - Configure `accounts_ids` with the list of AWS accounts for spoke clusters (use management account ID if creating spoke clusters in the same account)
 
    ```sh
    # edit: terraform.tfvars
    code $WORKSPACE_PATH/$WORKING_REPO/terraform/hub/terraform.tfvars
    ```
 
-2. Log in to your AWS management account
+1. Log in to your AWS management account
 
    Connect to your AWS management account using your preferred authentication method:
 
@@ -118,7 +116,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
    export AWS_PROFILE=management_account # use your own profile or ensure you're connected to the appropriate account
    ```
 
-3. Apply the terraform to create the management cluster:
+1. Apply the terraform to create the management cluster:
 
    ```sh
    cd $WORKSPACE_PATH/$WORKING_REPO/terraform/hub
@@ -127,53 +125,131 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
 
    Review the proposed changes and accept to deploy.
 
-4. Connect to the cluster
+   Note: EKS capabilities are not supported yet by Terraform AWS provider. So, we will create them manually using CLI commands.
+
+1. Retrieve terraform outputs and set into environment variables:
+
+   ```sh
+   export CLUSTER_NAME=$(terraform output -raw cluster_name)
+   export ACK_CONTROLLER_ROLE_ARN=$(terraform output -raw ack_controller_role_arn)
+   export KRO_CONTROLLER_ROLE_ARN=$(terraform output -raw kro_controller_role_arn)
+   export ARGOCD_CONTROLLER_ROLE_ARN=$(terraform output -raw argocd_controller_role_arn)
+   ```
+
+1. Create ACK capability
+   ```sh
+   aws eks create-capability \
+   --region ${AWS_REGION} \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-ack \
+   --type ACK \
+   --role-arn ${ACK_CONTROLLER_ROLE_ARN} \
+   --delete-propagation-policy RETAIN
+   ```
+
+1. Now, we need to create the Argo CD capability -- IdC has to be enabled in the management account for that. So before creating the capability let's store the IdC instance details and the user that will be used for accessing Argo CD in environment variables:
+
+   ```sh
+   export IDC_INSTANCE_ARN='<replace with IdC instance ARN>'
+   export IDC_USER_ID='<replace with IdC user id>'
+   export IDC_REGION='<replace with IdC region>'
+   ```
+1. Create Argo CD capability
+
+   ```sh
+   aws eks create-capability \
+   --region ${AWS_REGION} \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-argocd \
+   --type ARGOCD \
+   --role-arn ${ARGOCD_CONTROLLER_ROLE_ARN} \
+   --delete-propagation-policy RETAIN \
+   --configuration '{
+      "argoCd": {
+         "awsIdc": {
+         "idcInstanceArn": "'${IDC_INSTANCE_ARN}'",
+         "idcRegion": "'${IDC_REGION}'"
+         },
+         "rbacRoleMappings": [{
+         "role": "ADMIN",
+         "identities": [{
+            "id": "'${IDC_USER_ID}'",
+            "type": "SSO_USER"
+         }]
+         }]
+      }
+   }'
+   ```
+
+1. Create kro capability
+
+   ```sh
+   aws eks create-capability \
+   --region ${AWS_REGION} \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-kro \
+   --type KRO \
+   --role-arn ${KRO_CONTROLLER_ROLE_ARN} \
+   --delete-propagation-policy RETAIN
+   ```
+
+1. Make sure all the capabilities are now enabled by checking status using the console or the `describe-capability` command. For example:
+   ```sh
+   aws eks describe-capability \
+   --region ${AWS_REGION} \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-argocd \
+   --query 'capability.status' \
+   --output text
+   ```
+
+   Modify/run the commands above for other capabilities to make sure they are all `ACTIVE`.
+
+1. Retrieve the ArgoCD server URL and log on using the user provided during the capability creation:
+   ```sh
+   export ARGOCD_SERVER=$(aws eks describe-capability \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-argocd \
+   --query 'capability.configuration.argoCd.serverUrl' \
+   --output text \
+   --region ${AWS_REGION})
+
+   echo ${ARGOCD_SERVER}
+   ```
+
+1. Generate an account token from the Argo CD UI (Settings → Accounts → admin → Generate New Token), then set it as an environment variable:
+   ```sh
+   export ARGOCD_AUTH_TOKEN="<your-token-here>"
+   export ARGOCD_OPTS="--grpc-web"
+   ```
+
+1. Configure GitHub repository access (if using private repository). We automate this process using the Argo CD CLI. You can also configure this in the Web interface under "Settings / Repositories"
+
+   ```sh
+   export GITHUB_TOKEN="<your-token-here>"
+   argocd repo add https://github.com/$GITHUB_ORG_NAME/$WORKING_REPO.git --username iamahgoub --password $GITHUB_TOKEN --upsert --name github
+   ```
+
+   Note: If you encounter the error "Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = authentication required", verify your GitHub token settings.
+
+1. Connect to the cluster
 
    ```sh
    aws eks update-kubeconfig --name hub-cluster
    ```
 
-5. Connect to the Argo CD UI
-
-   Execute the following command to get the Argo CD UI URL and password:
-
+1. Install Argo CD App of App:
    ```sh
-   echo "Argo CD URL: http://$(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-    Login: admin
-    Password: $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)"
-   ```
-
-6. Configure GitHub repository access (if using private repository)
-
-   > We automate this process using the Argo CD CLI. You can also configure this in the Web interface under "Settings / Repositories"
-
-   Authenticate with the argocd CLI:
-
-   ```sh
-   argocd login --grpc-web $(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}') --username admin --password $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d) --insecure
-   ```
-
-   Add your GitHub repository using a valid GitHub Token:
-
-   ```sh
-   argocd repo add https://github.com/$GITHUB_ORG_NAME/$WORKING_REPO.git --username allamand --password $GITHUB_TOKEN --upsert --name github
-   ```
-
-   Note: If you encounter the error "Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = authentication required", verify your GitHub token settings.
-
-Once configured properly, Argo CD should start to install cluster-addons in the management cluster.
+   kubectl apply -f $WORKSPACE_PATH/$WORKING_REPO/terraform/hub/bootstrap/applicationsets.yaml
+   ``` 
 
 ### Bootstrap Spoke accounts
 
-For the management cluster to execute actions in the spoke AWS accounts, we need to create these IAM roles in the spoke accounts:
+For the management cluster to create resources in the spoke AWS accounts, we need to create an IAM roles in the spoke accounts to be assumed by the ACK capability in the management account for that purpose.
 
-- `eks-cluster-mgmt-ec2`
-- `eks-cluster-mgmt-eks`
-- `eks-cluster-mgmt-iam`
+> Note: Even if you're only testing this in the management account, you still need to perform this procedure, replacing the list of spoke account numbers with the management account number.
 
-> Even if you're only testing this in the management account, you still need to perform this procedure, replacing the list of spoke account numbers with the management account number.
-
-We provide a script to help create these roles. You need to first connect to each of your spoke accounts and execute the script.
+We provide a script to help with that. You need to first connect to each of your spoke accounts and execute the script.
 
 1. Log in to your AWS Spoke account
 
@@ -187,7 +263,7 @@ We provide a script to help create these roles. You need to first connect to eac
 
    ```sh
    cd $WORKSPACE_PATH/$WORKING_REPO/scripts
-   create_ack_workload_roles.sh
+   ./create_ack_workload_roles.sh
    ```
 
 > Repeat this step for each spoke account you want to use with the solution
@@ -228,27 +304,6 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    git add .
    git commit -s -m "initial commit"
    git push
-   ```
-
-3. Restart kro to incorporate new ACK CRDs deployed by Argo CD
-
-   ```sh
-   kubectl rollout restart deployment -n kro-system kro
-   ```
-
-4. Verify that the ResourceGraph definition is properly reconciled and active. If not, restart kro again as in step 3.
-
-   ```sh
-   kubectl get resourcegraphdefinitions.kro.run
-   ```
-
-   Expected output:
-
-   ```sh
-   NAME                        APIVERSION   KIND                STATE    AGE
-   ekscluster.kro.run          v1alpha1     EksCluster          Active   13m
-   eksclusterwithvpc.kro.run   v1alpha1     EksclusterWithVpc   Active   12m
-   vpc.kro.run                 v1alpha1     Vpc                 Active   13m
    ```
 
 5. After some time, the cluster should be created in the spoke account.
@@ -320,41 +375,6 @@ Update $WORKSPACE_PATH/$WORKING_REPO
 
    > This output shows that our GitOps solution has successfully deployed our addons in the cluster
 
-7. Deploy workload example application
-
-   To activate workloads, set the workloads parameter to true.
-   Then sync the cluster app:
-
-   ```sh
-   argocd app sync clusters 
-   ```
-
-   To deploy workloads on the spoke cluster, sync the namespace applications:
-
-   ```sh
-   argocd app sync namespaces-workload-cluster1-frontend
-   argocd app sync namespaces-workload-cluster1-backend
-   ```
-
-   Wait for synchronization to complete, then check the deployments:
-
-   ```sh
-   kubectl get pods -A | egrep "carts|ui|rabbitmq|checkout|catalog|assets"
-   ```
-
-   ```sh
-   assets             assets-6fd5c856d-chg7z                              1/1     Running   0              4m3s
-   carts              carts-84cd5747cf-pnqg6                              1/1     Running   2 (4m8s ago)   4m46s
-   carts              carts-dynamodb-6b64c98c4c-8mc86                     1/1     Running   0              4m4s
-   catalog            catalog-5756744b6b-s4fzv                            1/1     Running   0              4m3s
-   catalog            catalog-mysql-0                                     1/1     Running   0              5m44s
-   checkout           checkout-d4c999847-jmlv5                            1/1     Running   0              4m3s
-   checkout           checkout-redis-5c649558b6-stsvz                     1/1     Running   0              5m47s
-   rabbitmq           rabbitmq-0                                          1/1     Running   0              5m45s
-   ui                 ui-76c759877f-wgz69                                 1/1     Running   0              5m44s
-   ```
-
-   > We can now see the various pods of our sample application running
 
 You can repeat these steps for any additional clusters you want to manage.
 
@@ -432,7 +452,7 @@ To ensure proper cleanup of workload namespaces, you can either remove Argo CD a
 
    This allows Kubernetes addons to properly clean up any AWS resources like Load Balancers.
 
-2. Deactivate addons that create resources:
+1. Deactivate addons that create resources:
 
    The efs-addon creates IAM roles and EKS pod identity associations in the workload environment. To prevent orphaned resources, disable these addons:
 
@@ -459,23 +479,7 @@ To ensure proper cleanup of workload namespaces, you can either remove Argo CD a
    argocd app sync clusters
    ```
 
-3. De-register spoke account
-
-   Comment out the cluster you want to de-register in the cluster configuration:
-
-   ```sh
-   code $WORKSPACE_PATH/$WORKING_REPO/fleet/kro-values/tenants/tenant1/kro-clusters/values.yaml
-   ```
-
-   ```sh
-   cd $WORKSPACE_PATH/$WORKING_REPO/
-   git status
-   git add .
-   git commit -s -m "remove workload-cluster1"
-   git push
-   ```
-
-4. Prune the cluster in Argo CD UI
+1. Prune the cluster in Argo CD UI
 
    In the Argo CD UI, synchronize the cluster Applicationset with the prune option enabled, or use the CLI:
 
@@ -483,19 +487,39 @@ To ensure proper cleanup of workload namespaces, you can either remove Argo CD a
    argocd app sync clusters --prune
    ```
 
-5. Delete Management Cluster
+1. Delete the EKS capabilities on the management cluster
+
+   ```sh
+   aws eks delete-capability \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-argocd
+
+   aws eks delete-capability \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-kro
+
+
+   aws eks delete-capability \
+   --cluster-name ${CLUSTER_NAME} \
+   --capability-name ${CLUSTER_NAME}-ack
+   ```
+
+1. Make sure all the capabilities are deleted by checking the console or using the `describe-capability` command. For example:
+
+1. Delete Management Cluster
 
    After successfully de-registering all spoke accounts, remove the workload cluster created with Terraform:
 
    ```sh
-      cd $WORKSPACE_PATH/$WORKING_REPO/terraform/hub
-      ./destroy.sh
+   cd $WORKSPACE_PATH/$WORKING_REPO/terraform/hub
+   ./destroy.sh
    ```
 
-6. Remove ACK IAM Roles in workload accounts
+1. Remove ACK IAM Roles in workload accounts
 
    Finally, connect to each workload account and delete the IAM roles and policies created initially:
 
    ```bash
-   ./scripts/delete_ack_workload_roles.sh
+   cd $WORKSPACE_PATH/$WORKING_REPO/
+   ./scripts/delete_ack_workload_roles.sh ack
    ```

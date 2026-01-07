@@ -152,7 +152,10 @@ spec:
                   "Principal": {
                     "Service": "ec2.amazonaws.com"
                   },
-                  "Action": "sts:AssumeRole"
+                  "Action": [
+                    "sts:AssumeRole",
+                    "sts:TagSession"
+                  ]
                 }
               ]
             }
@@ -231,37 +234,6 @@ spec:
     ###########################################################
     # ArgoCD Integration
     ###########################################################
-    - id: argocdRole
-      template:
-        apiVersion: iam.services.k8s.aws/v1alpha1
-        kind: Role
-        metadata:
-          name: "${schema.spec.name}-argocd-role"
-          annotations:
-            services.k8s.aws/region: ${schema.spec.region}
-            #force dependency on ekscluster
-            eksclusterArn: "${ekscluster.status.ackResourceMetadata.arn}"
-            #force dependency on podIdentityAddon so that we create argo cluster secret after podIdentity correctly configured
-            podIdentityAddonArn: "${ackEksPodIdentity.status.ackResourceMetadata.arn}"
-        spec:
-          name: "${schema.spec.name}-argocd-role"
-          assumeRolePolicyDocument: |
-            {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Effect": "Allow",
-                  "Principal": {
-                    "AWS": "arn:aws:iam::${schema.spec.managementAccountId}:role/argocd-hub-mgmt"
-                  },
-                  "Action": [
-                    "sts:TagSession",
-                    "sts:AssumeRole"
-                  ]
-                }
-              ]
-            }
-
     - id: argocdSecret
       template:
         apiVersion: v1
@@ -348,24 +320,14 @@ spec:
             # karpenter_service_account: "${schema.spec.addons.karpenter_service_account}"
             # karpenter_sqs_queue_name: "${schema.spec.addons.karpenter_sqs_queue_name}"
 
+            access_entry_arn: "${accessEntry.status.ackResourceMetadata.arn}"
+
         type: Opaque
         # TODO bug in KRO, it always see some drifts..
         stringData:
           name: "${schema.spec.name}"
-          server: "${ekscluster.status.endpoint}"
-          config: |
-            {
-              "awsAuthConfig": {
-                "clusterName": "${schema.spec.name}",
-                "roleARN": "${argocdRole.status.ackResourceMetadata.arn}"
-              },
-              "tlsClientConfig": {
-                "caData": "${ekscluster.status.certificateAuthority.data}",
-                "insecure": false
-              }
-            }
-
-
+          server: "${ekscluster.status.ackResourceMetadata.arn}"
+          project: "default"
     - id: accessEntry
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -381,7 +343,7 @@ spec:
             - accessScope:
                 type: "cluster"
               policyARN: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          principalARN: "${argocdRole.status.ackResourceMetadata.arn}"
+          principalARN: "arn:aws:iam::${schema.spec.managementAccountId}:role/hub-cluster-argocd-controller"          
           type: STANDARD
 
     - id: accessEntryAdmin

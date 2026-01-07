@@ -53,6 +53,7 @@ var (
 		"context",
 		"dependency",
 		"dependencies",
+		"each", // Reserved for per-item readiness in collections
 		"externalRef",
 		"externalReference",
 		"externalRefs",
@@ -138,6 +139,58 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 		}
 		seen[res.ID] = struct{}{}
 	}
+
+	// Validate forEach iterators after collecting all resource IDs
+	resourceIDs := sets.NewString()
+	for _, res := range rgd.Spec.Resources {
+		resourceIDs.Insert(res.ID)
+	}
+	for _, res := range rgd.Spec.Resources {
+		if err := validateForEachDimensions(res, resourceIDs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateForEachDimensions validates the forEach iterators for a resource.
+// It checks that:
+// - Iterator names are valid identifiers (lowerCamelCase)
+// - Iterator names are not reserved keywords
+// - Iterator names do not conflict with resource IDs
+// - Iterator names are unique within the same resource
+func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String) error {
+	if len(res.ForEach) == 0 {
+		return nil
+	}
+
+	seenIterators := sets.NewString()
+	for _, iterMap := range res.ForEach {
+		for iterName := range iterMap {
+			// Check if iterator name is a valid identifier
+			if !isValidResourceID(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q is not valid: must be lowerCamelCase", res.ID, iterName)
+			}
+
+			// Check if iterator name is a reserved keyword
+			if isKROReservedWord(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q is a reserved keyword", res.ID, iterName)
+			}
+
+			// Check if iterator name conflicts with a resource ID
+			if resourceIDs.Has(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q conflicts with resource ID", res.ID, iterName)
+			}
+
+			// Check for duplicate iterator names within the same resource
+			if seenIterators.Has(iterName) {
+				return fmt.Errorf("resource %q: duplicate forEach iterator name %q", res.ID, iterName)
+			}
+			seenIterators.Insert(iterName)
+		}
+	}
+
 	return nil
 }
 

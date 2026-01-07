@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # External References
@@ -152,4 +152,3 @@ kro will:
 
 - **[CEL Expressions](../03-cel-expressions.md)** - Learn more about the `?` operator
 - **[Dependencies & Ordering](../04-dependencies-ordering.md)** - Understand how external refs affect dependency graphs
-- **[Readiness](./03-readiness.md)** - Use `readyWhen` with external references

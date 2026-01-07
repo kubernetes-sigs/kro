@@ -177,7 +177,8 @@ Explore the details of ResourceGraphDefinitions:
 - **[Resource Basics](./02-resource-definitions/01-resource-basics.md)** - Define resources with CEL expressions
 - **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Create resources conditionally with `includeWhen`
 - **[Readiness](./02-resource-definitions/03-readiness.md)** - Control when resources are considered ready
-- **[External References](./02-resource-definitions/04-external-references.md)** - Reference resources outside your RGD
+- **[Collections](./02-resource-definitions/04-collections.md)** - Create multiple resources with `forEach`
+- **[External References](./02-resource-definitions/05-external-references.md)** - Reference resources outside your RGD
 - **[CEL Expressions](./03-cel-expressions.md)** - Reference data between resources
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - How kro infers dependencies and determines creation order
 - **[Static Type Checking](./05-static-type-checking.md)** - How kro validates RGDs before instances are created

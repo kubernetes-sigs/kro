@@ -95,6 +95,22 @@ func WithExternalRef(
 	}
 }
 
+// WithExternalRefAndForEach adds an external reference with forEach iterators.
+// This is an invalid combination and should fail validation - used for testing.
+func WithExternalRefAndForEach(
+	id string,
+	externalRef *krov1alpha1.ExternalRef,
+	forEach []krov1alpha1.ForEachDimension,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ExternalRef: externalRef,
+			ForEach:     forEach,
+		})
+	}
+}
+
 // WithResource adds a resource to the ResourceGraphDefinition with the given name and definition
 // readyWhen and includeWhen expressions are optional.
 func WithResource(
@@ -132,5 +148,31 @@ func WithTypes(types map[string]interface{}) SchemaOption {
 			Object: &unstructured.Unstructured{Object: types},
 			Raw:    rawTypes,
 		}
+	}
+}
+
+// WithResourceCollection adds a collection resource with forEach iterators to the ResourceGraphDefinition.
+func WithResourceCollection(
+	id string,
+	template map[string]interface{},
+	forEach []krov1alpha1.ForEachDimension,
+	readyWhen []string,
+	includeWhen []string,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		raw, err := json.Marshal(template)
+		if err != nil {
+			panic(err)
+		}
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			ForEach:     forEach,
+			Template: runtime.RawExtension{
+				Object: &unstructured.Unstructured{Object: template},
+				Raw:    raw,
+			},
+		})
 	}
 }

@@ -77,6 +77,7 @@ For each resource template, kro:
 3. **Extracts CEL expressions and determines expected types** - For each field in the template:
    - **If the field contains a CEL expression**: kro extracts the expression and determines what type the target field expects based on the OpenAPI schema
    - **If the field is a literal value**: kro performs standard OpenAPI validation, just like the kube-api-server does
+4. **Validates forEach expressions** - For resources with `forEach`, kro validates that iterator expressions evaluate to arrays and types the iterator variables for use in the template
 
 ```kro
 resources:

@@ -47,6 +47,7 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 - If **all** expressions evaluate to `true`, the resource is included
 - If **any** expression evaluates to `false`, the resource is skipped
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
+- For [collections](./04-collections.md), `includeWhen` applies to the entire collection
 
 ## What You Can Reference
 
@@ -82,7 +83,7 @@ When a resource is skipped (due to `includeWhen` conditions), **all resources th
 
 </div>
 
-In this example, the Deployment on the left has `includeWhen: ${true}`, so it's included along with all its children (Service and Ingress). The Deployment on the right (shown in red) has a condition that evaluates to false, so it and all its dependencies are skipped.
+In this example, the Deployment on the left has an `includeWhen` condition that evaluates to true, so it's included along with all its children (Service and Ingress). The Deployment on the right (shown in red) has a condition that evaluates to false, so it and all its dependencies are skipped.
 
 This ensures that the resource graph remains consistent and prevents resources from referencing other resources that don't exist.
 

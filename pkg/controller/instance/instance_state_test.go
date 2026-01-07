@@ -19,8 +19,8 @@ import (
 	"testing"
 )
 
-func TestNewInstanceState(t *testing.T) {
-	state := newInstanceState()
+func TestNewStateManager(t *testing.T) {
+	state := newStateManager()
 
 	if state.State != InstanceStateInProgress {
 		t.Errorf("expected State to be %q, got %q", InstanceStateInProgress, state.State)
@@ -82,7 +82,7 @@ func TestResourceErrors(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			state := &InstanceState{
+			state := &StateManager{
 				ResourceStates: tt.resourceStates,
 			}
 

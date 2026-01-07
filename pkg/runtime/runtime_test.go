@@ -16,6 +16,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -40,6 +41,7 @@ func Test_RuntimeWorkflow(t *testing.T) {
 				},
 				"secret": map[string]interface{}{
 					"include": false,
+					"name":    "myapp-secret",
 				},
 			},
 		}),
@@ -2741,6 +2743,8 @@ type mockResource struct {
 	includeWhenExpressions []string
 	namespaced             bool
 	isExternalRef          bool
+	isCollection           bool
+	forEachDimensions      []ForEachDimensionInfo
 	obj                    *unstructured.Unstructured
 }
 
@@ -2784,6 +2788,14 @@ func (m *mockResource) IsExternalRef() bool {
 	return m.isExternalRef
 }
 
+func (m *mockResource) IsCollection() bool {
+	return m.isCollection
+}
+
+func (m *mockResource) GetForEachDimensionInfo() []ForEachDimensionInfo {
+	return m.forEachDimensions
+}
+
 type mockResourceOption func(*mockResource)
 
 /* func withGVR(group, version, resource string) mockResourceOption {
@@ -2820,6 +2832,12 @@ func withIncludeWhenExpressions(exprs []string) mockResourceOption {
 	}
 }
 
+func withIsCollection(isCollection bool) mockResourceOption {
+	return func(m *mockResource) {
+		m.isCollection = isCollection
+	}
+}
+
 /* func withNamespaced(namespaced bool) mockResourceOption {
 	return func(m *mockResource) {
 		m.namespaced = namespaced
@@ -2832,10 +2850,775 @@ func withObject(obj map[string]interface{}) mockResourceOption {
 	}
 }
 
+func withUnstructured(obj *unstructured.Unstructured) mockResourceOption {
+	return func(m *mockResource) {
+		m.obj = obj
+	}
+}
+
+func withForEachDimensions(dimensions []ForEachDimensionInfo) mockResourceOption {
+	return func(m *mockResource) {
+		m.forEachDimensions = dimensions
+	}
+}
+
 func newTestResource(opts ...mockResourceOption) *mockResource {
 	r := newMockResource()
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r
+}
+
+func TestCartesianProduct(t *testing.T) {
+	tests := []struct {
+		name      string
+		iterators []ForEachDimensionInfo
+		values    [][]interface{}
+		wantLen   int
+		wantFirst map[string]interface{}
+		wantLast  map[string]interface{}
+	}{
+		{
+			name: "single iterator with 3 values",
+			iterators: []ForEachDimensionInfo{
+				{Name: "region", Expression: "schema.spec.regions"},
+			},
+			values:    [][]interface{}{{"us", "eu", "ap"}},
+			wantLen:   3,
+			wantFirst: map[string]interface{}{"region": "us"},
+			wantLast:  map[string]interface{}{"region": "ap"},
+		},
+		{
+			name: "two iterators - cartesian product",
+			iterators: []ForEachDimensionInfo{
+				{Name: "region", Expression: "schema.spec.regions"},
+				{Name: "tier", Expression: "schema.spec.tiers"},
+			},
+			values:    [][]interface{}{{"us", "eu"}, {"web", "api"}},
+			wantLen:   4,
+			wantFirst: map[string]interface{}{"region": "us", "tier": "web"},
+			wantLast:  map[string]interface{}{"region": "eu", "tier": "api"},
+		},
+		{
+			name: "empty values returns nil",
+			iterators: []ForEachDimensionInfo{
+				{Name: "region", Expression: "schema.spec.regions"},
+			},
+			values:  [][]interface{}{{}},
+			wantLen: 0,
+		},
+		{
+			name:      "no iterators returns nil",
+			iterators: []ForEachDimensionInfo{},
+			values:    [][]interface{}{},
+			wantLen:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cartesianProduct(tt.iterators, tt.values)
+			if tt.wantLen == 0 {
+				if result != nil {
+					t.Errorf("expected nil, got %v", result)
+				}
+				return
+			}
+			if len(result) != tt.wantLen {
+				t.Errorf("expected length %d, got %d", tt.wantLen, len(result))
+			}
+			if !reflect.DeepEqual(result[0], tt.wantFirst) {
+				t.Errorf("first element: expected %v, got %v", tt.wantFirst, result[0])
+			}
+			if !reflect.DeepEqual(result[len(result)-1], tt.wantLast) {
+				t.Errorf("last element: expected %v, got %v", tt.wantLast, result[len(result)-1])
+			}
+		})
+	}
+}
+
+// Test_CollectionStorage tests the collection storage methods:
+// GetCollectionResources and SetCollectionResources
+func Test_CollectionStorage(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources []*unstructured.Unstructured
+	}{
+		{
+			name:      "empty collection",
+			resources: []*unstructured.Unstructured{},
+		},
+		{
+			name: "single resource",
+			resources: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+			},
+		},
+		{
+			name: "multiple resources",
+			resources: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-1"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-2"}}},
+			},
+		},
+		{
+			name: "resources with nil entries",
+			resources: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+				nil,
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-2"}}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			}
+
+			// Test SetCollectionResources
+			rt.SetCollectionResources("myCollection", tt.resources)
+
+			// Test GetCollectionResources
+			got, state := rt.GetCollectionResources("myCollection")
+			if state != ResourceStateResolved {
+				t.Errorf("GetCollectionResources() state = %v, want ResourceStateResolved", state)
+			}
+			if len(got) != len(tt.resources) {
+				t.Errorf("GetCollectionResources() length = %d, want %d", len(got), len(tt.resources))
+			}
+			for i := range tt.resources {
+				if got[i] != tt.resources[i] {
+					t.Errorf("GetCollectionResources()[%d] = %v, want %v", i, got[i], tt.resources[i])
+				}
+			}
+
+			// Test GetCollectionResources for non-existent collection
+			missing, missingState := rt.GetCollectionResources("nonExistent")
+			if missing != nil {
+				t.Errorf("GetCollectionResources(nonExistent) = %v, want nil", missing)
+			}
+			if missingState != ResourceStateWaitingOnDependencies {
+				t.Errorf("GetCollectionResources(nonExistent) state = %v, want ResourceStateWaitingOnDependencies", missingState)
+			}
+		})
+	}
+}
+
+// Test_isResourceResolved tests the isResourceResolved helper
+func Test_isResourceResolved(t *testing.T) {
+	tests := []struct {
+		name                string
+		resourceID          string
+		isCollection        bool
+		resolvedResources   map[string]*unstructured.Unstructured
+		resolvedCollections map[string][]*unstructured.Unstructured
+		want                bool
+	}{
+		{
+			name:         "single resource - resolved",
+			resourceID:   "configmap",
+			isCollection: false,
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "test"}}},
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                true,
+		},
+		{
+			name:                "single resource - not resolved",
+			resourceID:          "configmap",
+			isCollection:        false,
+			resolvedResources:   make(map[string]*unstructured.Unstructured),
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                false,
+		},
+		{
+			name:              "collection - resolved",
+			resourceID:        "configs",
+			isCollection:      true,
+			resolvedResources: make(map[string]*unstructured.Unstructured),
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}}},
+			},
+			want: true,
+		},
+		{
+			name:                "collection - not resolved",
+			resourceID:          "configs",
+			isCollection:        true,
+			resolvedResources:   make(map[string]*unstructured.Unstructured),
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                false,
+		},
+		{
+			name:              "collection - empty slice is still resolved",
+			resourceID:        "configs",
+			isCollection:      true,
+			resolvedResources: make(map[string]*unstructured.Unstructured),
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {}, // empty but exists
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resources: map[string]Resource{
+					tt.resourceID: newTestResource(withIsCollection(tt.isCollection)),
+				},
+				resolvedResources:   tt.resolvedResources,
+				resolvedCollections: tt.resolvedCollections,
+			}
+
+			got := rt.isResourceResolved(tt.resourceID)
+			if got != tt.want {
+				t.Errorf("isResourceResolved() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_allResourcesResolved tests the allResourcesResolved helper
+func Test_allResourcesResolved(t *testing.T) {
+	tests := []struct {
+		name                string
+		resources           map[string]Resource
+		resolvedResources   map[string]*unstructured.Unstructured
+		resolvedCollections map[string][]*unstructured.Unstructured
+		want                bool
+	}{
+		{
+			name:                "no resources",
+			resources:           map[string]Resource{},
+			resolvedResources:   make(map[string]*unstructured.Unstructured),
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                true,
+		},
+		{
+			name: "all single resources resolved",
+			resources: map[string]Resource{
+				"configmap":  newTestResource(withIsCollection(false)),
+				"deployment": newTestResource(withIsCollection(false)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap":  {Object: map[string]interface{}{}},
+				"deployment": {Object: map[string]interface{}{}},
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                true,
+		},
+		{
+			name: "single resource not resolved",
+			resources: map[string]Resource{
+				"configmap":  newTestResource(withIsCollection(false)),
+				"deployment": newTestResource(withIsCollection(false)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{}},
+				// deployment missing
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                false,
+		},
+		{
+			name: "all collections resolved",
+			resources: map[string]Resource{
+				"configs": newTestResource(withIsCollection(true)),
+				"pods":    newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: make(map[string]*unstructured.Unstructured),
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {{Object: map[string]interface{}{}}},
+				"pods":    {{Object: map[string]interface{}{}}},
+			},
+			want: true,
+		},
+		{
+			name: "collection not resolved",
+			resources: map[string]Resource{
+				"configs": newTestResource(withIsCollection(true)),
+				"pods":    newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: make(map[string]*unstructured.Unstructured),
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {{Object: map[string]interface{}{}}},
+				// pods missing
+			},
+			want: false,
+		},
+		{
+			name: "mixed - all resolved",
+			resources: map[string]Resource{
+				"configmap": newTestResource(withIsCollection(false)),
+				"configs":   newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{}},
+			},
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {{Object: map[string]interface{}{}}},
+			},
+			want: true,
+		},
+		{
+			name: "mixed - collection not resolved",
+			resources: map[string]Resource{
+				"configmap": newTestResource(withIsCollection(false)),
+				"configs":   newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{}},
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			want:                false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resources:           tt.resources,
+				resolvedResources:   tt.resolvedResources,
+				resolvedCollections: tt.resolvedCollections,
+			}
+
+			got := rt.allResourcesResolved()
+			if got != tt.want {
+				t.Errorf("allResourcesResolved() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_getCollectionResourcesAsSlice tests the getCollectionResourcesAsSlice helper
+func Test_getCollectionResourcesAsSlice(t *testing.T) {
+	tests := []struct {
+		name       string
+		resourceID string
+		collection []*unstructured.Unstructured
+		wantLen    int
+	}{
+		{
+			name:       "nil collection",
+			resourceID: "configs",
+			collection: nil,
+			wantLen:    0,
+		},
+		{
+			name:       "empty collection",
+			resourceID: "configs",
+			collection: []*unstructured.Unstructured{},
+			wantLen:    0,
+		},
+		{
+			name:       "single item",
+			resourceID: "configs",
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+			},
+			wantLen: 1,
+		},
+		{
+			name:       "multiple items",
+			resourceID: "configs",
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-1"}}},
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-2"}}},
+			},
+			wantLen: 3,
+		},
+		{
+			name:       "items with nil entries are filtered",
+			resourceID: "configs",
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-0"}}},
+				nil,
+				{Object: map[string]interface{}{"metadata": map[string]interface{}{"name": "item-2"}}},
+			},
+			wantLen: 2, // nil entries are skipped
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resolvedCollections: map[string][]*unstructured.Unstructured{
+					tt.resourceID: tt.collection,
+				},
+			}
+
+			got := rt.getCollectionResourcesAsSlice(tt.resourceID)
+			if len(got) != tt.wantLen {
+				t.Errorf("getCollectionResourcesAsSlice() length = %d, want %d", len(got), tt.wantLen)
+			}
+
+			// Verify each item is the .Object of the unstructured
+			nonNilIdx := 0
+			for _, item := range tt.collection {
+				if item != nil {
+					if !reflect.DeepEqual(got[nonNilIdx], item.Object) {
+						t.Errorf("getCollectionResourcesAsSlice()[%d] = %v, want %v", nonNilIdx, got[nonNilIdx], item.Object)
+					}
+					nonNilIdx++
+				}
+			}
+		})
+	}
+}
+
+// Test_evaluateDynamicVariablesWithCollections tests that isResourceResolved
+// correctly identifies collection dependencies as resolved/unresolved.
+// This is a simpler test that doesn't require full CEL evaluation.
+func Test_evaluateDynamicVariablesWithCollections(t *testing.T) {
+	tests := []struct {
+		name                string
+		resources           map[string]Resource
+		resolvedResources   map[string]*unstructured.Unstructured
+		resolvedCollections map[string][]*unstructured.Unstructured
+		dependencies        []string
+		wantAllResolved     bool
+	}{
+		{
+			name: "collection dependency resolved",
+			resources: map[string]Resource{
+				"configs": newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: make(map[string]*unstructured.Unstructured),
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {
+					{Object: map[string]interface{}{"data": map[string]interface{}{"key": "val1"}}},
+					{Object: map[string]interface{}{"data": map[string]interface{}{"key": "val2"}}},
+				},
+			},
+			dependencies:    []string{"configs"},
+			wantAllResolved: true,
+		},
+		{
+			name: "collection dependency not resolved",
+			resources: map[string]Resource{
+				"configs": newTestResource(withIsCollection(true)),
+			},
+			resolvedResources:   make(map[string]*unstructured.Unstructured),
+			resolvedCollections: make(map[string][]*unstructured.Unstructured), // not resolved
+			dependencies:        []string{"configs"},
+			wantAllResolved:     false,
+		},
+		{
+			name: "single resource dependency resolved",
+			resources: map[string]Resource{
+				"configmap": newTestResource(withIsCollection(false)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{"data": map[string]interface{}{"key": "value"}}},
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			dependencies:        []string{"configmap"},
+			wantAllResolved:     true,
+		},
+		{
+			name: "mixed dependencies - all resolved",
+			resources: map[string]Resource{
+				"configmap": newTestResource(withIsCollection(false)),
+				"configs":   newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{}},
+			},
+			resolvedCollections: map[string][]*unstructured.Unstructured{
+				"configs": {{Object: map[string]interface{}{}}},
+			},
+			dependencies:    []string{"configmap", "configs"},
+			wantAllResolved: true,
+		},
+		{
+			name: "mixed dependencies - collection not resolved",
+			resources: map[string]Resource{
+				"configmap": newTestResource(withIsCollection(false)),
+				"configs":   newTestResource(withIsCollection(true)),
+			},
+			resolvedResources: map[string]*unstructured.Unstructured{
+				"configmap": {Object: map[string]interface{}{}},
+			},
+			resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			dependencies:        []string{"configmap", "configs"},
+			wantAllResolved:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resources:           tt.resources,
+				resolvedResources:   tt.resolvedResources,
+				resolvedCollections: tt.resolvedCollections,
+			}
+
+			// Test that isResourceResolved works correctly for all dependencies
+			allResolved := true
+			for _, dep := range tt.dependencies {
+				if !rt.isResourceResolved(dep) {
+					allResolved = false
+					break
+				}
+			}
+
+			if allResolved != tt.wantAllResolved {
+				t.Errorf("all dependencies resolved = %v, want %v", allResolved, tt.wantAllResolved)
+			}
+		})
+	}
+}
+
+// Test_IsCollectionReady tests the IsCollectionReady method.
+// readyWhen for collections uses the `each` keyword for per-item checks (AND semantics).
+// Collections cannot reference themselves in readyWhen expressions.
+func Test_IsCollectionReady(t *testing.T) {
+	tests := []struct {
+		name             string
+		resourceID       string
+		readyExpressions []string
+		collection       []*unstructured.Unstructured
+		wantReady        bool
+		wantReason       string
+		wantErr          bool
+	}{
+		{
+			name:             "collection not expanded",
+			resourceID:       "configs",
+			readyExpressions: []string{},
+			collection:       nil,
+			wantReady:        false,
+			wantReason:       "collection not expanded",
+		},
+		{
+			name:             "no readyWhen expressions - always ready",
+			resourceID:       "configs",
+			readyExpressions: []string{},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Pending"}}},
+			},
+			wantReady: true,
+		},
+		{
+			name:             "each - all items ready",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+			},
+			wantReady: true,
+		},
+		{
+			name:             "each - one item not ready",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Pending"}}},
+			},
+			wantReady:  false,
+			wantReason: "item 1: expression each.status.phase == 'Running' evaluated to false",
+		},
+		{
+			name:             "each - first item not ready",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Pending"}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+			},
+			wantReady:  false,
+			wantReason: "item 0: expression each.status.phase == 'Running' evaluated to false",
+		},
+		{
+			name:             "each - all items pending",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Pending"}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Pending"}}},
+			},
+			wantReady:  false,
+			wantReason: "item 0: expression each.status.phase == 'Running' evaluated to false",
+		},
+		{
+			name:             "each - multiple expressions all pass",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'", "each.status.ready == true"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running", "ready": true}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running", "ready": true}}},
+			},
+			wantReady: true,
+		},
+		{
+			name:             "each - multiple expressions one fails",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'", "each.status.ready == true"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running", "ready": true}}},
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running", "ready": false}}},
+			},
+			wantReady:  false,
+			wantReason: "item 1: expression each.status.ready == true evaluated to false",
+		},
+		{
+			name:             "nil item in collection",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+				nil,
+			},
+			wantReady:  false,
+			wantReason: "expanded resource 1 not resolved",
+		},
+		{
+			name:             "empty collection is ready (vacuous truth)",
+			resourceID:       "configs",
+			readyExpressions: []string{"each.status.phase == 'Running'"},
+			collection:       []*unstructured.Unstructured{},
+			wantReady:        true,
+		},
+		{
+			name:             "each with has() for optional field - field exists",
+			resourceID:       "configs",
+			readyExpressions: []string{"has(each.status.phase) && each.status.phase == 'Running'"},
+			collection: []*unstructured.Unstructured{
+				{Object: map[string]interface{}{"status": map[string]interface{}{"phase": "Running"}}},
+			},
+			wantReady: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &ResourceGraphDefinitionRuntime{
+				resources: map[string]Resource{
+					tt.resourceID: newTestResource(
+						withIsCollection(true),
+						withReadyExpressions(tt.readyExpressions),
+					),
+				},
+				resolvedCollections: map[string][]*unstructured.Unstructured{
+					tt.resourceID: tt.collection,
+				},
+			}
+
+			// Remove the collection from resolved if it's nil (simulating "not expanded")
+			if tt.collection == nil {
+				delete(rt.resolvedCollections, tt.resourceID)
+			}
+
+			ready, reason, err := rt.IsCollectionReady(tt.resourceID)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsCollectionReady() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if ready != tt.wantReady {
+				t.Errorf("IsCollectionReady() ready = %v, want %v", ready, tt.wantReady)
+			}
+			if reason != tt.wantReason {
+				t.Errorf("IsCollectionReady() reason = %q, want %q", reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// Test_ExpandCollection_SizeLimit tests that ExpandCollection enforces the
+// DefaultMaxCollectionSize limit to prevent resource exhaustion.
+func Test_ExpandCollection_SizeLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		itemCount   int
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:      "within limit",
+			itemCount: 10,
+			wantErr:   false,
+		},
+		{
+			name:      "at limit",
+			itemCount: DefaultMaxCollectionSize,
+			wantErr:   false,
+		},
+		{
+			name:        "exceeds limit",
+			itemCount:   DefaultMaxCollectionSize + 1,
+			wantErr:     true,
+			errContains: "exceeding the maximum limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a list of items for forEach
+			items := make([]interface{}, tt.itemCount)
+			for i := 0; i < tt.itemCount; i++ {
+				items[i] = map[string]interface{}{"name": fmt.Sprintf("item-%d", i)}
+			}
+
+			// Create mock collection resource
+			collectionResource := newTestResource(
+				withIsCollection(true),
+				withForEachDimensions([]ForEachDimensionInfo{
+					{Name: "item", Expression: "schema.spec.items"},
+				}),
+				withUnstructured(&unstructured.Unstructured{
+					Object: map[string]interface{}{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata": map[string]interface{}{
+							"name": "${item.name}",
+						},
+					},
+				}),
+			)
+
+			// Create instance with the items
+			instance := newTestResource(withUnstructured(&unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "example.com/v1",
+					"kind":       "TestInstance",
+					"spec": map[string]interface{}{
+						"items": items,
+					},
+				},
+			}))
+
+			rt := &ResourceGraphDefinitionRuntime{
+				instance:            instance,
+				resources:           map[string]Resource{"collection": collectionResource},
+				topologicalOrder:    []string{"collection"},
+				resolvedResources:   make(map[string]*unstructured.Unstructured),
+				resolvedCollections: make(map[string][]*unstructured.Unstructured),
+			}
+
+			_, err := rt.ExpandCollection("collection")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ExpandCollection() expected error, got nil")
+					return
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("ExpandCollection() error = %v, want error containing %q", err, tt.errContains)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("ExpandCollection() unexpected error: %v", err)
+				}
+			}
+		})
+	}
 }

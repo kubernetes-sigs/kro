@@ -29,6 +29,14 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
+const (
+	// DefaultMaxCollectionSize is the maximum number of resources that can be
+	// generated from a single forEach collection. This limit prevents accidental
+	// resource exhaustion from misconfigured or malicious forEach expressions.
+	// The limit can be adjusted if needed for specific use cases.
+	DefaultMaxCollectionSize = 1000
+)
+
 // Compile time proof to ensure that ResourceGraphDefinitionRuntime implements the
 // Runtime interface.
 var _ Interface = &ResourceGraphDefinitionRuntime{}
@@ -53,6 +61,7 @@ func NewResourceGraphDefinitionRuntime(
 		resources:                    resources,
 		topologicalOrder:             topologicalOrder,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
+		resolvedCollections:          make(map[string][]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
 		celProgramCache:              make(map[string]cel.Program),
@@ -64,14 +73,29 @@ func NewResourceGraphDefinitionRuntime(
 		if yes, _ := r.ReadyToProcessResource(id); !yes {
 			continue
 		}
-		// Process the resource variables.
+
+		// Process the resource variables (including collection resources).
+		// Variable Kind determines when ALL expressions in the variable are evaluated:
+		// - Static: All expressions evaluated at init time
+		// - Dynamic: All expressions evaluated when dependencies ready
+		// - Iteration: All expressions evaluated during ExpandCollection only
+		// Iteration variables are completely skipped during static/dynamic evaluation.
 		for _, variable := range resource.GetVariables() {
 			for _, expr := range variable.Expressions {
-				// If cached, use the same pointer.
+				// If cached, reuse the cached expression state (they're shared pointers).
 				if ec, seen := r.expressionsCache[expr]; seen {
 					// NOTE(a-hilaly): This strikes me as an early optimization, but
 					// it's a good one, I believe... We can always remove it if it's
 					// too magical.
+					//
+					// IMPORTANT: An expression like "schema.spec.name" might appear in
+					// multiple variables with different Kinds. The SAME expression
+					// should be evaluated with the LOWEST Kind priority so it's available
+					// when needed. Priority: Static < Dynamic < Iteration.
+					// If the new variable has a lower Kind, update the cached expression.
+					if kindPriority(variable.Kind) < kindPriority(ec.Kind) {
+						ec.Kind = variable.Kind
+					}
 					r.runtimeVariables[id] = append(r.runtimeVariables[id], ec)
 					continue
 				}
@@ -115,12 +139,10 @@ func NewResourceGraphDefinitionRuntime(
 
 	// Evaluate the static variables, so that the caller only needs to call Synchronize
 	// whenever a new resource is added or a variable is updated.
-	err := r.evaluateStaticVariables()
-	if err != nil {
+	if err := r.evaluateStaticVariables(); err != nil {
 		return nil, fmt.Errorf("failed to evaluate static variables: %w", err)
 	}
-	err = r.propagateResourceVariables()
-	if err != nil {
+	if err := r.propagateResourceVariables(); err != nil {
 		return nil, fmt.Errorf("failed to propagate resource variables: %w", err)
 	}
 
@@ -142,11 +164,18 @@ type ResourceGraphDefinitionRuntime struct {
 	// dependency graph.
 	resources map[string]Resource
 
-	// resolvedResources stores the latest state of resolved resources.
+	// resolvedResources stores the latest state of resolved single resources.
 	// When a resource is successfully created or updated in the cluster,
 	// its state is stored here. This map helps track which resources have
 	// been successfully reconciled with the cluster state.
+	// Note: Collection resources use resolvedCollections instead.
 	resolvedResources map[string]*unstructured.Unstructured
+
+	// resolvedCollections stores the latest state of resolved collection resources.
+	// Each collection resource (those with forEach) expands into N individual resources
+	// at runtime. The slice maintains the order from ExpandCollection.
+	// Key: resource ID, Value: ordered slice of expanded resources
+	resolvedCollections map[string][]*unstructured.Unstructured
 
 	// runtimeVariables maps resource ids to their associated variables.
 	// These variables are used in the synchronization process to resolve
@@ -188,6 +217,40 @@ func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
 	return rt.topologicalOrder
 }
 
+// isResourceResolved checks if a resource has been resolved (applied to K8s).
+// For single resources, it checks resolvedResources.
+// For collections, it checks resolvedCollections.
+func (rt *ResourceGraphDefinitionRuntime) isResourceResolved(resourceID string) bool {
+	// Check if we have a resource descriptor to determine if it's a collection
+	resource, hasDescriptor := rt.resources[resourceID]
+	if hasDescriptor && resource.IsCollection() {
+		_, exists := rt.resolvedCollections[resourceID]
+		return exists
+	}
+	// For non-collection resources (or when descriptor is unavailable),
+	// check resolvedResources
+	_, exists := rt.resolvedResources[resourceID]
+	return exists
+}
+
+// allResourcesResolved checks if all resources have been resolved.
+// It checks both resolvedResources (for single resources) and
+// resolvedCollections (for collection resources).
+func (rt *ResourceGraphDefinitionRuntime) allResourcesResolved() bool {
+	for id, resource := range rt.resources {
+		if resource.IsCollection() {
+			if _, exists := rt.resolvedCollections[id]; !exists {
+				return false
+			}
+		} else {
+			if _, exists := rt.resolvedResources[id]; !exists {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ResourceDescriptor returns the descriptor for a given resource id.
 //
 // It is the responsibility of the caller to ensure that the resource id
@@ -197,10 +260,12 @@ func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) Resource
 	return rt.resources[id]
 }
 
-// GetResource returns a resource so that it's either created or updated in
-// the cluster, it also returns the runtime state of the resource. Indicating
-// whether the resource variables are resolved or not, and whether the resource
-// readiness conditions are met or not.
+// GetResource returns a single (non-collection) resource for creation or update.
+// For collection resources, use ExpandCollection to get expanded resources and
+// GetCollectionResources to retrieve already-applied resources.
+//
+// Callers should check ResourceDescriptor.IsCollection() first and call the
+// appropriate method.
 func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
 	// Did the user set the resource?
 	r, ok := rt.resolvedResources[id]
@@ -209,16 +274,18 @@ func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.
 	}
 
 	// If not, can we process the resource?
-	resolved := rt.canProcessResource(id)
-	if resolved {
+	if rt.canProcessResource(id) {
 		return rt.resources[id].Unstructured(), ResourceStateResolved
 	}
 
 	return nil, ResourceStateWaitingOnDependencies
 }
 
-// SetResource updates or sets a resource in the runtime. This is typically
-// called after a resource has been created or updated in the cluster.
+// SetResource stores a single (non-collection) resource after it's applied to K8s.
+// For collection resources, use SetCollectionResources instead.
+//
+// Callers should check ResourceDescriptor.IsCollection() first and call the
+// appropriate method.
 func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstructured.Unstructured) {
 	rt.resolvedResources[id] = resource
 }
@@ -245,7 +312,7 @@ func (rt *ResourceGraphDefinitionRuntime) SetInstance(obj *unstructured.Unstruct
 func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 	// if everything is resolved, we're done.
 	// TODO(a-hilaly): Add readiness check here.
-	if rt.allExpressionsAreResolved() && len(rt.resolvedResources) == len(rt.resources) {
+	if rt.allExpressionsAreResolved() && rt.allResourcesResolved() {
 		return false, nil
 	}
 
@@ -272,6 +339,8 @@ func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
 
 // propagateResourceVariables iterates over all resources and evaluates their
 // variables if all dependencies are resolved.
+// For collection resources, this resolves static and dynamic variables but
+// skips iteration kind variables (they're resolved during ExpandCollection).
 func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
 	for id := range rt.resources {
 		if rt.canProcessResource(id) {
@@ -302,9 +371,14 @@ func (rt *ResourceGraphDefinitionRuntime) canProcessResource(resource string) bo
 }
 
 // resourceVariablesResolved determines if all variables for a given resource
-// have been resolved.
+// have been resolved. Iteration kind variables are skipped since they're
+// resolved during ExpandCollection, not during normal variable propagation.
 func (rt *ResourceGraphDefinitionRuntime) resourceVariablesResolved(resource string) bool {
 	for _, variable := range rt.runtimeVariables[resource] {
+		// Skip iteration kind - they're resolved during ExpandCollection
+		if variable.Kind.IsIteration() {
+			continue
+		}
 		if variable.Kind.IsDynamic() && !variable.Resolved {
 			return false
 		}
@@ -315,7 +389,10 @@ func (rt *ResourceGraphDefinitionRuntime) resourceVariablesResolved(resource str
 // evaluateStaticVariables processes all static variables in the runtime.
 // Static variables are those that can be evaluated immediately, typically
 // depending only on the initial configuration. This function is usually
-// called once during runtime initialization to set up the baseline state
+// called once during runtime initialization to set up the baseline state.
+//
+// This also evaluates forEach expressions for collection resources since
+// forEach expressions are static (they only reference schema).
 func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
 	if err != nil {
@@ -325,6 +402,8 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	evalContext := map[string]interface{}{
 		"schema": rt.instance.Unstructured().Object,
 	}
+
+	// Evaluate static variables (skip iteration kind - they need iterator values)
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
 			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
@@ -335,7 +414,9 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 			variable.Resolved = true
 			variable.ResolvedValue = value
 		}
+		// Skip iteration kind - they're evaluated during ExpandCollection
 	}
+
 	return nil
 }
 
@@ -360,9 +441,16 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 	// Dynamic variables are those that depend on other resources
 	// and are resolved after all the dependencies are resolved.
 
-	resolvedResources := maps.Keys(rt.resolvedResources)
-	resolvedResources = append(resolvedResources, "schema")
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
+	// Include both regular resources and collection resources in the CEL environment.
+	// Regular resources are declared as AnyType, but collections must be declared
+	// as ListType to support CEL comprehension operations (map, filter, all, exists).
+	resolvedResourceIDs := maps.Keys(rt.resolvedResources)
+	resolvedCollectionIDs := maps.Keys(rt.resolvedCollections)
+	regularIDs := append(resolvedResourceIDs, "schema")
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs(regularIDs),
+		krocel.WithListVariables(resolvedCollectionIDs),
+	)
 	if err != nil {
 		return err
 	}
@@ -378,16 +466,37 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 				continue
 			}
 
-			// we need to make sure that the dependencies are
-			// part of the resolved resources.
-			if len(variable.Dependencies) > 0 &&
-				!containsAllElements(resolvedResources, variable.Dependencies) {
+			// Check if all dependencies are resolved AND ready.
+			// A dependency must be:
+			// - Resolved: exists in resolvedResources or resolvedCollections
+			// - Ready: its readyWhen expressions evaluate to true (if any)
+			// This prevents evaluating expressions that reference dependencies
+			// that aren't ready yet (e.g., workerPods[0] when pods aren't Running).
+			allDepsReady := true
+			for _, dep := range variable.Dependencies {
+				if !rt.isResourceResolved(dep) {
+					allDepsReady = false
+					break
+				}
+				// Also check if the dependency is ready (readyWhen satisfied)
+				if ready, _, _ := rt.IsResourceReady(dep); !ready {
+					allDepsReady = false
+					break
+				}
+			}
+			if !allDepsReady {
 				continue
 			}
 
 			evalContext := make(map[string]interface{})
 			for _, dep := range variable.Dependencies {
-				evalContext[dep] = rt.resolvedResources[dep].Object
+				// Check if this is a collection using the resource descriptor
+				resource, hasDescriptor := rt.resources[dep]
+				if hasDescriptor && resource.IsCollection() {
+					evalContext[dep] = rt.getCollectionResourcesAsSlice(dep)
+				} else {
+					evalContext[dep] = rt.resolvedResources[dep].Object
+				}
 			}
 
 			evalContext["schema"] = rt.instance.Unstructured().Object
@@ -439,7 +548,8 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
 }
 
 // evaluateResourceExpressions processes all expressions associated with a
-// specific resource.
+// specific resource. For collection resources, iteration kind variables are
+// skipped since they're resolved during ExpandCollection.
 func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
 	yes, _ := rt.ReadyToProcessResource(resource)
 	if !yes {
@@ -453,9 +563,18 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource s
 	}
 
 	variables := rt.resources[resource].GetVariables()
-	exprFields := make([]variable.FieldDescriptor, len(variables))
-	for i, v := range variables {
-		exprFields[i] = v.FieldDescriptor
+
+	// Filter out iteration kind variables - they're resolved during ExpandCollection
+	exprFields := make([]variable.FieldDescriptor, 0, len(variables))
+	for _, v := range variables {
+		if v.Kind.IsIteration() {
+			continue
+		}
+		exprFields = append(exprFields, v.FieldDescriptor)
+	}
+
+	if len(exprFields) == 0 {
+		return nil
 	}
 
 	rs := resolver.NewResolver(rt.resources[resource].Unstructured().Object, exprValues)
@@ -480,8 +599,24 @@ func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
 
 // IsResourceReady checks if a resource is ready based on the readyWhenExpressions
 // defined in the resource. If no readyWhenExpressions are defined, the resource
-// is considered ready.
+// is considered ready. This function handles both regular resources and collections.
 func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bool, string, error) {
+	resource, hasDescriptor := rt.resources[resourceID]
+
+	// If there's no resource descriptor, fall back to checking if resolved.
+	// This maintains backwards compatibility with tests and edge cases.
+	if !hasDescriptor {
+		if rt.isResourceResolved(resourceID) {
+			return true, "", nil
+		}
+		return false, fmt.Sprintf("resource %s is not resolved", resourceID), nil
+	}
+
+	// Delegate to IsCollectionReady for collection resources
+	if resource.IsCollection() {
+		return rt.IsCollectionReady(resourceID)
+	}
+
 	observed, ok := rt.resolvedResources[resourceID]
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
@@ -489,7 +624,7 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 		return false, fmt.Sprintf("resource %s is not resolved", resourceID), nil
 	}
 
-	expressions := rt.resources[resourceID].GetReadyWhenExpressions()
+	expressions := resource.GetReadyWhenExpressions()
 	if len(expressions) == 0 {
 		return true, "", nil
 	}
@@ -644,4 +779,394 @@ func containsAllElements[T comparable](outer, inner []T) bool {
 		}
 	}
 	return true
+}
+
+// kindPriority returns a numeric priority for ResourceVariableKind.
+// Lower values mean higher priority (should be evaluated earlier).
+// Static < Dynamic < Iteration
+//
+// NOTE(design): This priority system addresses a tension in our caching design.
+// Expressions are cached globally for efficiency, but the same expression can
+// appear in variables with different Kinds (e.g., "schema.spec.name" might be
+// Static in one resource but Iteration in another due to variable-level classification).
+//
+// Current approach: When an expression is encountered again with a lower Kind,
+// we demote the cached Kind so it's evaluated earlier. This works but mutates
+// cached state based on non-deterministic map iteration order.
+//
+// Cleaner alternatives for future consideration:
+//  1. Don't share expression states across resources - each resource evaluates
+//     its own expressions. More memory but eliminates ordering issues.
+//  2. Always evaluate pure "schema.*" expressions statically at the builder level,
+//     regardless of what variable they're in. The builder could tag these.
+//  3. Two-phase caching: first pass collects all expressions and their minimum
+//     required Kinds, second pass caches with the correct Kind.
+func kindPriority(kind variable.ResourceVariableKind) int {
+	switch kind {
+	case variable.ResourceVariableKindStatic:
+		return 0
+	case variable.ResourceVariableKindDynamic:
+		return 1
+	case variable.ResourceVariableKindIteration:
+		return 2
+	default:
+		return 3 // Unknown kinds get lowest priority
+	}
+}
+
+// ExpandCollection evaluates forEach expressions and generates the cartesian
+// product of iterator values, then evaluates only the iteration kind
+// expressions for each combination.
+func (rt *ResourceGraphDefinitionRuntime) ExpandCollection(resourceID string) ([]*unstructured.Unstructured, error) {
+	resource, ok := rt.resources[resourceID]
+	if !ok {
+		return nil, fmt.Errorf("resource %s not found", resourceID)
+	}
+
+	// Check if it's a collection resource
+	if !resource.IsCollection() {
+		return nil, fmt.Errorf("resource %s is not a collection", resourceID)
+	}
+
+	// Try to cast to CollectionResource to get iterator info
+	collectionResource, ok := resource.(CollectionResource)
+	if !ok {
+		return nil, fmt.Errorf("resource %s does not implement CollectionResource", resourceID)
+	}
+
+	iterators := collectionResource.GetForEachDimensionInfo()
+	if len(iterators) == 0 {
+		return nil, fmt.Errorf("collection resource %s has no iterators", resourceID)
+	}
+
+	// Build CEL environment with proper typing:
+	// - Regular resources declared as AnyType
+	// - Collections declared as ListType to support comprehension operations (map, filter, etc.)
+	regularIDs := []string{"schema"}
+	for id := range rt.resolvedResources {
+		regularIDs = append(regularIDs, id)
+	}
+	collectionIDs := maps.Keys(rt.resolvedCollections)
+
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs(regularIDs),
+		krocel.WithListVariables(collectionIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+
+	// Build eval context with schema, all resolved resources, and resolved collections
+	// Collection resources are provided as lists so forEach can iterate over them
+	evalContext := map[string]interface{}{
+		"schema": rt.instance.Unstructured().Object,
+	}
+	for id, res := range rt.resolvedResources {
+		evalContext[id] = res.Object
+	}
+	// Add resolved collections as lists
+	for id := range rt.resolvedCollections {
+		evalContext[id] = rt.getCollectionResourcesAsSlice(id)
+	}
+
+	// Evaluate forEach expressions and collect iterator values
+	iteratorValues := make([][]interface{}, len(iterators))
+	for i, iter := range iterators {
+		value, err := evaluateExpression(env, evalContext, iter.Expression)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate forEach expression %q for resource %s: %w", iter.Expression, resourceID, err)
+		}
+
+		// The value must be a slice/list
+		list, ok := value.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("forEach expression %q must return a list, got %T", iter.Expression, value)
+		}
+		iteratorValues[i] = list
+	}
+
+	// Generate cartesian product of all iterator values
+	combinations := cartesianProduct(iterators, iteratorValues)
+
+	// Check collection size limit to prevent resource exhaustion
+	if len(combinations) > DefaultMaxCollectionSize {
+		return nil, fmt.Errorf("collection %s would generate %d resources, exceeding the maximum limit of %d; consider reducing the forEach input size or splitting into multiple collections",
+			resourceID, len(combinations), DefaultMaxCollectionSize)
+	}
+
+	// For each combination, create a resolved resource
+	// Note: We do NOT store items here. Items are stored only when
+	// SetCollectionResources is called after K8s apply. This ensures
+	// "item exists in resolvedResources" means "item has been applied to K8s".
+	expandedResources := make([]*unstructured.Unstructured, 0, len(combinations))
+	for _, combination := range combinations {
+		// Deep copy the original template
+		template := resource.Unstructured().DeepCopy()
+
+		// Resolve the template with the iterator combination
+		resolved, err := rt.resolveTemplateForCombination(resourceID, template, combination)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve template for collection %s: %w", resourceID, err)
+		}
+
+		expandedResources = append(expandedResources, resolved)
+	}
+
+	return expandedResources, nil
+}
+
+// cartesianProduct generates all combinations of iterator values.
+// For example, with iterators [region, tier] and values [[us, eu], [web, api]],
+// it returns [{region: us, tier: web}, {region: us, tier: api}, {region: eu, tier: web}, {region: eu, tier: api}]
+func cartesianProduct(iterators []ForEachDimensionInfo, values [][]interface{}) []map[string]interface{} {
+	if len(iterators) == 0 || len(values) == 0 {
+		return nil
+	}
+
+	// Calculate total number of combinations
+	total := 1
+	for _, v := range values {
+		if len(v) == 0 {
+			return nil // Empty list means no combinations
+		}
+		total *= len(v)
+	}
+
+	result := make([]map[string]interface{}, 0, total)
+
+	// Generate all combinations using indices
+	indices := make([]int, len(iterators))
+	for {
+		// Create current combination
+		combination := make(map[string]interface{})
+		for i, iter := range iterators {
+			combination[iter.Name] = values[i][indices[i]]
+		}
+		result = append(result, combination)
+
+		// Increment indices (like a multi-digit counter)
+		carry := true
+		for i := len(indices) - 1; i >= 0 && carry; i-- {
+			indices[i]++
+			if indices[i] < len(values[i]) {
+				carry = false
+			} else {
+				indices[i] = 0
+			}
+		}
+		if carry {
+			break // All combinations generated
+		}
+	}
+
+	return result
+}
+
+// resolveTemplateForCombination resolves iteration kind variables in a template
+// with iterator variable values from a single combination. Static and dynamic
+// variables are already resolved in the template.
+func (rt *ResourceGraphDefinitionRuntime) resolveTemplateForCombination(
+	resourceID string,
+	template *unstructured.Unstructured,
+	combination map[string]interface{},
+) (*unstructured.Unstructured, error) {
+	// Build resource IDs list for the CEL environment (include collections)
+	resourceIDs := []string{"schema"}
+	for id := range rt.resolvedResources {
+		resourceIDs = append(resourceIDs, id)
+	}
+	for id := range rt.resolvedCollections {
+		resourceIDs = append(resourceIDs, id)
+	}
+
+	// Get iterator variable names from combination
+	iteratorNames := make([]string, 0, len(combination))
+	for name := range combination {
+		iteratorNames = append(iteratorNames, name)
+	}
+
+	// Create CEL environment with resource IDs and iterator variables
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithResourceIDs(resourceIDs),
+		krocel.WithIteratorVariables(iteratorNames),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+
+	// Build eval context with schema, resolved resources, resolved collections, AND iterator values
+	evalContext := map[string]interface{}{
+		"schema": rt.instance.Unstructured().Object,
+	}
+	for id, res := range rt.resolvedResources {
+		evalContext[id] = res.Object
+	}
+	// Add resolved collections as lists
+	for id := range rt.resolvedCollections {
+		evalContext[id] = rt.getCollectionResourcesAsSlice(id)
+	}
+	for name, value := range combination {
+		evalContext[name] = value
+	}
+
+	// Only process iteration kind variables - static/dynamic are already resolved
+	variables := rt.resources[resourceID].GetVariables()
+
+	// First, evaluate all iteration expressions and build the data map
+	exprValues := make(map[string]interface{})
+	exprFields := make([]variable.FieldDescriptor, 0, len(variables))
+	for _, v := range variables {
+		// Skip non-iteration variables - they're already resolved in the template
+		if !v.Kind.IsIteration() {
+			continue
+		}
+		exprFields = append(exprFields, v.FieldDescriptor)
+
+		for _, expr := range v.Expressions {
+			if _, seen := exprValues[expr]; seen {
+				continue
+			}
+			value, err := evaluateExpression(env, evalContext, expr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evaluate expression %q: %w", expr, err)
+			}
+			exprValues[expr] = value
+		}
+	}
+
+	if len(exprFields) == 0 {
+		return template, nil
+	}
+
+	// Use resolver to apply the evaluated expressions to the template
+	rs := resolver.NewResolver(template.Object, exprValues)
+	summary := rs.Resolve(exprFields)
+	if summary.Errors != nil {
+		return nil, fmt.Errorf("failed to resolve template for %s: %v", resourceID, summary.Errors)
+	}
+
+	return template, nil
+}
+
+// GetCollectionResources returns all expanded resources for a collection in order.
+// The returned slice is guaranteed to be in the same order as originally stored via
+// SetCollectionResources (index 0, 1, 2, ...).
+//
+// Returns:
+//   - (items, ResourceStateResolved) if collection has been applied (items may be empty slice)
+//   - (nil, ResourceStateResolved) if ready to expand but not yet applied
+//   - (nil, ResourceStateWaitingOnDependencies) if dependencies not ready
+//
+// IMPORTANT: nil and empty slice have different meanings:
+//   - nil means "not applied yet" (even if state is Resolved, it means ready-to-expand)
+//   - empty slice [] means "applied but collection expanded to zero items"
+//
+// Callers checking if a collection has been applied should use `items != nil`,
+// NOT `len(items) > 0`, to correctly handle empty collections.
+//
+// TODO(a-hilaly): Consider adding a third state (e.g., ResourceStateReady) to
+// distinguish "ready to process" from "applied to K8s" more explicitly, rather
+// than overloading ResourceStateResolved and relying on nil checks.
+func (rt *ResourceGraphDefinitionRuntime) GetCollectionResources(resourceID string) ([]*unstructured.Unstructured, ResourceState) {
+	// Already expanded and applied?
+	items, ok := rt.resolvedCollections[resourceID]
+	if ok {
+		return items, ResourceStateResolved
+	}
+
+	// Resource must exist to check if ready
+	if _, exists := rt.resources[resourceID]; !exists {
+		return nil, ResourceStateWaitingOnDependencies
+	}
+
+	// Ready to expand?
+	if rt.canProcessResource(resourceID) {
+		return nil, ResourceStateResolved
+	}
+
+	return nil, ResourceStateWaitingOnDependencies
+}
+
+// getCollectionResourcesAsSlice returns collection resources as []interface{} for CEL evaluation.
+// This allows other resources to reference a collection as a list and use CEL list functions.
+func (rt *ResourceGraphDefinitionRuntime) getCollectionResourcesAsSlice(resourceID string) []interface{} {
+	items := rt.resolvedCollections[resourceID]
+	result := make([]interface{}, 0, len(items))
+	for _, res := range items {
+		if res != nil {
+			result = append(result, res.Object)
+		}
+	}
+	return result
+}
+
+// SetCollectionResources stores all expanded resources for a collection at once.
+// The input slice MUST be in the same order as returned by ExpandCollection.
+// The slice index becomes the storage index (0, 1, 2, ...).
+// This should be called after all items have been applied to K8s.
+func (rt *ResourceGraphDefinitionRuntime) SetCollectionResources(resourceID string, resources []*unstructured.Unstructured) {
+	rt.resolvedCollections[resourceID] = resources
+}
+
+// IsCollectionReady checks if all expanded resources in a collection are ready.
+// Returns true only if:
+// 1. The collection has been expanded (resolvedCollections has an entry)
+// 2. All readyWhen expressions evaluate to true for EACH item (AND semantics)
+//
+// Note: The reconciler guarantees that len(resolvedCollections) == len(expandedResources)
+// because SetCollectionResources is only called after ALL resources are successfully applied.
+// If any apply fails, the reconciler returns an error before reaching this check.
+//
+// The readyWhen expressions use the `each` keyword to access the current item:
+//   - ${each.status.phase == 'Running'}   // Per-item check
+//   - ${each.status.ready == true}        // Per-item check
+//
+// Note: Collections cannot reference themselves in readyWhen expressions.
+// Self-reference is validated at build time in builder.go.
+func (rt *ResourceGraphDefinitionRuntime) IsCollectionReady(resourceID string) (bool, string, error) {
+	items := rt.resolvedCollections[resourceID]
+	if items == nil {
+		return false, "collection not expanded", nil
+	}
+
+	// Check for nil items before evaluation
+	for i, item := range items {
+		if item == nil {
+			return false, fmt.Sprintf("expanded resource %d not resolved", i), nil
+		}
+	}
+
+	expressions := rt.resources[resourceID].GetReadyWhenExpressions()
+	if len(expressions) == 0 {
+		// No readyWhen expressions means all expanded resources are ready
+		return true, "", nil
+	}
+
+	// Create CEL environment with "each" as iterator variable for per-item access.
+	// Collections cannot reference themselves in readyWhen (validated at build time).
+	env, err := krocel.DefaultEnvironment(
+		krocel.WithIteratorVariables([]string{"each"}),
+	)
+	if err != nil {
+		return false, "", fmt.Errorf("failed creating environment for %s: %w", resourceID, err)
+	}
+
+	// Per-item evaluation with `each` variable (AND semantics)
+	for i, item := range items {
+		context := map[string]interface{}{
+			"each": item.Object,
+		}
+
+		for _, expression := range expressions {
+			out, err := evaluateExpression(env, context, expression)
+			if err != nil {
+				return false, "", fmt.Errorf("failed evaluating expression %s for %s[%d]: %w", expression, resourceID, i, err)
+			}
+			if !out.(bool) {
+				return false, fmt.Sprintf("item %d: expression %s evaluated to false", i, expression), nil
+			}
+		}
+	}
+
+	return true, "", nil
 }

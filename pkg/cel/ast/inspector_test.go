@@ -503,6 +503,17 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{Name: "random.seededString"},
 			},
 		},
+		{
+			name:       "duplicate resource references are NOT deduplicated",
+			resources:  []string{"deployment"},
+			expression: `deployment.spec.replicas + deployment.spec.replicas + deployment.status.replicas`,
+			wantResources: []ResourceDependency{
+				// Inspector reports each occurrence - no deduplication at this level
+				{ID: "deployment", Path: "deployment.spec.replicas"},
+				{ID: "deployment", Path: "deployment.spec.replicas"},
+				{ID: "deployment", Path: "deployment.status.replicas"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

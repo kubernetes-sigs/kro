@@ -23,7 +23,17 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
+
+// ForEachDimension represents a parsed forEach dimension from an RGD resource.
+// This is the internal struct form of api/v1alpha1.ForEachDimension (which is a map).
+type ForEachDimension struct {
+	// Name is the variable name used in templates (e.g., "region")
+	Name string
+	// Expression is the CEL expression that evaluates to a collection (e.g., "schema.spec.regions")
+	Expression string
+}
 
 // Resource represents a resource in a resource graph definition, it hholds
 // information about the resource, its schema, and its variables.
@@ -66,6 +76,9 @@ type Resource struct {
 	order int
 	// isExternalRef indicates if the resource should only be read and not created/updated
 	isExternalRef bool
+	// forEachDimensions holds the parsed forEach dimensions for collection resources.
+	// Empty slice means this is not a collection resource.
+	forEachDimensions []ForEachDimension
 }
 
 // GetDependencies returns the dependencies of the resource.
@@ -152,6 +165,34 @@ func (r *Resource) IsExternalRef() bool {
 	return r.isExternalRef
 }
 
+// GetForEachDimensions returns the forEach dimensions for this resource.
+// Returns an empty slice if this is not a collection resource.
+func (r *Resource) GetForEachDimensions() []ForEachDimension {
+	return r.forEachDimensions
+}
+
+// IsCollection returns true if this resource has forEach dimensions,
+// meaning it will expand into multiple resources at runtime.
+func (r *Resource) IsCollection() bool {
+	return len(r.forEachDimensions) > 0
+}
+
+// GetForEachDimensionInfo returns the forEach dimension information in a format
+// that the runtime can use without importing the graph package.
+func (r *Resource) GetForEachDimensionInfo() []runtime.ForEachDimensionInfo {
+	if len(r.forEachDimensions) == 0 {
+		return nil
+	}
+	result := make([]runtime.ForEachDimensionInfo, len(r.forEachDimensions))
+	for i, iter := range r.forEachDimensions {
+		result[i] = runtime.ForEachDimensionInfo{
+			Name:       iter.Name,
+			Expression: iter.Expression,
+		}
+	}
+	return result
+}
+
 // DeepCopy returns a deep copy of the resource.
 func (r *Resource) DeepCopy() *Resource {
 	return &Resource{
@@ -166,5 +207,6 @@ func (r *Resource) DeepCopy() *Resource {
 		includeWhenExpressions: slices.Clone(r.includeWhenExpressions),
 		namespaced:             r.namespaced,
 		isExternalRef:          r.isExternalRef,
+		forEachDimensions:      slices.Clone(r.forEachDimensions),
 	}
 }

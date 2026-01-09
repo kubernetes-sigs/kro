@@ -162,11 +162,9 @@ spec:
                 properties:
                   additionalPrinterColumns:
                     description: |-
-                      AdditionalPrinterColumns defines additional printer columns
-                      that will be passed down to the created CRD. If set, no
-                      default printer columns will be added to the created CRD,
-                      and if default printer columns need to be retained, they
-                      need to be added explicitly.
+                      AdditionalPrinterColumns is the list of user-specified printer columns
+                      to merge with the default columns (State, Ready, Age). User columns
+                      override defaults when they share the same Name.
                     items:
                       description: CustomResourceColumnDefinition specifies a column
                         for server side printing.

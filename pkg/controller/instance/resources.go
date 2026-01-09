@@ -172,8 +172,9 @@ func (c *Controller) handleApplySetResource(
 	if actual != nil {
 		rcx.Runtime.SetResource(id, actual)
 		updateReadiness(rcx, id)
-		_, err := rcx.Runtime.Synchronize()
-		return err
+		if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
+			return err
+		}
 	}
 	return nil
 }
@@ -222,7 +223,7 @@ func (c *Controller) handleCollectionResource(
 
 	// Set collection resources and check readiness
 	rcx.Runtime.SetCollectionResources(id, collectionResults)
-	if _, err := rcx.Runtime.Synchronize(); err != nil {
+	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
 		return fmt.Errorf("failed to synchronize after expanding collection %s: %w", id, err)
 	}
 
@@ -253,8 +254,10 @@ func (c *Controller) handleExternalRef(
 
 	rcx.Runtime.SetResource(id, actual)
 	updateReadiness(rcx, id)
-	_, err = rcx.Runtime.Synchronize()
-	return err
+	if _, err = rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
+		return err
+	}
+	return nil
 }
 
 func (c *Controller) readExternalRef(
@@ -341,7 +344,7 @@ func (c *Controller) processApplyResults(
 				rcx.Runtime.SetResource(resourceID, applied)
 				updateReadiness(rcx, resourceID)
 
-				if _, err := rcx.Runtime.Synchronize(); err != nil {
+				if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
 					resourceState.State = ResourceStateError
 					resourceState.Err = fmt.Errorf("failed to synchronize after apply: %w", err)
 					continue
@@ -385,7 +388,7 @@ func (c *Controller) updateCollectionFromApplyResults(
 	}
 
 	rcx.Runtime.SetCollectionResources(resourceID, currentResources)
-	if _, err := rcx.Runtime.Synchronize(); err != nil {
+	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
 		return fmt.Errorf("failed to synchronize after applying collection %s: %w", resourceID, err)
 	}
 

@@ -29,6 +29,7 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 // ReconcileConfig holds configuration parameters for the reconciliation process.
@@ -161,7 +162,8 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 6. Resolve Graph
 	//--------------------------------------------------------------
-	if _, err := rcx.Runtime.Synchronize(); err != nil {
+	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
+		// Real error (not just missing data) - abort reconciliation
 		rcx.Mark.GraphResolutionFailed("graph resolution failed: %v", err)
 		_ = c.updateStatus(rcx)
 		return err

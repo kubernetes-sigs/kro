@@ -17,7 +17,6 @@ package runtime
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/google/cel-go/cel"
@@ -420,17 +419,6 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	return nil
 }
 
-type EvalError struct {
-	IsIncompleteData bool
-	Err              error
-}
-
-func (e *EvalError) Error() string {
-	if e.IsIncompleteData {
-		return fmt.Sprintf("incomplete data: %s", e.Err.Error())
-	}
-	return e.Err.Error()
-}
 
 // evaluateDynamicVariables processes all dynamic variables in the runtime.
 // Dynamic variables depend on the state of other resources and are evaluated
@@ -503,17 +491,13 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
-				if strings.Contains(err.Error(), "no such key") {
-					// TODO(a-hilaly): I'm not sure if this is the best way to handle
-					// these. Probably need to reiterate here.
-					return &EvalError{
-						IsIncompleteData: true,
-						Err:              err,
-					}
+				if isCELDataPending(err) {
+					// Data is not yet available (e.g., status not populated).
+					// Return ErrDataPending so the controller can handle this gracefully with
+					// a delayed requeue instead of exponential backoff.
+					return fmt.Errorf("%w: %v", ErrDataPending, err)
 				}
-				return &EvalError{
-					Err: err,
-				}
+				return fmt.Errorf("CEL evaluation failed: %w", err)
 			}
 
 			variable.Resolved = true
@@ -872,7 +856,7 @@ func (rt *ResourceGraphDefinitionRuntime) ExpandCollection(resourceID string) ([
 	// Evaluate forEach expressions and collect iterator values
 	iteratorValues := make([][]interface{}, len(iterators))
 	for i, iter := range iterators {
-		value, err := evaluateExpression(env, evalContext, iter.Expression)
+		value, err := rt.evaluateExpression(env, evalContext, iter.Expression)
 		if err != nil {
 			return nil, fmt.Errorf("failed to evaluate forEach expression %q for resource %s: %w", iter.Expression, resourceID, err)
 		}
@@ -1026,7 +1010,7 @@ func (rt *ResourceGraphDefinitionRuntime) resolveTemplateForCombination(
 			if _, seen := exprValues[expr]; seen {
 				continue
 			}
-			value, err := evaluateExpression(env, evalContext, expr)
+			value, err := rt.evaluateExpression(env, evalContext, expr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to evaluate expression %q: %w", expr, err)
 			}
@@ -1158,7 +1142,7 @@ func (rt *ResourceGraphDefinitionRuntime) IsCollectionReady(resourceID string) (
 		}
 
 		for _, expression := range expressions {
-			out, err := evaluateExpression(env, context, expression)
+			out, err := rt.evaluateExpression(env, context, expression)
 			if err != nil {
 				return false, "", fmt.Errorf("failed evaluating expression %s for %s[%d]: %w", expression, resourceID, i, err)
 			}

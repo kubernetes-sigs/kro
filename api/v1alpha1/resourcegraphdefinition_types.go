@@ -131,6 +131,15 @@ type ExternalRef struct {
 	Metadata ExternalRefMetadata `json:"metadata"`
 }
 
+// ForEachDimension defines a single expansion axis in a forEach block.
+// Each dimension is a map with exactly one entry where the key is the variable name
+// and the value is the CEL expression. Example: {"region": "${schema.spec.regions}"}
+// Multiple dimensions create a cartesian product of expansions.
+//
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MaxProperties=1
+type ForEachDimension map[string]string
+
 // Resource represents a Kubernetes resource that is part of the ResourceGraphDefinition.
 // Each resource can either be created using a template or reference an existing resource.
 // Resources can depend on each other through CEL expressions, creating a dependency graph.
@@ -169,6 +178,15 @@ type Resource struct {
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+	// ForEach expands this resource into a collection of resources.
+	// Each entry binds a variable name to a CEL expression that evaluates to an array.
+	// kro creates one resource instance for each element in the array.
+	// With multiple entries, kro creates the cartesian product of all combinations.
+	// Use the variable directly in template expressions (e.g., ${region}).
+	// Example: [{"region": "${schema.spec.regions}"}, {"tier": "${schema.spec.tiers}"}]
+	//
+	// +kubebuilder:validation:Optional
+	ForEach []ForEachDimension `json:"forEach,omitempty"`
 }
 
 // ResourceGraphDefinitionState defines the state of the resource graph definition.

@@ -45,6 +45,7 @@ func TestEKSCluster(t *testing.T) {
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
+				LogWriter:        GinkgoWriter,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
 				},

@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -36,8 +37,8 @@ type Interface interface {
 	// encounters any issues.
 	Synchronize() (bool, error)
 
-	// TopologicalOrder returns the topological order of resources.
-	TopologicalOrder() []string
+	// DAG returns the underlying dependency graph.
+	DAG() *dag.DirectedAcyclicGraph[string]
 
 	// ResourceDescriptor returns the descriptor for a given resource ID.
 	// The descriptor provides metadata about the resource.

@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
@@ -41,16 +43,18 @@ var _ Interface = &ResourceGraphDefinitionRuntime{}
 // static variables. This helps hide the complexity of the runtime from the
 // caller (instance controller in this case).
 //
-// The output of this function is NOT thread safe.
+// The returned runtime supports concurrent reads and writes to mutable
+// resource state via internal locking.
 func NewResourceGraphDefinitionRuntime(
 	instance Resource,
 	resources map[string]Resource,
-	topologicalOrder []string,
+	dag *dag.DirectedAcyclicGraph[string],
 ) (*ResourceGraphDefinitionRuntime, error) {
+
 	r := &ResourceGraphDefinitionRuntime{
 		instance:                     instance,
 		resources:                    resources,
-		topologicalOrder:             topologicalOrder,
+		dag:                          dag,
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
@@ -113,12 +117,10 @@ func NewResourceGraphDefinitionRuntime(
 
 	// Evaluate the static variables, so that the caller only needs to call Synchronize
 	// whenever a new resource is added or a variable is updated.
-	err := r.evaluateStaticVariables()
-	if err != nil {
+	if err := r.evaluateStaticVariables(); err != nil {
 		return nil, fmt.Errorf("failed to evaluate static variables: %w", err)
 	}
-	err = r.propagateResourceVariables()
-	if err != nil {
+	if err := r.propagateResourceVariables(); err != nil {
 		return nil, fmt.Errorf("failed to propagate resource variables: %w", err)
 	}
 
@@ -127,9 +129,11 @@ func NewResourceGraphDefinitionRuntime(
 
 // ResourceGraphDefinitionRuntime implements the Interface for managing and synchronizing
 // resources. Is is the responsibility of the consumer to call Synchronize
-// appropriately, and decide whether to follow the TopologicalOrder or a
-// BFS/DFS traversal of the resources.
+// appropriately.
 type ResourceGraphDefinitionRuntime struct {
+	// mu guards concurrent access to mutable maps.
+	mu sync.RWMutex
+
 	// instance represents the main resource instance being managed.
 	// This is typically the top-level custom resource that owns or manages
 	// other resources in the graph.
@@ -161,27 +165,23 @@ type ResourceGraphDefinitionRuntime struct {
 	// vice versa.
 	expressionsCache map[string]*expressionEvaluationState
 
-	// topologicalOrder holds the dependency order of resources. This order
-	// ensures that resources are processed in a way that respects their
-	// dependencies, preventing circular dependencies and ensuring efficient
-	// synchronization.
-	topologicalOrder []string
+	// dag is the directed acyclic graph representation of resource dependencies
+	dag *dag.DirectedAcyclicGraph[string]
 
 	// ignoredByConditionsResources holds the resources who's defined conditions returned false
 	// or who's dependencies are ignored
 	ignoredByConditionsResources map[string]bool
 }
 
-// TopologicalOrder returns the topological order of resources.
-func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
-	return rt.topologicalOrder
+// DAG returns the underlying dependency graph.
+func (rt *ResourceGraphDefinitionRuntime) DAG() *dag.DirectedAcyclicGraph[string] {
+	return rt.dag
 }
 
 // ResourceDescriptor returns the descriptor for a given resource id.
 //
 // It is the responsibility of the caller to ensure that the resource id
-// exists in the runtime. a.k.a the caller should use the TopologicalOrder
-// to get the resource ids.
+// exists in the runtime.
 func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) ResourceDescriptor {
 	return rt.resources[id]
 }
@@ -191,6 +191,9 @@ func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) Resource
 // whether the resource variables are resolved or not, and whether the resource
 // readiness conditions are met or not.
 func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
 	// Did the user set the resource?
 	r, ok := rt.resolvedResources[id]
 	if ok {
@@ -209,7 +212,9 @@ func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.
 // SetResource updates or sets a resource in the runtime. This is typically
 // called after a resource has been created or updated in the cluster.
 func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstructured.Unstructured) {
+	rt.mu.Lock()
 	rt.resolvedResources[id] = resource
+	rt.mu.Unlock()
 }
 
 // GetInstance returns the main instance object managed by this runtime.
@@ -471,7 +476,9 @@ func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
 // defined in the resource. If no readyWhenExpressions are defined, the resource
 // is considered ready.
 func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bool, string, error) {
+	rt.mu.RLock()
 	observed, ok := rt.resolvedResources[resourceID]
+	rt.mu.RUnlock()
 	if !ok {
 		// Users need to make sure that the resource is resolved a.k.a (SetResource)
 		// before calling this function.
@@ -509,7 +516,9 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 // IgnoreResource ignores resource that has a condition expression that evaluated
 // to false or whose dependencies are ignored
 func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
+	rt.mu.Lock()
 	rt.ignoredByConditionsResources[resourceID] = true
+	rt.mu.Unlock()
 }
 
 // areDependenciesIgnored will returns true if the dependencies of the resource
@@ -519,6 +528,9 @@ func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
 // and all its dependencies will be ignored as well. Causing a chain reaction
 // of ignored resources.
 func (rt *ResourceGraphDefinitionRuntime) areDependenciesIgnored(resourceID string) bool {
+	rt.mu.RLock()
+	defer rt.mu.RUnlock()
+
 	for _, p := range rt.resources[resourceID].GetDependencies() {
 		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
 			return true

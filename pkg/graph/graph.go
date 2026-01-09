@@ -46,7 +46,7 @@ func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runt
 
 	instance := rgd.Instance.DeepCopy()
 	instance.originalObject = newInstance
-	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder)
+	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.DAG)
 	if err != nil {
 		return nil, err
 	}

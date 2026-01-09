@@ -229,10 +229,17 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
-	// Ensure the graph is acyclic and get the topological order of resources.
-	topologicalOrder, err := dag.TopologicalSort()
+
+	// Compute the topological levels of the graph and ensure it is acyclic.
+	levels, err := dag.TopologicalSortLevels()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get topological order: %w", err)
+		return nil, fmt.Errorf("failed to compute topological levels: %w", err)
+	}
+
+	// Flatten the levels into a single topological order slice.
+	var topologicalOrder []string
+	for _, level := range levels {
+		topologicalOrder = append(topologicalOrder, level...)
 	}
 
 	// Now that we know all resources are properly declared and dependencies are valid,

@@ -25,6 +25,7 @@ package applyset
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -69,13 +70,17 @@ func (a *applySet) findAllObjectsToPrune(
 
 	tasks := []*task{}
 
+	// Take a snapshot of the protected fields so we
+	// can release the lock before making network calls.
+	a.mu.Lock()
 	restMappings := map[schema.GroupKind]*meta.RESTMapping{}
-	for gk, restMapping := range a.desiredRESTMappings {
-		restMappings[gk] = restMapping
-	}
+	maps.Copy(restMappings, a.desiredRESTMappings)
+	supersetGKs := a.supersetGKs.Clone()
+	supersetNamespaces := a.supersetNamespaces.Clone()
+	a.mu.Unlock()
 
 	// add restmapping for older GKs
-	for _, entry := range a.supersetGKs.UnsortedList() {
+	for _, entry := range supersetGKs.UnsortedList() {
 		if entry == "" {
 			continue
 		}
@@ -96,7 +101,7 @@ func (a *applySet) findAllObjectsToPrune(
 	for _, restMapping := range restMappings {
 		switch restMapping.Scope.Name() {
 		case meta.RESTScopeNameNamespace:
-			for _, namespace := range a.supersetNamespaces.UnsortedList() {
+			for _, namespace := range supersetNamespaces.UnsortedList() {
 				if namespace == "" {
 					namespace = metav1.NamespaceDefault
 				}

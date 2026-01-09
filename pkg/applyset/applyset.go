@@ -244,21 +244,34 @@ type applySet struct {
 	// fieldManager is the name of the field manager that will be used to apply the resources.
 	fieldManager string
 
-	// toolLabels is a map of tool provided labels to be applied to the resources
+	// mu guards all maps and sets in applySet.
+	// These fields are accessed and mutated from multiple goroutines during
+	// reconciliation, so the lock must be held for every read or write to
+	// avoid race conditions and ensure consistent state.
+	mu sync.Mutex
+
+	// toolLabels is a map of tool provided labels to be applied to the resources.
+	// Protected by mu.
 	toolLabels map[string]string
 
-	// current labels and annotations of the parent before the apply operation
-	currentLabels      map[string]string
+	// current labels and annotations of the parent before the apply operation.
+	// Protected by mu.
+	currentLabels map[string]string
+	// Protected by mu.
 	currentAnnotations map[string]string
 
-	// set of applyset object rest mappings
+	// set of applyset object rest mappings.
+	// Protected by mu.
 	desiredRESTMappings map[schema.GroupKind]*meta.RESTMapping
-	// set of applyset object namespaces
+	// set of applyset object namespaces.
+	// Protected by mu.
 	desiredNamespaces sets.Set[string]
 
-	// superset of desired and old namespaces
+	// superset of desired and old namespaces.
+	// Protected by mu.
 	supersetNamespaces sets.Set[string]
-	// superset of desired and old GKs
+	// superset of desired and old GKs.
+	// Protected by mu.
 	supersetGKs sets.Set[string]
 
 	desired *tracker
@@ -282,7 +295,9 @@ func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.
 		if namespace == "" {
 			namespace = a.parent.GetNamespace()
 		}
+		a.mu.Lock()
 		a.desiredNamespaces.Insert(namespace)
+		a.mu.Unlock()
 	case meta.RESTScopeNameRoot:
 		if obj.GetNamespace() != "" {
 			return fmt.Errorf("namespace was provided for cluster-scoped object %v %v", gvk, obj.GetName())
@@ -300,6 +315,10 @@ func (a *applySet) getAndRecordNamespace(obj ApplyableObject, restMapping *meta.
 func (a *applySet) getRestMapping(obj ApplyableObject) (*meta.RESTMapping, error) {
 	gvk := obj.GroupVersionKind()
 	gk := gvk.GroupKind()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	// Ensure a rest mapping exists for the object
 	_, found := a.desiredRESTMappings[gk]
 	if !found {
@@ -317,7 +336,10 @@ func (a *applySet) getRestMapping(obj ApplyableObject) (*meta.RESTMapping, error
 }
 
 func (a *applySet) resourceClient(obj Applyable) (dynamic.ResourceInterface, error) {
+	a.mu.Lock()
 	restMapping, ok := a.desiredRESTMappings[obj.GroupVersionKind().GroupKind()]
+	a.mu.Unlock()
+
 	if !ok {
 		// This should never happen, but if it does, we want to know about it.
 		return nil, fmt.Errorf("FATAL: rest mapping not found for %v", obj.GroupVersionKind())
@@ -336,6 +358,7 @@ func (a *applySet) resourceClient(obj Applyable) (dynamic.ResourceInterface, err
 	return dynResource, nil
 }
 
+// Add adds an object to the applyset for later application.
 func (a *applySet) Add(ctx context.Context, obj ApplyableObject) (*unstructured.Unstructured, error) {
 	restMapping, err := a.getRestMapping(obj)
 	if err != nil {
@@ -400,6 +423,8 @@ func (a *applySet) injectToolLabels(labels map[string]string) map[string]string 
 	if labels == nil {
 		labels = make(map[string]string)
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.toolLabels != nil {
 		for k, v := range a.toolLabels {
 			labels[k] = v
@@ -477,6 +502,9 @@ func (a *applySet) desiredParentLabels() map[string]string {
 func (a *applySet) desiredParentAnnotations(
 	includeCurrent bool,
 ) (map[string]string, sets.Set[string], sets.Set[string]) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	annotations := make(map[string]string)
 	annotations[ApplySetToolingAnnotation] = a.toolingID.String()
 
@@ -523,14 +551,20 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 			return results, fmt.Errorf("unable to get parent: %w", err)
 		}
 		// Record the current labels and annotations
+		a.mu.Lock()
 		a.currentLabels = parent.GetLabels()
 		a.currentAnnotations = parent.GetAnnotations()
+		a.mu.Unlock()
 
 		// We will ensure the parent is updated with the latest applyset before applying the resources.
-		a.supersetNamespaces, a.supersetGKs, err = a.updateParentLabelsAndAnnotations(ctx, updateToSuperset)
+		supersetNamespaces, supersetGKs, err := a.updateParentLabelsAndAnnotations(ctx, updateToSuperset)
 		if err != nil {
 			return results, fmt.Errorf("unable to update Parent: %w", err)
 		}
+		a.mu.Lock()
+		a.supersetNamespaces = supersetNamespaces
+		a.supersetGKs = supersetGKs
+		a.mu.Unlock()
 	}
 
 	options := a.applyOptions
@@ -540,16 +574,13 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 
 	concurrency := a.concurrency
 	if concurrency <= 0 {
-		concurrency = len(a.desired.objects)
+		concurrency = a.desired.Len()
 	}
 
 	eg, egctx := errgroup.WithContext(ctx)
 	eg.SetLimit(concurrency)
 
-	// protect concurrent access to write the apply results
-	var mu sync.Mutex
-
-	for _, obj := range a.desired.objects {
+	for _, obj := range a.desired.Objects() {
 		dynResource, err := a.resourceClient(obj)
 		if err != nil {
 			return results, err
@@ -558,8 +589,6 @@ func (a *applySet) apply(ctx context.Context, dryRun bool) (*ApplyResult, error)
 		// Apply resources using server-side apply
 		eg.Go(func() error {
 			lastApplied, err := a.applyResource(egctx, dynResource, obj, options)
-			mu.Lock()
-			defer mu.Unlock()
 			results.recordApplied(obj, lastApplied, err)
 			return nil
 		})

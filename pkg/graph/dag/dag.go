@@ -136,58 +136,91 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 	return nil
 }
 
-// TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
-// and preserving order of nodes within each "depth" of the topological ordering.
-func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
-	visited := make(map[T]bool)
-	var order []T
-
-	// Make a list of vertices, sorted by Order
-	vertices := make([]*Vertex[T], 0, len(d.Vertices))
-	for _, vertex := range d.Vertices {
-		vertices = append(vertices, vertex)
+// TopologicalSortLevels returns the vertices of the graph grouped by topological levels
+// using Kahn's algorithm. Each level contains vertices that have no dependencies on each
+// other and can be processed in parallel. Within each level, vertices are sorted by their
+// original Order for stability.
+//
+// For example, given a graph:
+//
+//	A -> C
+//	B -> C
+//	C -> D
+//
+// The result would be: [[A, B], [C], [D]]
+// where A and B can be processed in parallel, then C, then D.
+func (d *DirectedAcyclicGraph[T]) TopologicalSortLevels() ([][]T, error) {
+	// Count how many dependencies each vertex has (in-degree)
+	// Also build a map from each vertex to the vertices that depend on it (reverse lookup)
+	inDegree := make(map[T]int)
+	reverse := make(map[T][]T)
+	for id, v := range d.Vertices {
+		inDegree[id] = len(v.DependsOn)
+		for dep := range v.DependsOn {
+			reverse[dep] = append(reverse[dep], id)
+		}
 	}
-	sort.Slice(vertices, func(i, j int) bool {
-		return vertices[i].Order < vertices[j].Order
-	})
 
-	for len(visited) < len(vertices) {
-		progress := false
+	// Start with vertices that have no dependencies - these can run first
+	currentLevel := make([]*Vertex[T], 0)
+	for id, degree := range inDegree {
+		if degree == 0 {
+			currentLevel = append(currentLevel, d.Vertices[id])
+		}
+	}
 
-		for _, vertex := range vertices {
-			if visited[vertex.ID] {
-				continue
-			}
+	var levels [][]T
+	processed := 0
 
-			allDependenciesReady := true
-			for dep := range vertex.DependsOn {
-				if !visited[dep] {
-					allDependenciesReady = false
-					break
+	// Process vertices level by level
+	for len(currentLevel) > 0 {
+		// Sort current level to preserve user-provided ordering
+		sort.Slice(currentLevel, func(i, j int) bool {
+			return currentLevel[i].Order < currentLevel[j].Order
+		})
+
+		// Add this level to output
+		levelIDs := make([]T, len(currentLevel))
+		for i, v := range currentLevel {
+			levelIDs[i] = v.ID
+		}
+		levels = append(levels, levelIDs)
+		processed += len(currentLevel)
+
+		// Find the next level: for each vertex we just processed, tell its dependents
+		// that one of their dependencies is now satisfied. When all dependencies are
+		// satisfied (in-degree reaches 0), the vertex is ready for the next level.
+		nextLevel := make([]*Vertex[T], 0)
+		for _, vertex := range currentLevel {
+			for _, dependentID := range reverse[vertex.ID] {
+				inDegree[dependentID]--
+				if inDegree[dependentID] == 0 {
+					nextLevel = append(nextLevel, d.Vertices[dependentID])
 				}
 			}
-			if !allDependenciesReady {
-				continue
-			}
-
-			order = append(order, vertex.ID)
-			visited[vertex.ID] = true
-			progress = true
 		}
 
-		if !progress {
-			hasCycle, cycle := d.hasCycle()
-			if !hasCycle {
-				// Unexpected!
-				return nil, &CycleError[T]{}
+		currentLevel = nextLevel
+	}
+
+	// If we didn't process all vertices, there must be a cycle.
+	// Kahn's algorithm implicitly detects cycles: vertices in a cycle will never
+	// reach in-degree 0, so they'll remain unprocessed.
+	if processed != len(d.Vertices) {
+		// Collect vertices involved in the cycle with their unresolved dependencies
+		cyclicVertices := make([]T, 0, len(d.Vertices)-processed)
+		for id := range inDegree {
+			if inDegree[id] > 0 {
+				cyclicVertices = append(cyclicVertices, id)
 			}
-			return nil, &CycleError[T]{
-				Cycle: cycle,
-			}
+		}
+
+		return nil, &CycleError[T]{
+			Cycle: cyclicVertices,
 		}
 	}
 
-	return order, nil
+	return levels, nil
 }
 
 func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {

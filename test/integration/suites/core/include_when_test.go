@@ -211,6 +211,7 @@ var _ = Describe("Conditions", func() {
 
 		// Verify ResourceGraphDefinition is created and becomes ready
 		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+
 		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name: rgd.Name,
@@ -225,8 +226,8 @@ var _ = Describe("Conditions", func() {
 			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
 				"deploymentA",
 				"serviceAccountA",
-				"serviceA",
 				"deploymentB",
+				"serviceA",
 				"serviceAccountB",
 				"serviceB",
 			}))

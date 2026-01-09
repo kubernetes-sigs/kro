@@ -50,6 +50,29 @@ var (
 			},
 		},
 	}
+	defaultCELMetricsType = extv1.JSONSchemaProps{
+		Type: "object",
+		Properties: map[string]extv1.JSONSchemaProps{
+			"totalCost": {
+				Type:        "integer",
+				Format:      "int64",
+				Description: "Total cost of all CEL expression evaluations",
+			},
+			"costPerResource": {
+				Type: "object",
+				AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+					Allows: true,
+					Schema: &extv1.JSONSchemaProps{
+						Type:        "integer",
+						Format:      "int64",
+						Description: "CEL evaluation cost per resource",
+					},
+				},
+				Description: "Map of resource IDs to their CEL evaluation costs",
+			},
+		},
+		Description: "CEL expression evaluation metrics",
+	}
 	// additionalPrinterColumns specifies additional columns returned in Table output.
 	// See https://kubernetes.io/docs/reference/using-api/api-concepts/#receiving-resources-as-tables for details.
 	// Sample output for `kubectl get clusters`

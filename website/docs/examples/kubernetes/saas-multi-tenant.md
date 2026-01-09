@@ -1,6 +1,9 @@
 ---
-sidebar_position: 707
+sidebar_position: 701
 ---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # SaaS Multi-Tenant
 
@@ -139,10 +142,87 @@ kubectl delete -f tenant-rgd.yaml
 kubectl delete -f tenant-application-rgd.yaml
 kubectl delete -f tenant-environment-rgd.yaml
 ```
+## Manifest files
 
-<details>
-  <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+
+
+<Tabs>
+  <TabItem value="tenant-application-rgd" label="tenant-application-rgd.yaml">
+
+```kro
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenantapplication.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: TenantApplication
+    spec:
+      tenantId: string
+      image: string | default=100
+      replicas: integer | default=2
+  resources:
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.tenantId}-deployment
+        namespace: ${schema.spec.tenantId}
+        labels:
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app: ${schema.spec.tenantId}
+        template:
+          metadata:
+            labels:
+              app: ${schema.spec.tenantId}
+              saas/tenant-id: ${schema.spec.tenantId}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              ports:
+              - containerPort: 80
+                protocol: TCP
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${schema.spec.tenantId}-service
+        namespace: ${schema.spec.tenantId}
+        labels:
+          app: ${schema.spec.tenantId}
+          saas/tenant: "true"
+          saas/tenant-id: ${schema.spec.tenantId}
+      spec:
+        selector:
+          app: ${schema.spec.tenantId}
+          saas/tenant-id: ${schema.spec.tenantId}
+        ports:
+        - port: 80
+          targetPort: 80
+          protocol: TCP
+          name: http
+        type: ClusterIP
+```
+
+  </TabItem>
+  <TabItem value="tenant-environment-rgd" label="tenant-environment-rgd.yaml">
+
+```kro
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
@@ -192,5 +272,63 @@ spec:
         ingress:
         - from:
           - podSelector: {}
-  ```
-</details>
+```
+
+  </TabItem>
+  <TabItem value="tenant-instance" label="tenant-instance.yaml">
+
+```kro
+apiVersion: kro.run/v1alpha1
+kind: Tenant
+metadata:
+  name: tenant001
+  namespace: default
+spec:
+  tenantId: tenant001
+```
+
+  </TabItem>
+  <TabItem value="tenant-rgd" label="tenant-rgd.yaml">
+
+```kro
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenant.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Tenant
+    spec:
+      tenantId: string
+      image: string | default=nginx
+      replicas: integer | default=2
+  resources:
+  - id: tenantEnvironment
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: TenantEnvironment
+      metadata:
+        name: ${schema.spec.tenantId}
+        labels:
+          name: ${schema.spec.tenantId}
+      spec:
+        tenantId: ${schema.spec.tenantId}
+  - id: tenantApplication
+    template:
+      apiVersion: kro.run/v1alpha1
+      kind: TenantApplication
+      metadata:
+        name: ${schema.spec.tenantId}
+        labels:
+          name: ${schema.spec.tenantId}
+      spec:
+        tenantId: ${schema.spec.tenantId}
+        image: ${schema.spec.image}
+        replicas: ${schema.spec.replicas}
+
+
+```
+
+  </TabItem>
+</Tabs>

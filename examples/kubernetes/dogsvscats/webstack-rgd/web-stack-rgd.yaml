@@ -50,10 +50,7 @@ spec:
         name: string | default=""
         namespace: string | default=""
     status:
-      deploymentConditions: ${deployment.status.conditions}
-      availableReplicas: ${deployment.status.availableReplicas}
-      serviceName: ${service.metadata.name}
-      url: ${ingress.status.loadBalancer.ingress[0].hostname}
+      serviceName: ${service.metadata.?name.orValue("")}
       redisEndpoint: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
       postgresEndpoint: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
 
@@ -92,10 +89,13 @@ spec:
         name: ${schema.spec.externalPostgresSecret.name}
         namespace: ${schema.spec.externalPostgresSecret.namespace}
 
-  # --- WebApp Deployment (always created) ---
-  - id: deployment
+  # --- WebApp Deployment (Managed ElastiCache only - no RDS) ---
+  - id: deploymentElasticacheManaged
+    includeWhen:
+      - ${schema.spec.elasticache.enabled}
+      - ${!schema.spec.rds.enabled && !schema.spec.externalRds.enabled && !schema.spec.externalPostgresSecret.enabled}
     readyWhen:
-      - ${deployment.spec.replicas == deployment.status.availableReplicas}
+      - ${deploymentElasticacheManaged.spec.replicas == deploymentElasticacheManaged.status.availableReplicas}
     template:
       apiVersion: apps/v1
       kind: Deployment
@@ -131,21 +131,321 @@ spec:
                   memory: "512Mi"
                   cpu: "500m"
               env:
-              # Redis endpoint - from managed ElastiCache or external ref
               - name: REDIS_HOST
-                value: ${elasticache.status.?endpoint.orValue(externalElasticacheRef.status.?endpoint.orValue(""))}
-              # Postgres endpoint - from managed RDS or external ref
+                value: ${elasticache.status.endpoint}
+            restartPolicy: Always
+
+  # --- WebApp Deployment (External ElastiCache only - no RDS) ---
+  - id: deploymentElasticacheExternal
+    includeWhen:
+      - ${schema.spec.externalElasticache.enabled}
+      - ${!schema.spec.rds.enabled && !schema.spec.externalRds.enabled && !schema.spec.externalPostgresSecret.enabled}
+    readyWhen:
+      - ${deploymentElasticacheExternal.spec.replicas == deploymentElasticacheExternal.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              - name: REDIS_HOST
+                value: ${externalElasticacheRef.status.endpoint}
+            restartPolicy: Always
+
+  # --- WebApp Deployment (Managed RDS only - no ElastiCache) ---
+  - id: deploymentRdsManaged
+    includeWhen:
+      - ${schema.spec.rds.enabled}
+      - ${!schema.spec.elasticache.enabled && !schema.spec.externalElasticache.enabled}
+    readyWhen:
+      - ${deploymentRdsManaged.spec.replicas == deploymentRdsManaged.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
               - name: POSTGRES_HOST
-                value: ${rds.status.?endpoint.orValue(externalRdsRef.status.?endpoint.orValue(""))}
+                value: ${rds.status.endpoint}
               - name: POSTGRES_USER
                 value: postgres
               - name: POSTGRES_PASSWORD
                 valueFrom:
                   secretKeyRef:
-                    name: ${rds.status.?secretName.orValue(externalPostgresSecretRef.metadata.?name.orValue(""))}
+                    name: ${rds.status.secretName}
                     key: password
               - name: POSTGRES_DB
                 value: postgres
+            restartPolicy: Always
+
+  # --- WebApp Deployment (External RDS only - no ElastiCache) ---
+  - id: deploymentRdsExternal
+    includeWhen:
+      - ${schema.spec.externalRds.enabled}
+      - ${!schema.spec.elasticache.enabled && !schema.spec.externalElasticache.enabled}
+    readyWhen:
+      - ${deploymentRdsExternal.spec.replicas == deploymentRdsExternal.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              - name: POSTGRES_HOST
+                value: ${externalRdsRef.status.endpoint}
+              - name: POSTGRES_USER
+                value: postgres
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ${externalPostgresSecretRef.metadata.name}
+                    key: password
+              - name: POSTGRES_DB
+                value: postgres
+            restartPolicy: Always
+
+  # --- WebApp Deployment (Managed ElastiCache + Managed RDS) ---
+  - id: deploymentBothManaged
+    includeWhen:
+      - ${schema.spec.elasticache.enabled}
+      - ${schema.spec.rds.enabled}
+    readyWhen:
+      - ${deploymentBothManaged.spec.replicas == deploymentBothManaged.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              - name: REDIS_HOST
+                value: ${elasticache.status.endpoint}
+              - name: POSTGRES_HOST
+                value: ${rds.status.endpoint}
+              - name: POSTGRES_USER
+                value: postgres
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ${rds.status.secretName}
+                    key: password
+              - name: POSTGRES_DB
+                value: postgres
+            restartPolicy: Always
+
+  # --- WebApp Deployment (External ElastiCache + External RDS) ---
+  - id: deploymentBothExternal
+    includeWhen:
+      - ${schema.spec.externalElasticache.enabled}
+      - ${schema.spec.externalRds.enabled}
+    readyWhen:
+      - ${deploymentBothExternal.spec.replicas == deploymentBothExternal.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              env:
+              - name: REDIS_HOST
+                value: ${externalElasticacheRef.status.endpoint}
+              - name: POSTGRES_HOST
+                value: ${externalRdsRef.status.endpoint}
+              - name: POSTGRES_USER
+                value: postgres
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ${externalPostgresSecretRef.metadata.name}
+                    key: password
+              - name: POSTGRES_DB
+                value: postgres
+            restartPolicy: Always
+
+  # --- WebApp Deployment (No ElastiCache, No RDS - basic deployment) ---
+  - id: deploymentBasic
+    includeWhen:
+      - ${!schema.spec.elasticache.enabled && !schema.spec.externalElasticache.enabled}
+      - ${!schema.spec.rds.enabled && !schema.spec.externalRds.enabled && !schema.spec.externalPostgresSecret.enabled}
+    readyWhen:
+      - ${deploymentBasic.spec.replicas == deploymentBasic.status.availableReplicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+        namespace: ${schema.spec.namespace}
+        labels:
+          app.kubernetes.io/name: ${schema.spec.name}
+          app: ${schema.spec.name}
+      spec:
+        replicas: ${schema.spec.replicas}
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: ${schema.spec.name}
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: ${schema.spec.name}
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: ${schema.spec.image}
+              imagePullPolicy: Always
+              ports:
+              - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
             restartPolicy: Always
 
   # --- Service (conditional) ---

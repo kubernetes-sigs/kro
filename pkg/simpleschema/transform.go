@@ -190,6 +190,9 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType.Schema
 	} else if isAtomicType(valueType) {
 		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
+	} else if valueType == keyTypeObject {
+		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
+		fieldJSONSchemaProps.AdditionalProperties.Schema.XPreserveUnknownFields = ptr.To(true)
 	} else {
 		return nil, fmt.Errorf("unknown type: %s", valueType)
 	}
@@ -218,6 +221,9 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 		fieldJSONSchemaProps.Items.Schema = elementSchema
 	} else if isAtomicType(elementType) {
 		fieldJSONSchemaProps.Items.Schema.Type = elementType
+	} else if elementType == keyTypeObject {
+		fieldJSONSchemaProps.Items.Schema.Type = elementType
+		fieldJSONSchemaProps.Items.Schema.XPreserveUnknownFields = ptr.To(true)
 	} else if preDefinedType, ok := tf.preDefinedTypes[elementType]; ok {
 		fieldJSONSchemaProps.Items.Schema = &preDefinedType.Schema
 	} else {

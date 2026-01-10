@@ -2547,9 +2547,14 @@ func Test_evaluateExpression(t *testing.T) {
 		},
 	}
 
+	// Create a minimal runtime for testing
+	rt := &ResourceGraphDefinitionRuntime{
+		celProgramCache: make(map[string]cel.Program),
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evaluateExpression(env, tt.context, tt.expression)
+			got, err := rt.evaluateExpression(env, tt.context, tt.expression)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -2559,6 +2564,94 @@ func Test_evaluateExpression(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Benchmark_evaluateExpression(b *testing.B) {
+	env, err := setupTestEnv([]string{"resource"})
+	if err != nil {
+		b.Fatalf("failed to create environment: %v", err)
+	}
+
+	context := map[string]interface{}{
+		"resource": map[string]interface{}{
+			"status": map[string]interface{}{
+				"ready":     true,
+				"phase":     "Running",
+				"replicas":  int64(3),
+				"available": int64(3),
+			},
+			"metadata": map[string]interface{}{
+				"name":      "test-resource",
+				"namespace": "default",
+			},
+		},
+	}
+
+	b.Run("cached_simple_expression", func(b *testing.B) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celProgramCache: make(map[string]cel.Program),
+		}
+		expression := "resource.status.ready"
+
+		b.ResetTimer()
+		for b.Loop() {
+			_, err := rt.evaluateExpression(env, context, expression)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("cached_complex_expression", func(b *testing.B) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celProgramCache: make(map[string]cel.Program),
+		}
+		expression := "resource.status.ready && resource.status.phase == 'Running' && resource.status.replicas == resource.status.available"
+
+		b.ResetTimer()
+		for b.Loop() {
+			_, err := rt.evaluateExpression(env, context, expression)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("uncached_expression", func(b *testing.B) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celProgramCache: nil,
+		}
+		expression := "resource.status.ready"
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := rt.evaluateExpression(env, context, expression)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("multiple_different_expressions", func(b *testing.B) {
+		rt := &ResourceGraphDefinitionRuntime{
+			celProgramCache: make(map[string]cel.Program),
+		}
+		expressions := []string{
+			"resource.status.ready",
+			"resource.status.phase == 'Running'",
+			"resource.status.replicas == 3",
+			"resource.metadata.name == 'test-resource'",
+		}
+
+		b.ResetTimer()
+		for b.Loop() {
+			expr := expressions[b.N%len(expressions)]
+			_, err := rt.evaluateExpression(env, context, expr)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func Test_containsAllElements(t *testing.T) {

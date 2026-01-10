@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"golang.org/x/exp/maps"
@@ -54,6 +55,7 @@ func NewResourceGraphDefinitionRuntime(
 		resolvedResources:            make(map[string]*unstructured.Unstructured),
 		runtimeVariables:             make(map[string][]*expressionEvaluationState),
 		expressionsCache:             make(map[string]*expressionEvaluationState),
+		celProgramCache:              make(map[string]cel.Program),
 		ignoredByConditionsResources: make(map[string]bool),
 	}
 	// make sure to copy the variables and the dependencies, to avoid
@@ -160,6 +162,15 @@ type ResourceGraphDefinitionRuntime struct {
 	// is updated here, it will be updated in the runtimeVariables as well, and
 	// vice versa.
 	expressionsCache map[string]*expressionEvaluationState
+
+	// celProgramCache caches compiled CEL programs by expression string to
+	// avoid recompiling the same expression multiple times. This improves
+	// performance during expression evaluation by reusing previously compiled
+	// programs.
+	celProgramCache map[string]cel.Program
+	// celProgramCacheMu is a mutex that protects access to the celProgramCache
+	// to ensure thread safety during concurrent reads and writes.
+	celProgramCacheMu sync.RWMutex
 
 	// topologicalOrder holds the dependency order of resources. This order
 	// ensures that resources are processed in a way that respects their
@@ -316,7 +327,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				return err
 			}
@@ -381,7 +392,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			evalContext["schema"] = rt.instance.Unstructured().Object
 
-			value, err := evaluateExpression(env, evalContext, variable.Expression)
+			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				if strings.Contains(err.Error(), "no such key") {
 					// TODO(a-hilaly): I'm not sure if this is the best way to handle
@@ -494,7 +505,7 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 	}
 
 	for _, expression := range expressions {
-		out, err := evaluateExpression(env, context, expression)
+		out, err := rt.evaluateExpression(env, context, expression)
 		if err != nil {
 			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
 		}
@@ -552,7 +563,7 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 
 	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := evaluateExpression(env, context, includeWhenExpression)
+		value, err := rt.evaluateExpression(env, context, includeWhenExpression)
 		if err != nil {
 			return false, err
 		}
@@ -564,20 +575,42 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 	return true, nil
 }
 
-// evaluateExpression evaluates an CEL expression and returns a value if successful, or error
-func evaluateExpression(env *cel.Env, context map[string]interface{}, expression string) (interface{}, error) {
-	ast, issues := env.Compile(expression)
-	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
+// evaluateExpression evaluates a CEL expression and returns a value if successful, or error.
+// It caches compiled programs by expression string to avoid redundant compilation.
+func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(
+	env *cel.Env,
+	context map[string]interface{},
+	expression string,
+) (interface{}, error) {
+	var program cel.Program
+	var cached bool
+
+	if rt.celProgramCache != nil {
+		rt.celProgramCacheMu.RLock()
+		program, cached = rt.celProgramCache[expression]
+		rt.celProgramCacheMu.RUnlock()
 	}
-	// Here as well
-	program, err := env.Program(ast)
-	if err != nil {
-		return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
+
+	if !cached {
+		ast, issues := env.Compile(expression)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
+		}
+
+		prog, err := env.Program(ast)
+		if err != nil {
+			return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
+		}
+
+		program = prog
+
+		if rt.celProgramCache != nil {
+			rt.celProgramCacheMu.Lock()
+			rt.celProgramCache[expression] = program
+			rt.celProgramCacheMu.Unlock()
+		}
 	}
-	// We get an error here when the value field we're looking for is not yet defined
-	// For now leaving it as error, in the future when we see different scenarios
-	// of this error, we can make some a reason, and others an error
+
 	val, _, err := program.Eval(context)
 	if err != nil {
 		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)

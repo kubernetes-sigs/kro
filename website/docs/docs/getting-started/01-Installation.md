@@ -175,7 +175,7 @@ export KRO_VARIANT=kro-core-install-manifests
 ```
 
 ```
-kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
 
 :::info[**Removal of dangling objects**]
@@ -198,7 +198,7 @@ helm uninstall kro -n kro-system
   </TabItem>
   <TabItem value="kubectl" label="Raw manifest installation">
 ```bash
-kubectl delete -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl delete -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
   </TabItem>
 </Tabs>

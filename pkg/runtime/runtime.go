@@ -419,7 +419,6 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	return nil
 }
 
-
 // evaluateDynamicVariables processes all dynamic variables in the runtime.
 // Dynamic variables depend on the state of other resources and are evaluated
 // iteratively as resources are resolved. This function is called during each

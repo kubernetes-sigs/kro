@@ -1,4 +1,4 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors
+// Copyright 2025 The Kubernetes Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,6 @@
 
 package instance
 
-import (
-	"github.com/kubernetes-sigs/kro/pkg/applyset"
-	"sigs.k8s.io/release-utils/version"
-)
-
 const (
 	ResourceStatePending             = "PENDING"
 	ResourceStateInProgress          = "IN_PROGRESS"
@@ -32,10 +27,5 @@ const (
 	ResourceStateWaitingForReadiness = "WAITING_FOR_READINESS"
 	ResourceStateUpdating            = "UPDATING"
 
-	FieldManagerForApplyset = "kro.run/applyset"
-	FieldManagerForLabeler  = "kro.run/labeller"
-)
-
-var (
-	KROTooling = applyset.ToolingID{Name: "kro", Version: version.GetVersionInfo().GitVersion}
+	FieldManagerForLabeler = "kro.run/labeller"
 )

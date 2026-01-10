@@ -64,17 +64,23 @@ func (s *StateManager) Update() {
 		return
 	}
 
-	// Determine whether all resources are synced
+	// Check resource states
 	allSynced := true
+	hasError := false
 	for _, st := range s.ResourceStates {
+		if st.State == ResourceStateError {
+			hasError = true
+			break
+		}
 		if st.State != ResourceStateSynced {
 			allSynced = false
-			break
 		}
 	}
 
-	// Transition to ACTIVE if everything is synced
-	if allSynced {
+	// Transition based on resource states
+	if hasError {
+		s.State = InstanceStateError
+	} else if allSynced {
 		s.State = InstanceStateActive
 	} else {
 		s.State = InstanceStateInProgress

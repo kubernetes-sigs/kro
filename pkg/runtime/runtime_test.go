@@ -2547,9 +2547,14 @@ func Test_evaluateExpression(t *testing.T) {
 		},
 	}
 
+	// Create a minimal runtime for testing
+	rt := &ResourceGraphDefinitionRuntime{
+		celProgramCache: make(map[string]cel.Program),
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := evaluateExpression(env, tt.context, tt.expression)
+			got, err := rt.evaluateExpression(env, tt.context, tt.expression)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("evaluateExpression() error = %v, wantErr %v", err, tt.wantErr)
 				return

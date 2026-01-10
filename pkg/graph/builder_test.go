@@ -160,7 +160,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "failed to parse includeWhen expressions",
 		},
 		{
-			name: "includeWhen expression reference a different resource",
+			name: "valid includeWhen expression referencing another resource",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -175,17 +175,23 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					"metadata": map[string]interface{}{
 						"name": "test-vpc",
 					},
-				}, nil, []string{"invalid ! syntax"}),
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
 				generator.WithResource("subnet", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
-					"kind":       "VPC",
+					"kind":       "Subnet",
 					"metadata": map[string]interface{}{
-						"name": "test-vpc",
+						"name": "test-subnet",
 					},
-				}, nil, []string{"${vpc.status.state == 'available'}"}),
+					"spec": map[string]interface{}{
+						"cidrBlock": "10.0.1.0/24",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				}, nil, []string{"${has(vpc.status.state) && vpc.status.state == 'available'}"}),
 			},
-			wantErr: true,
-			errMsg:  "failed to parse includeWhen expressions",
+			wantErr: false,
 		},
 		{
 			name: "missing required field",
@@ -1053,6 +1059,85 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 					"cluster2",
 					"cluster3",
 					"monitor",
+				}, g.TopologicalOrder)
+			},
+		},
+		{
+			// Test that includeWhen expressions are parsed for dependencies.
+			// Resources here don't use ${...} syntax in their templates, so any
+			// dependencies come purely from includeWhen conditions.
+			name: "includeWhen expressions create dependencies (only via includeWhen)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("pod1", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "pod1",
+						"labels": map[string]interface{}{
+							"app":     "test",
+							"enabled": "true",
+						},
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "nginx",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, nil),
+				// Depends on pod1 only via includeWhen.
+				generator.WithResource("pod2", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "pod2",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "nginx",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, []string{"${has(pod1.metadata.labels.enabled) && pod1.metadata.labels.enabled == 'true'}"}),
+				// Depends on pod2 only via includeWhen.
+				generator.WithResource("pod3", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "pod3",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "nginx",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, []string{"${has(pod2.status.phase)}"}),
+			},
+			validateDeps: func(t *testing.T, g *Graph) {
+				assert.Empty(t, g.Resources["pod1"].GetDependencies())
+
+				// These would be empty if we weren't extracting deps from includeWhen
+				assert.Equal(t, []string{"pod1"}, g.Resources["pod2"].GetDependencies())
+				assert.Equal(t, []string{"pod2"}, g.Resources["pod3"].GetDependencies())
+
+				assert.Equal(t, []string{
+					"pod1",
+					"pod2",
+					"pod3",
 				}, g.TopologicalOrder)
 			},
 		},

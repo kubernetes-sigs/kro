@@ -103,7 +103,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
 
 	//--------------------------------------------------------------
-	// 1. Load instance
+	// 1. Load instance; if gone, nothing to do
 	//--------------------------------------------------------------
 	inst, err := c.client.Dynamic().
 		Resource(c.gvr).
@@ -119,7 +119,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 2. Create runtime
+	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
 	runtimeObj, err := c.rgd.NewGraphRuntime(inst)
 	if err != nil {
@@ -127,7 +127,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 3. Build reconciliation context
+	// 3. Build reconciliation context (clients, mapper, labeler, runtime)
 	//--------------------------------------------------------------
 	rcx := NewReconcileContext(
 		ctx, log, c.gvr,
@@ -140,7 +140,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	)
 
 	//--------------------------------------------------------------
-	// 4. Handle deletion explicitly
+	// 4. Handle deletion: clean up children and status
 	//--------------------------------------------------------------
 	if inst.GetDeletionTimestamp() != nil {
 		if err := c.reconcileDeletion(rcx); err != nil {
@@ -151,7 +151,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 5. Ensure finalizer + labels
+	// 5. Ensure finalizer + management labels before mutating children
 	//--------------------------------------------------------------
 	if err := c.ensureManaged(rcx); err != nil {
 		rcx.Mark.InstanceNotManaged("finalizer/labeling failed: %v", err)
@@ -160,7 +160,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 6. Resolve Graph
+	// 6. Resolve Graph (CEL, dependencies); allow data-pending
 	//--------------------------------------------------------------
 	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
 		// Real error (not just missing data) - abort reconciliation
@@ -171,7 +171,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile resources
+	// 7. Reconcile resources (SSA + prune) and update runtime state
 	//--------------------------------------------------------------
 	if err := c.reconcileResources(rcx); err != nil {
 		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
@@ -181,7 +181,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.ResourcesReady()
 
 	//--------------------------------------------------------------
-	// 8. Status
+	// 8. Persist status/conditions
 	//--------------------------------------------------------------
 	return c.updateStatus(rcx)
 }

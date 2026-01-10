@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -123,8 +123,9 @@ var _ = Describe("Labels and Annotations", func() {
 				Not(BeNil()),
 				HaveKeyWithValue(applyset.ApplySetGKsAnnotation, "ConfigMap"),
 				HaveKeyWithValue(applyset.ApplySetToolingAnnotation, "kro/devel"),
-				HaveKeyWithValue(applyset.ApplySetAdditionalNamespacesAnnotation, namespace),
-			), "instance should have group kind for owned resource")
+				// Per KEP-3659, additional-namespaces excludes parent namespace (implicit)
+				HaveKeyWithValue(applyset.ApplySetAdditionalNamespacesAnnotation, ""),
+			), "instance should have correct applyset annotations")
 
 			g.Expect(instance.GetLabels()).To(SatisfyAll(
 				Not(BeNil()),

@@ -539,16 +539,28 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 		return true, nil
 	}
 
+	// Get all resource IDs for the CEL environment
+	resourceIDs := make([]string, 0, len(rt.resources)+1)
+	for id := range rt.resources {
+		resourceIDs = append(resourceIDs, id)
+	}
+	resourceIDs = append(resourceIDs, "schema")
+
 	// we should not expect errors here since we already compiled it
 	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceIDs))
 	if err != nil {
 		return false, nil
 	}
 
-	context := map[string]interface{}{
-		"schema": rt.instance.Unstructured().Object,
+	// Build context with all resolved dependencies
+	context := make(map[string]interface{})
+	for _, dep := range rt.resources[resourceID].GetDependencies() {
+		if resolvedResource, exists := rt.resolvedResources[dep]; exists {
+			context[dep] = resolvedResource.Object
+		}
 	}
+	context["schema"] = rt.instance.Unstructured().Object
 
 	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run

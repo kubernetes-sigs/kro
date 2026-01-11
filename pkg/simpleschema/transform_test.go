@@ -175,6 +175,53 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Schema with array of objects",
+			obj: map[string]interface{}{
+				"items": "[]object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"items": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{
+								Type:                   "object",
+								XPreserveUnknownFields: ptr.To(true),
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Schema with nested array of objects",
+			obj: map[string]interface{}{
+				"matrix": "[][]object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"matrix": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{
+										Type:                   "object",
+										XPreserveUnknownFields: ptr.To(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "Schema with invalid type",
 			obj: map[string]interface{}{
 				"invalid": "unknownType",
@@ -282,6 +329,53 @@ func TestBuildOpenAPISchema(t *testing.T) {
 												},
 											},
 										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Schema with map of objects",
+			obj: map[string]interface{}{
+				"config": "map[string]object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"config": {
+						Type: "object",
+						AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+							Schema: &extv1.JSONSchemaProps{
+								Type:                   "object",
+								XPreserveUnknownFields: ptr.To(true),
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Schema with nested map of objects",
+			obj: map[string]interface{}{
+				"config": "map[string]map[string]object",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"config": {
+						Type: "object",
+						AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "object",
+								AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+									Schema: &extv1.JSONSchemaProps{
+										Type:                   "object",
+										XPreserveUnknownFields: ptr.To(true),
 									},
 								},
 							},

@@ -22,13 +22,20 @@ import (
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+)
+
+const (
+	// RGDFinalizerName is the finalizer used to block deletion until resources are cleaned up
+	RGDFinalizerName = "kro.run/finalizer"
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
@@ -60,6 +67,11 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	crd := processedRGD.Instance.GetCRD()
 	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
+
+	// KREP-004: Set OwnerReference to ensure CRD is garbage collected when RGD is deleted.
+	crd.SetOwnerReferences([]metav1.OwnerReference{
+		*metav1.NewControllerRef(rgd, v1alpha1.GroupVersion.WithKind("ResourceGraphDefinition")),
+	})
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
@@ -186,6 +198,24 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 		return newMicroControllerError(err)
 	}
 	return nil
+}
+
+// handleFinalizer manages the finalizer lifecycle for the RGD
+func (r *ResourceGraphDefinitionReconciler) handleFinalizer(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (bool, error) {
+	// 1. Check if the object is being deleted
+	if rgd.ObjectMeta.DeletionTimestamp.IsZero() {
+		// NOT being deleted: Ensure finalizer exists
+		if !controllerutil.ContainsFinalizer(rgd, RGDFinalizerName) {
+			controllerutil.AddFinalizer(rgd, RGDFinalizerName)
+			// FIX: Use r.Update() instead of r.clientSet.Update()
+			if err := r.Update(ctx, rgd); err != nil {
+				return false, err
+			}
+			return true, nil // Updated, so return true to requeue
+		}
+	}
+	// Note: We don't remove the finalizer here. That happens in the main Reconcile loop after cleanup.
+	return false, nil
 }
 
 // Error types for the resourcegraphdefinition controller

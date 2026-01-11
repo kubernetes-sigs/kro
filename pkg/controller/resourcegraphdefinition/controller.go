@@ -155,6 +155,16 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	ctx context.Context,
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
+	// Handle Finalizers (Blocking Deletion)
+	// This ensures we can perform cleanup or block deletion until resources are handled.
+	if result, err := r.handleFinalizer(ctx, o); err != nil {
+		return ctrl.Result{}, err
+	} else if result {
+		// If we added or removed the finalizer, the object was updated.
+		// Return here to let the update propagate and requeue.
+		return ctrl.Result{}, nil
+	}
+
 	if !o.DeletionTimestamp.IsZero() {
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err

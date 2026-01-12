@@ -31,7 +31,10 @@ resource "aws_iam_policy" "ack_assume_role" {
     Statement = [
       {
         Effect = "Allow"
-        Action = "sts:AssumeRole"
+        Action = [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ]
         Resource = "*"
       }
     ]

@@ -628,7 +628,7 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 
 	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, cost, err := evaluateExpression(env, context, includeWhenExpression)
+		value, cost, err := rt.evaluateExpression(env, context, includeWhenExpression)
 		if rt.expressionsCache[includeWhenExpression] != nil {
 			rt.expressionsCache[includeWhenExpression].EvaluationCost = cost
 		}

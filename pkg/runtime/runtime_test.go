@@ -2595,7 +2595,7 @@ func Benchmark_evaluateExpression(b *testing.B) {
 
 		b.ResetTimer()
 		for b.Loop() {
-			_, err := rt.evaluateExpression(env, context, expression)
+			_, _, err := rt.evaluateExpression(env, context, expression)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -2610,7 +2610,7 @@ func Benchmark_evaluateExpression(b *testing.B) {
 
 		b.ResetTimer()
 		for b.Loop() {
-			_, err := rt.evaluateExpression(env, context, expression)
+			_, _, err := rt.evaluateExpression(env, context, expression)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -2625,7 +2625,7 @@ func Benchmark_evaluateExpression(b *testing.B) {
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err := rt.evaluateExpression(env, context, expression)
+			_, _, err := rt.evaluateExpression(env, context, expression)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -2646,7 +2646,7 @@ func Benchmark_evaluateExpression(b *testing.B) {
 		b.ResetTimer()
 		for b.Loop() {
 			expr := expressions[b.N%len(expressions)]
-			_, err := rt.evaluateExpression(env, context, expr)
+			_, _, err := rt.evaluateExpression(env, context, expr)
 			if err != nil {
 				b.Fatal(err)
 			}

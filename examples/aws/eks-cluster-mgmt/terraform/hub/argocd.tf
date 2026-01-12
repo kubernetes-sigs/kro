@@ -10,7 +10,6 @@ locals {
   argocd_labels = merge({
     cluster_name                     = local.cluster_name
     environment                      = local.environment
-    enable_argocd                    = true
     "argocd.argoproj.io/secret-type" = "cluster"
     },
     try(local.addons, {})

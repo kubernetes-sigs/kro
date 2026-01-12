@@ -46,7 +46,7 @@ type ApplyableObject struct {
 
 	// Optional
 	// User provided unique identifier for the object.
-	// If present a uniqeness check is done when adding
+	// If present a uniqueness check is done when adding
 	// It is opaque and is passed in the callbacks as is
 	ID string
 

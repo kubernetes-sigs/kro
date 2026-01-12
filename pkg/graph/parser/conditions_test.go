@@ -46,7 +46,7 @@ func TestParseReadyWhen(t *testing.T) {
 		},
 		{
 			name:          "Complex standalone expression that works",
-			expression:    []string{"${hello + world - someone = whoever[else]isNone dum dum {pop}out-here}"},
+			expression:    []string{"${hello + world - someone = whoever[else]isNone dump dump {pop}out-here}"},
 			expectedError: "",
 		},
 	}

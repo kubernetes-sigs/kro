@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kro:controller:check-arbitary-objects
+  name: kro:controller:check-arbitrary-objects
   labels:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:

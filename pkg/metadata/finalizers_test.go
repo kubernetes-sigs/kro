@@ -115,7 +115,7 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 			expected:  false,
 		},
 		{
-			name: "Try to remve instance finalizer when its not there)",
+			name: "Try to remove instance finalizer when its not there)",
 			initialObject: &unstructured.Unstructured{
 				Object: map[string]interface{}{
 					"metadata": map[string]interface{}{

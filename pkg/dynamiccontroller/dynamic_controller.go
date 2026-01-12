@@ -577,7 +577,7 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 	parentGVRKey, childGVRKey := keyFromGVR(parent), keyFromGVR(child)
 	parentGVK, err := dc.mapper.KindFor(parent)
 	if err != nil {
-		return nil, fmt.Errorf("failed ot get parent gvk from %s for child handler: %w", parentGVRKey, err)
+		return nil, fmt.Errorf("failed to get parent gvk from %s for child handler: %w", parentGVRKey, err)
 	}
 	handle := func(obj interface{}, eventType string) {
 		objMeta, err := meta.Accessor(obj)

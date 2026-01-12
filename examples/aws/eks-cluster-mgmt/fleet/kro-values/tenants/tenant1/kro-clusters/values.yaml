@@ -1,14 +1,14 @@
 clusters:
-  workload-cluster1:
-    managementAccountId: "XXXXXX"
-    accountId: "XXXXXX"
-    tenant: "tenant1"
-    k8sVersion: "1.34"
-    vpc:
-      create: true
-    gitops:
-      addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
-      fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"XXXXXX
+  # workload-cluster1:
+  #     managementAccountId: "XXXXXX"
+  #     accountId: "XXXXXX"
+  #     tenant: "tenant1"
+  #     k8sVersion: "1.34"
+  #     vpc:
+  #       create: true
+  #     gitops:
+  #       addonsRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
+  #       fleetRepoUrl: "https://github.com/XXXXXX/eks-cluster-mgmt"
 
   # workload-cluster2:
   #     managementAccountId: "XXXXXX"

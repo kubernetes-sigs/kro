@@ -34,7 +34,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
 
    ```sh
    export MGMT_ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account) # Or update to the AWS account to use for your management cluster
-   export AWS_REGION="eu-west-2" # change to your preferred region
+   export AWS_REGION="us-west-2" # change to your preferred region
    export WORKSPACE_PATH="$HOME" # the directory where repos will be cloned
    export GITHUB_ORG_NAME="iamahgoub" # your Github username or organization name
    ```
@@ -125,7 +125,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
 
    Review the proposed changes and accept to deploy.
 
-   Note: EKS capabilities are not supported yet by Terraform AWS provider. So, we will create them manually using CLI commands.
+   > Note: EKS capabilities are not supported yet by Terraform AWS provider. So, we will create them manually using CLI commands.
 
 1. Retrieve terraform outputs and set into environment variables:
 
@@ -231,7 +231,7 @@ The solution implements a hub-spoke model where a management cluster (hub) is cr
    argocd repo add https://github.com/$GITHUB_ORG_NAME/$WORKING_REPO.git --username iamahgoub --password $GITHUB_TOKEN --upsert --name github
    ```
 
-   Note: If you encounter the error "Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = authentication required", verify your GitHub token settings.
+   > Note: If you encounter the error "Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = authentication required", verify your GitHub token settings.
 
 1. Connect to the cluster
 
@@ -267,7 +267,7 @@ We provide a script to help with that. You need to first connect to each of your
    ./create_ack_workload_roles.sh
    ```
 
-> Repeat this step for each spoke account you want to use with the solution
+Repeat this step for each spoke account you want to use with the solution
 
 ### Create a Spoke cluster
 
@@ -318,7 +318,7 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    argocd      workload-cluster1   ACTIVE   True     36m
    ```
 
-   > If you see STATE=ERROR, this may be normal as it will take some time for all dependencies to be ready. Check the logs of kro and ACK controllers for possible configuration errors.
+   If you see `STATE=ERROR`, this may be normal as it will take some time for all dependencies to be ready. Check the logs of kro and ACK controllers for possible configuration errors.
 
    You can also list resources created by kro to validate their status:
 
@@ -327,7 +327,7 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    kubectl get vpcs.ec2.services.k8s.aws -A -o yaml # check for errors
    ```
 
-   > If you see errors, double-check the multi-cluster account settings and verify that IAM roles in both management and workload AWS accounts are properly configured.
+   If you see errors, double-check the multi-cluster account settings and verify that IAM roles in both management and workload AWS accounts are properly configured.
 
    When VPCs are ready, check EKS resources:
 
@@ -353,28 +353,16 @@ Update $WORKSPACE_PATH/$WORKING_REPO
    ```sh
    kubectl get pods -A
    ```
+   Output:
 
    ```sh
    NAMESPACE          NAME                                                READY   STATUS    RESTARTS      AGE
-   ack-system         efs-chart-7558bdd9d7-2n9q9                          1/1     Running   0             3m51s
-   ack-system         eks-chart-7c8f7fd76c-pz49q                          1/1     Running   0             5m50s
-   ack-system         iam-chart-6846dfc7bc-kqccf                          1/1     Running   0             5m50s
-   external-secrets   external-secrets-cert-controller-586c6cbfd7-m5x94   1/1     Running   0             5m14s
-   external-secrets   external-secrets-d699ddc68-hhgps                    1/1     Running   0             5m14s
-   external-secrets   external-secrets-webhook-7f467cd6bf-ppzd5           1/1     Running   0             5m14s
-   kube-system        efs-csi-controller-f7b568848-72rzc                  3/3     Running   0             4m12s
-   kube-system        efs-csi-controller-f7b568848-vh85b                  3/3     Running   0             4m12s
-   kube-system        efs-csi-node-5znbp                                  3/3     Running   0             4m13s
-   kube-system        efs-csi-node-gzpsn                                  3/3     Running   0             4m13s
-   kube-system        efs-csi-node-zbzlv                                  3/3     Running   0             4m13s
-   kyverno            kyverno-admission-controller-5b4c74758b-kf2k7       1/1     Running   0             5m5s
-   kyverno            kyverno-background-controller-7cf48d5b9d-f67h6      1/1     Running   0             5m5s
-   kyverno            kyverno-cleanup-controller-cd4ccdd8c-4b4gp          1/1     Running   0             5m5s
-   kyverno            kyverno-reports-controller-55c9f8d645-h8d57         1/1     Running   0             5m5s
-   kyverno            policy-reporter-5c6c868c66-7jlxm                    1/1     Running   0             5m19s
+   external-secrets   external-secrets-679b98f996-74lsb                   1/1     Running   0          70s
+   external-secrets   external-secrets-cert-controller-556d7f95c5-h5nvq   1/1     Running   0          70s
+   external-secrets   external-secrets-webhook-7b456d589f-6bjzr           1/1     Running   0          70s
    ```
 
-   > This output shows that our GitOps solution has successfully deployed our addons in the cluster
+   This output shows that our GitOps solution has successfully deployed our addons in the cluster
 
 
 You can repeat these steps for any additional clusters you want to manage.
@@ -420,73 +408,24 @@ The combination of kro, ACK, and Argo CD provides a robust, scalable, and mainta
 
 ## Clean-up
 
-Since our spoke workloads have been bootstrapped by Argo CD and kro/ACK, we need to clean them up in a specific order.
-
-To ensure proper cleanup of workload namespaces, you can either remove Argo CD auto-sync or define exceptions using the cluster name you want to delete.
-
-1. Deactivate workloads:
+1. Delete the workload clusters by editing the following file:
 
    ```sh
-   code examples/aws/eks-cluster-mgmt/fleet/kro-values/tenants/tenant1/kro-clusters/values.yaml
+   code $WORKSPACE_PATH/$WORKING_REPO/fleet/kro-values/tenants/tenant1/kro-clusters/values.yaml
    ```
-
-   ```yaml
-   workload-cluster1:
-      ...
-      workloads: "false"
-      ...
-   ```
-
-   ```sh
-   cd $WORKSPACE_PATH/$WORKING_REPO/
-   git status
-   git add .
-   git commit -s -m "remove workloads from workload-cluster1"
-   git push
-   ```
-
-   Sync RGD:
-
-   ```bash
-   argocd app sync clusters
-   ```
-
-   This allows Kubernetes addons to properly clean up any AWS resources like Load Balancers.
-
-1. Deactivate addons that create resources:
-
-   The efs-addon creates IAM roles and EKS pod identity associations in the workload environment. To prevent orphaned resources, disable these addons:
-
-   ```yaml
-   workload-cluster1:
-      ...
-      workloads: "false"
-      ...
-      addons:
-         enable_ack_efs: "false"
-   ```
-
-   ```sh
-   cd $WORKSPACE_PATH/$WORKING_REPO/
-   git status
-   git add .
-   git commit -s -m "remove ack efs addon"
-   git push
-   ```
-
-   Sync RGD:
-
-   ```bash
-   argocd app sync clusters
-   ```
-
-1. Prune the cluster in Argo CD UI
 
    In the Argo CD UI, synchronize the cluster Applicationset with the prune option enabled, or use the CLI:
 
    ```bash
    argocd app sync clusters --prune
    ```
+
+   > **Known issue**: We noticed that some of the VPCs resources (route tables) do not get properly deleted when workload clusters are removed from manifests. If this occurred to you, delete the VPC resources manually to allow for the clean-up to complete till the issue is identified/resolved.
+
+1. Delete Argo CD App of App:
+   ```sh
+   kubectl delete -f $WORKSPACE_PATH/$WORKING_REPO/terraform/hub/bootstrap/applicationsets.yaml
+   ``` 
 
 1. Delete the EKS capabilities on the management cluster
 
@@ -498,7 +437,6 @@ To ensure proper cleanup of workload namespaces, you can either remove Argo CD a
    aws eks delete-capability \
    --cluster-name ${CLUSTER_NAME} \
    --capability-name ${CLUSTER_NAME}-kro
-
 
    aws eks delete-capability \
    --cluster-name ${CLUSTER_NAME} \

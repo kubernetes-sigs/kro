@@ -103,7 +103,7 @@ func AsCycleError[T cmp.Ordered](err error) *CycleError[T] {
 }
 
 // AddDependencies adds a set of dependencies to the "from" vertex.
-// This indicates that all the vertexes in "dependencies" must occur before "from".
+// This indicates that all the vertices in "dependencies" must occur before "from".
 func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) error {
 	fromNode, fromExists := d.Vertices[from]
 	if !fromExists {
@@ -136,7 +136,7 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 	return nil
 }
 
-// TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
+// TopologicalSort returns the vertices of the graph, respecting topological ordering first,
 // and preserving order of nodes within each "depth" of the topological ordering.
 func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
 	visited := make(map[T]bool)

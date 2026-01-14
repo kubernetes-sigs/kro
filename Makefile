@@ -321,7 +321,7 @@ cli:
 
 .PHONY: test-e2e
 test-e2e: chainsaw ## Run e2e tests
-	$(CHAINSAW) test ./test/e2e/chainsaw
+	$(CHAINSAW) test --parallel 8 ./test/e2e/chainsaw
 
 
 .PHONY: test-e2e-kind-%

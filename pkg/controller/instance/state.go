@@ -68,12 +68,16 @@ func (s *StateManager) Update() {
 	allSynced := true
 	hasError := false
 	for _, st := range s.ResourceStates {
-		if st.State == ResourceStateError {
+		switch st.State {
+		case ResourceStateError:
 			hasError = true
-			break
-		}
-		if st.State != ResourceStateSynced {
+		case ResourceStateSynced, ResourceStateSkipped, ResourceStateDeleted:
+			// terminal/success states
+		default:
 			allSynced = false
+		}
+		if hasError {
+			break
 		}
 	}
 

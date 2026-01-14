@@ -243,10 +243,10 @@ func (a *ApplySet) Apply(ctx context.Context, resources []Resource, mode ApplyMo
 	desiredNamespaces := sets.New[string]()
 
 	// Resources with resolved mappings, ready to apply
-	var toApply []struct {
+	toApply := make([]struct {
 		resource Resource
 		mapping  *meta.RESTMapping
-	}
+	}, 0, len(resources))
 
 	for _, r := range resources {
 		// SkipApply resources may have nil Object (unresolved), skip entirely
@@ -294,7 +294,6 @@ func (a *ApplySet) Apply(ctx context.Context, resources []Resource, mode ApplyMo
 	}
 
 	for _, entry := range toApply {
-		entry := entry // capture
 		eg.Go(func() error {
 			item := a.applyResource(egCtx, entry.resource, entry.mapping, applyOptions)
 			mu.Lock()
@@ -326,7 +325,7 @@ func (a *ApplySet) Prune(ctx context.Context, opts PruneOptions) (*PruneResult, 
 	}
 
 	// Convert GKs to RESTMappings
-	var pruneMappings []*meta.RESTMapping
+	pruneMappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
 	for gk := range scopeGKs {
 		mapping, err := a.restMapper.RESTMapping(gk)
 		if err != nil {
@@ -493,7 +492,6 @@ func (a *ApplySet) prune(
 	var results []PruneResultItem
 
 	for _, c := range candidates {
-		c := c // capture
 		eg.Go(func() error {
 			var err error
 			if c.obj.GetNamespace() != "" {

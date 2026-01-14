@@ -121,9 +121,10 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := c.rgd.NewGraphRuntime(inst)
+	runtimeObj, err := runtime.FromGraph(c.rgd, inst)
 	if err != nil {
-		return fmt.Errorf("creation of runtime failed: %w", err)
+		log.Error(err, "failed to create runtime")
+		return err
 	}
 
 	//--------------------------------------------------------------
@@ -162,12 +163,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 6. Resolve Graph (CEL, dependencies); allow data-pending
 	//--------------------------------------------------------------
-	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
-		// Real error (not just missing data) - abort reconciliation
-		rcx.Mark.GraphResolutionFailed("graph resolution failed: %v", err)
-		_ = c.updateStatus(rcx)
-		return err
-	}
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
@@ -178,7 +173,21 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		_ = c.updateStatus(rcx)
 		return err
 	}
-	rcx.Mark.ResourcesReady()
+	// Only mark ResourcesReady if all resources reached terminal state.
+	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
+	// which keeps StateManager.State as IN_PROGRESS.
+	switch rcx.StateManager.State {
+	case InstanceStateActive:
+		rcx.Mark.ResourcesReady()
+	case InstanceStateError:
+		if err := rcx.StateManager.ResourceErrors(); err != nil {
+			rcx.Mark.ResourcesNotReady("resource error: %v", err)
+		} else {
+			rcx.Mark.ResourcesNotReady("resource reconciliation error")
+		}
+	default:
+		rcx.Mark.ResourcesNotReady("awaiting resource readiness")
+	}
 
 	//--------------------------------------------------------------
 	// 8. Persist status/conditions
@@ -192,14 +201,16 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 		return err
 	}
 	if patched != nil {
-		rcx.Runtime.SetInstance(patched)
+		rcx.Instance = patched
+		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+		rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
 	}
 	rcx.Mark.InstanceManaged()
 	return nil
 }
 
 func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*unstructured.Unstructured, error) {
-	obj := rcx.Runtime.GetInstance()
+	obj := rcx.Instance
 	// Fast path: if everything is already correct → no patch
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer

@@ -24,6 +24,11 @@ import (
 // This is a retryable condition - the controller should requeue and try again.
 var ErrDataPending = errors.New("data pending")
 
+// ErrDesiredNotResolved indicates that the desired state for a node has not
+// been resolved yet. This typically happens when GetDesired is called on a
+// node that is still in Pending or Error state.
+var ErrDesiredNotResolved = errors.New("desired state not resolved")
+
 // IsDataPending returns true if the error indicates data is pending and
 // evaluation should be retried later.
 func IsDataPending(err error) bool {
@@ -34,10 +39,10 @@ func IsDataPending(err error) bool {
 // available (retryable). Other CEL errors are considered expression bugs.
 //
 // Data pending (retryable):
-//   - "no such key"       : map key doesn't exist (e.g., status.field not populated)
-//   - "no such field"     : struct field doesn't exist yet
-//   - "index out of range": list doesn't have enough items yet
-//     (could also be a bug, but we assume good intention - the list will grow)
+//   - "no such key"        : map key doesn't exist (e.g., status.field not populated)
+//   - "no such field"      : struct field doesn't exist yet
+//   - "no such attribute"  : dependency resource not yet in context
+//   - "index out of bounds": list doesn't have enough items yet
 //
 // NOT data pending (expression bugs):
 //   - "type conversion error" : wrong types in expression
@@ -46,7 +51,8 @@ func IsDataPending(err error) bool {
 var celDataPendingPatterns = []string{
 	"no such key",
 	"no such field",
-	"index out of range",
+	"no such attribute",
+	"index out of bounds",
 }
 
 // isCELDataPending checks if a CEL error indicates data is pending.

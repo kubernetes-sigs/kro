@@ -446,6 +446,38 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "crds with string template in metadata.name work",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"crdName": "string",
+					},
+					nil,
+				),
+				generator.WithResource("somecrd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						// Non-standalone expression (string template) - should not panic
+						"name": "crd-${schema.spec.crdName}",
+					},
+					"spec": map[string]interface{}{
+						"group":   "ec2.services.k8s.aws",
+						"version": "v1alpha1",
+						"names": map[string]interface{}{
+							"kind":     "VPC",
+							"listKind": "VPCList",
+							"singular": "vpc",
+							"plural":   "vpcs",
+						},
+						"scope": "Namespaced",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
 			name: "valid instance definition with complex types",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -521,7 +553,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}),
 			},
 			wantErr: true,
-			errMsg:  "cannot use both externalRef and forEach",
+			errMsg:  "cannot use externalRef with forEach",
 		},
 	}
 
@@ -641,14 +673,14 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil)},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Validate dependencies
-				assert.Empty(t, g.Resources["vpc"].GetDependencies())
-				assert.Empty(t, g.Resources["clusterpolicy"].GetDependencies())
+				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["clusterpolicy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].GetDependencies())
-				assert.Equal(t, []string{"clusterpolicy"}, g.Resources["clusterrole"].GetDependencies())
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"clusterpolicy"}, g.Resources["clusterrole"].Meta.Dependencies)
 
-				clusterDeps := g.Resources["cluster"].GetDependencies()
+				clusterDeps := g.Resources["cluster"].Meta.Dependencies
 				assert.Len(t, clusterDeps, 3)
 				assert.Contains(t, clusterDeps, "clusterrole")
 				assert.Contains(t, clusterDeps, "subnet1")
@@ -792,10 +824,10 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
 				assert.Len(t, g.Resources, 4)
-				assert.Empty(t, g.Resources["pod1"].GetDependencies())
-				assert.Empty(t, g.Resources["pod2"].GetDependencies())
-				assert.Empty(t, g.Resources["pod3"].GetDependencies())
-				assert.Empty(t, g.Resources["pod4"].GetDependencies())
+				assert.Empty(t, g.Resources["pod1"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod2"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod3"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod4"].Meta.Dependencies)
 				// Order doesn't matter as they're all independent
 				assert.Len(t, g.TopologicalOrder, 4)
 			},
@@ -1044,24 +1076,24 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Base infrastructure dependencies
-				assert.Empty(t, g.Resources["vpc"].GetDependencies())
-				assert.Empty(t, g.Resources["policy"].GetDependencies())
+				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["policy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet3"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["secgroup"].GetDependencies())
-				assert.Equal(t, []string{"policy"}, g.Resources["role"].GetDependencies())
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet3"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["secgroup"].Meta.Dependencies)
+				assert.Equal(t, []string{"policy"}, g.Resources["role"].Meta.Dependencies)
 
 				// Cluster dependencies
 				clusterDeps := []string{"role", "subnet1", "subnet2", "subnet3"}
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster1"].GetDependencies())
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster2"].GetDependencies())
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster3"].GetDependencies())
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster1"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster2"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster3"].Meta.Dependencies)
 
 				// Monitor pod dependencies
 				monitorDeps := []string{"cluster1", "cluster2", "cluster3"}
-				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].GetDependencies())
+				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].Meta.Dependencies)
 
 				// Validate topological order
 				assert.Equal(t, []string{
@@ -1230,24 +1262,24 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			validateVars: func(t *testing.T, g *Graph) {
 				// Verify resource with no expressions
 				policy := g.Resources["policy"]
-				assert.Empty(t, policy.variables)
-				assert.Empty(t, policy.GetReadyWhenExpressions())
-				assert.Empty(t, policy.GetIncludeWhenExpressions())
+				assert.Empty(t, policy.Variables)
+				assert.Empty(t, policy.ReadyWhen)
+				assert.Empty(t, policy.IncludeWhen)
 
 				// Verify resource with only readyWhen
 				vpc := g.Resources["vpc"]
-				assert.Empty(t, vpc.variables)
+				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.GetReadyWhenExpressions())
-				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+				}, vpc.ReadyWhen)
+				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
 				subnet := g.Resources["subnet"]
-				assert.Len(t, subnet.variables, 2)
+				assert.Len(t, subnet.Variables, 2)
 				// Create expected variables to match against
-				validateVariables(t, subnet.variables, []expectedVar{
+				validateVariables(t, subnet.Variables, []expectedVar{
 					{
 						path:                 "spec.vpcID",
 						expressions:          []string{"vpc.status.vpcID"},
@@ -1264,8 +1296,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 
 				// Verify resource with multiple expressions in one field
 				cluster := g.Resources["cluster"]
-				assert.Len(t, cluster.variables, 2)
-				validateVariables(t, cluster.variables, []expectedVar{
+				assert.Len(t, cluster.Variables, 2)
+				validateVariables(t, cluster.Variables, []expectedVar{
 					{
 						path:                 "metadata.name",
 						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
@@ -1279,12 +1311,12 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
-				assert.Equal(t, []string{"schema.spec.createMonitoring"}, cluster.GetIncludeWhenExpressions())
+				assert.Equal(t, []string{"schema.spec.createMonitoring"}, cluster.IncludeWhen)
 
 				// Verify monitor pod with all types of expressions
 				monitor := g.Resources["monitor"]
-				assert.Len(t, monitor.variables, 7)
-				validateVariables(t, monitor.variables, []expectedVar{
+				assert.Len(t, monitor.Variables, 7)
+				validateVariables(t, monitor.Variables, []expectedVar{
 					{
 						path:                 "metadata.labels.environment",
 						expressions:          []string{"schema.spec.environment"},
@@ -1328,6 +1360,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
+				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, monitor.ReadyWhen)
+				assert.Equal(t, []string{"schema.spec.createMonitoring == true"}, monitor.IncludeWhen)
 			},
 		},
 		{
@@ -1385,24 +1419,24 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			},
 			validateVars: func(t *testing.T, g *Graph) {
 				somecrd := g.Resources["somecrd"]
-				assert.Empty(t, somecrd.variables)
-				assert.Empty(t, somecrd.GetReadyWhenExpressions())
-				assert.Empty(t, somecrd.GetIncludeWhenExpressions())
+				assert.Empty(t, somecrd.Variables)
+				assert.Empty(t, somecrd.ReadyWhen)
+				assert.Empty(t, somecrd.IncludeWhen)
 
 				// Verify resource with only readyWhen
 				vpc := g.Resources["vpc"]
-				assert.Empty(t, vpc.variables)
+				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.GetReadyWhenExpressions())
-				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+				}, vpc.ReadyWhen)
+				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
 				subnet := g.Resources["subnet1"]
-				assert.Len(t, subnet.variables, 1)
+				assert.Len(t, subnet.Variables, 1)
 				// Create expected variables to match against
-				validateVariables(t, subnet.variables, []expectedVar{
+				validateVariables(t, subnet.Variables, []expectedVar{
 					{
 						path:                 "spec.vpcID",
 						expressions:          []string{"vpc.metadata.name"},
@@ -2232,7 +2266,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			validateGraph: func(t *testing.T, graph *Graph) {
 				resource := graph.Resources["workerPods"]
 				require.NotNil(t, resource)
-				iterators := resource.GetForEachDimensions()
+				iterators := resource.ForEach
 				require.Len(t, iterators, 1)
 				assert.Equal(t, "name", iterators[0].Name)
 				assert.Equal(t, "schema.spec.workers", iterators[0].Expression)
@@ -2274,7 +2308,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			validateGraph: func(t *testing.T, graph *Graph) {
 				resource := graph.Resources["pods"]
 				require.NotNil(t, resource)
-				iterators := resource.GetForEachDimensions()
+				iterators := resource.ForEach
 				require.Len(t, iterators, 2)
 				assert.Equal(t, "region", iterators[0].Name)
 				assert.Equal(t, "tier", iterators[1].Name)
@@ -2333,7 +2367,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 				// monitorPod should depend on workerPods
 				monitorPod := graph.Resources["monitorPod"]
 				require.NotNil(t, monitorPod)
-				assert.Contains(t, monitorPod.GetDependencies(), "workerPods")
+				assert.Contains(t, monitorPod.Meta.Dependencies, "workerPods")
 			},
 		},
 		{
@@ -2435,7 +2469,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			validateGraph: func(t *testing.T, graph *Graph) {
 				resource := graph.Resources["pod"]
 				require.NotNil(t, resource)
-				assert.Empty(t, resource.GetForEachDimensions())
+				assert.Empty(t, resource.ForEach)
 			},
 		},
 		{
@@ -2561,8 +2595,8 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			validateGraph: func(t *testing.T, graph *Graph) {
 				resource := graph.Resources["pods"]
 				require.NotNil(t, resource)
-				assert.True(t, resource.IsCollection())
-				assert.Equal(t, []string{"each.status.phase == 'Running'"}, resource.GetReadyWhenExpressions())
+				assert.True(t, resource.Meta.Type == NodeTypeCollection)
+				assert.Equal(t, []string{"each.status.phase == 'Running'"}, resource.ReadyWhen)
 			},
 		},
 	}
@@ -2647,8 +2681,8 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 				// Verify the collection resource depends on vpc
 				chainedResource := g.Resources["chainedSubnets"]
 				assert.NotNil(t, chainedResource)
-				assert.True(t, chainedResource.IsCollection())
-				assert.Contains(t, chainedResource.GetDependencies(), "vpc",
+				assert.True(t, chainedResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, chainedResource.Meta.Dependencies, "vpc",
 					"collection with forEach referencing vpc should have vpc as dependency")
 			},
 		},
@@ -2703,13 +2737,13 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 				// Verify first collection exists
 				subnetsResource := g.Resources["subnets"]
 				assert.NotNil(t, subnetsResource)
-				assert.True(t, subnetsResource.IsCollection())
+				assert.True(t, subnetsResource.Meta.Type == NodeTypeCollection)
 
 				// Verify second collection depends on first collection
 				sgResource := g.Resources["securityGroups"]
 				assert.NotNil(t, sgResource)
-				assert.True(t, sgResource.IsCollection())
-				assert.Contains(t, sgResource.GetDependencies(), "subnets",
+				assert.True(t, sgResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, sgResource.Meta.Dependencies, "subnets",
 					"securityGroups should depend on subnets collection")
 
 				// Verify topological order: subnets before securityGroups
@@ -2777,8 +2811,8 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 				// Verify second collection depends on first collection
 				filteredResource := g.Resources["filteredSecurityGroups"]
 				assert.NotNil(t, filteredResource)
-				assert.True(t, filteredResource.IsCollection())
-				assert.Contains(t, filteredResource.GetDependencies(), "subnets",
+				assert.True(t, filteredResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, filteredResource.Meta.Dependencies, "subnets",
 					"filteredSecurityGroups should depend on subnets collection")
 			},
 		},

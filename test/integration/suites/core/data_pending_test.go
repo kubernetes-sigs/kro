@@ -214,11 +214,13 @@ var _ = Describe("Data Pending", func() {
 				}
 			}
 			g.Expect(resourcesReadyCondition).ToNot(BeNil(), "ResourcesReady condition should exist")
-			g.Expect(resourcesReadyCondition["status"]).To(Equal("False"), "ResourcesReady should be False while data is pending")
+			g.Expect(resourcesReadyCondition["status"]).To(
+				Equal("False"), "ResourcesReady should be False while data is pending")
 
 			// CRITICAL: Assert that the message indicates data is pending/unresolved
 			msg, _ := resourcesReadyCondition["message"].(string)
-			g.Expect(msg).To(ContainSubstring("unresolved"), "Message should indicate resources are waiting for unresolved dependencies")
+			g.Expect(msg).To(
+				ContainSubstring("unresolved"), "Message should indicate unresolved dependencies")
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Step 3: InternetGateway and Subnet should NOT exist yet
@@ -279,7 +281,8 @@ var _ = Describe("Data Pending", func() {
 		}, 5*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Step 7: Simulate Subnet controller populating status.subnetID
-		Expect(env.Client.Get(ctx, types.NamespacedName{Name: instanceName + "-subnet", Namespace: namespace}, subnet)).To(Succeed())
+		subnetNN := types.NamespacedName{Name: instanceName + "-subnet", Namespace: namespace}
+		Expect(env.Client.Get(ctx, subnetNN, subnet)).To(Succeed())
 		Expect(unstructured.SetNestedField(subnet.Object, "subnet-67890", "status", "subnetID")).To(Succeed())
 		Expect(env.Client.Status().Update(ctx, subnet)).To(Succeed())
 
@@ -481,7 +484,8 @@ var _ = Describe("Data Pending", func() {
 		}, 3*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Now populate vpcB.status.vpcID
-		Expect(env.Client.Get(ctx, types.NamespacedName{Name: instanceName + "-vpc-b", Namespace: namespace}, vpcB)).To(Succeed())
+		vpcBNN := types.NamespacedName{Name: instanceName + "-vpc-b", Namespace: namespace}
+		Expect(env.Client.Get(ctx, vpcBNN, vpcB)).To(Succeed())
 		Expect(unstructured.SetNestedField(vpcB.Object, "vpc-bbbb", "status", "vpcID")).To(Succeed())
 		Expect(env.Client.Status().Update(ctx, vpcB)).To(Succeed())
 

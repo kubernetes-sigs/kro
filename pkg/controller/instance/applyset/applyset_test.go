@@ -17,8 +17,8 @@ package applyset
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"regexp"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -48,11 +48,11 @@ func (p *testParent) SetGroupVersionKind(gvk schema.GroupVersionKind) {
 	p.gvk = gvk
 }
 
-func newTestParent(name, namespace string, gvk schema.GroupVersionKind) *testParent {
+func newTestParent(gvk schema.GroupVersionKind) *testParent {
 	return &testParent{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:      "test-instance",
+			Namespace: "default",
 			UID:       types.UID("test-parent-uid"),
 		},
 		gvk: gvk,
@@ -111,7 +111,7 @@ func newFakeDynamicClient(objs ...runtime.Object) *fake.FakeDynamicClient {
 
 // addSSAReactor makes the fake client handle SSA Patch calls by simulating create/update.
 // It assigns UIDs and increments resourceVersion on each call.
-func addSSAReactor(client *fake.FakeDynamicClient) *int64 {
+func addSSAReactor(client *fake.FakeDynamicClient) {
 	var rvCounter int64
 	client.PrependReactor("patch", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		patchAction, ok := action.(k8stesting.PatchAction)
@@ -138,13 +138,12 @@ func addSSAReactor(client *fake.FakeDynamicClient) *int64 {
 
 		return true, obj, nil
 	})
-	return &rvCounter
 }
 
 func TestApply_BasicSSA(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 
@@ -216,7 +215,7 @@ func TestApply_BasicSSA(t *testing.T) {
 func TestApply_MembershipLabels(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 	client := newFakeDynamicClient()
@@ -262,7 +261,7 @@ func TestApply_MembershipLabels(t *testing.T) {
 func TestApply_ChangeDetection(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 
@@ -316,7 +315,7 @@ func TestApply_ChangeDetection(t *testing.T) {
 func TestApply_ChangeDetection_SameRevision(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 
@@ -458,7 +457,7 @@ func TestPrune(t *testing.T) {
 func TestErrors_ShouldPreventPrune(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 
@@ -508,7 +507,7 @@ func TestErrors_ShouldPreventPrune(t *testing.T) {
 
 func TestProject(t *testing.T) {
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 	client := newFakeDynamicClient()
@@ -759,7 +758,7 @@ func newNamespace(name string) *unstructured.Unstructured {
 func TestPrune_ClusterScopedResource(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
-	parent := newTestParent("test-instance", "default", schema.GroupVersionKind{
+	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
 	applySetID := ID(parent)
@@ -828,6 +827,7 @@ func TestPrune_ClusterScopedResource(t *testing.T) {
 		t.Errorf("Pruned wrong resource: got %q, want %q", pruneResult.Pruned[0].Object.GetName(), "orphan-ns")
 	}
 }
+
 // mockParent implements metav1.Object and schema.ObjectKind for testing ID().
 type mockParent struct {
 	name      string

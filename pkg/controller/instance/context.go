@@ -38,8 +38,9 @@ type ReconcileContext struct {
 	RestMapper meta.RESTMapper
 	Labeler    metadata.Labeler
 
-	Runtime runtime.Interface
-	Config  ReconcileConfig
+	Runtime  runtime.Interface
+	Instance *unstructured.Unstructured
+	Config   ReconcileConfig
 
 	Mark         *ConditionsMarker
 	StateManager *StateManager
@@ -53,7 +54,7 @@ func NewReconcileContext(
 	c dynamic.Interface,
 	r meta.RESTMapper,
 	lbl metadata.Labeler,
-	runtime runtime.Interface,
+	rt runtime.Interface,
 	cfg ReconcileConfig,
 	instance *unstructured.Unstructured,
 ) *ReconcileContext {
@@ -64,7 +65,8 @@ func NewReconcileContext(
 		Client:       c,
 		RestMapper:   r,
 		Labeler:      lbl,
-		Runtime:      runtime,
+		Runtime:      rt,
+		Instance:     instance,
 		Config:       cfg,
 		Mark:         NewConditionsMarkerFor(instance),
 		StateManager: newStateManager(),
@@ -75,13 +77,13 @@ func (rcx *ReconcileContext) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, rcx.Config.DefaultRequeueDuration)
 }
 
-func (rcx *ReconcileContext) getResourceNamespace(resourceID string) string {
-	res, _ := rcx.Runtime.GetResource(resourceID)
-	if ns := res.GetNamespace(); ns != "" {
+// getResourceNamespace returns the namespace for a resource.
+// Checks resource namespace first, falls back to instance namespace.
+func (rcx *ReconcileContext) getResourceNamespace(desired *unstructured.Unstructured) string {
+	if ns := desired.GetNamespace(); ns != "" {
 		return ns
 	}
-	inst := rcx.Runtime.GetInstance()
-	if ns := inst.GetNamespace(); ns != "" {
+	if ns := rcx.Instance.GetNamespace(); ns != "" {
 		return ns
 	}
 	return metav1.NamespaceDefault
@@ -89,8 +91,8 @@ func (rcx *ReconcileContext) getResourceNamespace(resourceID string) string {
 
 func (rcx *ReconcileContext) InstanceClient() dynamic.ResourceInterface {
 	base := rcx.Client.Resource(rcx.GVR)
-	if rcx.Runtime.GetInstance().GetNamespace() != "" {
-		return base.Namespace(rcx.Runtime.GetInstance().GetNamespace())
+	if rcx.Instance.GetNamespace() != "" {
+		return base.Namespace(rcx.Instance.GetNamespace())
 	}
 	return base
 }

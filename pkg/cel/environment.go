@@ -79,16 +79,6 @@ func WithTypedResources(schemas map[string]*spec.Schema) EnvOption {
 	}
 }
 
-// WithIteratorVariables adds iterator variable declarations to the CEL environment.
-// These are the loop variables from forEach expressions.
-func WithIteratorVariables(names []string) EnvOption {
-	return func(opts *envOptions) {
-		for _, name := range names {
-			opts.customDeclarations = append(opts.customDeclarations, cel.Variable(name, cel.DynType))
-		}
-	}
-}
-
 // WithListVariables adds list-typed variable declarations to the CEL environment.
 // Used for collection resources so they support list operations/macros like all()
 // exists(), filter(), and map() etc...

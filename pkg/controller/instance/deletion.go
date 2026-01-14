@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
@@ -31,10 +32,11 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	rcx.StateManager.State = InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	order := rcx.Runtime.TopologicalOrder()
-	slices.Reverse(order)
-	for _, resource := range order {
-		if err := c.deleteOne(rcx, resource); err != nil {
+	// Get nodes and reverse for deletion order (dependents first)
+	nodes := rcx.Runtime.Nodes()
+	slices.Reverse(nodes)
+	for _, node := range nodes {
+		if err := c.deleteOne(rcx, node); err != nil {
 			return err
 		}
 	}
@@ -42,27 +44,30 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	return c.removeFinalizer(rcx)
 }
 
-func (c *Controller) deleteOne(rcx *ReconcileContext, rid string) error {
-	desc := rcx.Runtime.ResourceDescriptor(rid)
+func (c *Controller) deleteOne(rcx *ReconcileContext, node *runtime.Node) error {
+	rid := node.Spec.Meta.ID
+	desc := node.Spec.Meta
 
-	if desc.IsExternalRef() {
+	if desc.Type == graph.NodeTypeExternal {
 		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateSkipped}
 		return nil
 	}
 
 	// Handle collection resources - delete all expanded items
-	if desc.IsCollection() {
-		return c.deleteCollection(rcx, rid, desc)
+	if desc.Type == graph.NodeTypeCollection {
+		return c.deleteCollection(rcx, node)
 	}
 
-	resource, _ := rcx.Runtime.GetResource(rid)
-	if resource == nil {
+	desired, err := node.GetDesired()
+	if err != nil || len(desired) == 0 {
+		// If we can't resolve desired, consider it already deleted or skip.
 		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
 		return nil
 	}
+	resource := desired[0]
 
-	rc := c.getClientFor(rcx, rid)
-	err := rc.Delete(rcx.Ctx, resource.GetName(), metav1.DeleteOptions{})
+	rc := c.getClientFor(rcx, node)
+	err = rc.Delete(rcx.Ctx, resource.GetName(), metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
 		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
 		return nil
@@ -76,14 +81,15 @@ func (c *Controller) deleteOne(rcx *ReconcileContext, rid string) error {
 	return rcx.delayedRequeue(fmt.Errorf("deleting resource %s", rid))
 }
 
-func (c *Controller) deleteCollection(rcx *ReconcileContext, rid string, desc runtime.ResourceDescriptor) error {
-	gvr := desc.GetGroupVersionResource()
-	instance := rcx.Runtime.GetInstance()
+func (c *Controller) deleteCollection(rcx *ReconcileContext, node *runtime.Node) error {
+	rid := node.Spec.Meta.ID
+	desc := node.Spec.Meta
+	gvr := desc.GVR
 
 	// Find all collection items by label selector
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		metadata.NodeIDLabel, rid,
-		metadata.InstanceIDLabel, string(instance.GetUID()),
+		metadata.InstanceIDLabel, string(rcx.Instance.GetUID()),
 	)
 
 	list, err := rcx.Client.Resource(gvr).List(rcx.Ctx, metav1.ListOptions{
@@ -103,13 +109,13 @@ func (c *Controller) deleteCollection(rcx *ReconcileContext, rid string, desc ru
 	allDeleted := true
 	for _, item := range list.Items {
 		ns := item.GetNamespace()
-		if ns == "" && desc.IsNamespaced() {
-			ns = instance.GetNamespace()
+		if ns == "" && desc.Namespaced {
+			ns = rcx.Instance.GetNamespace()
 		}
 
 		var rc dynamic.ResourceInterface
 		base := rcx.Client.Resource(gvr)
-		if desc.IsNamespaced() {
+		if desc.Namespaced {
 			rc = base.Namespace(ns)
 		} else {
 			rc = base
@@ -139,35 +145,37 @@ func (c *Controller) deleteCollection(rcx *ReconcileContext, rid string, desc ru
 }
 
 func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
-	inst := rcx.Runtime.GetInstance()
-	patched, err := c.setUnmanaged(rcx, inst)
+	patched, err := c.setUnmanaged(rcx, rcx.Instance)
 	if err != nil {
 		rcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)
 		return err
 	}
-	rcx.Runtime.SetInstance(patched)
+	rcx.Instance = patched
+	rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+	rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
+	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 	return nil
 }
 
-func (c *Controller) getClientFor(rcx *ReconcileContext, rid string) dynamic.ResourceInterface {
-	desc := rcx.Runtime.ResourceDescriptor(rid)
-	gvr := desc.GetGroupVersionResource()
-	ns := c.getNamespaceFor(rcx, rid)
+func (c *Controller) getClientFor(rcx *ReconcileContext, node *runtime.Node) dynamic.ResourceInterface {
+	desc := node.Spec.Meta
+	gvr := desc.GVR
 
-	if desc.IsNamespaced() {
+	if desc.Namespaced {
+		ns := c.getNamespaceFor(rcx, node)
 		return rcx.Client.Resource(gvr).Namespace(ns)
 	}
 	return rcx.Client.Resource(gvr)
 }
 
-func (c *Controller) getNamespaceFor(rcx *ReconcileContext, rid string) string {
-	inst := rcx.Runtime.GetInstance()
-	resource, _ := rcx.Runtime.GetResource(rid)
-
-	if ns := resource.GetNamespace(); ns != "" {
-		return ns
+func (c *Controller) getNamespaceFor(rcx *ReconcileContext, node *runtime.Node) string {
+	desired, err := node.GetDesired()
+	if err == nil && len(desired) > 0 {
+		if ns := desired[0].GetNamespace(); ns != "" {
+			return ns
+		}
 	}
-	if ns := inst.GetNamespace(); ns != "" {
+	if ns := rcx.Instance.GetNamespace(); ns != "" {
 		return ns
 	}
 	return metav1.NamespaceDefault

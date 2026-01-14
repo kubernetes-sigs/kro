@@ -167,3 +167,24 @@ func (r ResourceVariableKind) IsIncludeWhen() bool {
 func (r ResourceVariableKind) IsIteration() bool {
 	return r == ResourceVariableKindIteration
 }
+
+// Priority returns the evaluation priority for this kind.
+// Lower values = higher priority (evaluated earlier).
+//
+// Priority order: Static/IncludeWhen (0) < Dynamic/ReadyWhen (1) < Iteration (2)
+//
+// This matters because the same expression can appear in multiple variables
+// with different kinds. We use the lowest priority so the expression is
+// evaluated early enough for all consumers.
+func (r ResourceVariableKind) Priority() int {
+	switch r {
+	case ResourceVariableKindStatic, ResourceVariableKindIncludeWhen:
+		return 0
+	case ResourceVariableKindDynamic, ResourceVariableKindReadyWhen:
+		return 1
+	case ResourceVariableKindIteration:
+		return 2
+	default:
+		return 3
+	}
+}

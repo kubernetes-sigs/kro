@@ -108,7 +108,21 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
 
-	inst := rcx.Runtime.GetInstance().DeepCopy()
+	// instance desired is guaranteed to have one item.
+	desired, err := rcx.Runtime.Instance().GetDesired()
+	if err != nil {
+		return err
+	}
+	if resolved, found, _ := unstructured.NestedMap(desired[0].Object, "status"); found {
+		for k, v := range resolved {
+			if k == "conditions" || k == "state" {
+				continue
+			}
+			status[k] = v
+		}
+	}
+
+	inst := rcx.Instance.DeepCopy()
 	inst.Object["status"] = status
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -129,37 +143,26 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 }
 
 func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
-	base := rcx.getExistingStatus()
-	inst := rcx.Runtime.GetInstance()
+	inst := rcx.Instance
+
 	conds := condSet.For(&unstructuredWrapper{inst}).List()
 
 	b, _ := json.Marshal(conds)
 	var arr []interface{}
 	_ = json.Unmarshal(b, &arr)
 
-	base["conditions"] = arr
+	// Start fresh - user-defined status fields come solely from current resolution,
+	// not preserved from previous status. This ensures fields disappear when their
+	// dependencies become unavailable.
+	status := map[string]interface{}{
+		"conditions": arr,
+	}
 	if condSet.For(&unstructuredWrapper{inst}).IsRootReady() {
-		base["state"] = InstanceStateActive
+		status["state"] = InstanceStateActive
 	} else {
-		base["state"] = rcx.StateManager.State
+		status["state"] = rcx.StateManager.State
 	}
-	return base
-}
-
-func (rcx *ReconcileContext) getExistingStatus() map[string]interface{} {
-	out := map[string]interface{}{
-		"conditions": []interface{}{},
-	}
-	raw, ok := rcx.Runtime.GetInstance().Object["status"].(map[string]interface{})
-	if !ok {
-		return out
-	}
-	for k, v := range raw {
-		if k != "conditions" {
-			out[k] = v
-		}
-	}
-	return out
+	return status
 }
 
 func (rcx *ReconcileContext) updateInstanceState() {

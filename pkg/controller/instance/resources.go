@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
@@ -32,29 +33,15 @@ import (
 func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 	rcx.Log.V(2).Info("Reconciling resources")
 
-	order := rcx.Runtime.TopologicalOrder()
-
-	// The controller drives SSA + prune in a single pass:
-	//   1) build the desired applyset resources in topo order (respecting includeWhen,
-	//      readyWhen, dependencies, external refs)
-	//   2) compute the superset parent patch so the instance is labeled/annotated before SSA
-	//   3) apply all desired objects (SSA) and optionally prune orphans with the same applyset ID
-	//   4) update runtime state/readiness from apply results and surface a "cluster mutated"
-	//      requeue when SSA or prune changed the cluster
-	// ---------------------------------------------------------
-	// 1. Create ApplySet
-	// ---------------------------------------------------------
+	nodes := rcx.Runtime.Nodes()
 	applier := c.createApplySet(rcx)
 
-	// ---------------------------------------------------------
-	// 2. Build resources list and track state
-	// ---------------------------------------------------------
 	var resources []applyset.Resource
 	var unresolved string
 	prune := true
 
-	for _, id := range order {
-		resourcesToAdd, shouldPrune, unresolvedID, err := c.prepareResource(rcx, id)
+	for _, node := range nodes {
+		resourcesToAdd, shouldPrune, unresolvedID, err := c.prepareResource(rcx, node)
 		if err != nil {
 			return err
 		}
@@ -67,38 +54,27 @@ func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 		}
 	}
 
-	// ---------------------------------------------------------
-	// 3. Project (get superset parent patch)
-	// ---------------------------------------------------------
 	supersetPatch, err := applier.Project(resources)
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
 	}
 
-	// ---------------------------------------------------------
-	// 4. Patch parent with superset (before apply/prune)
-	// ---------------------------------------------------------
 	if err := c.patchInstanceWithApplySetMetadata(rcx, supersetPatch); err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
 	}
 
-	// ---------------------------------------------------------
-	// 5. Apply
-	// ---------------------------------------------------------
 	result, batchMeta, err := applier.Apply(rcx.Ctx, resources, applyset.ApplyMode{})
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("apply failed: %w", err))
 	}
 
-	// ---------------------------------------------------------
-	// 6. Prune orphans (if enabled and no apply errors)
-	// ---------------------------------------------------------
 	clusterMutated := result.HasClusterMutation()
 
 	if prune && result.Errors() == nil {
+		pruneScope := supersetPatch.PruneScope()
 		pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
 			KeepUIDs: result.ObservedUIDs(),
-			Scope:    supersetPatch.PruneScope(),
+			Scope:    pruneScope,
 		})
 		if err != nil {
 			return rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
@@ -112,16 +88,15 @@ func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 		}
 	}
 
-	// ---------------------------------------------------------
-	// 7. Process results and update runtime state
-	// ---------------------------------------------------------
 	if err := c.processApplyResults(rcx, result); err != nil {
 		return rcx.delayedRequeue(err)
 	}
 
-	// ---------------------------------------------------------
-	// 8. Final resolution checks
-	// ---------------------------------------------------------
+	// Update state manager after processing apply results.
+	// This ensures StateManager.State reflects current resource states
+	// (including WaitingForReadiness) before the controller checks it.
+	rcx.StateManager.Update()
+
 	if unresolved != "" {
 		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", unresolved))
 	}
@@ -137,83 +112,89 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 		Client:          rcx.Client,
 		RESTMapper:      rcx.RestMapper,
 		Log:             rcx.Log,
-		ParentNamespace: rcx.Runtime.GetInstance().GetNamespace(),
+		ParentNamespace: rcx.Instance.GetNamespace(),
 	}
-	return applyset.New(cfg, rcx.Runtime.GetInstance())
+	return applyset.New(cfg, rcx.Instance)
 }
 
 func (c *Controller) prepareResource(
 	rcx *ReconcileContext,
-	id string,
+	node *runtime.Node,
 ) ([]applyset.Resource, bool, string, error) {
+	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
 
 	st := &ResourceState{State: ResourceStateInProgress}
 	rcx.StateManager.ResourceStates[id] = st
 
-	// 1. Should we process?
-	want, err := rcx.Runtime.ReadyToProcessResource(id)
-	if err != nil || !want {
+	ignored, err := node.IsIgnored()
+	if err != nil {
+		st.State = ResourceStateError
+		st.Err = err
+		return nil, true, "", err
+	}
+	if ignored {
 		st.State = ResourceStateSkipped
-		rcx.Log.V(2).Info("Skipping resource", "id", id, "reason", err)
-		rcx.Runtime.IgnoreResource(id)
-
-		// SkipApply entry: prune relies on parent annotation "memory" from previous
-		// reconciles to find and delete this resource if it was previously applied.
-		desired, _ := rcx.Runtime.GetResource(id)
-
+		rcx.Log.V(2).Info("Skipping resource", "id", id, "reason", "ignored")
 		return []applyset.Resource{{
 			ID:        id,
-			Object:    desired,
 			SkipApply: true,
 		}}, true, "", nil
 	}
 
-	// 2. Must be resolved
-	_, rstate := rcx.Runtime.GetResource(id)
-	if rstate != runtime.ResourceStateResolved {
-		return nil, false, id, nil
-	}
-
-	// 3. Dependencies must be ready
-	if !rcx.Runtime.AreDependenciesReady(id) {
-		return nil, false, id, nil
-	}
-
-	// 4. External reference - don't add to applyset
-	if rcx.Runtime.ResourceDescriptor(id).IsExternalRef() {
-		if err := c.handleExternalRef(rcx, id, st); err != nil {
-			return nil, true, "", err
+	desired, err := node.GetDesired()
+	if err != nil {
+		if runtime.IsDataPending(err) {
+			st.State = ResourceStateWaitingForReadiness
+			return nil, true, id, nil
 		}
+		st.State = ResourceStateError
+		st.Err = err
+		return nil, true, "", err
+	}
+
+	// Nothing to apply (empty desired)
+	if len(desired) == 0 {
+		st.State = ResourceStateSkipped
 		return nil, true, "", nil
 	}
 
-	// 5. Collection resource
-	if rcx.Runtime.ResourceDescriptor(id).IsCollection() {
-		return c.prepareCollectionResource(rcx, id, st)
+	switch node.Spec.Meta.Type {
+	case graph.NodeTypeExternal:
+		if err := c.handleExternalRef(rcx, node, st, desired); err != nil {
+			return nil, true, "", err
+		}
+		return nil, true, "", nil
+	case graph.NodeTypeCollection:
+		return c.prepareCollectionResource(rcx, node, st, desired)
+	default:
+		return c.prepareRegularResource(rcx, node, st, desired)
 	}
-
-	// 6. Regular resource
-	return c.prepareRegularResource(rcx, id, st)
 }
 
 func (c *Controller) prepareRegularResource(
 	rcx *ReconcileContext,
-	id string,
+	node *runtime.Node,
 	st *ResourceState,
+	desiredList []*unstructured.Unstructured,
 ) ([]applyset.Resource, bool, string, error) {
-	desired, _ := rcx.Runtime.GetResource(id)
-	desc := rcx.Runtime.ResourceDescriptor(id)
-	gvr := desc.GetGroupVersionResource()
+	id := node.Spec.Meta.ID
+	desc := node.Spec.Meta
+	gvr := desc.GVR
+
+	if len(desiredList) == 0 {
+		st.State = ResourceStateSynced
+		return nil, true, "", nil
+	}
+	desired := desiredList[0]
 
 	// Determine namespace: use resource's namespace, or fall back to instance namespace for namespaced resources
 	namespace := desired.GetNamespace()
-	if namespace == "" && desc.IsNamespaced() {
-		namespace = rcx.Runtime.GetInstance().GetNamespace()
+	if namespace == "" && desc.Namespaced {
+		namespace = rcx.Instance.GetNamespace()
 		desired.SetNamespace(namespace)
 	}
 
-	// GET current cluster state - needed for CEL expressions that reference this resource's status
 	current, err := c.getCurrentClusterState(rcx, gvr, namespace, desired.GetName())
 	if err != nil {
 		st.State = ResourceStateError
@@ -221,14 +202,9 @@ func (c *Controller) prepareRegularResource(
 		return nil, true, "", err
 	}
 
-	// Set current state in runtime so CEL and readiness have real status to read
 	var currentRevision string
 	if current != nil {
-		rcx.Runtime.SetResource(id, current)
-		updateReadiness(rcx, id)
-		if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
-			return nil, true, "", err
-		}
+		node.SetObserved([]*unstructured.Unstructured{current})
 		currentRevision = current.GetResourceVersion()
 	}
 
@@ -246,19 +222,21 @@ func (c *Controller) prepareRegularResource(
 
 func (c *Controller) prepareCollectionResource(
 	rcx *ReconcileContext,
-	id string,
+	node *runtime.Node,
 	st *ResourceState,
+	expandedResources []*unstructured.Unstructured,
 ) ([]applyset.Resource, bool, string, error) {
-	expandedResources, err := rcx.Runtime.ExpandCollection(id)
-	if err != nil {
-		st.State = ResourceStateError
-		st.Err = fmt.Errorf("failed to expand collection: %w", err)
-		return nil, false, id, nil
-	}
+	id := node.Spec.Meta.ID
+	desc := node.Spec.Meta
+	gvr := desc.GVR
 
-	desc := rcx.Runtime.ResourceDescriptor(id)
-	gvr := desc.GetGroupVersionResource()
 	collectionSize := len(expandedResources)
+
+	// Empty collection is already handled - state would be Ready
+	if collectionSize == 0 {
+		st.State = ResourceStateSynced
+		return nil, true, "", nil
+	}
 
 	// LIST all existing collection items with single call (more efficient than N GETs)
 	existingByKey, err := c.listCollectionItems(rcx, gvr, id)
@@ -271,23 +249,18 @@ func (c *Controller) prepareCollectionResource(
 	// Set current items in runtime so CEL expressions in dependent resources can resolve
 	currentItems := make([]*unstructured.Unstructured, collectionSize)
 	for i, expandedResource := range expandedResources {
-		if expandedResource.GetNamespace() == "" && desc.IsNamespaced() {
-			expandedResource.SetNamespace(rcx.Runtime.GetInstance().GetNamespace())
+		if expandedResource.GetNamespace() == "" && desc.Namespaced {
+			expandedResource.SetNamespace(rcx.Instance.GetNamespace())
 		}
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
 		if current, ok := existingByKey[key]; ok {
 			currentItems[i] = current
 		}
 	}
-	rcx.Runtime.SetCollectionResources(id, currentItems)
-
-	// Synchronize CEL expressions that may reference collection items
-	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
-		return nil, true, "", err
-	}
+	node.SetObserved(currentItems)
 
 	// Build resources list for apply
-	var resources []applyset.Resource
+	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
@@ -319,7 +292,7 @@ func (c *Controller) listCollectionItems(
 	nodeID string,
 ) (map[string]*unstructured.Unstructured, error) {
 	// Filter by both instance UID and node ID for precise matching
-	instanceUID := string(rcx.Runtime.GetInstance().GetUID())
+	instanceUID := string(rcx.Instance.GetUID())
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		metadata.InstanceIDLabel, instanceUID,
 		metadata.NodeIDLabel, nodeID,
@@ -361,7 +334,7 @@ func (c *Controller) applyDecoratorLabels(
 
 	// Merge tool labels from labeler. On conflict (duplicate keys), log and use
 	// instance labels only - this avoids panic from nil dereference.
-	instanceLabeler := metadata.NewInstanceLabeler(rcx.Runtime.GetInstance())
+	instanceLabeler := metadata.NewInstanceLabeler(rcx.Instance)
 	toolLabels, err := instanceLabeler.Merge(rcx.Labeler)
 	if err != nil {
 		rcx.Log.V(1).Info("label merge conflict, using instance labels only", "error", err)
@@ -384,7 +357,7 @@ func (c *Controller) applyDecoratorLabels(
 }
 
 func (c *Controller) patchInstanceWithApplySetMetadata(rcx *ReconcileContext, meta applyset.Metadata) error {
-	inst := rcx.Runtime.GetInstance()
+	inst := rcx.Instance
 
 	// SSA is idempotent - just apply, server handles no-op if unchanged
 	patchObj := &unstructured.Unstructured{
@@ -414,26 +387,38 @@ func (c *Controller) patchInstanceWithApplySetMetadata(rcx *ReconcileContext, me
 
 func (c *Controller) handleExternalRef(
 	rcx *ReconcileContext,
-	id string,
+	node *runtime.Node,
 	st *ResourceState,
+	desiredList []*unstructured.Unstructured,
 ) error {
-	desired, _ := rcx.Runtime.GetResource(id)
+	id := node.Spec.Meta.ID
+	if len(desiredList) == 0 {
+		st.State = ResourceStateSkipped
+		return nil
+	}
+	desired := desiredList[0]
 
 	// External refs are read-only here: fetch and push into runtime for dependency/readiness.
 	actual, err := c.readExternalRef(rcx, id, desired)
 	if err != nil {
-		// NotFound means external ref doesn't exist yet - waiting, not error.
-		// Other errors (API issues, mapping errors) are also treated as waiting
-		// since the external ref may become available.
 		st.State = ResourceStateWaitingForReadiness
 		st.Err = fmt.Errorf("waiting for external reference %q: %w", id, err)
 		return nil
 	}
 
-	rcx.Runtime.SetResource(id, actual)
-	updateReadiness(rcx, id)
-	if _, err = rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
+	node.SetObserved([]*unstructured.Unstructured{actual})
+
+	ready, err := node.IsReady()
+	if err != nil {
+		st.State = ResourceStateError
+		st.Err = err
 		return err
+	}
+	if ready {
+		st.State = ResourceStateSynced
+		st.Err = nil
+	} else {
+		st.State = ResourceStateWaitingForReadiness
 	}
 	return nil
 }
@@ -459,10 +444,7 @@ func (c *Controller) readExternalRef(
 	var ri dynamic.ResourceInterface
 
 	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
-		ns := desired.GetNamespace()
-		if ns == "" {
-			ns = rcx.getResourceNamespace(resourceID)
-		}
+		ns := rcx.getResourceNamespace(desired)
 		ri = c.client.Dynamic().Resource(mapping.Resource).Namespace(ns)
 	} else {
 		ri = c.client.Dynamic().Resource(mapping.Resource)
@@ -488,55 +470,53 @@ func (c *Controller) readExternalRef(
 	return obj, nil
 }
 
-func updateReadiness(rcx *ReconcileContext, id string) {
-	st := rcx.StateManager.ResourceStates[id]
-
-	ready, reason, err := rcx.Runtime.IsResourceReady(id)
-	if err != nil {
-		st.State = ResourceStateWaitingForReadiness
-		st.Err = fmt.Errorf("readiness check failed: %s: %w", reason, err)
-	} else if !ready {
-		st.State = ResourceStateWaitingForReadiness
-		st.Err = fmt.Errorf("not ready: %s", reason)
-	} else {
-		st.State = ResourceStateSynced
-		st.Err = nil
-	}
-}
-
 func (c *Controller) processApplyResults(
 	rcx *ReconcileContext,
 	result *applyset.ApplyResult,
 ) error {
 	rcx.Log.V(2).Info("Processing apply results")
 
+	// Build nodeMap for lookups
+	nodes := rcx.Runtime.Nodes()
+	nodeMap := make(map[string]*runtime.Node, len(nodes))
+	for _, node := range nodes {
+		nodeMap[node.Spec.Meta.ID] = node
+	}
+
 	// Build map for efficient lookup
 	byID := result.ByID()
 
 	// Process all resources from apply results
 	for resourceID, resourceState := range rcx.StateManager.ResourceStates {
-		if rcx.Runtime.ResourceDescriptor(resourceID).IsCollection() {
-			if err := c.updateCollectionFromApplyResults(rcx, resourceID, resourceState, byID); err != nil {
+		node, ok := nodeMap[resourceID]
+		if !ok {
+			continue
+		}
+
+		if resourceState.State == ResourceStateError || resourceState.State == ResourceStateSkipped {
+			continue
+		}
+
+		switch node.Spec.Meta.Type {
+		case graph.NodeTypeCollection:
+			if err := c.updateCollectionFromApplyResults(rcx, node, resourceState, byID); err != nil {
 				return err
 			}
-		} else {
-			// Regular resources
+		case graph.NodeTypeExternal:
+			// External refs handled before applyset.
+			continue
+		default:
 			if item, ok := byID[resourceID]; ok {
 				if item.Error != nil {
 					resourceState.State = ResourceStateError
 					resourceState.Err = item.Error
 					rcx.Log.V(1).Info("apply error", "id", resourceID, "error", item.Error)
-				} else if item.Observed != nil {
-					rcx.Runtime.SetResource(resourceID, item.Observed)
-					updateReadiness(rcx, resourceID)
-
-					// Re-run synchronization so dependents can see fresh status/data.
-					if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
-						resourceState.State = ResourceStateError
-						resourceState.Err = fmt.Errorf("failed to synchronize after apply: %w", err)
-						continue
-					}
+					continue
 				}
+				if item.Observed != nil {
+					node.SetObserved([]*unstructured.Unstructured{item.Observed})
+				}
+				setStateFromReadiness(node, resourceState)
 			}
 		}
 	}
@@ -550,17 +530,21 @@ func (c *Controller) processApplyResults(
 }
 
 func (c *Controller) updateCollectionFromApplyResults(
-	rcx *ReconcileContext,
-	resourceID string,
+	_ *ReconcileContext,
+	node *runtime.Node,
 	resourceState *ResourceState,
 	byID map[string]applyset.ApplyResultItem,
 ) error {
-	currentResources, state := rcx.Runtime.GetCollectionResources(resourceID)
-	if state != runtime.ResourceStateResolved || currentResources == nil {
+	resourceID := node.Spec.Meta.ID
+	desiredItems, err := node.GetDesired()
+	if err != nil || len(desiredItems) == 0 {
+		resourceState.State = ResourceStateSynced
 		return nil
 	}
 
-	for i := range currentResources {
+	observedItems := make([]*unstructured.Unstructured, len(desiredItems))
+
+	for i := range desiredItems {
 		expandedID := fmt.Sprintf("%s-%d", resourceID, i)
 		if item, ok := byID[expandedID]; ok {
 			if item.Error != nil {
@@ -569,25 +553,30 @@ func (c *Controller) updateCollectionFromApplyResults(
 				return nil
 			}
 			if item.Observed != nil {
-				currentResources[i] = item.Observed
+				observedItems[i] = item.Observed
 			}
 		}
 	}
 
-	rcx.Runtime.SetCollectionResources(resourceID, currentResources)
-	if _, err := rcx.Runtime.Synchronize(); err != nil && !runtime.IsDataPending(err) {
-		return fmt.Errorf("failed to synchronize after applying collection %s: %w", resourceID, err)
-	}
-
-	// Check collection readiness
-	if ready, reason, err := rcx.Runtime.IsCollectionReady(resourceID); err != nil || !ready {
-		rcx.Log.V(1).Info("Collection not ready", "resourceID", resourceID, "reason", reason, "error", err)
-		resourceState.State = ResourceStateWaitingForReadiness
-		resourceState.Err = fmt.Errorf("collection not ready: %s: %w", reason, err)
-	} else {
-		resourceState.State = ResourceStateSynced
-	}
+	node.SetObserved(observedItems)
+	setStateFromReadiness(node, resourceState)
 	return nil
+}
+
+func setStateFromReadiness(node *runtime.Node, st *ResourceState) {
+	ready, err := node.IsReady()
+	if err != nil {
+		st.State = ResourceStateError
+		st.Err = err
+		return
+	}
+	if ready {
+		st.State = ResourceStateSynced
+		st.Err = nil
+		return
+	}
+	st.State = ResourceStateWaitingForReadiness
+	st.Err = nil
 }
 
 // getCurrentClusterState fetches the current state of a resource from the cluster.

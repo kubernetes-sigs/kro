@@ -126,19 +126,21 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    CEL expressions.
 	// 4. Extract the CEL expressions from the resource + validate them.
 
-	// we'll also store the resources in a map for easy access later.
-	resources := make(map[string]*Resource)
+	// we'll also store the nodes and schemas in maps for easy access later.
+	// Schemas are only needed during build for CEL validation.
+	nodes := make(map[string]*Node)
+	schemas := make(map[string]*spec.Schema)
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
-		order := i
-		r, err := b.buildRGResource(rgResource, order)
+		node, nodeSchema, err := b.buildRGResource(rgResource, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
 		}
-		if resources[id] != nil {
+		if nodes[id] != nil {
 			return nil, fmt.Errorf("found resources with duplicate id %q", id)
 		}
-		resources[id] = r
+		nodes[id] = node
+		schemas[id] = nodeSchema
 	}
 
 	// At this stage we have a superficial understanding of the resources that are
@@ -180,35 +182,37 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// 3. Validate them against the resources defined in the resource graph definition.
 	// 4. Infer the status schema based on the CEL expressions.
 
-	instance, err := b.buildInstanceResource(
+	instance, instanceCRD, err := b.buildInstanceNode(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
 		rgd.Spec.Schema,
-		// We need to pass the resources to the instance resource, so we can validate
+		// We need to pass the nodes and schemas to the instance, so we can validate
 		// the CEL expressions in the context of the resources.
-		resources,
+		nodes,
+		schemas,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition '%v': %w", rgd.Name, err)
 	}
 
-	// Collect all OpenAPI schemas for CEL type checking.
-	schemas := collectResourceSchemas(resources)
+	// Prepare schemas for CEL type checking.
+	// Collections need to be wrapped as list types.
+	celSchemas := collectNodeSchemas(nodes, schemas)
 
 	// include the instance spec schema in the context as "schema". This will let us
 	// validate expressions such as ${schema.spec.someField}.
 	//
 	// not that we only include the spec and metadata fields, instance status references
 	// are not allowed in RGDs (yet)
-	schemaWithoutStatus, err := getSchemaWithoutStatus(instance.crd)
+	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema without status: %w", err)
 	}
-	schemas["schema"] = schemaWithoutStatus
+	celSchemas[SchemaVarName] = schemaWithoutStatus
 
 	// Create a DeclTypeProvider for introspecting type structures during validation
-	typeProvider := krocel.CreateDeclTypeProvider(schemas)
+	typeProvider := krocel.CreateDeclTypeProvider(celSchemas)
 
 	// First, build the dependency graph by inspecting CEL expressions.
 	// This extracts all resource dependencies and validates that:
@@ -218,7 +222,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//
 	// We do this BEFORE type checking so that undeclared resource errors
 	// are caught here with clear messages, rather than as CEL type errors.
-	dag, err := b.buildDependencyGraph(resources)
+	dag, err := b.buildDependencyGraph(nodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
@@ -232,32 +236,34 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// we can perform type checking on the CEL expressions.
 
 	// Create a typed CEL environment with all resource schemas for template expressions
-	templatesEnv, err := krocel.TypedEnvironment(schemas)
+	templatesEnv, err := krocel.TypedEnvironment(celSchemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
 	// Create a CEL environment with only "schema" for includeWhen expressions
 	var schemaEnv *cel.Env
-	if schemas["schema"] != nil {
-		schemaEnv, err = krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemas["schema"]})
+	if celSchemas[SchemaVarName] != nil {
+		schemaEnv, err = krocel.TypedEnvironment(map[string]*spec.Schema{SchemaVarName: celSchemas[SchemaVarName]})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
 		}
 	}
 
-	// Validate all CEL expressions for each resource node
-	for _, resource := range resources {
-		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id], typeProvider); err != nil {
-			return nil, fmt.Errorf("failed to validate node %q: %w", resource.id, err)
+	// Validate all CEL expressions for each node
+	for id, node := range nodes {
+		if err := validateNode(node, templatesEnv, schemaEnv, schemas[id], typeProvider); err != nil {
+			return nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
 	}
 
 	resourceGraphDefinition := &Graph{
 		DAG:              dag,
 		Instance:         instance,
-		Resources:        resources,
+		Nodes:            nodes,
+		Resources:        nodes,
 		TopologicalOrder: topologicalOrder,
+		CRD:              instanceCRD,
 	}
 	return resourceGraphDefinition, nil
 }
@@ -278,62 +284,66 @@ func (b *Builder) buildExternalRefResource(
 	return resourceObject
 }
 
-// buildRGResource builds a resource from the given resource definition.
+// buildRGResource builds a node from the given resource definition.
 // It provides a high-level understanding of the resource, by extracting the
 // OpenAPI schema, emulating the resource and extracting the cel expressions
 // from the schema.
+// Returns the Node and the OpenAPI schema (schema is only needed during build for CEL validation).
 func (b *Builder) buildRGResource(
 	rgResource *v1alpha1.Resource,
 	order int,
-) (*Resource, error) {
-	// 1. Unmarshal the resource into a map[string]interface{}.
+) (*Node, *spec.Schema, error) {
+	// 1. Validate resource field combinations.
+	if err := validateCombinableResourceFields(rgResource); err != nil {
+		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
+	}
+
+	// 2. Unmarshal the resource into a map[string]interface{}.
 	resourceObject := map[string]interface{}{}
 	if len(rgResource.Template.Raw) > 0 {
 		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
-	} else if rgResource.ExternalRef != nil {
-		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
 	} else {
-		return nil, fmt.Errorf("exactly one of template or externalRef must be provided")
+		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
 	}
 
-	// 2. Check if it looks like a valid Kubernetes resource.
+	// 3. Check if it looks like a valid Kubernetes resource.
 	err := validateKubernetesObjectStructure(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("resource %s is not a valid Kubernetes object: %v", rgResource.ID, err)
 	}
 
-	// 3. Extract the GVK from the resource.
+	// 4. Extract the GVK from the resource.
 	gvk, err := metadata.ExtractGVKFromUnstructured(resourceObject)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to extract GVK from resource %s: %w", rgResource.ID, err)
 	}
 
-	// 4. Load the OpenAPI schema for the resource.
+	// 5. Load the OpenAPI schema for the resource.
 	resourceSchema, err := b.schemaResolver.ResolveSchema(gvk)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
-	// 5. Extract CEL fieldDescriptors from the resource.
+	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		fieldDescriptors, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
 		}
 
 		for _, expr := range fieldDescriptors {
 			if !strings.HasPrefix(expr.Path, "metadata.") {
-				return nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rgResource.ID)
+				return nil, nil, fmt.Errorf("CEL expressions in CRDs are only supported for metadata fields, found in path %q, resource %s", expr.Path, rgResource.ID)
 			}
 		}
 	} else {
 		fieldDescriptors, err = parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
 
 		// Set ExpectedType on each descriptor by converting schema to CEL type with proper naming
@@ -351,97 +361,101 @@ func (b *Builder) buildRGResource(
 		})
 	}
 
-	// 6. Parse ReadyWhen expressions
+	// 7. Parse ReadyWhen expressions
 	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
-	// 7. Parse condition expressions
+	// 8. Parse condition expressions
 	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
+		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
 
-	// 8. Parse forEach dimensions
+	// 9. Parse forEach dimensions
 	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
-	}
-
-	// 9. Validate that externalRef and forEach are not combined
-	// External refs are read-only resources, while forEach creates multiple managed resources
-	if rgResource.ExternalRef != nil && len(forEachDimensions) > 0 {
-		return nil, fmt.Errorf("resource %s cannot use both externalRef and forEach; externalRef is for read-only resources, while forEach creates multiple managed resources", rgResource.ID)
+		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
 	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
+		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
 	}
 
-	// Note that at this point we don't inject the dependencies into the resource.
-	// forEach dependencies are extracted later in buildDependencyGraph.
-	return &Resource{
-		id:                     rgResource.ID,
-		gvr:                    mapping.Resource,
-		schema:                 resourceSchema,
-		originalObject:         &unstructured.Unstructured{Object: resourceObject},
-		variables:              templateVariables,
-		readyWhenExpressions:   readyWhen,
-		includeWhenExpressions: includeWhen,
-		namespaced:             mapping.Scope.Name() == meta.RESTScopeNameNamespace,
-		order:                  order,
-		isExternalRef:          rgResource.ExternalRef != nil,
-		forEachDimensions:      forEachDimensions,
-	}, nil
+	// Determine node type
+	nodeType := NodeTypeResource
+	if rgResource.ExternalRef != nil {
+		nodeType = NodeTypeExternal
+	} else if len(forEachDimensions) > 0 {
+		nodeType = NodeTypeCollection
+	}
+
+	// Note that dependencies are not set here - they're extracted later in buildDependencyGraph.
+	node := &Node{
+		Meta: NodeMeta{
+			ID:         rgResource.ID,
+			Index:      order,
+			Type:       nodeType,
+			GVR:        mapping.Resource,
+			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
+			// Dependencies will be set by buildDependencyGraph
+		},
+		Template:    &unstructured.Unstructured{Object: resourceObject},
+		Variables:   templateVariables,
+		IncludeWhen: includeWhen,
+		ReadyWhen:   readyWhen,
+		ForEach:     forEachDimensions,
+	}
+	return node, resourceSchema, nil
 }
 
-// buildDependencyGraph builds the dependency graph between the resources in the
+// buildDependencyGraph builds the dependency graph between the nodes in the
 // resource graph definition. The dependency graph is a directed acyclic graph
-// that represents the relationships between the resources. The graph is used
+// that represents the relationships between the nodes. The graph is used
 // to determine the order in which the resources should be created in the cluster.
 func (b *Builder) buildDependencyGraph(
-	resources map[string]*Resource,
+	nodes map[string]*Node,
 ) (
 	*dag.DirectedAcyclicGraph[string], // directed acyclic graph
 	error,
 ) {
-	resourceNames := maps.Keys(resources)
-	resourceNames = append(resourceNames, "schema")
+	// Build node names list for CEL environment.
+	nodeNames := append(maps.Keys(nodes), SchemaVarName)
 
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(nodeNames))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
 	directedAcyclicGraph := dag.NewDirectedAcyclicGraph[string]()
-	for _, resource := range resources {
-		if err := directedAcyclicGraph.AddVertex(resource.id, resource.order); err != nil {
+	for _, node := range nodes {
+		if err := directedAcyclicGraph.AddVertex(node.Meta.ID, node.Meta.Index); err != nil {
 			return nil, fmt.Errorf("failed to add vertex to graph: %w", err)
 		}
 	}
 
-	for _, resource := range resources {
-		iteratorNames := collectIteratorNames(resource)
+	for _, node := range nodes {
+		iteratorNames := collectIteratorNames(node)
 
 		// Phase 1: Extract dependencies and classify variables
-		templateDeps, err := extractTemplateDependencies(env, resource, resourceNames, iteratorNames)
+		templateDeps, err := extractTemplateDependencies(env, node, nodeNames, iteratorNames)
 		if err != nil {
 			return nil, err
 		}
 
-		forEachDeps, err := extractForEachDependencies(env, resource, resourceNames, iteratorNames)
+		forEachDeps, err := extractForEachDependencies(env, node, nodeNames, iteratorNames)
 		if err != nil {
 			return nil, err
 		}
 
-		// Add all dependencies to resource and DAG
+		// Add all dependencies to node and DAG
 		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps))
 		allDeps = append(allDeps, templateDeps...)
 		allDeps = append(allDeps, forEachDeps...)
-		resource.addDependencies(allDeps...)
-		if err := directedAcyclicGraph.AddDependencies(resource.id, allDeps); err != nil {
+		node.Meta.Dependencies = append(node.Meta.Dependencies, allDeps...)
+		if err := directedAcyclicGraph.AddDependencies(node.Meta.ID, allDeps); err != nil {
 			return nil, err
 		}
 	}
@@ -449,10 +463,10 @@ func (b *Builder) buildDependencyGraph(
 	return directedAcyclicGraph, nil
 }
 
-// collectIteratorNames returns the iterator variable names for a resource's forEach.
-func collectIteratorNames(resource *Resource) []string {
-	names := make([]string, 0, len(resource.forEachDimensions))
-	for _, iter := range resource.forEachDimensions {
+// collectIteratorNames returns the iterator variable names for a node's forEach.
+func collectIteratorNames(node *Node) []string {
+	names := make([]string, 0, len(node.ForEach))
+	for _, iter := range node.ForEach {
 		names = append(names, iter.Name)
 	}
 	return names
@@ -463,14 +477,14 @@ func collectIteratorNames(resource *Resource) []string {
 // dependencies to each variable.
 func extractTemplateDependencies(
 	env *cel.Env,
-	resource *Resource,
-	resourceNames, iteratorNames []string,
+	node *Node,
+	nodeNames, iteratorNames []string,
 ) ([]string, error) {
 	var allDeps []string
 
-	for _, templateVariable := range resource.variables {
+	for _, templateVariable := range node.Variables {
 		for _, expression := range templateVariable.Expressions {
-			resourceDeps, iteratorRefs, err := extractDependencies(env, expression, resourceNames, iteratorNames)
+			nodeDeps, iteratorRefs, err := extractDependencies(env, expression, nodeNames, iteratorNames)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract dependencies: %w", err)
 			}
@@ -481,12 +495,12 @@ func extractTemplateDependencies(
 			// already promoted it to a higher kind.
 			if len(iteratorRefs) > 0 {
 				templateVariable.Kind = variable.ResourceVariableKindIteration
-			} else if len(resourceDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
+			} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
 				templateVariable.Kind = variable.ResourceVariableKindDynamic
 			}
 
-			templateVariable.AddDependencies(resourceDeps...)
-			allDeps = append(allDeps, resourceDeps...)
+			templateVariable.AddDependencies(nodeDeps...)
+			allDeps = append(allDeps, nodeDeps...)
 		}
 	}
 
@@ -494,48 +508,49 @@ func extractTemplateDependencies(
 }
 
 // extractForEachDependencies extracts dependencies from forEach expressions.
-// If a forEach expression references another resource (e.g ${config.data.items}
-// or ${otherCollection}), that resource becomes a DAG dependency.
+// If a forEach expression references another node (e.g ${config.data.items}
+// or ${otherCollection}), that node becomes a DAG dependency.
 // Iterator variables used in templates (e.g ${item}) are NOT DAG dependencies -
 // they're local bindings resolved during ExpandCollection.
 func extractForEachDependencies(
 	env *cel.Env,
-	resource *Resource,
-	resourceNames, iteratorNames []string,
+	node *Node,
+	nodeNames, iteratorNames []string,
 ) ([]string, error) {
 	var allDeps []string
 
-	for _, iter := range resource.forEachDimensions {
+	for _, iter := range node.ForEach {
 		// Only pass iteratorNames - we want to detect iterator cross-references.
 		// schema references in forEach are valid (e.g schema.spec.regions).
-		resourceDeps, iteratorRefs, err := extractDependencies(env, iter.Expression, resourceNames, iteratorNames)
+		nodeDeps, iteratorRefs, err := extractDependencies(env, iter.Expression, nodeNames, iteratorNames)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from forEach iterator %q: %w", iter.Name, err)
 		}
 
 		// forEach iterators cannot reference other iterators (they're independent for cartesian product)
 		if len(iteratorRefs) > 0 {
-			return nil, fmt.Errorf("resource %q: forEach iterator %q cannot reference other iterators %v - forEach iterators are independent (cartesian product)",
-				resource.id, iter.Name, iteratorRefs)
+			return nil, fmt.Errorf("node %q: forEach iterator %q cannot reference other iterators %v - forEach iterators are independent (cartesian product)",
+				node.Meta.ID, iter.Name, iteratorRefs)
 		}
 
-		allDeps = append(allDeps, resourceDeps...)
+		allDeps = append(allDeps, nodeDeps...)
 	}
 
 	return allDeps, nil
 }
 
-// buildInstanceResource builds the instance resource. The instance resource is
+// buildInstanceNode builds the instance node. The instance node is
 // the representation of the CR that users will create in their cluster to request
 // the creation of the resources defined in the resource graph definition.
 //
 // Since instances are defined using the "SimpleSchema" format, we use a different
-// approach to build the instance resource. We need to:
-func (b *Builder) buildInstanceResource(
+// approach to build the instance node. Returns the node and the generated CRD.
+func (b *Builder) buildInstanceNode(
 	group, apiVersion, kind string,
 	rgDefinition *v1alpha1.Schema,
-	resources map[string]*Resource,
-) (*Resource, error) {
+	nodes map[string]*Node,
+	nodeSchemas map[string]*spec.Schema,
+) (*Node, *extv1.CustomResourceDefinition, error) {
 	// The instance resource is the resource users will create in their cluster,
 	// to request the creation of the resources defined in the resource graph definition.
 	//
@@ -550,52 +565,49 @@ func (b *Builder) buildInstanceResource(
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	instanceSpecSchema, err := buildInstanceSpecSchema(rgDefinition)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %w", err)
+		return nil, nil, fmt.Errorf("failed to build OpenAPI schema for instance: %w", err)
 	}
 
-	instanceStatusSchema, statusVariables, err := buildStatusSchema(rgDefinition, resources)
+	instanceStatusSchema, statusVariables, statusTemplate, err := buildStatusSchema(rgDefinition, nodes, nodeSchemas)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build OpenAPI schema for instance status: %w", err)
+		return nil, nil, fmt.Errorf("failed to build OpenAPI schema for instance status: %w", err)
 	}
 
 	// Synthesize the CRD for the instance resource.
 	overrideStatusFields := true
 	instanceCRD := crd.SynthesizeCRD(group, apiVersion, kind, *instanceSpecSchema, *instanceStatusSchema, overrideStatusFields, rgDefinition)
 
-	instanceSchemaExt := instanceCRD.Spec.Versions[0].Schema.OpenAPIV3Schema
-	instanceSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(instanceSchemaExt)
+	nodeNames := maps.Keys(nodes)
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(nodeNames))
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert JSON schema to spec schema: %w", err)
+		return nil, nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
-	resourceNames := maps.Keys(resources)
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resourceNames))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
-	}
-
-	// The instance resource has a set of variables that need to be resolved.
-	instance := &Resource{
-		id:     "instance",
-		gvr:    gvr,
-		schema: instanceSchema,
-		crd:    instanceCRD,
-	}
-
+	// Collect dependencies for instance status fields
+	var instanceDeps []string
 	instanceStatusVariables := []*variable.ResourceField{}
 	for _, statusVariable := range statusVariables {
 		// These variables need to be injected into the status field of the instance.
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
-		resourceDeps, _, err := extractDependencies(env, statusVariable.Expressions[0], resourceNames, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract dependencies: %w", err)
+		// Extract dependencies from ALL expressions in the field (for multi-expression templates)
+		var resourceDeps []string
+		for _, expr := range statusVariable.Expressions {
+			deps, _, err := extractDependencies(env, expr, nodeNames, nil)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", expr, err)
+			}
+			for _, dep := range deps {
+				if !slices.Contains(resourceDeps, dep) {
+					resourceDeps = append(resourceDeps, dep)
+				}
+			}
 		}
 		if len(resourceDeps) == 0 {
-			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
+			return nil, nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
 		}
-		instance.addDependencies(resourceDeps...)
+		instanceDeps = append(instanceDeps, resourceDeps...)
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -604,8 +616,25 @@ func (b *Builder) buildInstanceResource(
 		})
 	}
 
-	instance.variables = instanceStatusVariables
-	return instance, nil
+	// Create the instance node.
+	// Instance doesn't have IncludeWhen, ReadyWhen, or ForEach.
+	instance := &Node{
+		Meta: NodeMeta{
+			ID:           InstanceNodeID,
+			Type:         NodeTypeInstance,
+			GVR:          gvr,
+			Namespaced:   true, // Instances are always namespaced
+			Dependencies: instanceDeps,
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"status": statusTemplate,
+			},
+		},
+		Variables: instanceStatusVariables,
+	}
+
+	return instance, instanceCRD, nil
 }
 
 // buildInstanceSpecSchema builds the instance spec schema that will be
@@ -640,32 +669,35 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 // buildStatusSchema builds the status schema for the instance resource.
 // The status schema is inferred from the CEL expressions in the status field
 // using CEL type checking.
+// Returns: (schema, fieldDescriptors, statusTemplate, error)
 func buildStatusSchema(
 	rgSchema *v1alpha1.Schema,
-	resources map[string]*Resource,
+	nodes map[string]*Node,
+	nodeSchemas map[string]*spec.Schema,
 ) (
 	*extv1.JSONSchemaProps,
 	[]variable.FieldDescriptor,
+	map[string]interface{},
 	error,
 ) {
 	// The instance resource has a schema defined using the "SimpleSchema" format.
 	unstructuredStatus := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgSchema.Status.Raw, &unstructuredStatus)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to unmarshal status schema: %w", err)
 	}
 
 	// Extract CEL expressions from the status field.
 	fieldDescriptors, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}
 
-	schemas := collectResourceSchemas(resources)
+	schemas := collectNodeSchemas(nodes, nodeSchemas)
 
 	env, err := krocel.TypedEnvironment(schemas)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
 	provider := krocel.CreateDeclTypeProvider(schemas)
@@ -673,29 +705,29 @@ func buildStatusSchema(
 	// Infer types for each status field expression using CEL type checking
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
-		if len(fieldDescriptor.Expressions) == 1 {
-			// Single expression - must infer type from expression output
+		if fieldDescriptor.StandaloneExpression {
+			// Single standalone expression - use its output type
 			expression := fieldDescriptor.Expressions[0]
 
 			checkedAST, err := parseAndCheckCELExpression(env, expression)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
+				return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 			}
 
 			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
 		} else {
+			// String interpolation - validate all expressions and result is string
 			for _, expression := range fieldDescriptor.Expressions {
 				checkedAST, err := parseAndCheckCELExpression(env, expression)
 				if err != nil {
-					return nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
+					return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 				}
 
 				outputType := checkedAST.OutputType()
 				if err := validateExpressionType(outputType, cel.StringType, expression, "status", fieldDescriptor.Path, provider); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 			}
-			// All expressions are strings - result type is string
 			statusTypeMap[fieldDescriptor.Path] = cel.StringType
 		}
 	}
@@ -703,10 +735,10 @@ func buildStatusSchema(
 	// convert the CEL types to OpenAPI schema - best effort.
 	statusSchema, err := schema.GenerateSchemaFromCELTypes(statusTypeMap, provider)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate status schema from CEL types: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to generate status schema from CEL types: %w", err)
 	}
 
-	return statusSchema, fieldDescriptors, nil
+	return statusSchema, fieldDescriptors, unstructuredStatus, nil
 }
 
 // extractDependencies extracts the dependencies from the given CEL expression.
@@ -715,17 +747,13 @@ func buildStatusSchema(
 //   - iteratorRefs: references to iterator variables (from forEach dimensions)
 //
 // # Iterator variables are recognized and returned in iteratorRefs for validation
-//
-// TODO(ahilaly): We need a better mechanism for handling built-in variables like "schema"
-// and "each". Currently "schema" is hardcoded here, and "each" is handled separately in
-// validateNode for collection readyWhen. Consider a more unified approach.
 func extractDependencies(env *cel.Env, expression string, resourceNames []string, iteratorVars []string) (
 	resourceDeps []string,
 	iteratorRefs []string,
 	err error,
 ) {
-	// "schema" is always available - add it to known identifiers so it's not flagged as unknown
-	knownIdentifiers := append(resourceNames, "schema")
+	// SchemaVarName is always available - add it to known identifiers so it's not flagged as unknown
+	knownIdentifiers := append(resourceNames, SchemaVarName)
 	knownIdentifiers = append(knownIdentifiers, iteratorVars...)
 	inspector := ast.NewInspectorWithEnv(env, knownIdentifiers)
 
@@ -735,8 +763,8 @@ func extractDependencies(env *cel.Env, expression string, resourceNames []string
 	}
 
 	for _, resource := range inspectionResult.ResourceDependencies {
-		// "schema" is the instance spec, not a resource dependency
-		if resource.ID == "schema" {
+		// SchemaVarName is the instance spec, not a resource dependency
+		if resource.ID == SchemaVarName {
 			continue
 		}
 		// Track iterator vars separately for validation
@@ -902,18 +930,18 @@ func lookupSchemaAtPath(schema *spec.Schema, path string) *spec.Schema {
 	return current
 }
 
-// validateNode validates all CEL expressions for a single resource node:
+// validateNode validates all CEL expressions for a single node:
 // - forEach expressions (collection iteration)
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
-func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
-	// If this resource has forEach iterators, validate them and extend the template environment
+func validateNode(node *Node, templatesEnv, schemaEnv *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
+	// If this node has forEach iterators, validate them and extend the template environment
 	effectiveTemplatesEnv := templatesEnv
-	if len(resource.forEachDimensions) > 0 {
+	if len(node.ForEach) > 0 {
 		// Use templatesEnv for forEach validation since forEach expressions can reference
-		// other resources (collection chaining), not just schema
-		iteratorTypes, err := validateForEachExpressions(templatesEnv, resource)
+		// other nodes (collection chaining), not just schema
+		iteratorTypes, err := validateForEachExpressions(templatesEnv, node)
 		if err != nil {
 			return err
 		}
@@ -927,40 +955,40 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 
 		effectiveTemplatesEnv, err = templatesEnv.Extend(iteratorDecls...)
 		if err != nil {
-			return fmt.Errorf("failed to extend CEL environment with iterator variables for resource %q: %w", resource.id, err)
+			return fmt.Errorf("failed to extend CEL environment with iterator variables for node %q: %w", node.Meta.ID, err)
 		}
 	}
 
 	// Validate template expressions (with iterator variables in scope if this is a collection)
-	if err := validateTemplateExpressions(effectiveTemplatesEnv, resource, typeProvider); err != nil {
+	if err := validateTemplateExpressions(effectiveTemplatesEnv, node, typeProvider); err != nil {
 		return err
 	}
 
 	// Validate includeWhen expressions if present
-	if len(resource.includeWhenExpressions) > 0 {
-		if err := validateIncludeWhenExpressions(schemaEnv, resource); err != nil {
+	if len(node.IncludeWhen) > 0 {
+		if err := validateIncludeWhenExpressions(schemaEnv, node); err != nil {
 			return err
 		}
 	}
 
 	// Validate readyWhen expressions if present
-	if len(resource.readyWhenExpressions) > 0 {
-		// readyWhen expressions can ONLY reference the resource itself (or 'each' for collections).
+	if len(node.ReadyWhen) > 0 {
+		// readyWhen expressions can ONLY reference the node itself (or 'each' for collections).
 		// At runtime, IsResourceReady/IsCollectionReady only has the resource in scope - no schema
-		// or other resources. Use includeWhen for schema-based conditional behavior.
+		// or other nodes. Use includeWhen for schema-based conditional behavior.
 		//
 		// Allowed:
-		//   - Regular: ${resourceID.status.ready == true}
+		//   - Regular: ${nodeID.status.ready == true}
 		//   - Collection: ${each.status.phase == 'Running'}
 		// Not allowed:
 		//   - ${schema.spec.enabled} - schema not in scope at runtime
-		//   - ${otherResource.status.ready} - other resources not in scope
-		allowedVar := resource.id
-		if resource.IsCollection() {
-			allowedVar = "each"
+		//   - ${otherNode.status.ready} - other nodes not in scope
+		allowedVar := node.Meta.ID
+		if node.Meta.Type == NodeTypeCollection {
+			allowedVar = EachVarName
 		}
 
-		for _, expression := range resource.readyWhenExpressions {
+		for _, expression := range node.ReadyWhen {
 			readyEnv, err := krocel.DefaultEnvironment(
 				krocel.WithResourceIDs([]string{allowedVar}),
 			)
@@ -979,27 +1007,27 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 				}
 				return fmt.Errorf(
 					"resource %q readyWhen expression %q cannot reference %v - only '%s' is available (use includeWhen for schema-based conditions)",
-					resource.id, expression, names, allowedVar,
+					node.Meta.ID, expression, names, allowedVar,
 				)
 			}
 		}
 
 		// Determine variable name and schema for readyWhen expressions.
-		// Collections use "each" with item schema (per-item checks).
-		// Regular resources use their ID with their full schema.
-		varName := resource.id
-		schema := resourceSchema
-		if resource.IsCollection() {
-			varName = "each"
-			schema = resource.schema // Item schema, not wrapped list
+		// Collections use EachVarName with item schema (per-item checks).
+		// Regular nodes use their ID with their full schema.
+		varName := node.Meta.ID
+		sch := nodeSchema
+		if node.Meta.Type == NodeTypeCollection {
+			varName = EachVarName
+			// nodeSchema is already the item schema (not wrapped as list)
 		}
 
-		resourceEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{varName: schema})
+		nodeEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{varName: sch})
 		if err != nil {
 			return fmt.Errorf("failed to create CEL environment for readyWhen validation: %w", err)
 		}
 
-		if err := validateReadyWhenExpressions(resourceEnv, resource); err != nil {
+		if err := validateReadyWhenExpressions(nodeEnv, node); err != nil {
 			return err
 		}
 	}
@@ -1007,11 +1035,11 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 	return nil
 }
 
-// validateTemplateExpressions validates CEL template expressions for a single resource.
+// validateTemplateExpressions validates CEL template expressions for a single node.
 // It type-checks that expressions reference valid fields and return the expected types
 // based on the OpenAPI schemas.
-func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider *krocel.DeclTypeProvider) error {
-	for _, templateVariable := range resource.variables {
+func validateTemplateExpressions(env *cel.Env, node *Node, typeProvider *krocel.DeclTypeProvider) error {
+	for _, templateVariable := range node.Variables {
 		if len(templateVariable.Expressions) == 1 {
 			// Single expression - validate against expected types
 			expression := templateVariable.Expressions[0]
@@ -1021,7 +1049,7 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider 
 				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
 			}
 			outputType := checkedAST.OutputType()
-			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path, typeProvider); err != nil {
+			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
 				return err
 			}
 		} else if len(templateVariable.Expressions) > 1 {
@@ -1033,7 +1061,7 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider 
 				}
 
 				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path, typeProvider); err != nil {
+				if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
 					return err
 				}
 			}
@@ -1110,27 +1138,26 @@ func validateConditionExpression(env *cel.Env, expression, conditionType, resour
 // validateIncludeWhenExpressions validates that includeWhen expressions:
 // 1. Only reference the "schema" variable
 // 2. Return bool or optional_type(bool)
-// validateIncludeWhenExpressions validates includeWhen expressions for a single resource.
-func validateIncludeWhenExpressions(env *cel.Env, resource *Resource) error {
-	for _, expression := range resource.includeWhenExpressions {
-		if err := validateConditionExpression(env, expression, "includeWhen", resource.id); err != nil {
+func validateIncludeWhenExpressions(env *cel.Env, node *Node) error {
+	for _, expression := range node.IncludeWhen {
+		if err := validateConditionExpression(env, expression, "includeWhen", node.Meta.ID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateReadyWhenExpressions validates readyWhen expressions for a single resource.
-func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
-	for _, expression := range resource.readyWhenExpressions {
-		if err := validateConditionExpression(env, expression, "readyWhen", resource.id); err != nil {
+// validateReadyWhenExpressions validates readyWhen expressions for a single node.
+func validateReadyWhenExpressions(env *cel.Env, node *Node) error {
+	for _, expression := range node.ReadyWhen {
+		if err := validateConditionExpression(env, expression, "readyWhen", node.Meta.ID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateForEachExpressions validates forEach expressions for a collection resource.
+// validateForEachExpressions validates forEach expressions for a collection node.
 // It returns a map of iterator variable names to their inferred CEL types.
 //
 // Each forEach expression must:
@@ -1139,26 +1166,26 @@ func validateReadyWhenExpressions(env *cel.Env, resource *Resource) error {
 //
 // The inferred element type of each list is used to declare the iterator variable
 // in the CEL environment for validating template expressions.
-func validateForEachExpressions(env *cel.Env, resource *Resource) (map[string]*cel.Type, error) {
-	if len(resource.forEachDimensions) == 0 {
+func validateForEachExpressions(env *cel.Env, node *Node) (map[string]*cel.Type, error) {
+	if len(node.ForEach) == 0 {
 		return nil, nil
 	}
 
-	iteratorTypes := make(map[string]*cel.Type, len(resource.forEachDimensions))
+	iteratorTypes := make(map[string]*cel.Type, len(node.ForEach))
 
-	for _, iter := range resource.forEachDimensions {
+	for _, iter := range node.ForEach {
 		// Parse and type-check the forEach expression
 		checkedAST, err := parseAndCheckCELExpression(env, iter.Expression)
 		if err != nil {
-			return nil, fmt.Errorf("resource %q: forEach iterator %q: %w", resource.id, iter.Name, err)
+			return nil, fmt.Errorf("node %q: forEach iterator %q: %w", node.Meta.ID, iter.Name, err)
 		}
 
 		// Extract the element type from the list
 		outputType := checkedAST.OutputType()
 		elemType, err := krocel.ListElementType(outputType)
 		if err != nil {
-			return nil, fmt.Errorf("resource %q: forEach iterator %q must return a list, got %q: %w",
-				resource.id, iter.Name, outputType.String(), err)
+			return nil, fmt.Errorf("node %q: forEach iterator %q must return a list, got %q: %w",
+				node.Meta.ID, iter.Name, outputType.String(), err)
 		}
 
 		iteratorTypes[iter.Name] = elemType
@@ -1199,19 +1226,19 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	return specSchema, nil
 }
 
-// collectResourceSchemas builds a map of resource IDs to their OpenAPI schemas.
-// Collection resources (those with forEach) are wrapped as list(ResourceType)
-// so other resources can reference them as arrays and use CEL list functions.
-func collectResourceSchemas(resources map[string]*Resource) map[string]*spec.Schema {
-	schemas := make(map[string]*spec.Schema)
-	for id, resource := range resources {
-		if resource.schema != nil {
-			if resource.IsCollection() {
-				schemas[id] = schema.WrapSchemaAsList(resource.schema)
+// collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
+// Collections (those with forEach) are wrapped as list types
+// so other nodes can reference them as arrays and use CEL list functions.
+func collectNodeSchemas(nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
+	result := make(map[string]*spec.Schema)
+	for id, node := range nodes {
+		if sch, ok := nodeSchemas[id]; ok {
+			if node.Meta.Type == NodeTypeCollection {
+				result[id] = schema.WrapSchemaAsList(sch)
 			} else {
-				schemas[id] = resource.schema
+				result[id] = sch
 			}
 		}
 	}
-	return schemas
+	return result
 }

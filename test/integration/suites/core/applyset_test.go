@@ -340,7 +340,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")
+				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -505,7 +505,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedField(instance.Object, true, "spec", "includeSecret")
+				g.Expect(unstructured.SetNestedField(instance.Object, true, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -544,7 +544,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedField(instance.Object, true, "spec", "includeSA")
+				g.Expect(unstructured.SetNestedField(instance.Object, true, "spec", "includeSA")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -583,7 +583,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")
+				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSecret")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -622,7 +622,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedField(instance.Object, false, "spec", "includeSA")
+				g.Expect(unstructured.SetNestedField(instance.Object, false, "spec", "includeSA")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -874,7 +874,7 @@ var _ = Describe("ApplySet", func() {
 				}, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				unstructured.SetNestedStringSlice(instance.Object, []string{"one"}, "spec", "values")
+				g.Expect(unstructured.SetNestedStringSlice(instance.Object, []string{"one"}, "spec", "values")).To(Succeed())
 				err = env.Client.Update(ctx, instance)
 				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -1343,7 +1343,7 @@ var _ = Describe("ApplySet", func() {
 						"name":      "test-preserve",
 						"namespace": namespace,
 						"labels": map[string]interface{}{
-							"custom-label":     "custom-value",
+							"custom-label":           "custom-value",
 							"app.kubernetes.io/team": "platform",
 						},
 						"annotations": map[string]interface{}{

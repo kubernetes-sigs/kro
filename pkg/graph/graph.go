@@ -15,40 +15,30 @@
 package graph
 
 import (
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
-	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
-// The Graph represents a processed resourcegraphdefinition.
-// It contains the DAG representation and everything needed to "manage"
-// the resources defined in the resource graph definition.
+// Graph represents a processed ResourceGraphDefinition.
+// It contains the DAG and immutable node specs produced by the builder.
 type Graph struct {
-	// DAG is the directed acyclic graph representation of the resource graph definition.
+	// DAG is the directed acyclic graph of node dependencies.
 	DAG *dag.DirectedAcyclicGraph[string]
-	// Instance is the processed resource graph definition instance.
-	Instance *Resource
-	// Resources is a map of the processed resources in the resource graph definition.
-	Resources map[string]*Resource
-	// TopologicalOrder is the topological order of the resources in the resource graph definition.
+
+	// Instance is the instance node (the generated CRD instance).
+	Instance *Node
+
+	// Nodes maps node ID to immutable node spec.
+	Nodes map[string]*Node
+
+	// Resources is an alias for Nodes kept for backward compatibility in tests and tooling.
+	Resources map[string]*Node
+
+	// TopologicalOrder is the sorted order of node IDs for processing.
+	// This excludes the instance node.
 	TopologicalOrder []string
-}
 
-// NewGraphRuntime creates a new runtime resource graph definition from the resource graph definition instance.
-func (rgd *Graph) NewGraphRuntime(newInstance *unstructured.Unstructured) (*runtime.ResourceGraphDefinitionRuntime, error) {
-	// we need to copy the resources to the runtime resources, mainly focusing
-	// on the variables and dependencies.
-	resources := make(map[string]runtime.Resource)
-	for name, resource := range rgd.Resources {
-		resources[name] = resource.DeepCopy()
-	}
-
-	instance := rgd.Instance.DeepCopy()
-	instance.originalObject = newInstance
-	rt, err := runtime.NewResourceGraphDefinitionRuntime(instance, resources, rgd.TopologicalOrder)
-	if err != nil {
-		return nil, err
-	}
-	return rt, nil
+	// CRD is the generated CustomResourceDefinition for the instance.
+	CRD *extv1.CustomResourceDefinition
 }

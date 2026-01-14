@@ -238,3 +238,21 @@ func validateKubernetesVersion(version string) error {
 	}
 	return nil
 }
+
+// validateCombinableResourceFields checks that certain fields in a resource
+// are not used together in an invalid combination, and that required fields are present.
+func validateCombinableResourceFields(res *v1alpha1.Resource) error {
+	hasTemplate := len(res.Template.Raw) > 0 // Template is runtime.RawExtension (struct)
+	hasExternalRef := res.ExternalRef != nil // ExternalRef is a pointer
+
+	if !hasTemplate && !hasExternalRef {
+		return fmt.Errorf("resource %q: exactly one of template or externalRef must be provided", res.ID)
+	}
+	if hasExternalRef && hasTemplate {
+		return fmt.Errorf("resource %q: cannot use externalRef with template", res.ID)
+	}
+	if hasExternalRef && len(res.ForEach) > 0 {
+		return fmt.Errorf("resource %q: cannot use externalRef with forEach", res.ID)
+	}
+	return nil
+}

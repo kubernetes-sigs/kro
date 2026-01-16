@@ -1,6 +1,0 @@
-apiVersion: v2
-name: team
-description: A Helm Chart to bootstrap a Namespace in a Multi-Tenancy setup
-version: 1.0.0
-type: application
-

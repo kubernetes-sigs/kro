@@ -14,7 +14,7 @@ export const MARKER_KEYWORDS = new Set([
 
 // kro-specific keywords
 export const KRO_KEYWORDS = new Set([
-  'id', 'template', 'readyWhen', 'includeWhen', 'externalRef'
+  'id', 'template', 'readyWhen', 'includeWhen', 'externalRef', 'forEach'
 ]);
 
 // CEL expression regex: matches ${...} with nested braces support (multi-line)

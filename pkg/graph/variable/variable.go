@@ -130,6 +130,17 @@ const (
 	//   includeWhen:
 	//   - ${schema.spec.replicas > 1}
 	ResourceVariableKindIncludeWhen ResourceVariableKind = "includeWhen"
+	// ResourceVariableKindIteration represents an iteration variable. Iteration
+	// variables are expressions inside a collection resource (one with forEach)
+	// that reference iterator variables. They are evaluated during collection
+	// expansion, once per iteration, with the iterator bindings in scope.
+	//
+	// For example, with forEach: [{region: "${schema.spec.regions}"}]:
+	//   metadata:
+	//     name: ${schema.spec.name}-${region}  <- "region" is an iterator variable
+	//
+	// Expressions not referencing iterator variables remain static or dynamic.
+	ResourceVariableKindIteration ResourceVariableKind = "iteration"
 )
 
 // String returns the string representation of a ResourceVariableKind.
@@ -150,4 +161,30 @@ func (r ResourceVariableKind) IsDynamic() bool {
 // IsIncludeWhen returns true if the ResourceVariableKind is includeWhen
 func (r ResourceVariableKind) IsIncludeWhen() bool {
 	return r == ResourceVariableKindIncludeWhen
+}
+
+// IsIteration returns true if the ResourceVariableKind is iteration
+func (r ResourceVariableKind) IsIteration() bool {
+	return r == ResourceVariableKindIteration
+}
+
+// Priority returns the evaluation priority for this kind.
+// Lower values = higher priority (evaluated earlier).
+//
+// Priority order: Static/IncludeWhen (0) < Dynamic/ReadyWhen (1) < Iteration (2)
+//
+// This matters because the same expression can appear in multiple variables
+// with different kinds. We use the lowest priority so the expression is
+// evaluated early enough for all consumers.
+func (r ResourceVariableKind) Priority() int {
+	switch r {
+	case ResourceVariableKindStatic, ResourceVariableKindIncludeWhen:
+		return 0
+	case ResourceVariableKindDynamic, ResourceVariableKindReadyWhen:
+		return 1
+	case ResourceVariableKindIteration:
+		return 2
+	default:
+		return 3
+	}
 }

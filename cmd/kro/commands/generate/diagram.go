@@ -111,7 +111,7 @@ func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
 	for resourceName, resource := range rgdGraph.Resources {
 		targetOrder := resourceOrder[resourceName]
 
-		for _, dependency := range resource.GetDependencies() {
+		for _, dependency := range resource.Meta.Dependencies {
 			sourceOrder := resourceOrder[dependency]
 
 			link := opts.GraphLink{

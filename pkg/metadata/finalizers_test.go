@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestResourceGraphDefinitionFinalizer(t *testing.T) {
@@ -71,9 +72,9 @@ func TestResourceGraphDefinitionFinalizer(t *testing.T) {
 func TestInstanceFinalizerUnstructured(t *testing.T) {
 	cases := []struct {
 		name          string
-		initialObject *unstructured.Unstructured
-		operation     func(*unstructured.Unstructured) error
-		check         func(*unstructured.Unstructured) (bool, error)
+		initialObject client.Object
+		operation     func(object client.Object)
+		check         func(object client.Object) bool
 		expected      bool
 		expectError   bool
 	}{
@@ -84,8 +85,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					"metadata": map[string]interface{}{},
 				},
 			},
-			operation: SetInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: SetInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  true,
 		},
 		{
@@ -97,8 +98,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: SetInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: SetInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  true,
 		},
 		{
@@ -110,8 +111,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: RemoveInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: RemoveInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  false,
 		},
 		{
@@ -123,23 +124,17 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: RemoveInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: RemoveInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.operation(tc.initialObject)
-			if tc.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				hasF, err := tc.check(tc.initialObject)
-				assert.NoError(t, err)
-				assert.Equal(t, tc.expected, hasF)
-			}
+			tc.operation(tc.initialObject)
+			hasF := tc.check(tc.initialObject)
+			assert.Equal(t, tc.expected, hasF)
 		})
 	}
 }

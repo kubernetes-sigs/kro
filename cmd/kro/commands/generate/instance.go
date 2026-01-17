@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kro-run/kro/cmd/kro/emulator"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/cmd/kro/emulator"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"

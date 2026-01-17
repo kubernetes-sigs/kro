@@ -6,7 +6,7 @@ variable "vpc_name" {
 variable "kubernetes_version" {
   description = "Kubernetes version"
   type        = string
-  default     = "1.31"
+  default     = "1.34"
 }
 
 variable "github_app_credentilas_secret" {
@@ -25,21 +25,7 @@ variable "addons" {
   description = "Kubernetes addons"
   type        = any
   default     = {
-    enable_metrics_server               = true
-    enable_kyverno                      = true
-    enable_kyverno_policies             = true
-    enable_kyverno_policy_reporter      = true
-    enable_argocd                       = true
-    enable_cni_metrics_helper           = false
-    enable_kube_state_metrics           = true
-    enable_cert_manager                 = false
-    enable_external_dns                 = false
     enable_external_secrets             = true
-    enable_ack_iam                      = true
-    enable_ack_eks                      = true
-    enable_ack_ec2                      = true
-    enable_ack_efs                      = true
-    enable_kro                          = true
     enable_kro_eks_rgs                  = true
     enable_multi_acct                   = true
   }
@@ -107,49 +93,6 @@ variable "gitops_fleet_repo_revision" {
   description = "The name of branch or tag"
   default     = "main"
 }
-
-# workload
-variable "gitops_workload_repo_name" {
-  description = "The name of Git repo"
-  default     = "kro"
-}
-
-variable "gitops_workload_repo_path" {
-  description = "The path of workload bootstraps in the repo"
-  default     = "examples/aws/eks-cluster-mgmt/apps/"
-}
-
-variable "gitops_workload_repo_base_path" {
-  description = "The base path of workloads in the repo"
-  default     = ""
-}
-
-variable "gitops_workload_repo_revision" {
-  description = "The name of branch or tag"
-  default     = "main"
-}
-
-# Platform
-variable "gitops_platform_repo_name" {
-  description = "The name of Git repo"
-  default     = "kro"
-}
-
-variable "gitops_platform_repo_path" {
-  description = "The path of platform bootstraps in the repo"
-  default     = "bootstrap"
-}
-
-variable "gitops_platform_repo_base_path" {
-  description = "The base path of platform in the repo"
-  default     = "examples/aws/eks-cluster-mgmt/platform/"
-}
-
-variable "gitops_platform_repo_revision" {
-  description = "The name of branch or tag"
-  default     = "main"
-}
-
 
 variable "ackCreate" {
   description = "Creating PodIdentity and addons relevant resources with ACK"

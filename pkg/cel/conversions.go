@@ -43,6 +43,8 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return v.Value().(float64), nil
 	case types.StringType:
 		return v.Value().(string), nil
+	case types.BytesType:
+		return v.Value().([]byte), nil
 	case types.ListType:
 		return convertList(v)
 	case types.MapType:

@@ -83,3 +83,30 @@ func TestGoNativeType_ComplexNested(t *testing.T) {
 	_, err = json.Marshal(native)
 	assert.NoError(t, err, "Should be JSON marshallable")
 }
+
+func TestGoNativeType_Bytes(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`b"hello world"`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	// Check type
+	bytes, ok := native.([]byte)
+	require.True(t, ok, "Expected []byte, got %T", native)
+	assert.Equal(t, []byte("hello world"), bytes)
+
+	// Check JSON marshalling
+	marshalled, err := json.Marshal(native)
+	assert.NoError(t, err, "Should be JSON marshallable")
+	assert.NotEmpty(t, marshalled)
+}

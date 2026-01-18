@@ -1,0 +1,28 @@
+# Result Instance
+# WebApp with Ingress:true and RDS Postgres:true
+apiVersion: kro.run/v1alpha1
+kind: WebStack
+metadata:
+  name: result-instance
+  namespace: default
+spec:
+  name: result
+  namespace: default
+  image: "dogsvscats/result:latest"
+  replicas: 1
+  # WebApp flags
+  service:
+    enabled: true
+  ingress:
+    enabled: true
+  # Infrastructure flags
+  elasticache:
+    enabled: false
+  rds:
+    enabled: true
+  # AWS Infrastructure - required when elasticache or rds enabled
+  aws:
+    vpcID: "vpc-xxxxxxxxx"           # Replace with your VPC ID
+    subnetIDs:
+      - "subnet-xxxxxxxxx"           # Replace with your subnet IDs
+      - "subnet-yyyyyyyyy"

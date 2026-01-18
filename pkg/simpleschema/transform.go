@@ -15,13 +15,16 @@
 package simpleschema
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 )
 
@@ -57,23 +60,160 @@ func newTransformer() *transformer {
 
 // loadPreDefinedTypes loads pre-defined types into the transformer.
 // The pre-defined types are used to resolve references in the schema.
-//
+// Types are loaded one by one so that each type can reference one of the
+// other custom types.
+// Cyclic dependencies are detected and reported as errors.
 // As of today, kro doesn't support custom types in the schema - do
 // not use this function.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
+
+	//Constructs a dag of the dependencies between the types
+	//If there is a cycle in the graph, then there is a cyclic dependency between the types
+	//and we cannot load the types
+	dagInstance := dag.NewDirectedAcyclicGraph[string]()
 	t.preDefinedTypes = make(map[string]predefinedType)
 
-	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
-	if err != nil {
-		return fmt.Errorf("failed to build pre-defined types schema: %w", err)
+	for k := range obj {
+		if err := dagInstance.AddVertex(k, 0); err != nil {
+			return err
+		}
 	}
 
-	for k, properties := range jsonSchemaProps.Properties {
-		required := false
-		if slices.Contains(jsonSchemaProps.Required, k) {
-			required = true
+	// Build dependencies and construct the schema
+	for k, v := range obj {
+		dependencies, err := extractDependenciesFromMap(v)
+		if err != nil {
+			return fmt.Errorf("failed to extract dependencies for type %s: %w", k, err)
 		}
-		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
+
+		// Add dependencies to the DAG and check for cycles
+		if err := dagInstance.AddDependencies(k, dependencies); err != nil {
+			var cycleErr *dag.CycleError[string]
+			if errors.As(err, &cycleErr) {
+				return fmt.Errorf("failed to load type %s due to cyclic dependency. Please remove the cyclic dependency: %w", k, err)
+			}
+			return err
+		}
+	}
+
+	// Perform a topological sort of the DAG to get the order of the types
+	// to be processed
+	orderedVertexes, err := dagInstance.TopologicalSort()
+	if err != nil {
+		return fmt.Errorf("failed to get topological order for the types: %w", err)
+	}
+
+	// Build the pre-defined types from the sorted DAG
+	for _, vertex := range orderedVertexes {
+		objValueAtKey := obj[vertex]
+		objMap := map[string]interface{}{
+			vertex: objValueAtKey,
+		}
+		schemaProps, err := t.buildOpenAPISchema(objMap)
+		if err != nil {
+			return fmt.Errorf("failed to build pre-defined types schema : %w", err)
+		}
+		for propKey, properties := range schemaProps.Properties {
+			required := false
+			if slices.Contains(schemaProps.Required, propKey) {
+				required = true
+			}
+			t.preDefinedTypes[propKey] = predefinedType{Schema: properties, Required: required}
+		}
+	}
+
+	return nil
+}
+
+func extractDependenciesFromMap(obj interface{}) (dependencies []string, err error) {
+	dependenciesSet := sets.Set[string]{}
+
+	// Extract dependencies using a helper function
+	if rootMap, ok := obj.(map[string]interface{}); ok {
+		err := parseMap(rootMap, dependenciesSet)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dependenciesSet.UnsortedList(), nil
+}
+
+func handleStringType(v string, dependencies sets.Set[string]) error {
+
+	// Fix: Strip markers (e.g. "Type | required=true" -> "Type")
+	if strings.Contains(v, "|") {
+		parts := strings.SplitN(v, "|", 2)
+		v = strings.TrimSpace(parts[0])
+	}
+	// Check if the value is an atomic type
+	if isAtomicType(v) {
+		return nil
+	}
+	// Check if the value is a collection type
+	if isCollectionType(v) {
+		if isSliceType(v) {
+			// It is a slice, we add the type as dependency
+			elementType, err := parseSliceType(v)
+			if err != nil {
+				return fmt.Errorf("Failed to parse slice type %s: %w", v, err)
+			}
+			if !isAtomicType(elementType) {
+				dependencies.Insert(elementType)
+			}
+			return nil
+		} else if isMapType(v) {
+			keyType, valueType, err := parseMapType(v)
+			if err != nil {
+				return fmt.Errorf("Failed to parse map type %s: %w", v, err)
+			}
+			// Only strings are supported as map keys
+			if keyType != keyTypeString {
+				return fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
+			}
+			// If the value is not an atomic type, add to dependencies
+			if !isAtomicType(valueType) {
+				dependencies.Insert(strings.TrimPrefix(valueType, "[]"))
+			}
+			return nil
+		}
+	}
+
+	// If the type is object, we do not add any dependency
+	// As unstructured objects are not validated https://kro.run/docs/concepts/simple-schema#unstructured-objects
+	if v == "object" {
+		return nil
+	}
+	// At this point, we have a new custom type, we add it as dependency
+	dependencies.Insert(v)
+	return nil
+}
+
+func parseMap(m map[string]interface{}, dependencies sets.Set[string]) (err error) {
+
+	for _, value := range m {
+		switch v := value.(type) {
+		case map[string]interface{}:
+			// Recursively parse nested maps
+			if err := parseMap(v, dependencies); err != nil {
+				return err
+			}
+		case []interface{}:
+			// Handle slices of types (e.g., []string or [][nested type])
+			for key, elem := range v {
+				print(key)
+				if nestedMap, ok := elem.(map[string]interface{}); ok {
+					if err := parseMap(nestedMap, dependencies); err != nil {
+						return err
+					}
+				} else {
+					return fmt.Errorf("unexpected type in slice: %T", elem)
+				}
+			}
+		case string:
+			if err := handleStringType(v, dependencies); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -170,7 +310,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
 	}
 	if keyType != keyTypeString {
-		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
+		return nil, fmt.Errorf("unsupported key type for maps, only strings are supported key types: %s", keyType)
 	}
 
 	fieldJSONSchemaProps := &extv1.JSONSchemaProps{

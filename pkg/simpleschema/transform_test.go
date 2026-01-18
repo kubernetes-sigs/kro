@@ -273,7 +273,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"matrix": {
 						Type: "array",
-
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{
 								Type: "array",
@@ -1085,7 +1084,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Valid types",
+			name: "Valid types with cross-references",
 			obj: map[string]interface{}{
 				"Person": map[string]interface{}{
 					"name": "string",
@@ -1094,6 +1093,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 						"street": "string",
 						"city":   "string",
 					},
+					"company": "Company",
 				},
 				"Company": map[string]interface{}{
 					"name":      "string",
@@ -1112,6 +1112,20 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 								Properties: map[string]extv1.JSONSchemaProps{
 									"street": {Type: "string"},
 									"city":   {Type: "string"},
+								},
+							},
+							"company": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"name": {Type: "string"},
+									"employees": {
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{
+												Type: "string",
+											},
+										},
+									},
 								},
 							},
 						},
@@ -1137,6 +1151,26 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "Invalid types with cyclic references",
+			obj: map[string]interface{}{
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+					"address": map[string]interface{}{
+						"street": "string",
+						"city":   "string",
+					},
+					"company": "Company",
+				},
+				"Company": map[string]interface{}{
+					"name":      "string",
+					"employees": "[]Person",
+				},
+			},
+			want:    map[string]predefinedType{},
+			wantErr: true,
 		},
 		{
 			name: "Simple type alias",
@@ -1176,6 +1210,67 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 			},
 			want:    map[string]predefinedType{},
 			wantErr: true,
+		},
+		{
+			name: "Nested cross-references",
+			obj: map[string]interface{}{
+				"Service": map[string]interface{}{
+					"target": "Deployment",
+				},
+				"Deployment": map[string]interface{}{
+					"config": "ConfigMap | required=true",
+				},
+				"ConfigMap": map[string]interface{}{
+					"data": "string",
+				},
+			},
+			want: map[string]predefinedType{
+				"ConfigMap": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"data": {Type: "string"},
+						},
+					},
+					Required: false,
+				},
+				"Deployment": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"config": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"data": {Type: "string"},
+								},
+							},
+						},
+						Required: []string{"config"},
+					},
+					Required: false,
+				},
+				"Service": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"target": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"config": {
+										Type: "object",
+										Properties: map[string]extv1.JSONSchemaProps{
+											"data": {Type: "string"},
+										},
+									},
+								},
+								Required: []string{"config"},
+							},
+						},
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
 		},
 	}
 

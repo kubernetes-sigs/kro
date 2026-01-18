@@ -56,6 +56,7 @@ func main() {
 		enableLeaderElection                        bool
 		leaderElectionNamespace                     string
 		probeAddr                                   string
+		pprofAddr                                   string
 		allowCRDDeletion                            bool
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
@@ -75,6 +76,7 @@ func main() {
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8079", "The address the probe endpoint binds to.")
+	flag.StringVar(&pprofAddr, "pprof-bind-address", ":6060", "The address the pprof endpoint binds to (only used in debug builds).")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -123,6 +125,11 @@ func main() {
 
 	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
+
+	if pprofEnabled {
+		setupLog.Info("Starting pprof server", "address", pprofAddr)
+		startPprof(pprofAddr)
+	}
 
 	set, err := kroclient.NewSet(kroclient.Config{
 		QPS:   float32(qps),

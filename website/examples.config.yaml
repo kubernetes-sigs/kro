@@ -1,0 +1,12 @@
+aws:
+- name: S3 Bucket
+  description: "examples of S3 Bucket"
+  sidebar_position: 101
+  files:
+  - path: ../examples/aws/s3bucket
+kubernetes:
+- name: SaaS Multi-Tenant
+  description: "examples of SaaS Multi-Tenant"
+  sidebar_position: 701
+  files:
+  - path: ../examples/kubernetes/saas-multi-tenant

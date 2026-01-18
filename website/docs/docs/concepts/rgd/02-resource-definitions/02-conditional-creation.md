@@ -48,9 +48,11 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 - If **any** expression evaluates to `false`, the resource is skipped
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
 
+kro extracts dependencies from these expressions and adds them to the dependency graph during graph construction. At runtime, `includeWhen` expressions are evaluated with access to all dependent resources.
+
 ## What You Can Reference
 
-Currently, `includeWhen` expressions can only reference `schema.spec` fields:
+`includeWhen` expressions can reference both `schema.spec` and other resources in the graph by their `id`:
 
 ```kro
 # ✓ Valid - references schema.spec and returns boolean
@@ -61,20 +63,38 @@ includeWhen:
 ```
 
 ```kro
+# ✓ Valid - references another resource by ID
+resources:
+  - id: app
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        labels:
+          environment: production
+
+  - id: loadbalancer
+    includeWhen:
+      - ${app.metadata.labels.environment == 'production'}
+    template:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+```
+
+```kro
 # ✗ Invalid - must return boolean
 includeWhen:
   - ${schema.spec.appName}  # returns string, not boolean
 ```
 
-kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring they reference valid fields and return boolean values.
+When an expression references a resource by `id`, kro automatically creates an implicit dependency on that resource. kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring referenced resource IDs exist and expressions return boolean values.
 
-:::note
-Currently, `includeWhen` can only reference `schema.spec` because conditions are evaluated before any resources are created. Support for conditional inclusion based on other resources' states is planned for future releases.
-:::
 
 ## Dependencies and Skipped Resources
 
 When a resource is skipped (due to `includeWhen` conditions), **all resources that depend on it are also skipped**.
+
+Referencing a resource in `includeWhen` creates an implicit dependency on that resource. If the referenced resource is skipped, any resource that depends on it (implicitly or explicitly) is also skipped.
 
 <div style={{marginTop: '3rem', marginBottom: '3rem'}}>
 

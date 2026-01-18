@@ -370,4 +370,204 @@ var _ = Describe("Conditions", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should conditionally create deployment based on configmap data", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-include-when-refs",
+			generator.WithSchema(
+				"TestIncludeWhenRefs", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			// ConfigMap - no dependencies
+			generator.WithResource("configmap", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-config",
+				},
+				"data": map[string]interface{}{
+					"deploymentEnabled": "true",
+					"replicas":          "3",
+				},
+			}, nil, nil),
+			// Deployment - depends on configmap via includeWhen
+			generator.WithResource("deployment", map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-deployment",
+				},
+				"spec": map[string]interface{}{
+					"replicas": "${int(configmap.data.replicas)}",
+					"selector": map[string]interface{}{
+						"matchLabels": map[string]interface{}{
+							"app": "test",
+						},
+					},
+					"template": map[string]interface{}{
+						"metadata": map[string]interface{}{
+							"labels": map[string]interface{}{
+								"app": "test",
+							},
+						},
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":  "nginx",
+									"image": "nginx",
+								},
+							},
+						},
+					},
+				},
+			}, nil, []string{"${configmap.data.deploymentEnabled == 'true'}"}),
+			// Service - depends on deployment
+			generator.WithResource("service", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Service",
+				"metadata": map[string]interface{}{
+					"name": "${deployment.metadata.name}",
+				},
+				"spec": map[string]interface{}{
+					"selector": map[string]interface{}{
+						"app": "test",
+					},
+					"ports": []interface{}{
+						map[string]interface{}{
+							"port":       80,
+							"targetPort": 80,
+						},
+					},
+				},
+			}, nil, nil),
+		)
+
+		// Create ResourceGraphDefinition
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+		// Verify ResourceGraphDefinition is created and becomes ready
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			// Verify the ResourceGraphDefinition fields
+			g.Expect(createdRGD.Spec.Schema.Kind).To(Equal("TestIncludeWhenRefs"))
+			g.Expect(createdRGD.Spec.Schema.APIVersion).To(Equal("v1alpha1"))
+			g.Expect(createdRGD.Spec.Resources).To(HaveLen(3))
+
+			// Verify topological order respects includeWhen dependencies
+			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
+				"configmap",
+				"deployment",
+				"service",
+			}))
+
+			// Verify ready condition
+			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
+			var readyCondition krov1alpha1.Condition
+			for _, cond := range createdRGD.Status.Conditions {
+				if cond.Type == resourcegraphdefinition.Ready {
+					readyCondition = cond
+				}
+			}
+			g.Expect(readyCondition).ToNot(BeNil())
+			g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
+
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		name := "test-include-refs"
+		// Create instance
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "TestIncludeWhenRefs",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name": name,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		// Check if instance is created and active
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			val, b, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(b).To(BeTrue())
+			g.Expect(val).To(Equal("ACTIVE"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify ConfigMap is created
+		configMap := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("%s-config", name),
+				Namespace: namespace,
+			}, configMap)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(configMap.Data["deploymentEnabled"]).To(Equal("true"))
+			g.Expect(configMap.Data["replicas"]).To(Equal("3"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify Deployment is created (because configmap.data.deploymentEnabled == 'true')
+		deployment := &appsv1.Deployment{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("%s-deployment", name),
+				Namespace: namespace,
+			}, deployment)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(3)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify Service is created
+		service := &corev1.Service{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("%s-deployment", name),
+				Namespace: namespace,
+			}, service)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(service.Spec.Selector["app"]).To(Equal("test"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Delete instance
+		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+
+		// Verify instance is deleted
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Delete ResourceGraphDefinition
+		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+
+		// Verify ResourceGraphDefinition is deleted
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, &krov1alpha1.ResourceGraphDefinition{})
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 })

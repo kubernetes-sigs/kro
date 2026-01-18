@@ -1,0 +1,37 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-additional-printer-columns
+spec:
+  description: | 
+    Tests additional printer columns merge behavior in ResourceGraphDefinitions.
+    Verifies that custom printer columns are merged with default columns,
+    with user columns overriding defaults when they share the same name.
+  steps:
+  - name: test-default-columns
+    try:
+    - apply:
+        file: rgd-default.yaml
+      description: Apply RGD with no additionalPrinterColumns
+    - assert:
+        file: crd-default-assert.yaml
+      description: Verify CRD has default printer columns
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+
+  - name: test-merge-columns
+    try:
+    - apply:
+        file: rgd-add-policy.yaml
+      description: Apply RGD with custom columns
+    - assert:
+        file: crd-add-assert.yaml
+      description: Verify CRD merges custom columns with defaults
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

@@ -58,6 +58,20 @@ func NewResourceGraphDefinitionRuntime(
 		celProgramCache:              make(map[string]cel.Program),
 		ignoredByConditionsResources: make(map[string]bool),
 	}
+	// First pass: populate expressionsCache with all includeWhen expressions.
+	// This must happen before ReadyToProcessResource is called, so that
+	// includeWhen expression costs can be recorded during evaluation.
+	for _, resource := range resources {
+		for _, expr := range resource.GetIncludeWhenExpressions() {
+			ees := &expressionEvaluationState{
+				Expression: expr,
+				Kind:       variable.ResourceVariableKindIncludeWhen,
+			}
+			r.expressionsCache[expr] = ees
+		}
+	}
+
+	// Second pass: process resources that pass condition checks.
 	// make sure to copy the variables and the dependencies, to avoid
 	// modifying the original resource.
 	for id, resource := range resources {
@@ -235,6 +249,47 @@ func (rt *ResourceGraphDefinitionRuntime) SetInstance(obj *unstructured.Unstruct
 	ptr.Object = obj.Object
 }
 
+// GetCELMetrics returns the CEL cost metrics for all evaluated expressions.
+// It returns the total cost across all expressions and a breakdown by resource ID.
+// Aggregate costs from resource variables (static and dynamic) + condition expressions (readyWhen, includeWhen)
+func (rt *ResourceGraphDefinitionRuntime) GetCELMetrics() (totalCost uint64, costPerResource map[string]uint64) {
+	resourceVarCost, costPerResource := rt.aggregateResourceVariableCosts()
+	totalCost += resourceVarCost
+
+	conditionCost := rt.aggregateConditionCosts()
+	totalCost += conditionCost
+	costPerResource["_conditions"] = conditionCost
+
+	return totalCost, costPerResource
+}
+
+// aggregateResourceVariableCosts calculates the total cost and per-resource
+// breakdown for expressions in runtimeVariables.
+func (rt *ResourceGraphDefinitionRuntime) aggregateResourceVariableCosts() (totalCost uint64, costPerResource map[string]uint64) {
+	costPerResource = make(map[string]uint64)
+	for resourceID, variables := range rt.runtimeVariables {
+		var resourceCost uint64
+		for _, v := range variables {
+			resourceCost += v.EvaluationCost
+		}
+		costPerResource[resourceID] += resourceCost
+		totalCost += resourceCost
+	}
+	return totalCost, costPerResource
+}
+
+// aggregateConditionCosts calculates the total cost for condition expressions
+// (readyWhen, includeWhen) stored in expressionsCache.
+func (rt *ResourceGraphDefinitionRuntime) aggregateConditionCosts() uint64 {
+	var totalCost uint64
+	for _, state := range rt.expressionsCache {
+		if state.EvaluationCost > 0 && (state.Kind.IsReadyWhen() || state.Kind.IsIncludeWhen()) {
+			totalCost += state.EvaluationCost
+		}
+	}
+	return totalCost
+}
+
 // Synchronize tries to resolve as many resources as possible. It returns true
 // if the user should call Synchronize again, and false if something is still
 // not resolved.
@@ -327,13 +382,14 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
 	}
 	for _, variable := range rt.expressionsCache {
 		if variable.Kind.IsStatic() {
-			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
+			value, cost, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				return err
 			}
 
 			variable.Resolved = true
 			variable.ResolvedValue = value
+			variable.EvaluationCost = cost
 		}
 	}
 	return nil
@@ -392,7 +448,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			evalContext["schema"] = rt.instance.Unstructured().Object
 
-			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
+			value, cost, err := rt.evaluateExpression(env, evalContext, variable.Expression)
 			if err != nil {
 				if strings.Contains(err.Error(), "no such key") {
 					// TODO(a-hilaly): I'm not sure if this is the best way to handle
@@ -409,6 +465,7 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
 
 			variable.Resolved = true
 			variable.ResolvedValue = value
+			variable.EvaluationCost = cost
 		}
 	}
 
@@ -468,9 +525,14 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource s
 }
 
 // allExpressionsAreResolved checks if every expression in the runtimes cache
-// has been successfully evaluated
+// has been successfully evaluated. Condition expressions (readyWhen, includeWhen)
+// are skipped as they are evaluated on-demand and don't follow the same resolution pattern.
 func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
 	for _, v := range rt.expressionsCache {
+		// Skip condition expressions - they are evaluated on-demand
+		if v.Kind.IsReadyWhen() || v.Kind.IsIncludeWhen() {
+			continue
+		}
 		if !v.Resolved {
 			return false
 		}
@@ -505,7 +567,10 @@ func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bo
 	}
 
 	for _, expression := range expressions {
-		out, err := rt.evaluateExpression(env, context, expression)
+		out, cost, err := rt.evaluateExpression(env, context, expression)
+		if rt.expressionsCache[expression] != nil {
+			rt.expressionsCache[expression].EvaluationCost = cost
+		}
 		if err != nil {
 			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
 		}
@@ -563,7 +628,10 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 
 	for _, includeWhenExpression := range includeWhenExpressions {
 		// We should not expect an error here as well since we checked during dry-run
-		value, err := rt.evaluateExpression(env, context, includeWhenExpression)
+		value, cost, err := rt.evaluateExpression(env, context, includeWhenExpression)
+		if rt.expressionsCache[includeWhenExpression] != nil {
+			rt.expressionsCache[includeWhenExpression].EvaluationCost = cost
+		}
 		if err != nil {
 			return false, err
 		}
@@ -575,13 +643,13 @@ func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID stri
 	return true, nil
 }
 
-// evaluateExpression evaluates a CEL expression and returns a value if successful, or error.
+// evaluateExpression evaluates a CEL expression and returns a value, cost and error.
 // It caches compiled programs by expression string to avoid redundant compilation.
 func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(
 	env *cel.Env,
 	context map[string]interface{},
 	expression string,
-) (interface{}, error) {
+) (interface{}, uint64, error) {
 	var program cel.Program
 	var cached bool
 
@@ -594,12 +662,12 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(
 	if !cached {
 		ast, issues := env.Compile(expression)
 		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
+			return nil, 0, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
 		}
 
 		prog, err := env.Program(ast)
 		if err != nil {
-			return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
+			return nil, 0, fmt.Errorf("failed programming expression %s: %w", expression, err)
 		}
 
 		program = prog
@@ -611,12 +679,17 @@ func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(
 		}
 	}
 
-	val, _, err := program.Eval(context)
+	val, details, err := program.Eval(context)
 	if err != nil {
-		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
+		return nil, 0, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
+	}
+	var cost uint64
+	if details != nil {
+		cost = *details.ActualCost()
 	}
 
-	return krocel.GoNativeType(val)
+	result, err := krocel.GoNativeType(val)
+	return result, cost, err
 }
 
 // containsAllElements checks if all elements in the inner slice are present

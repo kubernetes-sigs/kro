@@ -71,3 +71,56 @@ func TestResourceFieldAddDependencies(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceVariableKind(t *testing.T) {
+	tests := []struct {
+		name          string
+		kind          ResourceVariableKind
+		isStatic      bool
+		isDynamic     bool
+		isIncludeWhen bool
+		isReadyWhen   bool
+	}{
+		{
+			name:          "Static Kind",
+			kind:          ResourceVariableKindStatic,
+			isStatic:      true,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isReadyWhen:   false,
+		},
+		{
+			name:          "Dynamic Kind",
+			kind:          ResourceVariableKindDynamic,
+			isStatic:      false,
+			isDynamic:     true,
+			isIncludeWhen: false,
+			isReadyWhen:   false,
+		},
+		{
+			name:          "IncludeWhen Kind",
+			kind:          ResourceVariableKindIncludeWhen,
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: true,
+			isReadyWhen:   false,
+		},
+		{
+			name:          "ReadyWhen Kind",
+			kind:          ResourceVariableKindReadyWhen,
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
+			isReadyWhen:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.isStatic, tc.kind.IsStatic(), "IsStatic()")
+			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic(), "IsDynamic()")
+			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen(), "IsIncludeWhen()")
+			assert.Equal(t, tc.isReadyWhen, tc.kind.IsReadyWhen(), "IsReadyWhen()")
+		})
+	}
+}

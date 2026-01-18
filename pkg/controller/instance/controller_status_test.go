@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 func TestConditionsMarker(t *testing.T) {
@@ -478,5 +479,84 @@ status:
 	}
 	if cond.Status != metav1.ConditionTrue {
 		t.Errorf("Expected status True, got %s", cond.Status)
+	}
+}
+
+// mockRuntime implements runtime.Interface for testing CEL metrics
+type mockRuntime struct {
+	totalCost       uint64
+	costPerResource map[string]uint64
+}
+
+func (m *mockRuntime) Synchronize() (bool, error)                                      { return false, nil }
+func (m *mockRuntime) TopologicalOrder() []string                                      { return nil }
+func (m *mockRuntime) ResourceDescriptor(resourceID string) runtime.ResourceDescriptor { return nil }
+func (m *mockRuntime) GetResource(resourceID string) (*unstructured.Unstructured, runtime.ResourceState) {
+	return nil, runtime.ResourceStateResolved
+}
+func (m *mockRuntime) SetResource(resourceID string, obj *unstructured.Unstructured) {}
+func (m *mockRuntime) GetInstance() *unstructured.Unstructured                       { return nil }
+func (m *mockRuntime) SetInstance(obj *unstructured.Unstructured)                    {}
+func (m *mockRuntime) IsResourceReady(resourceID string) (bool, string, error)       { return true, "", nil }
+func (m *mockRuntime) ReadyToProcessResource(resourceID string) (bool, error)        { return true, nil }
+func (m *mockRuntime) IgnoreResource(resourceID string)                              {}
+func (m *mockRuntime) GetCELMetrics() (uint64, map[string]uint64) {
+	return m.totalCost, m.costPerResource
+}
+
+func TestPrepareStatusWithCELMetrics(t *testing.T) {
+	tests := []struct {
+		name            string
+		totalCost       uint64
+		costPerResource map[string]uint64
+		expectMetrics   bool
+	}{
+		{
+			name:            "with costs",
+			totalCost:       100,
+			costPerResource: map[string]uint64{"deployment": 40, "service": 60},
+			expectMetrics:   true,
+		},
+		{
+			name:            "zero cost",
+			totalCost:       0,
+			costPerResource: map[string]uint64{},
+			expectMetrics:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockRuntime{
+				totalCost:       tt.totalCost,
+				costPerResource: tt.costPerResource,
+			}
+
+			igr := &instanceGraphReconciler{
+				runtime: mock,
+				instance: &unstructured.Unstructured{
+					Object: map[string]interface{}{
+						"apiVersion": "example.com/v1",
+						"kind":       "Test",
+						"metadata":   map[string]interface{}{"name": "test"},
+						"status":     map[string]interface{}{},
+					},
+				},
+				state: &InstanceState{State: InstanceStateActive},
+			}
+
+			status := igr.prepareStatus()
+
+			celMetrics, ok := status["celMetrics"].(map[string]any)
+			if tt.expectMetrics && !ok {
+				t.Fatalf("Expected celMetrics in status")
+			}
+
+			if tt.expectMetrics {
+				if celMetrics["totalCost"] != tt.totalCost {
+					t.Errorf("Expected totalCost %d, got %v", tt.totalCost, celMetrics["totalCost"])
+				}
+			}
+		})
 	}
 }

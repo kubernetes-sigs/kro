@@ -69,6 +69,10 @@ type Interface interface {
 	// IgnoreResource ignores resource that has a condition expressison that evaluated
 	// to false
 	IgnoreResource(resourceID string)
+
+	// GetCELMetrics returns the CEL cost metrics for all evaluated expressions.
+	// It returns the total cost across all expressions and a breakdown by resource ID.
+	GetCELMetrics() (totalCost uint64, costPerResource map[string]uint64)
 }
 
 // ResourceDescriptor provides metadata about a resource.

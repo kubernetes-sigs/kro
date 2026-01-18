@@ -330,8 +330,11 @@ func (b *Builder) buildRGResource(
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		fieldDescriptors, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
+			celExpressionsParseErrorsTotal.WithLabelValues("crd", "parse_failed").Inc()
 			return nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
 		}
+
+		celExpressionsParsedTotal.WithLabelValues("crd").Add(float64(len(fieldDescriptors)))
 
 		for _, expr := range fieldDescriptors {
 			if !strings.HasPrefix(expr.Path, "metadata.") {
@@ -341,8 +344,11 @@ func (b *Builder) buildRGResource(
 	} else {
 		fieldDescriptors, err = parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
+			celExpressionsParseErrorsTotal.WithLabelValues("standard", "parse_failed").Inc()
 			return nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
+
+		celExpressionsParsedTotal.WithLabelValues("standard").Add(float64(len(fieldDescriptors)))
 
 		// Set ExpectedType on each descriptor by converting schema to CEL type with proper naming
 		for i := range fieldDescriptors {
@@ -362,14 +368,18 @@ func (b *Builder) buildRGResource(
 	// 6. Parse ReadyWhen expressions
 	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
 	if err != nil {
+		celExpressionsParseErrorsTotal.WithLabelValues("readyWhen", "parse_failed").Inc()
 		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
+	celExpressionsParsedTotal.WithLabelValues("readyWhen").Add(float64(len(readyWhen)))
 
 	// 7. Parse condition expressions
 	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
 	if err != nil {
+		celExpressionsParseErrorsTotal.WithLabelValues("includeWhen", "parse_failed").Inc()
 		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
 	}
+	celExpressionsParsedTotal.WithLabelValues("includeWhen").Add(float64(len(includeWhen)))
 
 	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
@@ -589,8 +599,11 @@ func buildStatusSchema(
 	// Extract CEL expressions from the status field.
 	fieldDescriptors, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
+		celExpressionsParseErrorsTotal.WithLabelValues("instance_status", "parse_failed").Inc()
 		return nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
 	}
+
+	celExpressionsParsedTotal.WithLabelValues("instance_status").Add(float64(len(fieldDescriptors)))
 
 	schemas := make(map[string]*spec.Schema)
 	for id, resource := range resources {

@@ -624,6 +624,30 @@ collection (a resource with `forEach`) is also a single node in the graph - it
 creates multiple resources at runtime, but dependencies treat it as one unit.
 :::
 
+## Collection Labels
+
+kro automatically applies labels to each resource in a collection to track
+membership and ordering. These labels are part of kro's public API and can be
+used for querying or debugging:
+
+| Label | Description | Example |
+|-------|-------------|---------|
+| `kro.run/node-id` | The resource ID from the RGD | `workerPods` |
+| `kro.run/collection-index` | Position in the collection (0-indexed) | `0`, `1`, `2` |
+| `kro.run/collection-size` | Total number of items in the collection | `3` |
+| `kro.run/instance-id` | UID of the instance that owns this resource | `a1b2c3...` |
+
+These labels enable:
+- **Querying**: Find all items in a collection with `kubectl get pods -l kro.run/node-id=workerPods`
+- **Ordering**: Understand item position via `collection-index`
+- **Debugging**: Trace resources back to their source instance and RGD
+
+:::note
+The combination of `instance-id` + `node-id` + `collection-index` uniquely
+identifies each collection item. These labels are managed by kro - do not
+modify them manually.
+:::
+
 ## Next Steps
 
 - **[External References](./05-external-references.md)** - Reference existing

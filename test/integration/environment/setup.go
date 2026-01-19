@@ -157,7 +157,7 @@ func (e *Environment) setupController() error {
 	dc := dynamiccontroller.NewDynamicController(
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
 		dynamiccontroller.Config{
-			Workers:         10,
+			Workers:         3,
 			ResyncPeriod:    0, // disabled resync
 			QueueMaxRetries: 20,
 			MinRetryDelay:   200 * time.Millisecond,

@@ -161,6 +161,8 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 // - Iterator names do not conflict with resource IDs
 // - Iterator names are unique within the same resource
 func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String) error {
+	//TODO: Validate a maximum number dimensions
+
 	if len(res.ForEach) == 0 {
 		return nil
 	}

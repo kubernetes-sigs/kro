@@ -358,6 +358,7 @@ func (a *ApplySet) applyResource(
 	if labels == nil {
 		labels = make(map[string]string)
 	}
+	// Handle applyset label conflicts/overwrites
 	labels[ApplysetPartOfLabel] = a.applySetID
 	r.Object.SetLabels(labels)
 

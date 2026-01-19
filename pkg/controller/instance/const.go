@@ -14,18 +14,30 @@
 
 package instance
 
+// Resource states track the lifecycle of individual resources during reconciliation.
 const (
-	ResourceStatePending             = "PENDING"
-	ResourceStateInProgress          = "IN_PROGRESS"
-	ResourceStateDeleting            = "DELETING"
-	ResourceStateSkipped             = "SKIPPED"
-	ResourceStateError               = "ERROR"
-	ResourceStateSynced              = "SYNCED"
-	ResourceStateCreated             = "CREATED"
-	ResourceStateDeleted             = "DELETED"
-	ResourceStatePendingDeletion     = "PENDING_DELETION"
+	// ResourceStateInProgress is the initial state when a resource starts being processed.
+	// Set at the beginning of prepareResource before any operations.
+	ResourceStateInProgress = "IN_PROGRESS"
+	// ResourceStateDeleting means delete was called but the resource still exists.
+	// Set when deletion is initiated but not yet confirmed.
+	ResourceStateDeleting = "DELETING"
+	// ResourceStateSkipped means the resource was not applied.
+	// Set when includeWhen=false, dependency is skipped, or external ref during deletion.
+	ResourceStateSkipped = "SKIPPED"
+	// ResourceStateError means something failed.
+	// Set when resolution, apply, or delete fails.
+	ResourceStateError = "ERROR"
+	// ResourceStateSynced means the resource was applied and is ready.
+	// Set when apply succeeds and readyWhen is satisfied.
+	ResourceStateSynced = "SYNCED"
+	// ResourceStateDeleted means the resource no longer exists.
+	// Set when deletion is confirmed or resource was not found.
+	ResourceStateDeleted = "DELETED"
+	// ResourceStateWaitingForReadiness means apply succeeded but readyWhen is not satisfied.
+	// Set when apply succeeds but readyWhen evaluates to false.
 	ResourceStateWaitingForReadiness = "WAITING_FOR_READINESS"
-	ResourceStateUpdating            = "UPDATING"
 
+	// FieldManagerForLabeler is the field manager name used when applying labels.
 	FieldManagerForLabeler = "kro.run/labeller"
 )

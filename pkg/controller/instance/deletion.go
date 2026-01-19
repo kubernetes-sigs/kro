@@ -106,6 +106,7 @@ func (c *Controller) deleteCollection(rcx *ReconcileContext, node *runtime.Node)
 	}
 
 	// Delete each item
+	// TODO: Consider parallelizing deletions
 	allDeleted := true
 	for _, item := range list.Items {
 		ns := item.GetNamespace()

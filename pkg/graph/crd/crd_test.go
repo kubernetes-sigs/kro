@@ -71,11 +71,13 @@ func TestSynthesizeCRD(t *testing.T) {
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
 			schema: &v1alpha1.Schema{
-				Labels: map[string]string{
-					"environment": "test",
-				},
-				Annotations: map[string]string{
-					"description": "Widget CRD",
+				Metadata: &v1alpha1.CRDMetadata{
+					Labels: map[string]string{
+						"environment": "test",
+					},
+					Annotations: map[string]string{
+						"description": "Widget CRD",
+					},
 				},
 			},
 			expectedName:  "widgets.kro.com",
@@ -96,8 +98,10 @@ func TestSynthesizeCRD(t *testing.T) {
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
 			schema: &v1alpha1.Schema{
-				Labels:      map[string]string{},
-				Annotations: map[string]string{},
+				Metadata: &v1alpha1.CRDMetadata{
+					Labels:      map[string]string{},
+					Annotations: map[string]string{},
+				},
 			},
 			expectedName:  "widgets.kro.com",
 			expectedGroup: "kro.com",
@@ -241,7 +245,7 @@ func TestNewCRD(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns, nil, nil)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns, nil)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)

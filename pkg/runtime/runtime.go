@@ -52,17 +52,22 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 		nodes: make(map[string]*Node),
 	}
 
-	// Local expression cache - only used during construction for deduplication.
-	// After FromGraph completes, nodes hold direct pointers to their expressions.
+	// Expression cache for non-iteration expressions only.
+	// Iteration expressions are not cached because they're evaluated per-item
+	// with different iterator bindings each time.
 	expressionsCache := make(map[string]*expressionEvaluationState)
 
-	// Helper to get or create cached expression state.
+	// Helper to get or create expression state. Only caches non-iteration expressions.
 	getOrCreateExpr := func(expr string, kind variable.ResourceVariableKind, deps []string) *expressionEvaluationState {
-		if cached, ok := expressionsCache[expr]; ok {
-			// Use the most restrictive kind (lowest priority = evaluated earliest).
-			if kind.Priority() < cached.Kind.Priority() {
-				cached.Kind = kind
+		// Don't cache iteration expressions - they need fresh evaluation per iteration.
+		if kind.IsIteration() {
+			return &expressionEvaluationState{
+				Expression:   expr,
+				Dependencies: deps,
+				Kind:         kind,
 			}
+		}
+		if cached, ok := expressionsCache[expr]; ok {
 			return cached
 		}
 		state := &expressionEvaluationState{

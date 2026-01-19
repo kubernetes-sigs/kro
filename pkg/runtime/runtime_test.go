@@ -210,44 +210,6 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	assert.Len(t, inst.templateExprs, 1)
 }
 
-func TestFromGraph_ExpressionKindPriority(t *testing.T) {
-	// When the same expression is used with different kinds, the most restrictive
-	// (lowest priority = evaluated earliest) kind should be kept.
-	g := &graph.Graph{
-		TopologicalOrder: []string{"a", "b"},
-		Nodes: map[string]*graph.Node{
-			"a": {
-				Meta: graph.NodeMeta{ID: "a", Type: graph.NodeTypeResource},
-				Variables: []*variable.ResourceField{
-					{
-						Kind:            variable.ResourceVariableKindDynamic, // priority 1
-						FieldDescriptor: variable.FieldDescriptor{Expressions: []string{"schema.spec.name"}},
-					},
-				},
-			},
-			"b": {
-				Meta: graph.NodeMeta{ID: "b", Type: graph.NodeTypeResource},
-				Variables: []*variable.ResourceField{
-					{
-						Kind:            variable.ResourceVariableKindStatic, // priority 0 - more restrictive
-						FieldDescriptor: variable.FieldDescriptor{Expressions: []string{"schema.spec.name"}},
-					},
-				},
-			},
-		},
-		Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
-	}
-
-	rt, err := FromGraph(g, testInstance("test"))
-	require.NoError(t, err)
-
-	nodes := rt.Nodes()
-	// Both should share the same expression pointer
-	assert.Same(t, nodes[0].templateExprs[0], nodes[1].templateExprs[0])
-	// The kind should be Static (priority 0, most restrictive)
-	assert.Equal(t, variable.ResourceVariableKindStatic, nodes[0].templateExprs[0].Kind)
-}
-
 func testInstance(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{

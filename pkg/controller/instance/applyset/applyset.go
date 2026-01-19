@@ -183,6 +183,7 @@ func New(cfg Config, parent interface {
 		restMapper:        cfg.RESTMapper,
 		log:               cfg.Log,
 		applySetID:        applySetID,
+		labelSelector:     fmt.Sprintf("%s=%s", ApplysetPartOfLabel, applySetID),
 		parentNamespace:   cfg.ParentNamespace,
 		parentAnnotations: maps.Clone(parent.GetAnnotations()),
 	}
@@ -194,6 +195,7 @@ type ApplySet struct {
 	restMapper        meta.RESTMapper
 	log               logr.Logger
 	applySetID        string
+	labelSelector     string
 	parentNamespace   string
 	parentAnnotations map[string]string
 }
@@ -351,31 +353,28 @@ func (a *ApplySet) applyResource(
 ) ApplyResultItem {
 	item := ApplyResultItem{ID: r.ID}
 
-	// Work on a copy to avoid mutating caller's object
-	obj := r.Object.DeepCopy()
-
 	// Inject applyset membership label (required for prune to find managed resources)
-	labels := obj.GetLabels()
+	labels := r.Object.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
 	}
 	labels[ApplysetPartOfLabel] = a.applySetID
-	obj.SetLabels(labels)
+	r.Object.SetLabels(labels)
 
 	// Desired reflects what we're actually sending (with label injected)
-	item.Desired = obj
+	item.Desired = r.Object
 
 	// Apply (no GET - use CurrentRevision from Resource for change detection)
-	dynResource := a.resourceClient(mapping, obj.GetNamespace())
-	applied, err := dynResource.Apply(ctx, obj.GetName(), obj, options)
+	dynResource := a.resourceClient(mapping, r.Object.GetNamespace())
+	applied, err := dynResource.Apply(ctx, r.Object.GetName(), r.Object, options)
 	if err != nil {
 		item.Error = err
 		a.log.V(2).Info("apply failed",
 			"id", r.ID,
 			"gvr", mapping.Resource.String(),
-			"namespace", obj.GetNamespace(),
-			"name", obj.GetName(),
-			"objectGVK", obj.GroupVersionKind().String(),
+			"namespace", r.Object.GetNamespace(),
+			"name", r.Object.GetName(),
+			"objectGVK", r.Object.GroupVersionKind().String(),
 			"error", err,
 		)
 		return item
@@ -388,8 +387,8 @@ func (a *ApplySet) applyResource(
 	a.log.V(2).Info("applied resource",
 		"id", r.ID,
 		"gvr", mapping.Resource.String(),
-		"name", obj.GetName(),
-		"namespace", obj.GetNamespace(),
+		"name", r.Object.GetName(),
+		"namespace", r.Object.GetNamespace(),
 		"changed", item.Changed,
 	)
 
@@ -399,14 +398,7 @@ func (a *ApplySet) applyResource(
 func (a *ApplySet) resourceClient(mapping *meta.RESTMapping, namespace string) dynamic.ResourceInterface {
 	dynResource := a.client.Resource(mapping.Resource)
 	if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
-		ns := namespace
-		if ns == "" {
-			ns = a.parentNamespace
-		}
-		if ns == "" {
-			ns = metav1.NamespaceDefault
-		}
-		return dynResource.Namespace(ns)
+		return dynResource.Namespace(a.resolveNamespace(namespace))
 	}
 	return dynResource
 }
@@ -415,14 +407,17 @@ func (a *ApplySet) resolvedNamespace(mapping *meta.RESTMapping, obj *unstructure
 	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
 		return "", false
 	}
-	ns := obj.GetNamespace()
+	return a.resolveNamespace(obj.GetNamespace()), true
+}
+
+func (a *ApplySet) resolveNamespace(ns string) string {
 	if ns == "" {
 		ns = a.parentNamespace
 	}
 	if ns == "" {
 		ns = metav1.NamespaceDefault
 	}
-	return ns, true
+	return ns
 }
 
 func (a *ApplySet) prune(
@@ -432,49 +427,74 @@ func (a *ApplySet) prune(
 	keepUIDs sets.Set[types.UID],
 	concurrency int,
 ) ([]PruneResultItem, error) {
-	labelSelector := fmt.Sprintf("%s=%s", ApplysetPartOfLabel, a.applySetID)
-
 	// Track candidates with their GVR for deletion
 	type pruneCandidate struct {
 		obj *unstructured.Unstructured
 		gvr schema.GroupVersionResource
 	}
-	var candidates []pruneCandidate
 
-	// List resources per (GVR, namespace) pair for namespaced resources,
-	// or once per GVR for cluster-scoped.
+	// Build list tasks
+	type listTask struct {
+		gvr       schema.GroupVersionResource
+		namespace string // empty for cluster-scoped
+		scoped    bool
+	}
+	var tasks []listTask
 	for _, mapping := range mappings {
 		gvr := mapping.Resource
-
 		if mapping.Scope.Name() == meta.RESTScopeNameNamespace {
 			for ns := range namespaces {
-				list, err := a.client.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{
-					LabelSelector: labelSelector,
-				})
-				if err != nil {
-					return nil, fmt.Errorf("list %v in %s: %w", gvr, ns, err)
-				}
-				for i := range list.Items {
-					obj := &list.Items[i]
-					if !keepUIDs.Has(obj.GetUID()) {
-						candidates = append(candidates, pruneCandidate{obj: obj, gvr: gvr})
-					}
-				}
+				tasks = append(tasks, listTask{gvr: gvr, namespace: ns, scoped: true})
 			}
 		} else {
-			list, err := a.client.Resource(gvr).List(ctx, metav1.ListOptions{
-				LabelSelector: labelSelector,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("list %v: %w", gvr, err)
+			tasks = append(tasks, listTask{gvr: gvr, scoped: false})
+		}
+	}
+
+	// List resources in parallel
+	var listMu sync.Mutex
+	var candidates []pruneCandidate
+
+	listGroup, listCtx := errgroup.WithContext(ctx)
+	if concurrency > 0 {
+		listGroup.SetLimit(concurrency)
+	}
+	for _, task := range tasks {
+		listGroup.Go(func() error {
+			var list *unstructured.UnstructuredList
+			var err error
+			if task.scoped {
+				list, err = a.client.Resource(task.gvr).Namespace(task.namespace).List(listCtx, metav1.ListOptions{
+					LabelSelector: a.labelSelector,
+				})
+				if err != nil {
+					return fmt.Errorf("list %v in %s: %w", task.gvr, task.namespace, err)
+				}
+			} else {
+				list, err = a.client.Resource(task.gvr).List(listCtx, metav1.ListOptions{
+					LabelSelector: a.labelSelector,
+				})
+				if err != nil {
+					return fmt.Errorf("list %v: %w", task.gvr, err)
+				}
 			}
+
+			var local []pruneCandidate
 			for i := range list.Items {
 				obj := &list.Items[i]
 				if !keepUIDs.Has(obj.GetUID()) {
-					candidates = append(candidates, pruneCandidate{obj: obj, gvr: gvr})
+					local = append(local, pruneCandidate{obj: obj, gvr: task.gvr})
 				}
 			}
-		}
+
+			listMu.Lock()
+			candidates = append(candidates, local...)
+			listMu.Unlock()
+			return nil
+		})
+	}
+	if err := listGroup.Wait(); err != nil {
+		return nil, err
 	}
 
 	// Delete candidates concurrently

@@ -46,28 +46,36 @@ type ReconcileContext struct {
 	StateManager *StateManager
 }
 
-// NewReconcileContext constructs a new sequential reconciliation context.
+// NewReconcileContext constructs a ReconcileContext for a single reconciliation cycle.
+// It bundles all dependencies needed to reconcile an instance's resources:
+//   - client/restMapper: for Kubernetes API operations
+//   - labeler: for applying kro metadata labels to resources
+//   - rt: the runtime containing resolved resource templates, and helpers to figure out
+//     readiness, inclusion etc...
+//   - instance: the instance CR being reconciled
+//
+// It also initializes internal state (Mark for conditions, StateManager for resource states).
 func NewReconcileContext(
 	ctx context.Context,
 	log logr.Logger,
 	gvr schema.GroupVersionResource,
-	c dynamic.Interface,
-	r meta.RESTMapper,
-	lbl metadata.Labeler,
+	client dynamic.Interface,
+	restMapper meta.RESTMapper,
+	labeler metadata.Labeler,
 	rt runtime.Interface,
-	cfg ReconcileConfig,
+	config ReconcileConfig,
 	instance *unstructured.Unstructured,
 ) *ReconcileContext {
 	return &ReconcileContext{
 		Ctx:          ctx,
 		Log:          log,
 		GVR:          gvr,
-		Client:       c,
-		RestMapper:   r,
-		Labeler:      lbl,
+		Client:       client,
+		RestMapper:   restMapper,
+		Labeler:      labeler,
 		Runtime:      rt,
 		Instance:     instance,
-		Config:       cfg,
+		Config:       config,
 		Mark:         NewConditionsMarkerFor(instance),
 		StateManager: newStateManager(),
 	}

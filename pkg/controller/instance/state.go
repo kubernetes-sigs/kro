@@ -29,6 +29,8 @@ type ResourceState struct {
 	Err   error
 }
 
+// StateManager tracks instance and resource states during reconciliation.
+// It is not safe for concurrent use; reconciliation processes resources sequentially.
 type StateManager struct {
 	State          string
 	ResourceStates map[string]*ResourceState

@@ -126,7 +126,7 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go run github.com/onsi/ginkgo/v2/ginkgo -p -v --cover --coverprofile=integration-cover.out ./test/integration/suites/...
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go tool ginkgo -p -v --cover --coverprofile=integration-cover.out ./test/integration/suites/...
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else

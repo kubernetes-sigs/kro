@@ -1,5 +1,7 @@
 # Developer Getting Started (macOS + kind)
 
+**Save this file as:** `docs/developer-getting-started.md`
+
 This guide helps you run **KRO locally** on a Mac using a local Kubernetes cluster (kind). You do **not** need VirtualBox.
 
 ---
@@ -38,6 +40,8 @@ go version
 ---
 
 ## Get the source code
+
+> If you only need to run KRO locally (not contribute code), you can skip cloning the repo.
 
 Fork the repo on GitHub, then:
 

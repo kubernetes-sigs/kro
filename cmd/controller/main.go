@@ -25,6 +25,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -54,6 +55,7 @@ func main() {
 	var (
 		metricsAddr                                 string
 		enableLeaderElection                        bool
+		enableControllerWarmup                      bool
 		leaderElectionNamespace                     string
 		probeAddr                                   string
 		allowCRDDeletion                            bool
@@ -78,6 +80,10 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&enableControllerWarmup, "enable-controller-warmup", false,
+		"Enable controller warmup to start controller sources (watches/informers) before "+
+			"leader election is won. This pre-populates caches and improves leader failover time. "+
+			"Requires --leader-elect to be set.")
 	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
 		"Specific namespace that the controller will utilize to manage the coordination.k8s.io/lease object for"+
 			"leader election. By default it will try to use the namespace of the service account mounted"+
@@ -147,6 +153,11 @@ func main() {
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "controller.kro.run",
 		LeaderElectionNamespace: leaderElectionNamespace,
+		Controller: ctrlconfig.Controller{
+			// EnableWarmup allows controllers to start their sources (watches/informers) before
+			// leader election is won. This pre-populates caches and improves leader failover time.
+			EnableWarmup: &enableControllerWarmup,
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly

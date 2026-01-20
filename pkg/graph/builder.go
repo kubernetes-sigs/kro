@@ -440,9 +440,25 @@ func (b *Builder) buildDependencyGraph(
 		iteratorNames := collectIteratorNames(node)
 
 		// Phase 1: Extract dependencies and classify variables
-		templateDeps, err := extractTemplateDependencies(env, node, nodeNames, iteratorNames)
+		templateDeps, usedIterators, err := extractTemplateDependencies(env, node, nodeNames, iteratorNames)
 		if err != nil {
 			return nil, err
+		}
+
+		// Validate that all forEach dimensions are used in resource identity fields.
+		if len(iteratorNames) > 0 {
+			var missing []string
+			for _, iterName := range iteratorNames {
+				if !slices.Contains(usedIterators, iterName) {
+					missing = append(missing, iterName)
+				}
+			}
+			if len(missing) > 0 {
+				return nil, fmt.Errorf(
+					"node %q: all forEach dimensions must be used to produce a unique resource identity, missing: %v",
+					node.Meta.ID, missing,
+				)
+			}
 		}
 
 		forEachDeps, err := extractForEachDependencies(env, node, nodeNames, iteratorNames)
@@ -475,18 +491,23 @@ func collectIteratorNames(node *Node) []string {
 // extractTemplateDependencies extracts dependencies from template variable expressions.
 // It also classifies each variable's Kind (Static -> Dynamic -> Iteration) and adds
 // dependencies to each variable.
+// Returns: (resourceDeps, iteratorsInIdentity, error)
+// iteratorsInIdentity contains iterators used in identity fields:
+//   - For namespaced resources: metadata.name or metadata.namespace
+//   - For cluster-scoped resources: metadata.name only
 func extractTemplateDependencies(
 	env *cel.Env,
 	node *Node,
 	nodeNames, iteratorNames []string,
-) ([]string, error) {
+) ([]string, []string, error) {
 	var allDeps []string
+	var iteratorsInIdentity []string
 
 	for _, templateVariable := range node.Variables {
 		for _, expression := range templateVariable.Expressions {
 			nodeDeps, iteratorRefs, err := extractDependencies(env, expression, nodeNames, iteratorNames)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract dependencies: %w", err)
+				return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
 			}
 
 			// Promote variable Kind based on expression references.
@@ -501,10 +522,28 @@ func extractTemplateDependencies(
 
 			templateVariable.AddDependencies(nodeDeps...)
 			allDeps = append(allDeps, nodeDeps...)
+
+			// Track iterators used in identity fields (name/namespace).
+			switch templateVariable.Path {
+			case MetadataNamePath:
+				for _, iter := range iteratorRefs {
+					if !slices.Contains(iteratorsInIdentity, iter) {
+						iteratorsInIdentity = append(iteratorsInIdentity, iter)
+					}
+				}
+			case MetadataNamespacePath:
+				if node.Meta.Namespaced {
+					for _, iter := range iteratorRefs {
+						if !slices.Contains(iteratorsInIdentity, iter) {
+							iteratorsInIdentity = append(iteratorsInIdentity, iter)
+						}
+					}
+				}
+			}
 		}
 	}
 
-	return allDeps, nil
+	return allDeps, iteratorsInIdentity, nil
 }
 
 // extractForEachDependencies extracts dependencies from forEach expressions.

@@ -34,6 +34,14 @@ const (
 	EachVarName = "each"
 )
 
+// often used field paths in resource templates.
+const (
+	// MetadataNamePath is the path to the resource name field.
+	MetadataNamePath = "metadata.name"
+	// MetadataNamespacePath is the path to the resource namespace field.
+	MetadataNamespacePath = "metadata.namespace"
+)
+
 // NodeType identifies the kind of node in the resource graph.
 // This is set by the builder based on the resource definition.
 type NodeType int

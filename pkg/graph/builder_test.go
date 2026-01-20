@@ -2246,7 +2246,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					"apiVersion": "v1",
 					"kind":       "Pod",
 					"metadata": map[string]interface{}{
-						"name": "worker",
+						"name": "${workerName}",
 					},
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
@@ -2258,7 +2258,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					},
 				},
 					[]krov1alpha1.ForEachDimension{
-						{"name": "${schema.spec.workers}"},
+						{"workerName": "${schema.spec.workers}"},
 					},
 					nil, nil),
 			},
@@ -2268,7 +2268,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 				require.NotNil(t, resource)
 				iterators := resource.ForEach
 				require.Len(t, iterators, 1)
-				assert.Equal(t, "name", iterators[0].Name)
+				assert.Equal(t, "workerName", iterators[0].Name)
 				assert.Equal(t, "schema.spec.workers", iterators[0].Expression)
 			},
 		},
@@ -2287,7 +2287,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					"apiVersion": "v1",
 					"kind":       "Pod",
 					"metadata": map[string]interface{}{
-						"name": "multi-region-pod",
+						"name": "${region}-${tier}-pod",
 					},
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
@@ -2328,7 +2328,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					"apiVersion": "v1",
 					"kind":       "Pod",
 					"metadata": map[string]interface{}{
-						"name": "worker",
+						"name": "${worker}",
 					},
 					"spec": map[string]interface{}{
 						"containers": []interface{}{
@@ -3008,6 +3008,105 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "cannot reference other iterators",
+		},
+		{
+			name: "invalid collection - forEach dimension not used in identity",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"UnusedIterator", "v1alpha1",
+					map[string]interface{}{
+						"regions": "[]string",
+						"tiers":   "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						// Only uses 'region', not 'tier' - should fail
+						"name": "${region}-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"region": "${schema.spec.regions}"},
+						{"tier": "${schema.spec.tiers}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "all forEach dimensions must be used to produce a unique resource identity, missing: [tier]",
+		},
+		{
+			name: "valid collection - all iterators used in name and namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"MultiDimension", "v1alpha1",
+					map[string]interface{}{
+						"namespaces": "[]string",
+						"names":      "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name":      "${name}",
+						"namespace": "${ns}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"ns": "${schema.spec.namespaces}"},
+						{"name": "${schema.spec.names}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid collection - cluster-scoped resource with iterator only in namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"ClusterScoped", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				// CRD is cluster-scoped, so namespace field doesnt count for identity
+				generator.WithResourceCollection("crds", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "static-name",
+						// Iterator in namespace field doesn't count for cluster-scoped resources
+						"namespace": "${name}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "all forEach dimensions must be used to produce a unique resource identity, missing: [name]",
 		},
 	}
 

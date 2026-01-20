@@ -255,6 +255,26 @@ spec:
                   type: string
               required: [name]
 ```
+#### Adding Labels and Annotations to CRDs
+
+You can also apply custom labels and annotations to the generated CRD using the `metadata` field.
+This is useful for organizing CRDs and integrating with external tools.
+
+```kro
+schema:
+  apiVersion: v1alpha1
+  kind: Application
+  metadata:
+    labels:
+      team: platform
+      managed-by: kro
+      environment: production
+    annotations:
+      description: "Application resource for managing web applications"
+  spec:
+    name: string | required=true
+```
+The labels and annotations you define here will be applied to the CRD itself (not to instances of the CRD).
 
 ### 2. Instance Validation
 

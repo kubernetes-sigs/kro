@@ -111,9 +111,11 @@ func TestDAGTopologicalSort(t *testing.T) {
 		{Nodes: "A,B", Edges: "B->A", Want: "B,A"},
 		{Nodes: "A,B,C,D,E,F", Want: "A,B,C,D,E,F"},
 		{Nodes: "A,B,C,D,E,F", Edges: "C->D", Want: "A,B,C,D,E,F"},
-		{Nodes: "A,B,C,D,E,F", Edges: "D->C", Want: "A,B,D,E,F,C"},
+		{Nodes: "A,B,C,D,E,F", Edges: "D->C", Want: "A,B,D,C,E,F"},
 		{Nodes: "A,B,C,D,E,F", Edges: "F->A,F->B,B->A", Want: "C,D,E,F,B,A"},
-		{Nodes: "A,B,C,D,E,F", Edges: "B->A,C->A,D->B,D->C,F->E,A->E", Want: "D,F,B,C,A,E"},
+		{Nodes: "A,B,C,D,E,F", Edges: "B->A,C->A,D->B,D->C,F->E,A->E", Want: "D,B,C,A,F,E"},
+		// B depends on A and C; D depends on C. B should come before D since B has lower order.
+		{Nodes: "A,B,C,D", Edges: "A->B,C->B,C->D", Want: "A,C,B,D"},
 	}
 
 	for i, g := range grid {

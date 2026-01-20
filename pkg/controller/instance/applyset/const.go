@@ -15,10 +15,40 @@
 package applyset
 
 import (
+	"errors"
 	"fmt"
 
 	"sigs.k8s.io/release-utils/version"
 )
+
+// ErrApplySetConflict is returned when a resource already belongs to a different ApplySet.
+// This indicates the resource is managed by another controller/instance and should not
+// be overwritten without explicit action.
+var ErrApplySetConflict = errors.New("resource belongs to a different ApplySet")
+
+// ApplySetConflictError provides details about an ApplySet membership conflict.
+type ApplySetConflictError struct {
+	ResourceName      string
+	ResourceNamespace string
+	ResourceGVK       string
+	CurrentApplySetID string
+	DesiredApplySetID string
+}
+
+func (e *ApplySetConflictError) Error() string {
+	if e.ResourceNamespace != "" {
+		return fmt.Sprintf("%s: %s/%s (%s) belongs to ApplySet %q, cannot reassign to %q",
+			ErrApplySetConflict, e.ResourceNamespace, e.ResourceName, e.ResourceGVK,
+			e.CurrentApplySetID, e.DesiredApplySetID)
+	}
+	return fmt.Sprintf("%s: %s (%s) belongs to ApplySet %q, cannot reassign to %q",
+		ErrApplySetConflict, e.ResourceName, e.ResourceGVK,
+		e.CurrentApplySetID, e.DesiredApplySetID)
+}
+
+func (e *ApplySetConflictError) Unwrap() error {
+	return ErrApplySetConflict
+}
 
 // Internal constants for ApplySet implementation.
 const (

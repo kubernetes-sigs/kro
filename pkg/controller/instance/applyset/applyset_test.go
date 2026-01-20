@@ -258,6 +258,127 @@ func TestApply_MembershipLabels(t *testing.T) {
 	}
 }
 
+func TestApply_ApplySetConflict(t *testing.T) {
+	ctx := context.Background()
+	mapper := newTestRESTMapper()
+	parent := newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	})
+	client := newFakeDynamicClient()
+	addSSAReactor(client)
+
+	applier := New(Config{
+		Client:          client,
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	conflictingCM := newConfigMap("conflicting-cm", "default")
+	conflictingCM.SetLabels(map[string]string{
+		ApplysetPartOfLabel: "applyset-different-owner-v1",
+	})
+
+	resources := []Resource{
+		{ID: "cm1", Object: newConfigMap("cm1", "default")},
+		{ID: "cm2", Object: conflictingCM},
+	}
+
+	result, _, err := applier.Apply(ctx, resources, ApplyMode{})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if len(result.Applied) != 2 {
+		t.Fatalf("Apply() applied %d resources, want 2", len(result.Applied))
+	}
+
+	if result.Errors() == nil {
+		t.Fatal("Apply() expected error for conflicting resource, got none")
+	}
+
+	byID := result.ByID()
+	conflictItem, ok := byID["cm2"]
+	if !ok {
+		t.Fatal("Apply() missing result for cm2")
+	}
+
+	if conflictItem.Error == nil {
+		t.Fatal("Apply() expected error for cm2, got none")
+	}
+
+	var conflictErr *ApplySetConflictError
+	if !errors.As(conflictItem.Error, &conflictErr) {
+		t.Fatalf("Apply() error type = %T, want *ApplySetConflictError", conflictItem.Error)
+	}
+
+	if conflictErr.ResourceName != "conflicting-cm" {
+		t.Errorf("ApplySetConflictError.ResourceName = %q, want %q", conflictErr.ResourceName, "conflicting-cm")
+	}
+	if conflictErr.CurrentApplySetID != "applyset-different-owner-v1" {
+		t.Errorf("ApplySetConflictError.CurrentApplySetID = %q, want %q", conflictErr.CurrentApplySetID, "applyset-different-owner-v1")
+	}
+	if conflictErr.DesiredApplySetID != ID(parent) {
+		t.Errorf("ApplySetConflictError.DesiredApplySetID = %q, want %q", conflictErr.DesiredApplySetID, ID(parent))
+	}
+
+	if !errors.Is(conflictItem.Error, ErrApplySetConflict) {
+		t.Error("Apply() error should wrap ErrApplySetConflict")
+	}
+
+	cm1Item, ok := byID["cm1"]
+	if !ok {
+		t.Fatal("Apply() missing result for cm1")
+	}
+	if cm1Item.Error != nil {
+		t.Errorf("Apply() cm1 unexpected error: %v", cm1Item.Error)
+	}
+}
+
+func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
+	ctx := context.Background()
+	mapper := newTestRESTMapper()
+	parent := newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	})
+	client := newFakeDynamicClient()
+	addSSAReactor(client)
+
+	applier := New(Config{
+		Client:          client,
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	expectedID := ID(parent)
+	sameOwnerCM := newConfigMap("same-owner-cm", "default")
+	sameOwnerCM.SetLabels(map[string]string{
+		ApplysetPartOfLabel: expectedID,
+	})
+
+	resources := []Resource{
+		{ID: "cm1", Object: sameOwnerCM},
+	}
+
+	result, _, err := applier.Apply(ctx, resources, ApplyMode{})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if result.Errors() != nil {
+		t.Errorf("Apply() unexpected errors: %v", result.Errors())
+	}
+
+	if len(result.Applied) != 1 {
+		t.Fatalf("Apply() applied %d resources, want 1", len(result.Applied))
+	}
+
+	if result.Applied[0].Error != nil {
+		t.Errorf("Apply() item error = %v, want nil", result.Applied[0].Error)
+	}
+}
+
 func TestApply_ChangeDetection(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()

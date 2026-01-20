@@ -358,7 +358,29 @@ func (a *ApplySet) applyResource(
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	// Handle applyset label conflicts/overwrites
+
+	// Check for ApplySet membership conflict: if the resource already belongs to
+	// a different ApplySet, fail rather than silently overwriting the membership.
+	// This prevents accidental takeover of resources managed by other instances/controllers.
+	if existingID, exists := labels[ApplysetPartOfLabel]; exists && existingID != a.applySetID {
+		item.Error = &ApplySetConflictError{
+			ResourceName:      r.Object.GetName(),
+			ResourceNamespace: r.Object.GetNamespace(),
+			ResourceGVK:       r.Object.GroupVersionKind().String(),
+			CurrentApplySetID: existingID,
+			DesiredApplySetID: a.applySetID,
+		}
+		a.log.V(2).Info("applyset conflict",
+			"id", r.ID,
+			"name", r.Object.GetName(),
+			"namespace", r.Object.GetNamespace(),
+			"gvk", r.Object.GroupVersionKind().String(),
+			"existingApplySetID", existingID,
+			"desiredApplySetID", a.applySetID,
+		)
+		return item
+	}
+
 	labels[ApplysetPartOfLabel] = a.applySetID
 	r.Object.SetLabels(labels)
 

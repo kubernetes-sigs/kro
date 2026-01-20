@@ -95,6 +95,9 @@ spec:
             - --leader-election-namespace
             - {{ .Values.config.leaderElectionNamespace | quote }}
             {{- end }}
+            {{- if .Values.config.enableControllerWarmup }}
+            - --enable-controller-warmup
+            {{- end }}
             {{- end }}
           livenessProbe:
             httpGet:

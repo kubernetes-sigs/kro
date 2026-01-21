@@ -445,18 +445,6 @@ func (igr *instanceGraphReconciler) deleteResource(ctx context.Context, resource
 	return igr.delayedRequeue(fmt.Errorf("resource deletion in progress"))
 }
 
-// getResourceClient returns the appropriate dynamic client and namespace for a resource
-func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic.ResourceInterface {
-	descriptor := igr.runtime.ResourceDescriptor(resourceID)
-	gvr := descriptor.GetGroupVersionResource()
-	namespace := igr.getResourceNamespace(resourceID)
-
-	if descriptor.IsNamespaced() {
-		return igr.client.Resource(gvr).Namespace(namespace)
-	}
-	return igr.client.Resource(gvr)
-}
-
 // finalizeDeletion checks if all resources are deleted and removes the instance finalizer
 // if appropriate.
 func (igr *instanceGraphReconciler) finalizeDeletion(ctx context.Context) error {
@@ -516,10 +504,10 @@ func (igr *instanceGraphReconciler) setManaged(
 
 	igr.instanceLabeler.ApplyLabels(instancePatch)
 
-	updated, err := igr.client.Resource(igr.gvr).
-		Namespace(obj.GetNamespace()).
-		Apply(ctx, instancePatch.GetName(), instancePatch,
-			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+	instanceClient := igr.getGVRClient(igr.gvr, obj.GetNamespace())
+
+	updated, err := instanceClient.Apply(ctx, instancePatch.GetName(), instancePatch,
+		metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update managed state: %w", err)
 	}
@@ -552,10 +540,10 @@ func (igr *instanceGraphReconciler) setUnmanaged(
 		return nil, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 
-	updated, err := igr.client.Resource(igr.gvr).
-		Namespace(obj.GetNamespace()).
-		Apply(ctx, instancePatch.GetName(), instancePatch,
-			metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
+	instanceClient := igr.getGVRClient(igr.gvr, obj.GetNamespace())
+
+	updated, err := instanceClient.Apply(ctx, instancePatch.GetName(), instancePatch,
+		metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update unmanaged state: %w", err)
 	}
@@ -571,18 +559,15 @@ func (igr *instanceGraphReconciler) delayedRequeue(err error) error {
 // readExternalRef fetches an external reference from the cluster.
 // External references are resources that exist outside of this instance's control.
 func (igr *instanceGraphReconciler) readExternalRef(ctx context.Context, resourceID string, resource *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	gvk := resource.GroupVersionKind()
-	restMapping, err := igr.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get REST mapping for %v: %w", gvk, err)
-	}
+	descriptor := igr.runtime.ResourceDescriptor(resourceID)
+	gvr := descriptor.GetGroupVersionResource()
 
 	var dynResource dynamic.ResourceInterface
-	if restMapping.Scope.Name() == meta.RESTScopeNameNamespace {
+	if descriptor.IsNamespaced() {
 		namespace := igr.getResourceNamespace(resourceID)
-		dynResource = igr.client.Resource(restMapping.Resource).Namespace(namespace)
+		dynResource = igr.getGVRClient(gvr, namespace)
 	} else {
-		dynResource = igr.client.Resource(restMapping.Resource)
+		dynResource = igr.getGVRClient(gvr, "")
 	}
 
 	clusterObj, err := dynResource.Get(ctx, resource.GetName(), metav1.GetOptions{})
@@ -590,7 +575,7 @@ func (igr *instanceGraphReconciler) readExternalRef(ctx context.Context, resourc
 		return nil, fmt.Errorf("failed to get external ref %s/%s: %w", resource.GetNamespace(), resource.GetName(), err)
 	}
 
-	igr.log.V(2).Info("read external ref", "gvk", gvk, "namespace", resource.GetNamespace(), "name", resource.GetName())
+	igr.log.V(2).Info("read external ref", "gvr", gvr, "namespace", resource.GetNamespace(), "name", resource.GetName())
 	return clusterObj, nil
 }
 
@@ -624,4 +609,26 @@ func (igr *instanceGraphReconciler) getResourceNamespace(resourceID string) stri
 		"resourceID", resourceID,
 		"namespace", metav1.NamespaceDefault)
 	return metav1.NamespaceDefault
+}
+
+// getResourceClient returns the appropriate dynamic client and namespace for a resource
+func (igr *instanceGraphReconciler) getResourceClient(resourceID string) dynamic.ResourceInterface {
+	descriptor := igr.runtime.ResourceDescriptor(resourceID)
+	gvr := descriptor.GetGroupVersionResource()
+	namespace := igr.getResourceNamespace(resourceID)
+
+	if descriptor.IsNamespaced() {
+		return igr.getGVRClient(gvr, namespace)
+	}
+	return igr.getGVRClient(gvr, "")
+}
+
+// getGVRClient returns a dynamic client for the given GVR and namespace.
+// If namespace is empty, it returns a cluster-scoped client (or a client that can list across all namespaces if the resource is namespaced).
+// Note: For namespaced resources, if you want a client for a specific namespace, you MUST provide it.
+func (igr *instanceGraphReconciler) getGVRClient(gvr schema.GroupVersionResource, namespace string) dynamic.ResourceInterface {
+	if namespace != "" {
+		return igr.client.Resource(gvr).Namespace(namespace)
+	}
+	return igr.client.Resource(gvr)
 }

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -45,6 +46,10 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 		return v.Value().(string), nil
 	case types.BytesType:
 		return v.Value().([]byte), nil
+	case types.DurationType:
+		return v.Value().(time.Duration), nil
+	case types.TimestampType:
+		return v.Value().(time.Time), nil
 	case types.ListType:
 		return convertList(v)
 	case types.MapType:

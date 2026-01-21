@@ -17,6 +17,7 @@ package cel
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,64 @@ func TestGoNativeType_Bytes(t *testing.T) {
 	bytes, ok := native.([]byte)
 	require.True(t, ok, "Expected []byte, got %T", native)
 	assert.Equal(t, []byte("hello world"), bytes)
+
+	// Check JSON marshalling
+	marshalled, err := json.Marshal(native)
+	assert.NoError(t, err, "Should be JSON marshallable")
+	assert.NotEmpty(t, marshalled)
+}
+
+func TestGoNativeType_Duration(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`duration("1h30m")`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	// Check type and value
+	duration, ok := native.(time.Duration)
+	require.True(t, ok, "Expected time.Duration, got %T", native)
+	assert.Equal(t, time.Hour+30*time.Minute, duration)
+
+	// Check JSON marshalling
+	marshalled, err := json.Marshal(native)
+	assert.NoError(t, err, "Should be JSON marshallable")
+	assert.NotEmpty(t, marshalled)
+}
+
+func TestGoNativeType_Timestamp(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	// Test timestamp conversion using RFC3339 format
+	ast, issues := env.Compile(`timestamp("2024-01-15T10:30:00Z")`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	// Check type
+	ts, ok := native.(time.Time)
+	require.True(t, ok, "Expected time.Time, got %T", native)
+
+	// Verify the timestamp is correct
+	expected, _ := time.Parse(time.RFC3339, "2024-01-15T10:30:00Z")
+	assert.Equal(t, expected, ts)
 
 	// Check JSON marshalling
 	marshalled, err := json.Marshal(native)

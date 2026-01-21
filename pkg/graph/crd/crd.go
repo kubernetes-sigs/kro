@@ -19,18 +19,31 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
-// with the provided spec and status schemas~
+// with the provided spec and status schemas
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), additionalPrinterColumns)
+	crdGroup := group
+	if crdGroup == "" {
+		crdGroup = v1alpha1.KRODomainName
+	}
+	printerColumns := newCRDAdditionalPrinterColumns(additionalPrinterColumns)
+	return newCRD(crdGroup, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), printerColumns)
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
+
+	// Use defaults if no columns provided
+	printerColumns := additionalPrinterColumns
+	if len(printerColumns) == 0 {
+		printerColumns = defaultAdditionalPrinterColumns
+	}
+
 	return &extv1.CustomResourceDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fmt.Sprintf("%s.%s", pluralKind, group),
@@ -56,7 +69,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
-					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
+					AdditionalPrinterColumns: printerColumns,
 				},
 			},
 		},
@@ -70,6 +83,8 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 	// if statusFieldsOverride is true, we will override the status fields with the default ones
 	// TODO(a-hilaly): Allow users to override the default status fields.
 	if statusFieldsOverride {
+		// Use lowercase 'state' to match the JSONPath in defaultAdditionalPrinterColumns
+		// (.status.state)
 		if _, ok := status.Properties["state"]; !ok {
 			status.Properties["state"] = defaultStateType
 		}
@@ -97,10 +112,39 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 	}
 }
 
-func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResourceColumnDefinition) []extv1.CustomResourceColumnDefinition {
-	if len(additionalPrinterColumns) == 0 {
+// newCRDAdditionalPrinterColumns merges user-provided printer columns with defaults.
+//
+// If no user columns are provided, returns the default columns.
+// User columns override defaults when they share the same Name.
+// New user columns are appended after the defaults.
+func newCRDAdditionalPrinterColumns(
+	userCols []extv1.CustomResourceColumnDefinition,
+) []extv1.CustomResourceColumnDefinition {
+	if len(userCols) == 0 {
 		return defaultAdditionalPrinterColumns
 	}
 
-	return additionalPrinterColumns
+	// Merge user columns with defaults
+	// Start with defaults, then override/append user columns
+	merged := make([]extv1.CustomResourceColumnDefinition, len(defaultAdditionalPrinterColumns), len(defaultAdditionalPrinterColumns)+len(userCols))
+	copy(merged, defaultAdditionalPrinterColumns)
+
+	// Build an index by column Name for O(1) lookup
+	index := make(map[string]int, len(merged))
+	for i, c := range merged {
+		index[c.Name] = i
+	}
+
+	// Process user columns: override defaults by Name, or append if new
+	for _, u := range userCols {
+		if pos, ok := index[u.Name]; ok {
+			// Override the default column at this position
+			merged[pos] = u
+		} else {
+			// Append new column not in defaults
+			merged = append(merged, u)
+		}
+	}
+
+	return merged
 }

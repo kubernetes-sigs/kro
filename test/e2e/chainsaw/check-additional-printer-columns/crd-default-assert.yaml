@@ -1,0 +1,42 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: testdefaultprintercolumns.kro.run
+spec:
+  versions:
+  - additionalPrinterColumns:
+    - description: The state of a ResourceGraphDefinition instance
+      jsonPath: .status.state
+      name: State
+      type: string
+    - description: Whether a ResourceGraphDefinition instance is ready
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - description: Age of the resource
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            default: {}
+            properties:
+              name:
+                default: test
+                type: string
+              replicas:
+                default: 1
+                type: integer
+            type: object
+          status:
+            properties:
+              conditions:
+                type: array
+              state:
+                type: string
+            type: object
+    served: true
+    storage: true

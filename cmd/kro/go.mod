@@ -2,7 +2,7 @@ module github.com/kubernetes-sigs/kro/cmd/kro
 
 go 1.25.0
 
-toolchain go1.25.4
+toolchain go1.25.5
 
 require (
 	github.com/go-echarts/go-echarts/v2 v2.6.5

@@ -63,7 +63,7 @@ func newTestApplySet(
 ) (Set, *fake.FakeDynamicClient) {
 	allObjs := append([]runtime.Object{parent}, objs...)
 	gvrToListKind := map[schema.GroupVersionResource]string{}
-	defaultGroupVersions := []schema.GroupVersion{}
+	defaultGroupVersions := make([]schema.GroupVersion, 0, len(gvkrlList))
 	for _, gvkrl := range gvkrlList {
 		gvrToListKind[gvkrl.gvk.GroupVersion().WithResource(gvkrl.resource)] = gvkrl.listKind
 		defaultGroupVersions = append(defaultGroupVersions, gvkrl.gvk.GroupVersion())

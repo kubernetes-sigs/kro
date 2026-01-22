@@ -189,7 +189,7 @@ var _ = Describe("CRD", func() {
 				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 

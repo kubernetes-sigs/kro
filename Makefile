@@ -3,7 +3,7 @@ OCI_REPO ?= registry.k8s.io/kro
 HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 
-HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.5
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -136,7 +136,7 @@ else
 endif
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.6.1
+GOLANGCI_LINT_VERSION ?= v2.8.0
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -178,10 +178,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
-KO_VERSION ?= v0.17.1
-KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.19.0
-CHAINSAW_VERSION ?= v0.2.12
+KO_VERSION ?= v0.18.1
+KUSTOMIZE_VERSION ?= v5.8.0
+CONTROLLER_TOOLS_VERSION ?= v0.20.0
+CHAINSAW_VERSION ?= v0.2.14
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -192,7 +192,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.31.x
+ENVTEST_VERSION ?= 1.35.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.

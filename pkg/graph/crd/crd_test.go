@@ -17,6 +17,7 @@ package crd
 import (
 	"testing"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -31,8 +32,11 @@ func TestSynthesizeCRD(t *testing.T) {
 		spec                 extv1.JSONSchemaProps
 		status               extv1.JSONSchemaProps
 		statusFieldsOverride bool
+		schema               *v1alpha1.Schema
 		expectedName         string
 		expectedGroup        string
+		expectedLabels       map[string]string
+		expectedAnnotations  map[string]string
 	}{
 		{
 			name:                 "standard group and kind",
@@ -42,6 +46,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			spec:                 extv1.JSONSchemaProps{Type: "object"},
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
+			schema:               &v1alpha1.Schema{},
 			expectedName:         "widgets.kro.com",
 			expectedGroup:        "kro.com",
 		},
@@ -53,14 +58,59 @@ func TestSynthesizeCRD(t *testing.T) {
 			spec:                 extv1.JSONSchemaProps{Type: "object"},
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
+			schema:               &v1alpha1.Schema{},
 			expectedName:         "databases.kro.com",
 			expectedGroup:        "kro.com",
+		},
+		{
+			name:                 "with labels and annotations",
+			group:                "kro.com",
+			apiVersion:           "v1",
+			kind:                 "Widget",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			schema: &v1alpha1.Schema{
+				Metadata: &v1alpha1.CRDMetadata{
+					Labels: map[string]string{
+						"environment": "test",
+					},
+					Annotations: map[string]string{
+						"description": "Widget CRD",
+					},
+				},
+			},
+			expectedName:  "widgets.kro.com",
+			expectedGroup: "kro.com",
+			expectedLabels: map[string]string{
+				"environment": "test",
+			},
+			expectedAnnotations: map[string]string{
+				"description": "Widget CRD",
+			},
+		},
+		{
+			name:                 "with empty labels and annotations",
+			group:                "kro.com",
+			apiVersion:           "v1",
+			kind:                 "Widget",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			schema: &v1alpha1.Schema{
+				Metadata: &v1alpha1.CRDMetadata{
+					Labels:      map[string]string{},
+					Annotations: map[string]string{},
+				},
+			},
+			expectedName:  "widgets.kro.com",
+			expectedGroup: "kro.com",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, nil)
+			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, tt.schema)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
@@ -80,6 +130,20 @@ func TestSynthesizeCRD(t *testing.T) {
 			require.NotNil(t, version.Subresources.Status)
 
 			assert.Equal(t, defaultAdditionalPrinterColumns, version.AdditionalPrinterColumns)
+
+			if tt.expectedLabels == nil {
+				assert.Nil(t, crd.Labels)
+			} else {
+				require.NotNil(t, crd.Labels)
+				assert.Equal(t, tt.expectedLabels, crd.Labels)
+			}
+
+			if tt.expectedAnnotations == nil {
+				assert.Nil(t, crd.Annotations)
+			} else {
+				require.NotNil(t, crd.Annotations)
+				assert.Equal(t, tt.expectedAnnotations, crd.Annotations)
+			}
 		})
 	}
 }
@@ -181,7 +245,7 @@ func TestNewCRD(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns, nil)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)

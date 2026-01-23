@@ -44,6 +44,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
 // NewBuilder creates a new GraphBuilder instance.
@@ -794,7 +795,7 @@ func lookupSchemaAtPath(schema *spec.Schema, path string) *spec.Schema {
 // - readyWhen expressions (resource readiness conditions)
 func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
 	// Validate template expressions
-	if err := validateTemplateExpressions(templatesEnv, resource, typeProvider); err != nil {
+	if err := validateTemplateExpressions(templatesEnv, resource, typeProvider, resourceSchema); err != nil {
 		return err
 	}
 
@@ -821,10 +822,160 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 	return nil
 }
 
+type Kind int
+
+const (
+	KindUnknown Kind = iota
+	KindScalar
+	KindList
+	KindMap
+	KindObject
+	KindDyn
+)
+
+func RewriteTernariesWithDyn(
+	expr string,
+	env *cel.Env,
+	schema *spec.Schema,
+) (string, error) {
+
+	ast, issues := env.Parse(expr)
+	if issues != nil && issues.Err() != nil {
+		return "", issues.Err()
+	}
+
+	parsed, err := cel.AstToParsedExpr(ast)
+	if err != nil {
+		return "", err
+	}
+
+	changed := false
+	rewriteExpr(parsed.Expr, schema, &changed)
+
+	if !changed {
+		return expr, nil
+	}
+
+	newAst := cel.ParsedExprToAst(parsed)
+
+	out, err := cel.AstToString(newAst)
+	if err != nil {
+		return "", err
+	}
+
+	return out, nil
+}
+
+func rewriteExpr(
+	e *exprpb.Expr,
+	schema *spec.Schema,
+	changed *bool,
+) {
+	if e == nil {
+		return
+	}
+
+	call := e.GetCallExpr()
+	if call != nil {
+		// ternary: condition ? l : f
+		if call.Function == "_?_:_" && len(call.Args) == 3 {
+			t := call.Args[1]
+			f := call.Args[2]
+
+			kt := kindOfExpr(t, schema)
+			kf := kindOfExpr(f, schema)
+
+			// if same kind then wrap both sides in dyn()
+			if kt == kf && kt != KindUnknown && kt != KindDyn {
+				call.Args[1] = wrapDyn(t)
+				call.Args[2] = wrapDyn(f)
+				*changed = true
+			}
+		}
+
+		for _, a := range call.Args {
+			rewriteExpr(a, schema, changed)
+		}
+	}
+
+	if s := e.GetSelectExpr(); s != nil {
+		rewriteExpr(s.Operand, schema, changed)
+	}
+
+	if l := e.GetListExpr(); l != nil {
+		for _, el := range l.Elements {
+			rewriteExpr(el, schema, changed)
+		}
+	}
+
+	if o := e.GetStructExpr(); o != nil {
+		for _, en := range o.Entries {
+			rewriteExpr(en.Value, schema, changed)
+		}
+	}
+}
+
+func wrapDyn(e *exprpb.Expr) *exprpb.Expr {
+	return &exprpb.Expr{
+		ExprKind: &exprpb.Expr_CallExpr{
+			CallExpr: &exprpb.Expr_Call{
+				Function: "dyn",
+				Args:     []*exprpb.Expr{e},
+			},
+		},
+	}
+}
+
+func kindOfExpr(e *exprpb.Expr, schema *spec.Schema) Kind {
+	if e == nil {
+		return KindUnknown
+	}
+
+	switch e.ExprKind.(type) {
+	case *exprpb.Expr_ListExpr:
+		return KindList
+
+	case *exprpb.Expr_StructExpr:
+		return KindObject
+
+	case *exprpb.Expr_ConstExpr:
+		return KindScalar
+
+	case *exprpb.Expr_IdentExpr, *exprpb.Expr_SelectExpr:
+		// we donot walk structure,just trust schema root
+		return kindFromSchema(schema)
+
+	default:
+		return KindDyn
+	}
+}
+
+func kindFromSchema(s *spec.Schema) Kind {
+	if s == nil {
+		return KindUnknown
+	}
+
+	if len(s.Type) > 0 {
+		switch s.Type[0] {
+		case "array":
+			return KindList
+		case "object":
+			if s.AdditionalProperties != nil {
+				return KindMap
+			}
+			return KindObject
+		case "string", "boolean", "integer", "number":
+			return KindScalar
+		}
+	}
+
+	return KindDyn
+}
+
 // validateTemplateExpressions validates CEL template expressions for a single resource.
 // It type-checks that expressions reference valid fields and return the expected types
 // based on the OpenAPI schemas.
-func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider *krocel.DeclTypeProvider) error {
+func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider *krocel.DeclTypeProvider, resourceSchema *spec.Schema) error {
 	for _, templateVariable := range resource.variables {
 		if len(templateVariable.Expressions) == 1 {
 			// Single expression - validate against expected types
@@ -832,7 +983,17 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider 
 
 			checkedAST, err := parseAndCheckCELExpression(env, expression)
 			if err != nil {
-				return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
+				if hasTernary(expression, env) {
+					expression, err = RewriteTernariesWithDyn(expression, env, resourceSchema)
+					checkedAST, err = parseAndCheckCELExpression(env, expression)
+					if err != nil {
+						return fmt.Errorf("failed to type-check template ternary expression %q at path %q: %w",
+							expression, templateVariable.Path, err)
+					}
+				} else {
+					return fmt.Errorf("failed to type-check template expression %q at path %q: %w",
+						expression, templateVariable.Path, err)
+				}
 			}
 			outputType := checkedAST.OutputType()
 			if err := validateExpressionType(outputType, templateVariable.ExpectedType, expression, resource.id, templateVariable.Path, typeProvider); err != nil {
@@ -843,7 +1004,17 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider 
 			for _, expression := range templateVariable.Expressions {
 				checkedAST, err := parseAndCheckCELExpression(env, expression)
 				if err != nil {
-					return fmt.Errorf("failed to type-check template expression %q at path %q: %w", expression, templateVariable.Path, err)
+					if hasTernary(expression, env) {
+						expression, err = RewriteTernariesWithDyn(expression, env, resourceSchema)
+						checkedAST, err = parseAndCheckCELExpression(env, expression)
+						if err != nil {
+							return fmt.Errorf("failed to type-check template ternary expression %q at path %q: %w",
+								expression, templateVariable.Path, err)
+						}
+					} else {
+						return fmt.Errorf("failed to type-check template expression %q at path %q: %w",
+							expression, templateVariable.Path, err)
+					}
 				}
 
 				outputType := checkedAST.OutputType()
@@ -854,6 +1025,64 @@ func validateTemplateExpressions(env *cel.Env, resource *Resource, typeProvider 
 		}
 	}
 	return nil
+}
+
+// hasTernary tells if the expresion is ternary or not
+func hasTernary(expr string, env *cel.Env) bool {
+	ast, issues := env.Parse(expr)
+	if issues != nil && issues.Err() != nil {
+		return false
+	}
+
+	parsed, err := cel.AstToParsedExpr(ast)
+	if err != nil || parsed == nil {
+		return false
+	}
+
+	return containsTernary(parsed.GetExpr())
+}
+
+func containsTernary(expr *exprpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	if call := expr.GetCallExpr(); call != nil {
+		if call.Function == "_?_:_" && len(call.Args) == 3 {
+			return true
+		}
+
+		// recursvely check arguments
+		for _, arg := range call.Args {
+			if containsTernary(arg) {
+				return true
+			}
+		}
+	}
+
+	// Also check list, map, and comprehension nodes
+	switch kind := expr.ExprKind.(type) {
+	case *exprpb.Expr_ListExpr:
+		for _, e := range kind.ListExpr.Elements {
+			if containsTernary(e) {
+				return true
+			}
+		}
+	case *exprpb.Expr_StructExpr:
+		for _, e := range kind.StructExpr.Entries {
+			if containsTernary(e.GetValue()) {
+				return true
+			}
+		}
+	case *exprpb.Expr_ComprehensionExpr:
+		if containsTernary(kind.ComprehensionExpr.LoopCondition) ||
+			containsTernary(kind.ComprehensionExpr.LoopStep) ||
+			containsTernary(kind.ComprehensionExpr.Result) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // validateExpressionType verifies that the CEL expression output type matches

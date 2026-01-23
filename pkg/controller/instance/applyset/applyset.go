@@ -71,10 +71,9 @@ type Resource struct {
 	ID string
 	// Object is the desired state to apply (GVK/ns/name must be set correctly by the caller).
 	Object *unstructured.Unstructured
-	// CurrentRevision optionally carries the resourceVersion from the controller's GET.
-	// If set, ApplyResultItem.Changed will be false when SSA returns the same RV; if empty,
-	// every apply is treated as changed for reporting.
-	CurrentRevision string
+	// Current optionally carries the live object fetched by the controller.
+	// This allows conflict detection without extra GETs inside Apply().
+	Current *unstructured.Unstructured
 	// SkipApply excludes the resource from SSA and from the current GK/namespace set.
 	// Prune relies on the parent annotation "memory" from previous reconciles to
 	// delete these resources if they were previously applied. Use for includeWhen=false.
@@ -353,32 +352,34 @@ func (a *ApplySet) applyResource(
 ) ApplyResultItem {
 	item := ApplyResultItem{ID: r.ID}
 
-	// Inject applyset membership label (required for prune to find managed resources)
-	labels := r.Object.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
+	// Conflict check using observed state (from controller GET), if provided.
+	var currentApplySetID string
+	if r.Current != nil {
+		currentApplySetID = r.Current.GetLabels()[ApplysetPartOfLabel]
 	}
-
-	// Check for ApplySet membership conflict: if the resource already belongs to
-	// a different ApplySet, fail rather than silently overwriting the membership.
-	// This prevents accidental takeover of resources managed by other instances/controllers.
-	if existingID, exists := labels[ApplysetPartOfLabel]; exists && existingID != a.applySetID {
+	if currentApplySetID != "" && currentApplySetID != a.applySetID {
 		item.Error = &ApplySetConflictError{
 			ResourceName:      r.Object.GetName(),
 			ResourceNamespace: r.Object.GetNamespace(),
 			ResourceGVK:       r.Object.GroupVersionKind().String(),
-			CurrentApplySetID: existingID,
+			CurrentApplySetID: currentApplySetID,
 			DesiredApplySetID: a.applySetID,
 		}
-		a.log.V(2).Info("applyset conflict",
+		a.log.V(2).Info("applyset conflict (observed state)",
 			"id", r.ID,
 			"name", r.Object.GetName(),
 			"namespace", r.Object.GetNamespace(),
 			"gvk", r.Object.GroupVersionKind().String(),
-			"existingApplySetID", existingID,
+			"existingApplySetID", currentApplySetID,
 			"desiredApplySetID", a.applySetID,
 		)
 		return item
+	}
+
+	// Inject applyset membership label (required for prune to find managed resources)
+	labels := r.Object.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
 	}
 
 	labels[ApplysetPartOfLabel] = a.applySetID
@@ -387,7 +388,7 @@ func (a *ApplySet) applyResource(
 	// Desired reflects what we're actually sending (with label injected)
 	item.Desired = r.Object
 
-	// Apply (no GET - use CurrentRevision from Resource for change detection)
+	// Apply (no GET - use Current from Resource for change detection)
 	dynResource := a.resourceClient(mapping, r.Object.GetNamespace())
 	applied, err := dynResource.Apply(ctx, r.Object.GetName(), r.Object, options)
 	if err != nil {
@@ -405,7 +406,11 @@ func (a *ApplySet) applyResource(
 
 	item.Observed = applied
 	// Compare with revision passed by controller (from their GET for CEL evaluation)
-	item.Changed = r.CurrentRevision == "" || applied.GetResourceVersion() != r.CurrentRevision
+	var currentRevision string
+	if r.Current != nil {
+		currentRevision = r.Current.GetResourceVersion()
+	}
+	item.Changed = currentRevision == "" || applied.GetResourceVersion() != currentRevision
 
 	a.log.V(2).Info("applied resource",
 		"id", r.ID,

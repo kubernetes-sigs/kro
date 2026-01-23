@@ -49,7 +49,6 @@ func TestEKSCluster(t *testing.T) {
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
 				},
-				LogWriter: GinkgoWriter,
 			},
 		)
 		Expect(err).NotTo(HaveOccurred())

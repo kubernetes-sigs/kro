@@ -274,14 +274,19 @@ func TestApply_ApplySetConflict(t *testing.T) {
 		ParentNamespace: "default",
 	}, parent)
 
-	conflictingCM := newConfigMap("conflicting-cm", "default")
-	conflictingCM.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-different-owner-v1",
-	})
-
 	resources := []Resource{
 		{ID: "cm1", Object: newConfigMap("cm1", "default")},
-		{ID: "cm2", Object: conflictingCM},
+		{
+			ID:     "cm2",
+			Object: newConfigMap("conflicting-cm", "default"),
+			Current: func() *unstructured.Unstructured {
+				obj := newConfigMap("conflicting-cm", "default")
+				obj.SetLabels(map[string]string{
+					ApplysetPartOfLabel: "applyset-different-owner-v1",
+				})
+				return obj
+			}(),
+		},
 	}
 
 	result, _, err := applier.Apply(ctx, resources, ApplyMode{})
@@ -341,6 +346,7 @@ func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
 	})
+	expectedID := ID(parent)
 	client := newFakeDynamicClient()
 	addSSAReactor(client)
 
@@ -351,14 +357,18 @@ func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
 		ParentNamespace: "default",
 	}, parent)
 
-	expectedID := ID(parent)
-	sameOwnerCM := newConfigMap("same-owner-cm", "default")
-	sameOwnerCM.SetLabels(map[string]string{
-		ApplysetPartOfLabel: expectedID,
-	})
-
 	resources := []Resource{
-		{ID: "cm1", Object: sameOwnerCM},
+		{
+			ID:     "cm1",
+			Object: newConfigMap("same-owner-cm", "default"),
+			Current: func() *unstructured.Unstructured {
+				obj := newConfigMap("same-owner-cm", "default")
+				obj.SetLabels(map[string]string{
+					ApplysetPartOfLabel: expectedID,
+				})
+				return obj
+			}(),
+		},
 	}
 
 	result, _, err := applier.Apply(ctx, resources, ApplyMode{})
@@ -391,9 +401,8 @@ func TestApply_ChangeDetection(t *testing.T) {
 		serverRV        string
 		wantChanged     bool
 	}{
-		"no current revision - always changed": {
-			currentRevision: "",
-			wantChanged:     true,
+		"no current object - always changed": {
+			wantChanged: true,
 		},
 		"different revision - changed": {
 			currentRevision: "old-rv",
@@ -413,8 +422,13 @@ func TestApply_ChangeDetection(t *testing.T) {
 				ParentNamespace: "default",
 			}, parent)
 
+			var current *unstructured.Unstructured
+			if tt.currentRevision != "" {
+				current = newConfigMap("cm1", "default")
+				current.SetResourceVersion(tt.currentRevision)
+			}
 			resources := []Resource{
-				{ID: "cm1", Object: newConfigMap("cm1", "default"), CurrentRevision: tt.currentRevision},
+				{ID: "cm1", Object: newConfigMap("cm1", "default"), Current: current},
 			}
 
 			result, _, err := applier.Apply(ctx, resources, ApplyMode{})
@@ -463,8 +477,10 @@ func TestApply_ChangeDetection_SameRevision(t *testing.T) {
 		ParentNamespace: "default",
 	}, parent)
 
+	current := newConfigMap("cm1", "default")
+	current.SetResourceVersion("same-rv")
 	resources := []Resource{
-		{ID: "cm1", Object: newConfigMap("cm1", "default"), CurrentRevision: "same-rv"},
+		{ID: "cm1", Object: newConfigMap("cm1", "default"), Current: current},
 	}
 
 	result, _, err := applier.Apply(ctx, resources, ApplyMode{})

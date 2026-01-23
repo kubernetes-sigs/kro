@@ -202,19 +202,17 @@ func (c *Controller) prepareRegularResource(
 		return nil, true, "", err
 	}
 
-	var currentRevision string
 	if current != nil {
 		node.SetObserved([]*unstructured.Unstructured{current})
-		currentRevision = current.GetResourceVersion()
 	}
 
 	// Apply decorator labels to desired object
 	c.applyDecoratorLabels(rcx, desired, id, nil)
 
 	resource := applyset.Resource{
-		ID:              id,
-		Object:          desired,
-		CurrentRevision: currentRevision,
+		ID:      id,
+		Object:  desired,
+		Current: current,
 	}
 
 	return []applyset.Resource{resource}, true, "", nil
@@ -267,17 +265,14 @@ func (c *Controller) prepareCollectionResource(
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
 
 		// Look up current revision from LIST results
-		var currentRevision string
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
-		if current, ok := existingByKey[key]; ok {
-			currentRevision = current.GetResourceVersion()
-		}
+		current := existingByKey[key]
 
 		expandedID := fmt.Sprintf("%s-%d", id, i)
 		resources = append(resources, applyset.Resource{
-			ID:              expandedID,
-			Object:          expandedResource,
-			CurrentRevision: currentRevision,
+			ID:      expandedID,
+			Object:  expandedResource,
+			Current: current,
 		})
 	}
 

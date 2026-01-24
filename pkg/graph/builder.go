@@ -238,24 +238,15 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// Now that we know all resources are properly declared and dependencies are valid,
 	// we can perform type checking on the CEL expressions.
 
-	// Create a typed CEL environment with all resource schemas for template expressions
+	// Create a typed CEL environment with all resource schemas for template and includeWhen expressions
 	templatesEnv, err := krocel.TypedEnvironment(schemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
 
-	// Create a CEL environment with only "schema" for includeWhen expressions
-	var schemaEnv *cel.Env
-	if schemas["schema"] != nil {
-		schemaEnv, err = krocel.TypedEnvironment(map[string]*spec.Schema{"schema": schemas["schema"]})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create CEL environment for includeWhen validation: %w", err)
-		}
-	}
-
 	// Validate all CEL expressions for each resource node
 	for _, resource := range resources {
-		if err := validateNode(resource, templatesEnv, schemaEnv, schemas[resource.id], typeProvider); err != nil {
+		if err := validateNode(resource, templatesEnv, schemas[resource.id], typeProvider); err != nil {
 			return nil, fmt.Errorf("failed to validate node %q: %w", resource.id, err)
 		}
 	}
@@ -365,7 +356,7 @@ func (b *Builder) buildRGResource(
 		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
 	}
 
-	// 7. Parse condition expressions
+	// 7. Parse IncludeWhen expressions
 	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
@@ -449,6 +440,20 @@ func (b *Builder) buildDependencyGraph(
 				if err := directedAcyclicGraph.AddDependencies(resource.id, resourceDependencies); err != nil {
 					return nil, err
 				}
+			}
+		}
+
+		// Extract dependencies from includeWhen expressions
+		for _, expression := range resource.includeWhenExpressions {
+			resourceDependencies, _, err := extractDependencies(env, expression, resourceNames)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract dependencies from includeWhen: %w", err)
+			}
+
+			resource.addDependencies(resourceDependencies...)
+			// We need to add the dependencies to the graph.
+			if err := directedAcyclicGraph.AddDependencies(resource.id, resourceDependencies); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -792,7 +797,7 @@ func lookupSchemaAtPath(schema *spec.Schema, path string) *spec.Schema {
 // - Template expressions (resource field values)
 // - includeWhen expressions (conditional resource creation)
 // - readyWhen expressions (resource readiness conditions)
-func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resourceSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
+func validateNode(resource *Resource, templatesEnv *cel.Env, resourceSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
 	// Validate template expressions
 	if err := validateTemplateExpressions(templatesEnv, resource, typeProvider); err != nil {
 		return err
@@ -800,7 +805,7 @@ func validateNode(resource *Resource, templatesEnv, schemaEnv *cel.Env, resource
 
 	// Validate includeWhen expressions if present
 	if len(resource.includeWhenExpressions) > 0 {
-		if err := validateIncludeWhenExpressions(schemaEnv, resource); err != nil {
+		if err := validateIncludeWhenExpressions(templatesEnv, resource); err != nil {
 			return err
 		}
 	}

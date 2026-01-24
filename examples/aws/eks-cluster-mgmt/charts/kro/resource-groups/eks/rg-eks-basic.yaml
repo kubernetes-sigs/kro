@@ -249,6 +249,8 @@ spec:
           server: "${ekscluster.status.ackResourceMetadata.arn}"
           project: "default"
     - id: accessEntry
+      readyWhen:
+      - ${accessEntry.status.conditions.exists(x, x.type == 'ACK.ResourceSynced' && x.status == "True")} #check on ACK condition
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: AccessEntry

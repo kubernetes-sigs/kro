@@ -15,7 +15,6 @@
 package applyset
 
 import (
-	"context"
 	"errors"
 	"regexp"
 	"sync/atomic"
@@ -141,7 +140,7 @@ func addSSAReactor(client *fake.FakeDynamicClient) {
 }
 
 func TestApply_BasicSSA(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -213,7 +212,7 @@ func TestApply_BasicSSA(t *testing.T) {
 }
 
 func TestApply_MembershipLabels(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -259,7 +258,7 @@ func TestApply_MembershipLabels(t *testing.T) {
 }
 
 func TestApply_ApplySetConflict(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -341,7 +340,7 @@ func TestApply_ApplySetConflict(t *testing.T) {
 }
 
 func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -390,7 +389,7 @@ func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
 }
 
 func TestApply_ChangeDetection(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -448,7 +447,7 @@ func TestApply_ChangeDetection(t *testing.T) {
 }
 
 func TestApply_ChangeDetection_SameRevision(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -494,7 +493,7 @@ func TestApply_ChangeDetection_SameRevision(t *testing.T) {
 }
 
 func TestPrune(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 
 	// Create parent with annotations (required for prune scope)
@@ -592,7 +591,7 @@ func TestPrune(t *testing.T) {
 }
 
 func TestErrors_ShouldPreventPrune(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
@@ -736,7 +735,6 @@ func TestProject(t *testing.T) {
 }
 
 func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
-	ctx := context.Background()
 	mapper := newTestRESTMapper()
 
 	// Create parent with existing annotations from a previous reconcile
@@ -779,7 +777,7 @@ func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
 	}
 
 	// Apply first to get UIDs
-	result, batchMeta, err := applier.Apply(ctx, resources, ApplyMode{})
+	result, batchMeta, err := applier.Apply(t.Context(), resources, ApplyMode{})
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
@@ -794,7 +792,7 @@ func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Project() error = %v", err)
 	}
-	pruneResult, err := applier.Prune(ctx, PruneOptions{
+	pruneResult, err := applier.Prune(t.Context(), PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    projectMeta.PruneScope(),
 	})
@@ -810,7 +808,7 @@ func TestPrune_ParentAnnotationsContributeToPruneScope(t *testing.T) {
 }
 
 func TestApply_ReturnsBatchOnlyMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 
 	// Parent with existing annotations from previous reconcile
@@ -893,7 +891,7 @@ func newNamespace(name string) *unstructured.Unstructured {
 }
 
 func TestPrune_ClusterScopedResource(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
 		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",

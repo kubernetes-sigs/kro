@@ -47,22 +47,37 @@ type unstructuredWrapper struct {
 }
 
 func (u *unstructuredWrapper) GetConditions() []v1alpha1.Condition {
-	raw, found, err := unstructured.NestedSlice(u.Object, "status", "conditions")
-	if err != nil || !found {
-		return nil
-	}
+	if conditions, found, err := unstructured.NestedSlice(u.Object, "status", "conditions"); err == nil && found {
+		// Marshal the conditions slice to JSON and then unmarshal to []v1alpha1.Condition
+		conditionsJSON, err := json.Marshal(conditions)
+		if err != nil {
+			panic(err)
+		}
 
-	b, _ := json.Marshal(raw)
-	var out []v1alpha1.Condition
-	_ = json.Unmarshal(b, &out)
-	return out
+		var result []v1alpha1.Condition
+		if err := json.Unmarshal(conditionsJSON, &result); err != nil {
+			panic(err)
+		}
+		return result
+	}
+	return []v1alpha1.Condition{}
 }
 
-func (u *unstructuredWrapper) SetConditions(conds []v1alpha1.Condition) {
-	b, _ := json.Marshal(conds)
-	var raw []interface{}
-	_ = json.Unmarshal(b, &raw)
-	_ = unstructured.SetNestedSlice(u.Object, raw, "status", "conditions")
+func (u *unstructuredWrapper) SetConditions(conditions []v1alpha1.Condition) {
+	// Marshal the conditions to JSON and then unmarshal to interface{} slice
+	conditionsJSON, err := json.Marshal(conditions)
+	if err != nil {
+		return // Fail silently - could log this in the future
+	}
+
+	var conditionsInterface []interface{}
+	if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err != nil {
+		return // Fail silently - could log this in the future
+	}
+
+	if err := unstructured.SetNestedSlice(u.Object, conditionsInterface, "status", "conditions"); err != nil {
+		return // Fail silently - could log this in the future
+	}
 }
 
 type ConditionsMarker struct {
@@ -147,9 +162,14 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 
 	conds := condSet.For(&unstructuredWrapper{inst}).List()
 
-	b, _ := json.Marshal(conds)
+	b, err := json.Marshal(conds)
+	if err != nil {
+		panic(err)
+	}
 	var arr []interface{}
-	_ = json.Unmarshal(b, &arr)
+	if err := json.Unmarshal(b, &arr); err != nil {
+		panic(err)
+	}
 
 	// Start fresh - user-defined status fields come solely from current resolution,
 	// not preserved from previous status. This ensures fields disappear when their

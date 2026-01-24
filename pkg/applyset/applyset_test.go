@@ -311,14 +311,14 @@ func TestApplySet_Prune(t *testing.T) {
 	// This CM will be pruned
 	pruneCM := configMap("prune-cm", "default")
 	pruneCM.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM)
 	// Set the ApplysetPartOfLabel on the pruneCM to match the ID of the applyset
 	// This is needed because the applyset ID is dynamically generated based on the parent object.
 	// We need to ensure that the pruneCM has the correct label so it is discovered for pruning.
 	as := aset.(*applySet)
-	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID())
+	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID()) // spellchecker:disable-line
 
 	_, err := aset.Add(context.Background(), configMap("test-cm", "default"))
 	assert.NoError(t, err)
@@ -438,18 +438,18 @@ func TestApplySet_PruneMultiNamespace(t *testing.T) {
 	// These CMs will be pruned
 	pruneCM1 := configMap("prune-cm", "ns1")
 	pruneCM1.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	pruneCM2 := configMap("prune-cm", "ns2")
 	pruneCM2.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM1, pruneCM2)
 	// Set the ApplysetPartOfLabel on the pruneCM to match the ID of the applyset
 	// This is needed because the applyset ID is dynamically generated based on the parent object.
 	// We need to ensure that the pruneCM has the correct label so it is discovered for pruning.
 	as := aset.(*applySet)
-	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID())
+	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID()) // spellchecker:disable-line
 
 	_, err := aset.Add(context.Background(), configMap("test-cm", "ns1"))
 	assert.NoError(t, err)
@@ -526,18 +526,18 @@ func TestApplySet_PruneOldNamespace(t *testing.T) {
 	// CM in old namespace should be pruned
 	pruneCM1 := configMap("prune-cm", "oldns1")
 	pruneCM1.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	pruneCM2 := configMap("prune-cm", "ns2")
 	pruneCM2.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneCM1, pruneCM2)
 	// Set the ApplysetPartOfLabel on the pruneCM to match the ID of the applyset
 	// This is needed because the applyset ID is dynamically generated based on the parent object.
 	// We need to ensure that the pruneCM has the correct label so it is discovered for pruning.
 	as := aset.(*applySet)
-	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID())
+	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID()) // spellchecker:disable-line
 
 	_, err := aset.Add(context.Background(), configMap("test-cm", "ns1"))
 	assert.NoError(t, err)
@@ -614,14 +614,14 @@ func TestApplySet_PruneOldGVKs(t *testing.T) {
 	// Foo type should be pruned
 	pruneFoo := foo("prune-foo", "ns1")
 	pruneFoo.SetLabels(map[string]string{
-		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1",
+		ApplysetPartOfLabel: "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", // spellchecker:disable-line
 	})
 	aset, dynamicClient := newTestApplySet(t, parent, pruneFoo)
 	// Set the ApplysetPartOfLabel on the pruneCM to match the ID of the applyset
 	// This is needed because the applyset ID is dynamically generated based on the parent object.
 	// We need to ensure that the pruneCM has the correct label so it is discovered for pruning.
 	as := aset.(*applySet)
-	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID())
+	assert.Equal(t, "applyset-wHf5Gity0G0nPN34KuNBIBBEOu2H9ED2KqsblMPFygM-v1", as.ID()) // spellchecker:disable-line
 
 	_, err := aset.Add(context.Background(), configMap("test-cm", "ns1"))
 	assert.NoError(t, err)

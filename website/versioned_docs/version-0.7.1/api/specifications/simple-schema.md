@@ -103,7 +103,7 @@ This disables the field-validation normally offered by kro, and forwards the val
 :::
 
 ```kro
-kind: ResourceGraphDefintion
+kind: ResourceGraphDefinition
 metadata: {}
 spec:
   schema:

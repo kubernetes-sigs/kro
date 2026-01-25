@@ -57,3 +57,17 @@ func getObjectMetaSchema() (spec.Schema, error) {
 	}
 	return *populatedSchema, nil
 }
+
+// WrapSchemaAsList wraps an OpenAPI schema as an array schema.
+// This is used for collection resources which are typed as list(ResourceType)
+// so other resources can reference them with CEL list functions.
+func WrapSchemaAsList(itemSchema *spec.Schema) *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"array"},
+			Items: &spec.SchemaOrArray{
+				Schema: itemSchema,
+			},
+		},
+	}
+}

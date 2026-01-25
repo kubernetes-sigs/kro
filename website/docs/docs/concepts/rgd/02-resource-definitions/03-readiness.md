@@ -60,10 +60,12 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
 - If **any** expression evaluates to `false`, the resource continues waiting
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
 - **Dependent resources wait** until all their dependencies are ready
+- For [collections](./04-collections.md), `readyWhen` applies to the entire collection
 
 ## What You Can Reference
 
-`readyWhen` expressions can only reference the resource itself (by its `id`):
+`readyWhen` expressions can only reference the resource itself (by its `id`).
+For collections, use the `each` keyword to reference the current item:
 
 ```kro
 # ✓ Valid - references the resource itself and returns boolean
@@ -71,6 +73,19 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
   readyWhen:
     - ${deployment.status.availableReplicas > 0}
     - ${deployment.status.conditions.exists(c, c.type == "Available" && c.status == "True")}
+```
+
+```kro
+# ✓ Valid for collections - uses each for per-item readiness
+- id: workerPods
+  forEach:
+    - worker: ${schema.spec.workers}
+  readyWhen:
+    - ${each.status.phase == 'Running'}
+  template:
+    kind: Pod
+    metadata:
+      name: ${schema.metadata.name + '-' + worker}
 ```
 
 ```kro
@@ -121,4 +136,5 @@ The `?` operator returns `null` if the field doesn't exist. This is useful when 
 
 - **[Dependencies & Ordering](../04-dependencies-ordering.md)** - Understand how kro determines resource creation order
 - **[Conditional Resources](./02-conditional-creation.md)** - Control whether resources are created
+- **[Collections](./04-collections.md)** - Use aggregate readiness conditions with `forEach`
 - **[CEL Expressions](../03-cel-expressions.md)** - Master expression syntax for readiness conditions

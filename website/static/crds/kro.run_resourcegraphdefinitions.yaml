@@ -115,6 +115,26 @@ spec:
                       - kind
                       - metadata
                       type: object
+                    forEach:
+                      description: |-
+                        ForEach expands this resource into a collection of resources.
+                        Each entry binds a variable name to a CEL expression that evaluates to an array.
+                        kro creates one resource instance for each element in the array.
+                        With multiple entries, kro creates the cartesian product of all combinations.
+                        Use the variable directly in template expressions (e.g., ${region}).
+                        Example: [{"region": "${schema.spec.regions}"}, {"tier": "${schema.spec.tiers}"}]
+                      items:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          ForEachDimension defines a single expansion axis in a forEach block.
+                          Each dimension is a map with exactly one entry where the key is the variable name
+                          and the value is the CEL expression. Example: {"region": "${schema.spec.regions}"}
+                          Multiple dimensions create a cartesian product of expansions.
+                        maxProperties: 1
+                        minProperties: 1
+                        type: object
+                      type: array
                     id:
                       description: |-
                         ID is a unique identifier for this resource within the ResourceGraphDefinition.

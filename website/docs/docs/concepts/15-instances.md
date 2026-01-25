@@ -98,9 +98,17 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive all t
 | `kro.run/instance-id` | UID of the instance that created this resource |
 | `kro.run/instance-name` | Name of the instance |
 | `kro.run/instance-namespace` | Namespace of the instance |
+| `kro.run/node-id` | The resource ID from the RGD (e.g., `workerPods`) |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
-These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster.
+**Collection-specific labels** (only on resources created via `forEach`):
+
+| Label | Description |
+|-------|-------------|
+| `kro.run/collection-index` | Position in the collection (0-indexed) |
+| `kro.run/collection-size` | Total number of items in the collection |
+
+These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>

@@ -64,7 +64,8 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
 
 ## What You Can Reference
 
-`readyWhen` expressions can only reference the resource itself (by its `id`):
+`readyWhen` expressions can only reference the resource itself (by its `id`).
+For collections, use the `each` keyword to reference the current item:
 
 ```kro
 # ✓ Valid - references the resource itself and returns boolean
@@ -72,6 +73,19 @@ This ensures `${database.status.endpoint}` has a valid value when the app is cre
   readyWhen:
     - ${deployment.status.availableReplicas > 0}
     - ${deployment.status.conditions.exists(c, c.type == "Available" && c.status == "True")}
+```
+
+```kro
+# ✓ Valid for collections - uses each for per-item readiness
+- id: workerPods
+  forEach:
+    - worker: ${schema.spec.workers}
+  readyWhen:
+    - ${each.status.phase == 'Running'}
+  template:
+    kind: Pod
+    metadata:
+      name: ${schema.metadata.name + '-' + worker}
 ```
 
 ```kro

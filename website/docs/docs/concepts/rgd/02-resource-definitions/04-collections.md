@@ -456,6 +456,9 @@ expressions (AND semantics):
 In this example, `workerPods` is only considered ready when **every** pod in the
 collection has `status.phase == 'Running'`. Dependent resources wait for this
 condition before proceeding.
+:::important
+If the collection is empty (zero items), it is considered ready.
+:::
 
 :::tip
 Without `readyWhen`, a collection is considered ready once all resources are
@@ -533,26 +536,16 @@ array changes, kro creates, updates, or deletes resources to match.
 
 ### Scaling Up
 
-When items are added to the source array, kro creates new resources:
-
-```yaml
-# Instance spec change:
-# workers: ["alice", "bob"] → ["alice", "bob", "charlie"]
-#
-# Result: kro creates a new pod for "charlie"
-```
+When items are added to the source array, kro creates new resources.  
+Example: if `workers` changes from `["alice", "bob"]` to `["alice", "bob", "charlie"]`,
+it creates one new pod for **charlie**.
 
 ### Scaling Down
 
 When items are removed from the source array, kro automatically deletes the
-corresponding resources:
-
-```yaml
-# Instance spec change:
-# workers: ["alice", "bob", "charlie"] → ["alice"]
-#
-# Result: kro deletes pods for "bob" and "charlie"
-```
+corresponding resources.  
+Example: if `workers` changes from `["alice", "bob", "charlie"]` to `["alice"]`,
+it deletes the pods for **bob** and **charlie**.
 
 This cleanup happens automatically through kro's applyset mechanism - orphaned
 resources are pruned on each reconciliation.
@@ -560,14 +553,12 @@ resources are pruned on each reconciliation.
 ### Empty Collections
 
 An empty array results in zero resources - this is not an error:
-
-```yaml
-# workers: []
-# Result: zero pods created (collection exists but is empty)
-```
+for example, `workers: []` means no pods are created (the collection exists but is empty).
 
 This is useful for optional features that can be enabled by adding items to an
 initially empty array.
+
+Empty collections are considered ready, since there are no items to wait on.
 
 :::important
 If any iterator in a cartesian product is empty, zero resources are created.

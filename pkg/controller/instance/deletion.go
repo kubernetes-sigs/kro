@@ -31,7 +31,7 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	rcx.StateManager.State = InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	deletionNode, err := c.observeDeletionState(rcx)
+	deletionNode, err := c.planResourcesForDeletion(rcx)
 	if err != nil {
 		return err
 	}
@@ -47,9 +47,9 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	return c.removeFinalizer(rcx)
 }
 
-// observeDeletionState resolves as much of the runtime as possible and returns the last
+// planResourcesForDeletion resolves as much of the runtime as possible and returns the last
 // resolvable node (topologically).
-func (c *Controller) observeDeletionState(
+func (c *Controller) planResourcesForDeletion(
 	rcx *ReconcileContext,
 ) (*runtime.Node, error) {
 	var deletionNode *runtime.Node

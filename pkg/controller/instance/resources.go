@@ -33,27 +33,20 @@ import (
 func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 	rcx.Log.V(2).Info("Reconciling resources")
 
-	nodes := rcx.Runtime.Nodes()
 	applier := c.createApplySet(rcx)
 
-	var resources []applyset.Resource
-	var unresolved string
-	prune := true
-
-	for _, node := range nodes {
-		resourcesToAdd, shouldPrune, unresolvedID, err := c.prepareResource(rcx, node)
-		if err != nil {
-			return err
-		}
-		resources = append(resources, resourcesToAdd...)
-		if !shouldPrune {
-			prune = false
-		}
-		if unresolvedID != "" {
-			unresolved = unresolvedID
-		}
+	// ---------------------------------------------------------
+	// 1. Plan resources (build applyset inputs)
+	// ---------------------------------------------------------
+	resources, lastUnresolved, err := c.planResourcesForApply(rcx)
+	if err != nil {
+		return err
 	}
+	prune := lastUnresolved == ""
 
+	// ---------------------------------------------------------
+	// 2. Project applyset metadata and patch parent
+	// ---------------------------------------------------------
 	supersetPatch, err := applier.Project(resources)
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
@@ -63,31 +56,43 @@ func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 		return rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
 	}
 
+	// ---------------------------------------------------------
+	// 3. Apply desired resources
+	// ---------------------------------------------------------
 	result, batchMeta, err := applier.Apply(rcx.Ctx, resources, applyset.ApplyMode{})
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("apply failed: %w", err))
 	}
 
+	// clusterMutated tracks any cluster-side change from apply and/or prune.
+	// NOTE: it must start from apply results and only ever be OR-ed with
+	// prune outcomes. Be careful overwrriting this later, as we may drop the
+	// "apply changed the cluster" signal and skip the requeue needed for CEL
+	// refresh.
 	clusterMutated := result.HasClusterMutation()
 
+	// ---------------------------------------------------------
+	// 4. Prune orphans (when desired is fully resolved)
+	// ---------------------------------------------------------
+	//
+	// Prune is intentionally gated by two independent conditions:
+	//   1) prune == true  -> all desired objects were resolvable (no ErrDataPending)
+	//   2) result.Errors() == nil -> apply had no per-resource errors
+	// The split is deliberate: "unresolved desired" is not an apply error, but
+	// pruning in that case would delete still-managed objects because they were
+	// omitted from the apply set. Keeping both checks visible prevents subtle
+	// regressions where one gate gets removed and prune becomes unsafe.
 	if prune && result.Errors() == nil {
-		pruneScope := supersetPatch.PruneScope()
-		pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
-			KeepUIDs: result.ObservedUIDs(),
-			Scope:    pruneScope,
-		})
+		pruned, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
 		if err != nil {
-			return rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+			return err
 		}
-		if pruneResult.HasPruned() {
-			clusterMutated = true
-		}
-		// Prune succeeded (errors return directly), safe to shrink metadata
-		if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
-			rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
-		}
+		clusterMutated = clusterMutated || pruned
 	}
 
+	// ---------------------------------------------------------
+	// 5. Process results and update resource state
+	// ---------------------------------------------------------
 	if err := c.processApplyResults(rcx, result); err != nil {
 		return rcx.delayedRequeue(err)
 	}
@@ -97,14 +102,59 @@ func (c *Controller) reconcileResources(rcx *ReconcileContext) error {
 	// (including WaitingForReadiness) before the controller checks it.
 	rcx.StateManager.Update()
 
-	if unresolved != "" {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", unresolved))
+	if lastUnresolved != "" {
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", lastUnresolved))
 	}
 	if clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
 	}
 
 	return nil
+}
+
+func (c *Controller) planResourcesForApply(
+	rcx *ReconcileContext,
+) ([]applyset.Resource, string, error) {
+	nodes := rcx.Runtime.Nodes()
+
+	var resources []applyset.Resource
+	var lastUnresolved string
+
+	for _, node := range nodes {
+		resourcesToAdd, unresolvedID, err := c.prepareResource(rcx, node)
+		if err != nil {
+			return nil, "", err
+		}
+		resources = append(resources, resourcesToAdd...)
+		if unresolvedID != "" {
+			lastUnresolved = unresolvedID
+		}
+	}
+
+	return resources, lastUnresolved, nil
+}
+
+func (c *Controller) pruneOrphans(
+	rcx *ReconcileContext,
+	applier *applyset.ApplySet,
+	result *applyset.ApplyResult,
+	supersetPatch applyset.Metadata,
+	batchMeta applyset.Metadata,
+) (bool, error) {
+	pruneScope := supersetPatch.PruneScope()
+	pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
+		KeepUIDs: result.ObservedUIDs(),
+		Scope:    pruneScope,
+	})
+	if err != nil {
+		return false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+	}
+
+	// Prune succeeded (errors return directly), safe to shrink metadata
+	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
+		rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
+	}
+	return pruneResult.HasPruned(), nil
 }
 
 func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
@@ -120,7 +170,7 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 func (c *Controller) prepareResource(
 	rcx *ReconcileContext,
 	node *runtime.Node,
-) ([]applyset.Resource, bool, string, error) {
+) ([]applyset.Resource, string, error) {
 	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
 
@@ -131,7 +181,7 @@ func (c *Controller) prepareResource(
 	if err != nil {
 		st.State = ResourceStateError
 		st.Err = err
-		return nil, true, "", err
+		return nil, "", err
 	}
 	if ignored {
 		st.State = ResourceStateSkipped
@@ -139,36 +189,48 @@ func (c *Controller) prepareResource(
 		return []applyset.Resource{{
 			ID:        id,
 			SkipApply: true,
-		}}, true, "", nil
+		}}, "", nil
 	}
 
 	desired, err := node.GetDesired()
 	if err != nil {
 		if runtime.IsDataPending(err) {
-			st.State = ResourceStateWaitingForReadiness
-			return nil, true, id, nil
+			// Skip prune when any resource is unresolved to avoid deleting
+			// previously managed resources that are still pending resolution.
+			// Returning the unresolved ID signals the caller to disable prune.
+			return nil, id, nil
 		}
 		st.State = ResourceStateError
 		st.Err = err
-		return nil, true, "", err
+		return nil, "", err
 	}
 
 	// Nothing to apply (empty desired)
 	if len(desired) == 0 {
 		st.State = ResourceStateSkipped
-		return nil, true, "", nil
+		return nil, "", nil
 	}
 
 	switch node.Spec.Meta.Type {
 	case graph.NodeTypeExternal:
 		if err := c.handleExternalRef(rcx, node, st, desired); err != nil {
-			return nil, true, "", err
+			return nil, "", err
 		}
-		return nil, true, "", nil
+		return nil, "", nil
 	case graph.NodeTypeCollection:
-		return c.prepareCollectionResource(rcx, node, st, desired)
+		resources, err := c.prepareCollectionResource(rcx, node, st, desired)
+		if err != nil {
+			return nil, "", err
+		}
+		return resources, "", nil
+	case graph.NodeTypeResource:
+		resources, err := c.prepareRegularResource(rcx, node, st, desired)
+		if err != nil {
+			return nil, "", err
+		}
+		return resources, "", nil
 	default:
-		return c.prepareRegularResource(rcx, node, st, desired)
+		panic(fmt.Sprintf("unknown node type: %v", node.Spec.Meta.Type))
 	}
 }
 
@@ -177,14 +239,14 @@ func (c *Controller) prepareRegularResource(
 	node *runtime.Node,
 	st *ResourceState,
 	desiredList []*unstructured.Unstructured,
-) ([]applyset.Resource, bool, string, error) {
+) ([]applyset.Resource, error) {
 	id := node.Spec.Meta.ID
 	desc := node.Spec.Meta
 	gvr := desc.GVR
 
 	if len(desiredList) == 0 {
 		st.State = ResourceStateSynced
-		return nil, true, "", nil
+		return nil, nil
 	}
 	desired := desiredList[0]
 
@@ -197,7 +259,7 @@ func (c *Controller) prepareRegularResource(
 	if err != nil {
 		st.State = ResourceStateError
 		st.Err = err
-		return nil, true, "", err
+		return nil, err
 	}
 
 	if current != nil {
@@ -213,7 +275,7 @@ func (c *Controller) prepareRegularResource(
 		Current: current,
 	}
 
-	return []applyset.Resource{resource}, true, "", nil
+	return []applyset.Resource{resource}, nil
 }
 
 func (c *Controller) prepareCollectionResource(
@@ -221,7 +283,7 @@ func (c *Controller) prepareCollectionResource(
 	node *runtime.Node,
 	st *ResourceState,
 	expandedResources []*unstructured.Unstructured,
-) ([]applyset.Resource, bool, string, error) {
+) ([]applyset.Resource, error) {
 	id := node.Spec.Meta.ID
 	desc := node.Spec.Meta
 	gvr := desc.GVR
@@ -231,7 +293,7 @@ func (c *Controller) prepareCollectionResource(
 	// Empty collection is already handled - state would be Ready
 	if collectionSize == 0 {
 		st.State = ResourceStateSynced
-		return nil, true, "", nil
+		return nil, nil
 	}
 
 	// LIST all existing collection items with single call (more efficient than N GETs)
@@ -239,7 +301,7 @@ func (c *Controller) prepareCollectionResource(
 	if err != nil {
 		st.State = ResourceStateError
 		st.Err = fmt.Errorf("failed to list collection items: %w", err)
-		return nil, false, id, nil
+		return nil, st.Err
 	}
 
 	// Pass unordered observed items to runtime; it will align them to desired
@@ -272,7 +334,7 @@ func (c *Controller) prepareCollectionResource(
 		})
 	}
 
-	return resources, true, "", nil
+	return resources, nil
 }
 
 // listCollectionItems returns existing collection items.
@@ -390,9 +452,14 @@ func (c *Controller) handleExternalRef(
 	// External refs are read-only here: fetch and push into runtime for dependency/readiness.
 	actual, err := c.readExternalRef(rcx, id, desired)
 	if err != nil {
-		st.State = ResourceStateWaitingForReadiness
-		st.Err = fmt.Errorf("waiting for external reference %q: %w", id, err)
-		return nil
+		if errors.IsNotFound(err) {
+			st.State = ResourceStateWaitingForReadiness
+			st.Err = fmt.Errorf("waiting for external reference %q: %w", id, err)
+			return nil
+		}
+		st.State = ResourceStateError
+		st.Err = err
+		return err
 	}
 
 	node.SetObserved([]*unstructured.Unstructured{actual})
@@ -482,7 +549,9 @@ func (c *Controller) processApplyResults(
 			continue
 		}
 
-		if resourceState.State == ResourceStateError || resourceState.State == ResourceStateSkipped {
+		if resourceState.State == ResourceStateError ||
+			resourceState.State == ResourceStateSkipped ||
+			resourceState.State == ResourceStateWaitingForReadiness {
 			continue
 		}
 
@@ -494,7 +563,7 @@ func (c *Controller) processApplyResults(
 		case graph.NodeTypeExternal:
 			// External refs handled before applyset.
 			continue
-		default:
+		case graph.NodeTypeResource:
 			if item, ok := byID[resourceID]; ok {
 				if item.Error != nil {
 					resourceState.State = ResourceStateError
@@ -507,6 +576,8 @@ func (c *Controller) processApplyResults(
 				}
 				setStateFromReadiness(node, resourceState)
 			}
+		default:
+			panic(fmt.Sprintf("unknown node type: %v", node.Spec.Meta.Type))
 		}
 	}
 
@@ -525,9 +596,24 @@ func (c *Controller) updateCollectionFromApplyResults(
 	byID map[string]applyset.ApplyResultItem,
 ) error {
 	resourceID := node.Spec.Meta.ID
+	// Re-evaluate desired for collections when processing apply results:
+	// - Any non-pending error is a real failure (bad expression, missing field, etc.),
+	//   so we mark ERROR and stop.
+	// - An empty resolved collection (len==0) is correct by design and is treated
+	//   as SYNCED/ready because there is nothing to apply.
+	// - Otherwise we expect item-level apply results and proceed to reconcile them.
 	desiredItems, err := node.GetDesired()
-	if err != nil || len(desiredItems) == 0 {
+	if err != nil {
+		if runtime.IsDataPending(err) {
+			return nil
+		}
+		resourceState.State = ResourceStateError
+		resourceState.Err = err
+		return err
+	}
+	if len(desiredItems) == 0 {
 		resourceState.State = ResourceStateSynced
+		resourceState.Err = nil
 		return nil
 	}
 

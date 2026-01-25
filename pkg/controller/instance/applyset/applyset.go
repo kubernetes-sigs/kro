@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -383,13 +384,15 @@ func (a *ApplySet) applyResource(
 
 		currentApplySetID = existing[ApplysetPartOfLabel]
 
-		if existing["kro.run/owned"] == "true" {
-			if existing["kro.run/instance-id"] != desired["kro.run/instance-id"] ||
-				existing["kro.run/resource-graph-definition-id"] != desired["kro.run/resource-graph-definition-id"] ||
-				existing["kro.run/node-id"] != desired["kro.run/node-id"] {
+		if metadata.IsKROOwned(r.Current) {
+
+			// True ownership = instance level, not just RGD level
+			if existing[metadata.InstanceIDLabel] != desired[metadata.InstanceIDLabel] ||
+				existing[metadata.ResourceGraphDefinitionIDLabel] != desired[metadata.ResourceGraphDefinitionIDLabel] ||
+				existing[metadata.NodeIDLabel] != desired[metadata.NodeIDLabel] {
 
 				item.Error = fmt.Errorf(
-					"kro ownership conflict for %s/%s",
+					"kro ownership conflict for %s/%s: owned by different KRO instance",
 					r.Object.GetNamespace(),
 					r.Object.GetName(),
 				)

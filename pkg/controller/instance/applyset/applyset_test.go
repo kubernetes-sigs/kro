@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -386,6 +387,52 @@ func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
 
 	if result.Applied[0].Error != nil {
 		t.Errorf("Apply() item error = %v, want nil", result.Applied[0].Error)
+	}
+}
+
+func TestApply_DefensiveGetDetectsOwnershipConflict(t *testing.T) {
+	ctx := context.Background()
+	mapper := newTestRESTMapper()
+	parent := newTestParent(schema.GroupVersionKind{
+		Group: "kro.run", Version: "v1alpha1", Kind: "TestKind",
+	})
+
+	// Existing object in cluster owned by DIFFERENT KRO instance
+	existing := newConfigMap("conflict-cm", "default")
+	existing.SetLabels(map[string]string{
+		metadata.OwnedLabel:                     "true",
+		metadata.InstanceIDLabel:                "some-other-instance",
+		metadata.ResourceGraphDefinitionIDLabel: "some-other-rgd",
+		metadata.NodeIDLabel:                    "node-a",
+		ApplysetPartOfLabel:                     "applyset-different-owner-v1",
+	})
+	existing.SetUID(types.UID("existing-uid"))
+
+	client := newFakeDynamicClient(existing)
+	addSSAReactor(client)
+
+	applier := New(Config{
+		Client:          client,
+		RESTMapper:      mapper,
+		Log:             logr.Discard(),
+		ParentNamespace: "default",
+	}, parent)
+
+	// NOTE: Current is NOT provided (this is the bug path)
+	resources := []Resource{
+		{
+			ID:     "cm1",
+			Object: newConfigMap("conflict-cm", "default"),
+		},
+	}
+
+	result, _, err := applier.Apply(ctx, resources, ApplyMode{})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if result.Errors() == nil {
+		t.Fatal("Expected ownership conflict error, got none")
 	}
 }
 

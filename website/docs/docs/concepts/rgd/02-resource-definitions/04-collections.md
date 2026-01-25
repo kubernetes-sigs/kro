@@ -86,7 +86,8 @@ forEach:
   - key: ${schema.spec.labels.map(k, k).sort()}
 ```
 
-You can then access the value inside the template using the key.
+For ordering pitfalls and why this matters, see
+[Map Gotchas and pitfalls](#map-iteration-order-is-not-deterministic)
 
 ## Iterator Variables
 
@@ -219,6 +220,7 @@ deterministic order (arrays are ordered, maps are not - see
 If any iterator's collection is empty, zero resources are created. This follows
 standard cartesian product behavior: `2 × 0 = 0`.
 :::
+
 
 ## Collection Sources
 
@@ -460,6 +462,9 @@ condition before proceeding.
 If the collection is empty (zero items), it is considered ready.
 :::
 
+For empty-collection readiness, see
+[Constraints & Gotchas](#constraints--gotchas) below.
+
 :::tip
 Without `readyWhen`, a collection is considered ready once all resources are
 created. Add `readyWhen` when dependent resources need specific conditions to be
@@ -499,6 +504,121 @@ expression:
       name: ${schema.metadata.name + '-backup-' + dbSpec.name}
     # ...
 ```
+
+For the all-or-nothing behavior of `includeWhen`, see
+[Constraints & Gotchas](#constraints--gotchas) below.
+
+## Constraints & Gotchas
+
+Collections are powerful but easy to misuse. Most issues come from identity
+collisions, dimension explosion from cartesian products, or assumptions about
+readiness and ordering. Use this section as a quick checklist when behavior
+looks surprising.
+
+### External References
+
+Collections are only supported for templated resources. A resource cannot use
+both `forEach` and `externalRef`.
+
+### Dimension Explosion
+
+Multiple iterators multiply the total number of resources. A small increase in
+each dimension can produce a large cartesian product, which slows reconciliation
+and increases cluster churn:
+
+```text
+3 regions × 5 tiers × 10 shards = 150 resources
+```
+
+Keep iterator lists bounded and avoid combining large dimensions unless you
+intentionally want the expanded set.
+
+### includeWhen Is Collection-wide
+
+`includeWhen` applies to the entire collection. If it evaluates to `false`, the
+whole collection is skipped and **no items** are created. It cannot be used to
+filter individual items.
+
+If you need per-item filtering, use `filter()` in the `forEach` expression
+instead.
+
+### Empty Collections Are Ready
+
+An empty array produces zero resources. The collection is still considered
+**ready**, because there are no items to wait on. This also applies to cartesian
+products where any iterator is empty (`2 × 0 = 0`).
+
+If you expect downstream resources to wait on actual items, ensure the
+collection is non-empty or use additional conditions in `includeWhen`.
+
+### Map Iteration Order Is Not Deterministic
+
+Map iteration order in Go is randomized. If you iterate over map keys or values,
+convert the map to a sorted array first to make resource ordering stable.
+Unstable ordering can lead to noisy diffs and unexpected reconciliation churn.
+
+For example:
+
+```kro
+# Given schema.spec.labels = {"app": "web", "env": "prod"}
+forEach:
+  - key: ${schema.spec.labels.map(k, k).sort()}
+template:
+  kind: ConfigMap
+  metadata:
+    name: ${schema.metadata.name + '-' + key}
+  data:
+    value: ${schema.spec.labels[key]}
+```
+
+:::tip Prefer Arrays Over Maps
+When designing your API schema, prefer arrays over maps. Arrays offer better
+patching semantics (strategic merge patch), extensibility (items can grow new
+fields), deterministic ordering, and more predictable tooling behavior (kubectl,
+kustomize, helm).
+:::
+
+### Identity Must Include All Iterator Dimensions
+
+Every iterator dimension must be represented in the resource identity. If any
+dimension is omitted, distinct items can collapse to the same resource and
+overwrite each other.
+
+<Tabs>
+<TabItem value="namespaced" label="Namespaced Resources">
+
+```kro
+# region + tier must appear in name or namespace
+metadata:
+  name: ${schema.metadata.name + '-' + region + '-' + tier}
+  # OR: namespace: ${schema.metadata.name + '-' + region}
+```
+
+You can also split iterator dimensions across name and namespace:
+
+```kro
+metadata:
+  name: ${schema.metadata.name + '-' + tier}
+  namespace: ${schema.metadata.name + '-' + region}
+```
+
+</TabItem>
+<TabItem value="cluster-scoped" label="Cluster-scoped Resources">
+
+```kro
+# cluster-scoped resources have no namespace, so all iterator dimensions must
+# be part of metadata.name
+metadata:
+  name: ${schema.metadata.name + '-' + region + '-' + tier}
+```
+
+</TabItem>
+</Tabs>
+
+### Collection Labels Are Managed
+
+kro-managed collection labels are part of the public API. Do not modify them
+manually — changes will be reverted and can break collection bookkeeping.
 
 ## Exposing Collection Data in Instance Status
 
@@ -564,6 +684,9 @@ Empty collections are considered ready, since there are no items to wait on.
 If any iterator in a cartesian product is empty, zero resources are created.
 For example, `regions: ["us-east"]` × `tiers: []` = zero deployments.
 :::
+
+For more context on empty-collection behavior, see
+[Constraints & Gotchas](#constraints--gotchas) above.
 
 ### Drift Detection
 
@@ -638,6 +761,8 @@ The combination of `instance-id` + `node-id` + `collection-index` uniquely
 identifies each collection item. These labels are managed by kro - do not
 modify them manually.
 :::
+
+See [Constraints & Gotchas](#constraints--gotchas) for label management notes.
 
 ## Next Steps
 

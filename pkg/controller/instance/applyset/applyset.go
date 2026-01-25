@@ -354,9 +354,28 @@ func (a *ApplySet) applyResource(
 
 	// Conflict check using observed state (from controller GET), if provided.
 	var currentApplySetID string
+
 	if r.Current != nil {
-		currentApplySetID = r.Current.GetLabels()[ApplysetPartOfLabel]
+		existing := r.Current.GetLabels()
+		desired := r.Object.GetLabels()
+
+		currentApplySetID = existing[ApplysetPartOfLabel]
+
+		if existing["kro.run/owned"] == "true" {
+			if existing["kro.run/instance-id"] != desired["kro.run/instance-id"] ||
+				existing["kro.run/resource-graph-definition-id"] != desired["kro.run/resource-graph-definition-id"] ||
+				existing["kro.run/node-id"] != desired["kro.run/node-id"] {
+
+				item.Error = fmt.Errorf(
+					"kro ownership conflict for %s/%s",
+					r.Object.GetNamespace(),
+					r.Object.GetName(),
+				)
+				return item
+			}
+		}
 	}
+
 	if currentApplySetID != "" && currentApplySetID != a.applySetID {
 		item.Error = &ApplySetConflictError{
 			ResourceName:      r.Object.GetName(),

@@ -139,62 +139,67 @@ func generateJSONSchemaFromFieldDescriptors(fieldDescriptors []fieldDescriptor) 
 	return rootSchema, nil
 }
 
-func addFieldToSchema(fieldDescriptor fieldDescriptor, schema *extv1.JSONSchemaProps) error {
-	segments, err := fieldpath.Parse(fieldDescriptor.Path)
+func addFieldToSchema(fd fieldDescriptor, schema *extv1.JSONSchemaProps) error {
+	segments, err := fieldpath.Parse(fd.Path)
 	if err != nil {
-		return fmt.Errorf("failed to parse path %s: %w", fieldDescriptor.Path, err)
+		return fmt.Errorf("failed to parse path %s: %w", fd.Path, err)
 	}
 
-	currentSchema := schema
-
-	for i, segment := range segments {
-		isLast := i == len(segments)-1
-
-		if segment.Index >= 0 {
-			// Handle array segment
-			if currentSchema.Type != "array" {
-				currentSchema.Type = "array"
-				currentSchema.Items = &extv1.JSONSchemaPropsOrArray{
-					Schema: &extv1.JSONSchemaProps{
-						Type:       "object",
-						Properties: make(map[string]extv1.JSONSchemaProps),
-					},
-				}
-			}
-			currentSchema = currentSchema.Items.Schema
-		}
-
-		if isLast {
-			// This is the final segment of the path, add the schema here
-			if fieldDescriptor.Schema != nil {
-				if segment.Index >= 0 {
-					*currentSchema = *fieldDescriptor.Schema
-				} else {
-					currentSchema.Properties[segment.Name] = *fieldDescriptor.Schema
-				}
-			} else {
-				// If no schema is provided, default to a string type
-				defaultSchema := extv1.JSONSchemaProps{Type: "string"}
-				if segment.Index >= 0 {
-					*currentSchema = defaultSchema
-				} else {
-					currentSchema.Properties[segment.Name] = defaultSchema
-				}
-			}
-		} else {
-			// This is an intermediate segment of the path
-			if segment.Index < 0 {
-				if _, exists := currentSchema.Properties[segment.Name]; !exists {
-					currentSchema.Properties[segment.Name] = extv1.JSONSchemaProps{
-						Type:       "object",
-						Properties: make(map[string]extv1.JSONSchemaProps),
-					}
-				}
-				s := currentSchema.Properties[segment.Name]
-				currentSchema = &s
-			}
-		}
+	leaf := fd.Schema
+	if leaf == nil {
+		leaf = &extv1.JSONSchemaProps{Type: "string"}
 	}
-
+	addFieldToSchemaSegments(schema, segments, leaf)
 	return nil
+}
+
+// ensureObjectSchema initializes a schema as an object type with properties.
+func ensureObjectSchema(s *extv1.JSONSchemaProps) {
+	if s.Type == "" {
+		s.Type = "object"
+	}
+	if s.Properties == nil {
+		s.Properties = make(map[string]extv1.JSONSchemaProps)
+	}
+}
+
+// addFieldToSchemaSegments walks the parsed path segments, ensures the schema
+// tree has the required object/array nodes, and writes the leaf schema.
+func addFieldToSchemaSegments(
+	current *extv1.JSONSchemaProps,
+	segments []fieldpath.Segment,
+	leaf *extv1.JSONSchemaProps,
+) {
+	if len(segments) == 0 {
+		return
+	}
+
+	seg, rest := segments[0], segments[1:]
+
+	// Array index segment
+	if seg.Index >= 0 {
+		current.Type = "array"
+		if current.Items == nil || current.Items.Schema == nil {
+			current.Items = &extv1.JSONSchemaPropsOrArray{Schema: &extv1.JSONSchemaProps{}}
+		}
+		if len(rest) == 0 {
+			*current.Items.Schema = *leaf
+			return
+		}
+		ensureObjectSchema(current.Items.Schema)
+		addFieldToSchemaSegments(current.Items.Schema, rest, leaf)
+		return
+	}
+
+	// Named field segment
+	ensureObjectSchema(current)
+	if len(rest) == 0 {
+		current.Properties[seg.Name] = *leaf
+		return
+	}
+
+	child := current.Properties[seg.Name]
+	ensureObjectSchema(&child)
+	addFieldToSchemaSegments(&child, rest, leaf)
+	current.Properties[seg.Name] = child
 }

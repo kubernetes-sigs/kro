@@ -266,7 +266,9 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 	}
 
 	if len(items) == 0 {
-		return nil, nil
+		// Resolved empty collection: return non-nil empty slice to distinguish
+		// from unresolved (n.desired == nil).
+		return []*unstructured.Unstructured{}, nil
 	}
 
 	// Build iteration env with all iterator names added as singles (dyn, not list).
@@ -553,6 +555,9 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 }
 
 func (n *Node) isCollectionReady() (bool, error) {
+	if n.desired == nil {
+		return false, nil
+	}
 	if len(n.desired) == 0 {
 		return true, nil
 	}

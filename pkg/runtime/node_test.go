@@ -301,8 +301,13 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 			name: "schema dependency does not block GetDesired",
 			node: newTestNode("deployment", graph.NodeTypeResource).
 				withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
+				withTemplate(map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "test"},
+				}).
 				build(),
-			wantNil: true,
+			wantNil: false,
 			wantErr: nil,
 		},
 	}
@@ -317,6 +322,8 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 			}
 			if tt.wantNil {
 				assert.Nil(t, result)
+			} else {
+				assert.NotNil(t, result)
 			}
 		})
 	}
@@ -329,9 +336,19 @@ func TestNode_IsReady_Collection(t *testing.T) {
 		wantReady bool
 	}{
 		{
-			name: "collection with no desired is ready",
+			name: "collection with nil desired is not ready",
 			node: newTestNode("buckets", graph.NodeTypeCollection).
 				withReadyWhen("each.status.ready == true").build(),
+			wantReady: false,
+		},
+		{
+			name: "collection with resolved empty desired is ready",
+			node: func() *Node {
+				n := newTestNode("buckets", graph.NodeTypeCollection).
+					withReadyWhen("each.status.ready == true").build()
+				n.desired = []*unstructured.Unstructured{}
+				return n
+			}(),
 			wantReady: true,
 		},
 		{
@@ -829,9 +846,15 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 		errContain string
 	}{
 		{
-			name:    "nil template returns nil",
-			node:    newTestNode("test", graph.NodeTypeResource).build(),
-			wantLen: 0,
+			name: "template without expressions returns template copy",
+			node: newTestNode("test", graph.NodeTypeResource).
+				withTemplate(map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"name": "test"},
+				}).build(),
+			wantLen:  1,
+			wantName: "test",
 		},
 		{
 			name: "resolves template with schema values",
@@ -974,12 +997,6 @@ func TestNode_SoftResolve(t *testing.T) {
 		wantErr    bool
 		errContain string
 	}{
-		{
-			name: "nil template returns nil",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
-				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
-			wantNil: true,
-		},
 		{
 			name: "empty template returns template copy",
 			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
@@ -1155,7 +1172,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 		errContain string
 	}{
 		{
-			name: "empty forEach returns nil",
+			name: "empty forEach returns empty slice",
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{
@@ -1243,7 +1260,8 @@ func TestNode_HardResolveCollection(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			if tt.wantLen == 0 {
-				assert.Nil(t, result)
+				assert.NotNil(t, result)
+				assert.Len(t, result, 0)
 			} else {
 				assert.Len(t, result, tt.wantLen)
 			}

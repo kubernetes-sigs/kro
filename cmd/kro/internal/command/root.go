@@ -1,3 +1,17 @@
+// Copyright 2025 The Kube Resource Orchestrator Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package command
 
 import (
@@ -6,15 +20,15 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/release-utils/version"
 
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/view"
-	"github.com/kubernetes-sigs/kro/cmd/kro/version"
 )
 
 var (
-	jsonFlag  bool
-	debugFlag bool
-	rootCmd   *cobra.Command
+	outputFlag string
+	debugFlag  bool
+	rootCmd    *cobra.Command
 )
 
 func NewRootCommand() *cobra.Command {
@@ -34,7 +48,7 @@ func NewRootCommand() *cobra.Command {
 			"kro is a CLI utility that provides various workflows for working with\n" +
 			"ResourceGraphDefinitions (RGDs) as well as their instances. It includes\n" +
 			"commands for generation, validation, distribution, and hydration of these resources.\n\n",
-		Version:       version.Version,
+		Version:       version.GetVersionInfo().GitVersion,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -45,7 +59,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output in JSON format")
+	cmd.PersistentFlags().StringVarP(&outputFlag, "output", "o", "", "Output format. One of: (json | yaml)")
 	cmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Set log level to debug")
 	return cmd
 }
@@ -91,10 +105,11 @@ func Execute() {
 
 	// Configure viewer after flags are parsed by Cobra
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		// Set up the view type based on the `--json` flag
-		viewType := view.ViewHuman
-		if jsonFlag {
-			viewType = view.ViewJSON
+		// Set up the view type based on the `-o`/`--output` flag
+		viewType, err := view.ParseOutputFormat(outputFlag)
+		if err != nil {
+			cli.Println("Error: invalid output format:", outputFlag)
+			os.Exit(1)
 		}
 
 		logLevel := view.LogLevelSilent

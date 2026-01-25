@@ -1,3 +1,17 @@
+// Copyright 2025 The Kube Resource Orchestrator Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package view
 
 import (
@@ -9,8 +23,11 @@ import (
 	"github.com/lmittmann/tint"
 )
 
+// LogLevel controls the minimum severity for displaying log messages.
 type LogLevel int
 
+// Logger provides structured logging. Logs are always human-readable text
+// regardless of output format, following kubectl's pattern.
 type Logger interface {
 	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
@@ -111,7 +128,7 @@ func (l *jsonLogger) Error(msg string, args ...any) {
 	l.logger.Error(msg, args...)
 }
 
-// NewHumanLogger creates a human-readable slog logger
+// NewHumanLogger creates a logger with colored, human-readable output.
 func NewHumanLogger(w io.Writer, level LogLevel) Logger {
 	opts := &tint.Options{
 		Level:       level.toSlogLevel(),
@@ -123,7 +140,8 @@ func NewHumanLogger(w io.Writer, level LogLevel) Logger {
 	return &humanLogger{logger: logger}
 }
 
-// NewJSONLogger creates a JSON-structured slog logger
+// NewJSONLogger creates a logger with JSON-formatted output.
+// Currently unused in favor of human-readable logs for all formats.
 func NewJSONLogger(w io.Writer, level LogLevel) Logger {
 	opts := &slog.HandlerOptions{
 		Level: level.toSlogLevel(),
@@ -133,7 +151,7 @@ func NewJSONLogger(w io.Writer, level LogLevel) Logger {
 	return &jsonLogger{logger: logger}
 }
 
-// NewNopLogger creates a no-op logger that discards all output
+// NewNopLogger creates a no-op logger that discards all output.
 func NewNopLogger() Logger {
 	opts := &slog.HandlerOptions{
 		Level: slog.Level(100), // Higher than any real level

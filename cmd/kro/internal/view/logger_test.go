@@ -1,8 +1,21 @@
+// Copyright 2025 The Kube Resource Orchestrator Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package view_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"testing"
 
 	"github.com/kubernetes-sigs/kro/cmd/kro/internal/view"
@@ -74,35 +87,19 @@ func TestHumanLogger_SilentLevelFiltersAll(t *testing.T) {
 	assert.NotContains(t, output, "info message")
 }
 
-func TestJSONLogger_Debug(t *testing.T) {
+func TestJSONView_UsesHumanLogger(t *testing.T) {
+	// JSONView now uses HumanLogger for logs (like kubectl)
+	// Logs are always human-readable regardless of output format
 	buf, logger := setupJsonLogger(view.LogLevelDebug)
 	logger.Debug("test debug message")
 
-	var entry map[string]any
-	decoder := json.NewDecoder(buf)
-	err := decoder.Decode(&entry)
-	assert.NoError(t, err, "JSON output should be valid")
-
-	assert.Equal(t, "DEBUG", entry["level"])
-	assert.Equal(t, "test debug message", entry["msg"])
-	assert.NotEmpty(t, entry["time"])
+	output := buf.String()
+	assert.Contains(t, output, "DEBUG")
+	assert.Contains(t, output, "test debug message")
 }
 
-func TestJSONLogger_Info(t *testing.T) {
-	buf, logger := setupJsonLogger(view.LogLevelInfo)
-	logger.Info("test info message")
-
-	var entry map[string]any
-	decoder := json.NewDecoder(buf)
-	err := decoder.Decode(&entry)
-	assert.NoError(t, err, "JSON output should be valid")
-
-	assert.Equal(t, "INFO", entry["level"])
-	assert.Equal(t, "test info message", entry["msg"])
-	assert.NotEmpty(t, entry["time"])
-}
-
-func TestJSONLogger_LogLevelFiltering(t *testing.T) {
+func TestJSONView_LogLevelFiltering(t *testing.T) {
+	// JSONView now uses HumanLogger, so logs are text-based
 	buf, logger := setupJsonLogger(view.LogLevelInfo)
 
 	logger.Debug("debug message")

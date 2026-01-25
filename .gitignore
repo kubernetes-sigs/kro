@@ -45,3 +45,4 @@ node_modules/
 
 tools/lsp/client/out/
 manifests/rendered
+cmd/kro/kro

@@ -1,95 +1,61 @@
+// Copyright 2025 The Kube Resource Orchestrator Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package view
 
 import (
-	"encoding/json"
-	"time"
-
 	"github.com/fatih/color"
 )
 
+// ValidateView renders validation results in human-readable format.
 type ValidateView interface {
 	Render(result ValidateResult)
 }
 
+// ValidateResult holds validation results for one or more files.
 type ValidateResult struct {
 	FileCount int
 	Errors    []ValidateFileError
 }
 
+// ValidateFileError represents a validation error in a specific file.
 type ValidateFileError struct {
 	File    string
 	Message string
 }
 
+// HasErrors returns true if any validation errors were found.
 func (r ValidateResult) HasErrors() bool {
 	return len(r.Errors) > 0
 }
 
-// Human view implementation.
-
 type validateHumanView struct {
-	*HumanView
+	stream *Stream
 }
 
-func newValidateHumanView(hv *HumanView) *validateHumanView {
-	return &validateHumanView{HumanView: hv}
+// NewValidateHumanView creates a view that renders validation results in human-readable format.
+func NewValidateHumanView(s *Stream) ValidateView {
+	return &validateHumanView{stream: s}
 }
 
 func (v *validateHumanView) Render(result ValidateResult) {
 	if result.HasErrors() {
 		for _, e := range result.Errors {
-			v.Println(color.RGB(229, 50, 50).Sprintf("Error!"), e.File+":", e.Message)
+			v.stream.Println(color.RGB(229, 50, 50).Sprintf("Error!"), e.File+":", e.Message)
 		}
 		return
 	}
 
-	v.Println(color.RGB(50, 108, 229).Sprintf("Valid!"), "no errors found.")
-}
-
-// JSON view implementation.
-
-type validateJSONView struct {
-	*JSONView
-}
-
-func newValidateJSONView(jv *JSONView) *validateJSONView {
-	return &validateJSONView{JSONView: jv}
-}
-
-type validateJSONResult struct {
-	Type      string              `json:"type"`
-	Status    string              `json:"status"`
-	Timestamp time.Time           `json:"timestamp"`
-	Files     int                 `json:"files"`
-	Errors    []ValidateFileError `json:"errors,omitempty"`
-}
-
-func (v *validateJSONView) Render(result ValidateResult) {
-	out := validateJSONResult{
-		Type:      "validate",
-		Timestamp: time.Now(),
-		Files:     result.FileCount,
-	}
-
-	if result.HasErrors() {
-		out.Status = "error"
-		out.Errors = result.Errors
-	} else {
-		out.Status = "success"
-	}
-
-	if data, err := json.Marshal(out); err == nil {
-		v.Println(string(data))
-	}
-}
-
-func NewValidateView(v Viewer) ValidateView {
-	switch vt := v.(type) {
-	case *HumanView:
-		return newValidateHumanView(vt)
-	case *JSONView:
-		return newValidateJSONView(vt)
-	default:
-		panic("unknown view type")
-	}
+	v.stream.Println(color.RGB(50, 108, 229).Sprintf("Valid!"), "no errors found.")
 }

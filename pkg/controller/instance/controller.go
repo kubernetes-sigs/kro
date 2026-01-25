@@ -32,6 +32,9 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+// FieldManagerForLabeler is the field manager name used when applying labels.
+const FieldManagerForLabeler = "kro.run/labeller"
+
 // ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
@@ -166,9 +169,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile resources (SSA + prune) and update runtime state
+	// 7. Reconcile nodes (SSA + prune) and update runtime state
 	//--------------------------------------------------------------
-	if err := c.reconcileResources(rcx); err != nil {
+	if err := c.reconcileNodes(rcx); err != nil {
 		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
 		_ = c.updateStatus(rcx)
 		return err
@@ -180,7 +183,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	case InstanceStateActive:
 		rcx.Mark.ResourcesReady()
 	case InstanceStateError:
-		if err := rcx.StateManager.ResourceErrors(); err != nil {
+		if err := rcx.StateManager.NodeErrors(); err != nil {
 			rcx.Mark.ResourcesNotReady("resource error: %v", err)
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")

@@ -389,7 +389,7 @@ func (a *ApplySet) applyResource(
 			// True ownership = instance level, not just RGD level
 			if existing[metadata.InstanceIDLabel] != desired[metadata.InstanceIDLabel] ||
 				existing[metadata.ResourceGraphDefinitionIDLabel] != desired[metadata.ResourceGraphDefinitionIDLabel] ||
-				existing[metadata.NodeIDLabel] != desired[metadata.NodeIDLabel] {
+				existing[metadata.NodeIDLabel] != desired[metadata.NodeIDLabel] || existing[metadata.CollectionIndexLabel] != desired[metadata.CollectionIndexLabel] {
 
 				item.Error = fmt.Errorf(
 					"kro ownership conflict for %s/%s: owned by different KRO instance",

@@ -590,7 +590,7 @@ func TestNode_EvaluateExprs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values, hasPending, err := tt.node().evaluateExprs(false)
+			values, hasPending, err := tt.node().evaluateExprsFiltered(nil, false)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -605,20 +605,6 @@ func TestNode_EvaluateExprs(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestNode_ResolveInTemplate(t *testing.T) {
-	node := newTestNode("deployment", graph.NodeTypeResource).
-		withTemplateVar("metadata.name", "schema.spec.name").
-		withTemplate(map[string]any{
-			"apiVersion": "apps/v1",
-			"kind":       "Deployment",
-			"metadata":   map[string]any{"name": "${schema.spec.name}"},
-		}).build()
-
-	result, err := node.resolveInTemplate(node.Spec.Template, map[string]any{"schema.spec.name": "myapp"})
-	assert.NoError(t, err)
-	assert.Equal(t, "myapp", result.GetName())
 }
 
 func TestNode_UpsertToTemplate(t *testing.T) {
@@ -955,7 +941,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := tt.node.hardResolveSingleResource()
+			result, err := tt.node.hardResolveSingleResource(tt.node.templateVars)
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errIs != nil {
@@ -1244,7 +1230,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := tt.node.hardResolveCollection()
+			result, err := tt.node.hardResolveCollection(tt.node.templateVars, true)
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errIs != nil {

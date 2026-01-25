@@ -188,14 +188,12 @@ func (c *Controller) prepareRegularResource(
 	}
 	desired := desiredList[0]
 
-	// Determine namespace: use resource's namespace, or fall back to instance namespace for namespaced resources
-	namespace := desired.GetNamespace()
-	if namespace == "" && desc.Namespaced {
-		namespace = rcx.Instance.GetNamespace()
-		desired.SetNamespace(namespace)
-	}
-
-	current, err := c.getCurrentClusterState(rcx, gvr, namespace, desired.GetName())
+	current, err := c.getCurrentClusterState(
+		rcx,
+		gvr,
+		desired.GetNamespace(),
+		desired.GetName(),
+	)
 	if err != nil {
 		st.State = ResourceStateError
 		st.Err = err
@@ -237,25 +235,23 @@ func (c *Controller) prepareCollectionResource(
 	}
 
 	// LIST all existing collection items with single call (more efficient than N GETs)
-	existingByKey, err := c.listCollectionItems(rcx, gvr, id)
+	existingItems, err := c.listCollectionItems(rcx, gvr, id)
 	if err != nil {
 		st.State = ResourceStateError
 		st.Err = fmt.Errorf("failed to list collection items: %w", err)
 		return nil, false, id, nil
 	}
 
-	// Set current items in runtime so CEL expressions in dependent resources can resolve
-	currentItems := make([]*unstructured.Unstructured, collectionSize)
-	for i, expandedResource := range expandedResources {
-		if expandedResource.GetNamespace() == "" && desc.Namespaced {
-			expandedResource.SetNamespace(rcx.Instance.GetNamespace())
-		}
-		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
-		if current, ok := existingByKey[key]; ok {
-			currentItems[i] = current
-		}
+	// Pass unordered observed items to runtime; it will align them to desired
+	// order by identity.
+	node.SetObserved(existingItems)
+
+	// Build lookup map for current items keyed by namespace/name.
+	existingByKey := make(map[string]*unstructured.Unstructured, len(existingItems))
+	for _, current := range existingItems {
+		key := current.GetNamespace() + "/" + current.GetName()
+		existingByKey[key] = current
 	}
-	node.SetObserved(currentItems)
 
 	// Build resources list for apply
 	resources := make([]applyset.Resource, 0, collectionSize)
@@ -279,13 +275,13 @@ func (c *Controller) prepareCollectionResource(
 	return resources, true, "", nil
 }
 
-// listCollectionItems returns existing collection items indexed by namespace/name.
+// listCollectionItems returns existing collection items.
 // Uses a single LIST with label selector instead of N individual GETs.
 func (c *Controller) listCollectionItems(
 	rcx *ReconcileContext,
 	gvr schema.GroupVersionResource,
 	nodeID string,
-) (map[string]*unstructured.Unstructured, error) {
+) ([]*unstructured.Unstructured, error) {
 	// Filter by both instance UID and node ID for precise matching
 	instanceUID := string(rcx.Instance.GetUID())
 	selector := fmt.Sprintf("%s=%s,%s=%s",
@@ -301,13 +297,11 @@ func (c *Controller) listCollectionItems(
 		return nil, err
 	}
 
-	result := make(map[string]*unstructured.Unstructured, len(list.Items))
+	items := make([]*unstructured.Unstructured, len(list.Items))
 	for i := range list.Items {
-		item := &list.Items[i]
-		key := item.GetNamespace() + "/" + item.GetName()
-		result[key] = item
+		items[i] = &list.Items[i]
 	}
-	return result, nil
+	return items, nil
 }
 
 // CollectionInfo holds collection item metadata for decorator.
@@ -537,7 +531,7 @@ func (c *Controller) updateCollectionFromApplyResults(
 		return nil
 	}
 
-	observedItems := make([]*unstructured.Unstructured, len(desiredItems))
+	observedItems := make([]*unstructured.Unstructured, 0, len(desiredItems))
 
 	for i := range desiredItems {
 		expandedID := fmt.Sprintf("%s-%d", resourceID, i)
@@ -548,7 +542,7 @@ func (c *Controller) updateCollectionFromApplyResults(
 				return nil
 			}
 			if item.Observed != nil {
-				observedItems[i] = item.Observed
+				observedItems = append(observedItems, item.Observed)
 			}
 		}
 	}

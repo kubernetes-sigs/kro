@@ -24,16 +24,14 @@ import (
 
 func TestValidateUniqueIdentities(t *testing.T) {
 	tests := []struct {
-		name       string
-		objs       []*unstructured.Unstructured
-		namespaced bool
-		wantErr    bool
+		name    string
+		objs    []*unstructured.Unstructured
+		wantErr bool
 	}{
 		{
-			name:       "empty slice",
-			objs:       nil,
-			namespaced: true,
-			wantErr:    false,
+			name:    "empty slice",
+			objs:    nil,
+			wantErr: false,
 		},
 		{
 			name: "unique identities",
@@ -41,8 +39,7 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("apps/v1", "Deployment", "ns", "deploy-a"),
 				newUnstructured("apps/v1", "Deployment", "ns", "deploy-b"),
 			},
-			namespaced: true,
-			wantErr:    false,
+			wantErr: false,
 		},
 		{
 			name: "duplicate identities",
@@ -50,8 +47,7 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("apps/v1", "Deployment", "ns", "deploy-a"),
 				newUnstructured("apps/v1", "Deployment", "ns", "deploy-a"),
 			},
-			namespaced: true,
-			wantErr:    true,
+			wantErr: true,
 		},
 		{
 			name: "same name different namespace for namespaced resource",
@@ -59,8 +55,7 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("apps/v1", "Deployment", "ns1", "deploy"),
 				newUnstructured("apps/v1", "Deployment", "ns2", "deploy"),
 			},
-			namespaced: true,
-			wantErr:    false, // different namespaces = different resources
+			wantErr: false, // different namespaces = different resources
 		},
 		{
 			name: "same name different kind",
@@ -68,27 +63,7 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("apps/v1", "Deployment", "ns", "foo"),
 				newUnstructured("v1", "Service", "ns", "foo"),
 			},
-			namespaced: true,
-			wantErr:    false,
-		},
-		{
-			name: "nil objects are skipped",
-			objs: []*unstructured.Unstructured{
-				newUnstructured("apps/v1", "Deployment", "ns", "deploy"),
-				nil,
-				newUnstructured("apps/v1", "Deployment", "ns", "deploy2"),
-			},
-			namespaced: true,
-			wantErr:    false,
-		},
-		{
-			name: "cluster-scoped resources with different namespaces should collide",
-			objs: []*unstructured.Unstructured{
-				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "", "admin"),
-				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "ignored", "admin"),
-			},
-			namespaced: false, // cluster-scoped
-			wantErr:    true,  // same name = collision
+			wantErr: false,
 		},
 		{
 			name: "cluster-scoped resources with same name collide",
@@ -96,8 +71,7 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "", "admin"),
 				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "", "admin"),
 			},
-			namespaced: false,
-			wantErr:    true,
+			wantErr: true,
 		},
 		{
 			name: "cluster-scoped resources with different names are unique",
@@ -105,14 +79,13 @@ func TestValidateUniqueIdentities(t *testing.T) {
 				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "", "admin"),
 				newUnstructured("rbac.authorization.k8s.io/v1", "ClusterRole", "", "viewer"),
 			},
-			namespaced: false,
-			wantErr:    false,
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateUniqueIdentities(tt.objs, tt.namespaced)
+			err := validateUniqueIdentities(tt.objs)
 			if tt.wantErr {
 				require.Error(t, err, "expected error for duplicate identity")
 				assert.Contains(t, err.Error(), "duplicate identity")
@@ -123,27 +96,24 @@ func TestValidateUniqueIdentities(t *testing.T) {
 	}
 }
 
-func TestOrderedCollectionObserved(t *testing.T) {
+func TestOrderedIntersection(t *testing.T) {
 	tests := []struct {
-		name       string
-		observed   []*unstructured.Unstructured
-		desired    []*unstructured.Unstructured
-		namespaced bool
-		want       []string // expected names in order
+		name     string
+		observed []*unstructured.Unstructured
+		desired  []*unstructured.Unstructured
+		want     []string // expected names in order
 	}{
 		{
-			name:       "empty observed",
-			observed:   nil,
-			desired:    []*unstructured.Unstructured{newUnstructured("v1", "Pod", "ns", "a")},
-			namespaced: true,
-			want:       nil,
+			name:     "empty observed",
+			observed: nil,
+			desired:  []*unstructured.Unstructured{newUnstructured("v1", "Pod", "ns", "a")},
+			want:     nil,
 		},
 		{
-			name:       "empty desired",
-			observed:   []*unstructured.Unstructured{newUnstructured("v1", "Pod", "ns", "a")},
-			desired:    nil,
-			namespaced: true,
-			want:       []string{"a"},
+			name:     "empty desired",
+			observed: []*unstructured.Unstructured{newUnstructured("v1", "Pod", "ns", "a")},
+			desired:  nil,
+			want:     []string{"a"},
 		},
 		{
 			name: "reorders to match desired",
@@ -157,8 +127,7 @@ func TestOrderedCollectionObserved(t *testing.T) {
 				newUnstructured("v1", "Pod", "ns", "b"),
 				newUnstructured("v1", "Pod", "ns", "c"),
 			},
-			namespaced: true,
-			want:       []string{"a", "b", "c"},
+			want: []string{"a", "b", "c"},
 		},
 		{
 			name: "orphans excluded",
@@ -171,8 +140,7 @@ func TestOrderedCollectionObserved(t *testing.T) {
 				newUnstructured("v1", "Pod", "ns", "a"),
 				newUnstructured("v1", "Pod", "ns", "b"),
 			},
-			namespaced: true,
-			want:       []string{"a", "b"},
+			want: []string{"a", "b"},
 		},
 		{
 			name: "missing observed items create gaps",
@@ -184,14 +152,13 @@ func TestOrderedCollectionObserved(t *testing.T) {
 				newUnstructured("v1", "Pod", "ns", "b"),
 				newUnstructured("v1", "Pod", "ns", "c"),
 			},
-			namespaced: true,
-			want:       []string{"c"}, // only c is present
+			want: []string{"c"}, // only c is present
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := orderedCollectionObserved(tt.observed, tt.desired, tt.namespaced)
+			result := orderedIntersection(tt.observed, tt.desired)
 
 			if tt.want == nil {
 				// For empty observed, result should equal observed

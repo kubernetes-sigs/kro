@@ -22,13 +22,10 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-func validateUniqueIdentities(objs []*unstructured.Unstructured, namespaced bool) error {
+func validateUniqueIdentities(objs []*unstructured.Unstructured) error {
 	seen := make(map[string]bool)
 	for _, obj := range objs {
-		if obj == nil {
-			continue
-		}
-		key := identityKey(obj, namespaced)
+		key := identityKey(obj)
 		if seen[key] {
 			return fmt.Errorf("duplicate identity: %s", key)
 		}
@@ -37,54 +34,42 @@ func validateUniqueIdentities(objs []*unstructured.Unstructured, namespaced bool
 	return nil
 }
 
-func identityKey(obj *unstructured.Unstructured, namespaced bool) string {
-	if obj == nil {
-		return ""
-	}
+func identityKey(obj *unstructured.Unstructured) string {
+	// Caller must guarantee: cluster-scoped objects have empty namespace and
+	// namespaced objects have a namespace set.
 	gvk := obj.GroupVersionKind()
-	if namespaced {
-		return fmt.Sprintf("%s/%s/%s/%s/%s",
-			gvk.Group, gvk.Version, gvk.Kind,
-			obj.GetNamespace(), obj.GetName())
-	}
-	// Cluster-scoped: namespace is irrelevant
-	return fmt.Sprintf("%s/%s/%s/%s",
-		gvk.Group, gvk.Version, gvk.Kind, obj.GetName())
+	return fmt.Sprintf("%s/%s/%s/%s/%s",
+		gvk.Group, gvk.Version, gvk.Kind,
+		obj.GetNamespace(), obj.GetName())
 }
 
-func orderedCollectionObserved(
-	observed, desired []*unstructured.Unstructured, namespaced bool,
+// orderedIntersection returns the observed items that also exist in desired,
+// ordered to match desired's sequence.
+//
+// Why this exists:
+//   - Kubernetes LIST results have no guaranteed order, so we cannot trust list order.
+//   - Collection items are created/updated in a deterministic "desired" order
+//     (the forEach expansion order). That order is the source of truth for collection
+//     evaluation.
+//   - readyWhen for collections evaluates "each" per item; aligning observed items
+//     to desired indices keeps readiness checks deterministic across reconciles.
+//   - Additional use cases will come with propagation control.
+func orderedIntersection(
+	observed, desired []*unstructured.Unstructured,
 ) []*unstructured.Unstructured {
 	if len(observed) == 0 || len(desired) == 0 {
 		return observed
 	}
 
-	indexByKey := make(map[string]int, len(desired))
-	for i, obj := range desired {
-		if obj == nil {
-			continue
-		}
-		indexByKey[identityKey(obj, namespaced)] = i
-	}
-
-	ordered := make([]*unstructured.Unstructured, len(desired))
+	observedByKey := make(map[string]*unstructured.Unstructured, len(observed))
 	for _, obj := range observed {
-		if obj == nil {
-			continue
-		}
-		idx, ok := indexByKey[identityKey(obj, namespaced)]
-		if !ok {
-			continue // orphan
-		}
-		if ordered[idx] == nil {
-			ordered[idx] = obj
-		}
+		observedByKey[identityKey(obj)] = obj
 	}
 
-	result := make([]*unstructured.Unstructured, 0, len(ordered))
-	for _, obj := range ordered {
-		if obj != nil {
-			result = append(result, obj)
+	result := make([]*unstructured.Unstructured, 0, len(desired))
+	for _, obj := range desired {
+		if observedObj, ok := observedByKey[identityKey(obj)]; ok {
+			result = append(result, observedObj)
 		}
 	}
 	return result

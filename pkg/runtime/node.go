@@ -79,12 +79,12 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	singles, collections, _ := n.contextDependencyIDs(nil)
-	env, err := buildEnv(singles, collections)
+	// includeWhen only allows schema references; restrict env/context to schema.
+	env, err := buildEnv([]string{graph.InstanceNodeID}, nil)
 	if err != nil {
 		return false, err
 	}
-	ctx := n.buildContext()
+	ctx := n.buildContext(graph.InstanceNodeID)
 
 	for _, expr := range n.includeWhenExprs {
 		val, err := evalBoolExpr(env, expr, ctx)
@@ -528,16 +528,12 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 	}
 
 	nodeID := n.Spec.Meta.ID
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{nodeID, graph.InstanceNodeID}))
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{nodeID}))
 	if err != nil {
 		return false, err
 	}
 
 	ctx := map[string]any{nodeID: n.observed[0].Object}
-	// Add schema to context (without status).
-	if schemaDep := n.deps[graph.InstanceNodeID]; schemaDep != nil {
-		ctx[graph.InstanceNodeID] = withStatusOmitted(schemaDep.observed[0].Object)
-	}
 
 	for _, expr := range n.readyWhenExprs {
 		result, err := evalBoolExpr(env, expr, ctx)
@@ -565,25 +561,16 @@ func (n *Node) isCollectionReady() (bool, error) {
 		return false, nil
 	}
 
-	// Collection readyWhen uses "each" (single item) plus schema.
+	// Collection readyWhen uses "each" (single item) only.
 	env, err := krocel.DefaultEnvironment(
-		krocel.WithResourceIDs([]string{graph.InstanceNodeID, graph.EachVarName}),
+		krocel.WithResourceIDs([]string{graph.EachVarName}),
 	)
 	if err != nil {
 		return false, err
 	}
 
-	// Get schema value once (without status).
-	var schemaObj map[string]any
-	if schemaDep := n.deps[graph.InstanceNodeID]; schemaDep != nil {
-		schemaObj = withStatusOmitted(schemaDep.observed[0].Object)
-	}
-
 	for i, obj := range n.observed {
 		ctx := map[string]any{graph.EachVarName: obj.Object}
-		if schemaObj != nil {
-			ctx[graph.InstanceNodeID] = schemaObj
-		}
 		for _, expr := range n.readyWhenExprs {
 			// readyWhen for collections must NOT be cached - each item has different "each" context.
 			// Use evalRawCEL directly instead of evalBoolExpr.

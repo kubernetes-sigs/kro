@@ -797,7 +797,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 			errContain: "division by zero",
 		},
 		{
-			name: "uses schema in readyWhen",
+			name: "schema is not available in readyWhen",
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{
@@ -815,7 +815,8 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.replicas >= schema.spec.minReplicas").build()
 			},
-			wantReady: false,
+			wantErr:    true,
+			errContain: "undeclared reference",
 		},
 	}
 

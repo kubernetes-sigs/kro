@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/util/retry"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
@@ -313,6 +314,23 @@ var _ = Describe("Status", func() {
 			return status
 		}
 
+		updateSpec := func(ctx SpecContext, mutate func(spec map[string]interface{})) {
+			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				current := &unstructured.Unstructured{}
+				current.SetAPIVersion(instance.GetAPIVersion())
+				current.SetKind(instance.GetKind())
+				if err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      instanceName,
+					Namespace: namespace,
+				}, current); err != nil {
+					return err
+				}
+				spec := current.Object["spec"].(map[string]interface{})
+				mutate(spec)
+				return env.Client.Update(ctx, current)
+			})).To(Succeed())
+		}
+
 		// State 1: All disabled - no status fields should exist
 		Eventually(func(g Gomega, ctx SpecContext) {
 			status := getStatus(g, ctx)
@@ -326,8 +344,9 @@ var _ = Describe("Status", func() {
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// State 2: Enable cm1 only - field1 should appear
-		instance.Object["spec"].(map[string]interface{})["includeCm1"] = true
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		updateSpec(ctx, func(spec map[string]interface{}) {
+			spec["includeCm1"] = true
+		})
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			status := getStatus(g, ctx)
@@ -341,8 +360,9 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// State 3: Enable cm1 and cm2 - field1 and field2 should appear
-		instance.Object["spec"].(map[string]interface{})["includeCm2"] = true
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		updateSpec(ctx, func(spec map[string]interface{}) {
+			spec["includeCm2"] = true
+		})
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			status := getStatus(g, ctx)
@@ -357,8 +377,9 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// State 4: Enable all - all fields should appear
-		instance.Object["spec"].(map[string]interface{})["includeCm3"] = true
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		updateSpec(ctx, func(spec map[string]interface{}) {
+			spec["includeCm3"] = true
+		})
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			status := getStatus(g, ctx)
@@ -374,8 +395,9 @@ var _ = Describe("Status", func() {
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// State 5: Disable cm2 - field2 and field3 should disappear, field1 remains
-		instance.Object["spec"].(map[string]interface{})["includeCm2"] = false
-		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+		updateSpec(ctx, func(spec map[string]interface{}) {
+			spec["includeCm2"] = false
+		})
 
 		Eventually(func(g Gomega, ctx SpecContext) {
 			status := getStatus(g, ctx)

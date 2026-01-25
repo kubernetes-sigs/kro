@@ -53,6 +53,7 @@ var (
 		"context",
 		"dependency",
 		"dependencies",
+		"each", // Reserved for per-item readiness in collections
 		"externalRef",
 		"externalReference",
 		"externalRefs",
@@ -138,6 +139,60 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 		}
 		seen[res.ID] = struct{}{}
 	}
+
+	// Validate forEach iterators after collecting all resource IDs
+	resourceIDs := sets.NewString()
+	for _, res := range rgd.Spec.Resources {
+		resourceIDs.Insert(res.ID)
+	}
+	for _, res := range rgd.Spec.Resources {
+		if err := validateForEachDimensions(res, resourceIDs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateForEachDimensions validates the forEach iterators for a resource.
+// It checks that:
+// - Iterator names are valid identifiers (lowerCamelCase)
+// - Iterator names are not reserved keywords
+// - Iterator names do not conflict with resource IDs
+// - Iterator names are unique within the same resource
+func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String) error {
+	//TODO: Validate a maximum number dimensions
+
+	if len(res.ForEach) == 0 {
+		return nil
+	}
+
+	seenIterators := sets.NewString()
+	for _, iterMap := range res.ForEach {
+		for iterName := range iterMap {
+			// Check if iterator name is a valid identifier
+			if !isValidResourceID(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q is not valid: must be lowerCamelCase", res.ID, iterName)
+			}
+
+			// Check if iterator name is a reserved keyword
+			if isKROReservedWord(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q is a reserved keyword", res.ID, iterName)
+			}
+
+			// Check if iterator name conflicts with a resource ID
+			if resourceIDs.Has(iterName) {
+				return fmt.Errorf("resource %q: forEach iterator name %q conflicts with resource ID", res.ID, iterName)
+			}
+
+			// Check for duplicate iterator names within the same resource
+			if seenIterators.Has(iterName) {
+				return fmt.Errorf("resource %q: duplicate forEach iterator name %q", res.ID, iterName)
+			}
+			seenIterators.Insert(iterName)
+		}
+	}
+
 	return nil
 }
 
@@ -182,6 +237,24 @@ func validateKubernetesObjectStructure(obj map[string]interface{}) error {
 func validateKubernetesVersion(version string) error {
 	if !kubernetesVersionRegex.MatchString(version) {
 		return fmt.Errorf("version %s is not a valid Kubernetes version", version)
+	}
+	return nil
+}
+
+// validateCombinableResourceFields checks that certain fields in a resource
+// are not used together in an invalid combination, and that required fields are present.
+func validateCombinableResourceFields(res *v1alpha1.Resource) error {
+	hasTemplate := len(res.Template.Raw) > 0 // Template is runtime.RawExtension (struct)
+	hasExternalRef := res.ExternalRef != nil // ExternalRef is a pointer
+
+	if !hasTemplate && !hasExternalRef {
+		return fmt.Errorf("resource %q: exactly one of template or externalRef must be provided", res.ID)
+	}
+	if hasExternalRef && hasTemplate {
+		return fmt.Errorf("resource %q: cannot use externalRef with template", res.ID)
+	}
+	if hasExternalRef && len(res.ForEach) > 0 {
+		return fmt.Errorf("resource %q: cannot use externalRef with forEach", res.ID)
 	}
 	return nil
 }

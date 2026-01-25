@@ -15,617 +15,155 @@
 package runtime
 
 import (
-	"fmt"
-	"slices"
-	"strings"
-	"sync"
-
-	"github.com/google/cel-go/cel"
-	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
-	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
-// Compile time proof to ensure that ResourceGraphDefinitionRuntime implements the
-// Runtime interface.
-var _ Interface = &ResourceGraphDefinitionRuntime{}
+// Compile-time check: Runtime must implement Interface.
+var _ Interface = (*Runtime)(nil)
 
-// NewResourceGraphDefinitionRuntime creates and initializes a new ResourceGraphDefinitionRuntime
-// instance.
-//
-// It is also responsible of properly creating the ExpressionEvaluationState
-// for each variable in the resources and the instance, and caching them
-// for future use. This function will also call Synchronize to evaluate the
-// static variables. This helps hide the complexity of the runtime from the
-// caller (instance controller in this case).
-//
-// The output of this function is NOT thread safe.
-func NewResourceGraphDefinitionRuntime(
-	instance Resource,
-	resources map[string]Resource,
-	topologicalOrder []string,
-) (*ResourceGraphDefinitionRuntime, error) {
-	r := &ResourceGraphDefinitionRuntime{
-		instance:                     instance,
-		resources:                    resources,
-		topologicalOrder:             topologicalOrder,
-		resolvedResources:            make(map[string]*unstructured.Unstructured),
-		runtimeVariables:             make(map[string][]*expressionEvaluationState),
-		expressionsCache:             make(map[string]*expressionEvaluationState),
-		celProgramCache:              make(map[string]cel.Program),
-		ignoredByConditionsResources: make(map[string]bool),
-	}
-	// make sure to copy the variables and the dependencies, to avoid
-	// modifying the original resource.
-	for id, resource := range resources {
-		if yes, _ := r.ReadyToProcessResource(id); !yes {
-			continue
-		}
-		// Process the resource variables.
-		for _, variable := range resource.GetVariables() {
-			for _, expr := range variable.Expressions {
-				// If cached, use the same pointer.
-				if ec, seen := r.expressionsCache[expr]; seen {
-					// NOTE(a-hilaly): This strikes me as an early optimization, but
-					// it's a good one, I believe... We can always remove it if it's
-					// too magical.
-					r.runtimeVariables[id] = append(r.runtimeVariables[id], ec)
-					continue
-				}
-				ees := &expressionEvaluationState{
-					Expression:   expr,
-					Dependencies: variable.Dependencies,
-					Kind:         variable.Kind,
-				}
-				r.runtimeVariables[id] = append(r.runtimeVariables[id], ees)
-				r.expressionsCache[expr] = ees
-			}
-		}
-		// Process the readyWhenExpressions.
-		for _, expr := range resource.GetReadyWhenExpressions() {
-			ees := &expressionEvaluationState{
-				Expression: expr,
-				Kind:       variable.ResourceVariableKindReadyWhen,
-			}
-			r.expressionsCache[expr] = ees
-		}
+// Interface defines the minimal runtime operations needed by the controller.
+type Interface interface {
+	// Nodes returns nodes in topological order (instance excluded).
+	Nodes() []*Node
+
+	// Instance returns the instance node.
+	Instance() *Node
+}
+
+// Runtime is the execution context for a single reconciliation.
+// It holds nodes in topological order and provides access to the instance node.
+// Expression deduplication is done during FromGraph construction via a local cache.
+type Runtime struct {
+	order    []string
+	nodes    map[string]*Node
+	instance *Node
+}
+
+// FromGraph creates a new Runtime from a Graph and instance.
+// This is called at the start of each reconciliation.
+func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, error) {
+	instanceObj := instance.DeepCopy()
+
+	rt := &Runtime{
+		order: g.TopologicalOrder,
+		nodes: make(map[string]*Node),
 	}
 
-	// Now we need to collect the instance variables.
-	for _, variable := range instance.GetVariables() {
-		for _, expr := range variable.Expressions {
-			if ec, seen := r.expressionsCache[expr]; seen {
-				// It is validated at the Graph level that the resource ids
-				// can't be `instance`. This is why.
-				r.runtimeVariables["instance"] = append(r.runtimeVariables["instance"], ec)
-				continue
-			}
-			ees := &expressionEvaluationState{
+	// Expression cache for non-iteration expressions only.
+	// Iteration expressions are not cached because they're evaluated per-item
+	// with different iterator bindings each time.
+	expressionsCache := make(map[string]*expressionEvaluationState)
+
+	// Helper to get or create expression state. Only caches non-iteration expressions.
+	getOrCreateExpr := func(expr string, kind variable.ResourceVariableKind, deps []string) *expressionEvaluationState {
+		// Don't cache iteration expressions - they need fresh evaluation per iteration.
+		if kind.IsIteration() {
+			return &expressionEvaluationState{
 				Expression:   expr,
-				Dependencies: variable.Dependencies,
-				Kind:         variable.Kind,
+				Dependencies: deps,
+				Kind:         kind,
 			}
-			r.runtimeVariables["instance"] = append(r.runtimeVariables["instance"], ees)
-			r.expressionsCache[expr] = ees
+		}
+		if cached, ok := expressionsCache[expr]; ok {
+			return cached
+		}
+		state := &expressionEvaluationState{
+			Expression:   expr,
+			Dependencies: deps,
+			Kind:         kind,
+		}
+		expressionsCache[expr] = state
+		return state
+	}
+
+	// Phase 1: Create all nodes first (without deps wired).
+	for _, id := range rt.order {
+		rt.nodes[id] = &Node{
+			Spec: g.Nodes[id].DeepCopy(),
+			deps: make(map[string]*Node),
 		}
 	}
 
-	// Evaluate the static variables, so that the caller only needs to call Synchronize
-	// whenever a new resource is added or a variable is updated.
-	err := r.evaluateStaticVariables()
-	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate static variables: %w", err)
+	// Create instance node.
+	instNode := &Node{
+		Spec: g.Instance.DeepCopy(),
+		deps: make(map[string]*Node),
 	}
-	err = r.propagateResourceVariables()
-	if err != nil {
-		return nil, fmt.Errorf("failed to propagate resource variables: %w", err)
-	}
+	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
+	rt.instance = instNode
 
-	return r, nil
-}
-
-// ResourceGraphDefinitionRuntime implements the Interface for managing and synchronizing
-// resources. Is is the responsibility of the consumer to call Synchronize
-// appropriately, and decide whether to follow the TopologicalOrder or a
-// BFS/DFS traversal of the resources.
-type ResourceGraphDefinitionRuntime struct {
-	// instance represents the main resource instance being managed.
-	// This is typically the top-level custom resource that owns or manages
-	// other resources in the graph.
-	instance Resource
-
-	// resources is a map of all resources in the graph, keyed by their
-	// unique identifier. These resources represent the nodes in the
-	// dependency graph.
-	resources map[string]Resource
-
-	// resolvedResources stores the latest state of resolved resources.
-	// When a resource is successfully created or updated in the cluster,
-	// its state is stored here. This map helps track which resources have
-	// been successfully reconciled with the cluster state.
-	resolvedResources map[string]*unstructured.Unstructured
-
-	// runtimeVariables maps resource ids to their associated variables.
-	// These variables are used in the synchronization process to resolve
-	// dependencies and compute derived values for resources.
-	runtimeVariables map[string][]*expressionEvaluationState
-
-	// expressionsCache caches evaluated expressions to avoid redundant
-	// computations. This optimization helps improve performance by reusing
-	// previously calculated results for expressions that haven't changed.
-	//
-	// NOTE(a-hilaly): It is important to note that the expressionsCache have
-	// the same pointers used in the runtimeVariables. Meaning that if a variable
-	// is updated here, it will be updated in the runtimeVariables as well, and
-	// vice versa.
-	expressionsCache map[string]*expressionEvaluationState
-
-	// celProgramCache caches compiled CEL programs by expression string to
-	// avoid recompiling the same expression multiple times. This improves
-	// performance during expression evaluation by reusing previously compiled
-	// programs.
-	celProgramCache map[string]cel.Program
-	// celProgramCacheMu is a mutex that protects access to the celProgramCache
-	// to ensure thread safety during concurrent reads and writes.
-	celProgramCacheMu sync.RWMutex
-
-	// topologicalOrder holds the dependency order of resources. This order
-	// ensures that resources are processed in a way that respects their
-	// dependencies, preventing circular dependencies and ensuring efficient
-	// synchronization.
-	topologicalOrder []string
-
-	// ignoredByConditionsResources holds the resources who's defined conditions returned false
-	// or who's dependencies are ignored
-	ignoredByConditionsResources map[string]bool
-}
-
-// TopologicalOrder returns the topological order of resources.
-func (rt *ResourceGraphDefinitionRuntime) TopologicalOrder() []string {
-	return rt.topologicalOrder
-}
-
-// ResourceDescriptor returns the descriptor for a given resource id.
-//
-// It is the responsibility of the caller to ensure that the resource id
-// exists in the runtime. a.k.a the caller should use the TopologicalOrder
-// to get the resource ids.
-func (rt *ResourceGraphDefinitionRuntime) ResourceDescriptor(id string) ResourceDescriptor {
-	return rt.resources[id]
-}
-
-// GetResource returns a resource so that it's either created or updated in
-// the cluster, it also returns the runtime state of the resource. Indicating
-// whether the resource variables are resolved or not, and whether the resource
-// readiness conditions are met or not.
-func (rt *ResourceGraphDefinitionRuntime) GetResource(id string) (*unstructured.Unstructured, ResourceState) {
-	// Did the user set the resource?
-	r, ok := rt.resolvedResources[id]
-	if ok {
-		return r, ResourceStateResolved
-	}
-
-	// If not, can we process the resource?
-	resolved := rt.canProcessResource(id)
-	if resolved {
-		return rt.resources[id].Unstructured(), ResourceStateResolved
-	}
-
-	return nil, ResourceStateWaitingOnDependencies
-}
-
-// SetResource updates or sets a resource in the runtime. This is typically
-// called after a resource has been created or updated in the cluster.
-func (rt *ResourceGraphDefinitionRuntime) SetResource(id string, resource *unstructured.Unstructured) {
-	rt.resolvedResources[id] = resource
-}
-
-// GetInstance returns the main instance object managed by this runtime.
-func (rt *ResourceGraphDefinitionRuntime) GetInstance() *unstructured.Unstructured {
-	return rt.instance.Unstructured()
-}
-
-// SetInstance updates the main instance object.
-// This is typically called after the instance has been updated in the cluster.
-func (rt *ResourceGraphDefinitionRuntime) SetInstance(obj *unstructured.Unstructured) {
-	ptr := rt.instance.Unstructured()
-	ptr.Object = obj.Object
-}
-
-// Synchronize tries to resolve as many resources as possible. It returns true
-// if the user should call Synchronize again, and false if something is still
-// not resolved.
-//
-// Every time Synchronize is called, it walks through the resources and tries
-// to resolve as many as possible. If a resource is resolved, it's added to the
-// resolved resources map.
-func (rt *ResourceGraphDefinitionRuntime) Synchronize() (bool, error) {
-	// if everything is resolved, we're done.
-	// TODO(a-hilaly): Add readiness check here.
-	if rt.allExpressionsAreResolved() && len(rt.resolvedResources) == len(rt.resources) {
-		return false, nil
-	}
-
-	// first synchronize the resources.
-	err := rt.evaluateDynamicVariables()
-	if err != nil {
-		return true, fmt.Errorf("failed to evaluate dynamic variables: %w", err)
-	}
-
-	// Now propagate the resource variables.
-	err = rt.propagateResourceVariables()
-	if err != nil {
-		return true, fmt.Errorf("failed to propagate resource variables: %w", err)
-	}
-
-	// then synchronize the instance
-	err = rt.evaluateInstanceStatuses()
-	if err != nil {
-		return true, fmt.Errorf("failed to evaluate instance statuses: %w", err)
-	}
-
-	return true, nil
-}
-
-// propagateResourceVariables iterates over all resources and evaluates their
-// variables if all dependencies are resolved.
-func (rt *ResourceGraphDefinitionRuntime) propagateResourceVariables() error {
-	for id := range rt.resources {
-		if rt.canProcessResource(id) {
-			// evaluate the resource variables
-			err := rt.evaluateResourceExpressions(id)
-			if err != nil {
-				return fmt.Errorf("failed to evaluate resource variables for %s: %w", id, err)
+	// Phase 2: Wire up dependencies for each node.
+	// Inject instance node as "schema" dep for static expression evaluation.
+	for _, id := range rt.order {
+		node := rt.nodes[id]
+		node.deps[graph.InstanceNodeID] = instNode
+		for _, depID := range node.Spec.Meta.Dependencies {
+			if dep, ok := rt.nodes[depID]; ok {
+				node.deps[depID] = dep
 			}
 		}
 	}
-	return nil
-}
 
-// canProcessResource checks if a resource can be resolved by examining
-// if all its dependencies are resolved AND if all its variables are resolved.
-func (rt *ResourceGraphDefinitionRuntime) canProcessResource(resource string) bool {
-	// Check if all dependencies are resolved. a.k.a all variables have been
-	// evaluated.
-	for _, dep := range rt.resources[resource].GetDependencies() {
-		if !rt.resourceVariablesResolved(dep) {
-			return false
+	// Wire up instance node dependencies.
+	for _, depID := range instNode.Spec.Meta.Dependencies {
+		if dep, ok := rt.nodes[depID]; ok {
+			instNode.deps[depID] = dep
 		}
 	}
 
-	// Check if the resource variables are resolved.
-	kk := rt.resourceVariablesResolved(resource)
-	return kk
-}
+	// Phase 3: Wire up expressions for all nodes.
+	for _, id := range rt.order {
+		node := rt.nodes[id]
 
-// resourceVariablesResolved determines if all variables for a given resource
-// have been resolved.
-func (rt *ResourceGraphDefinitionRuntime) resourceVariablesResolved(resource string) bool {
-	for _, variable := range rt.runtimeVariables[resource] {
-		if variable.Kind.IsDynamic() && !variable.Resolved {
-			return false
+		for _, expr := range node.Spec.IncludeWhen {
+			state := getOrCreateExpr(expr, variable.ResourceVariableKindIncludeWhen, nil)
+			node.includeWhenExprs = append(node.includeWhenExprs, state)
 		}
-	}
-	return true
-}
 
-// evaluateStaticVariables processes all static variables in the runtime.
-// Static variables are those that can be evaluated immediately, typically
-// depending only on the initial configuration. This function is usually
-// called once during runtime initialization to set up the baseline state
-func (rt *ResourceGraphDefinitionRuntime) evaluateStaticVariables() error {
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
-	if err != nil {
-		return err
-	}
-
-	evalContext := map[string]interface{}{
-		"schema": rt.instance.Unstructured().Object,
-	}
-	for _, variable := range rt.expressionsCache {
-		if variable.Kind.IsStatic() {
-			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
-			if err != nil {
-				return err
-			}
-
-			variable.Resolved = true
-			variable.ResolvedValue = value
+		for _, expr := range node.Spec.ReadyWhen {
+			state := getOrCreateExpr(expr, variable.ResourceVariableKindReadyWhen, []string{id})
+			node.readyWhenExprs = append(node.readyWhenExprs, state)
 		}
-	}
-	return nil
-}
 
-type EvalError struct {
-	IsIncompleteData bool
-	Err              error
-}
-
-func (e *EvalError) Error() string {
-	if e.IsIncompleteData {
-		return fmt.Sprintf("incomplete data: %s", e.Err.Error())
-	}
-	return e.Err.Error()
-}
-
-// evaluateDynamicVariables processes all dynamic variables in the runtime.
-// Dynamic variables depend on the state of other resources and are evaluated
-// iteratively as resources are resolved. This function is called during each
-// synchronization cycle to update the runtime state based on newly resolved
-// resources.
-func (rt *ResourceGraphDefinitionRuntime) evaluateDynamicVariables() error {
-	// Dynamic variables are those that depend on other resources
-	// and are resolved after all the dependencies are resolved.
-
-	resolvedResources := maps.Keys(rt.resolvedResources)
-	resolvedResources = append(resolvedResources, "schema")
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(resolvedResources))
-	if err != nil {
-		return err
-	}
-
-	// Let's iterate over any resolved resource and try to resolve
-	// the dynamic variables that depend on it.
-	// Since we have already cached the expressions, we don't need to
-	// loop over all the resources.
-	for _, variable := range rt.expressionsCache {
-		if variable.Kind.IsDynamic() {
-			// Skip the variable if it's already resolved
-			if variable.Resolved {
-				continue
-			}
-
-			// we need to make sure that the dependencies are
-			// part of the resolved resources.
-			if len(variable.Dependencies) > 0 &&
-				!containsAllElements(resolvedResources, variable.Dependencies) {
-				continue
-			}
-
-			evalContext := make(map[string]interface{})
-			for _, dep := range variable.Dependencies {
-				evalContext[dep] = rt.resolvedResources[dep].Object
-			}
-
-			evalContext["schema"] = rt.instance.Unstructured().Object
-
-			value, err := rt.evaluateExpression(env, evalContext, variable.Expression)
-			if err != nil {
-				if strings.Contains(err.Error(), "no such key") {
-					// TODO(a-hilaly): I'm not sure if this is the best way to handle
-					// these. Probably need to reiterate here.
-					return &EvalError{
-						IsIncompleteData: true,
-						Err:              err,
-					}
-				}
-				return &EvalError{
-					Err: err,
-				}
-			}
-
-			variable.Resolved = true
-			variable.ResolvedValue = value
+		for _, dim := range node.Spec.ForEach {
+			state := getOrCreateExpr(dim.Expression, variable.ResourceVariableKindIteration, node.Spec.Meta.Dependencies)
+			node.forEachExprs = append(node.forEachExprs, state)
 		}
-	}
 
-	return nil
-}
-
-// evaluateInstanceStatuses updates the status of the main instance based on
-// the current state of all resources. This function aggregates information
-// from all managed resources to provide an overall status of the runtime,
-// which is typically reflected in the custom resource's status field.
-func (rt *ResourceGraphDefinitionRuntime) evaluateInstanceStatuses() error {
-	rs := resolver.NewResolver(rt.instance.Unstructured().Object, map[string]interface{}{})
-
-	// Two pieces of information are needed here:
-	//  1. Instance variables are guaranteed to be standalone expressions.
-	//  2. Not all instance variables are guaranteed to be resolved. This is
-	//     more like a "best effort" to resolve as many as possible.
-	for _, variable := range rt.instance.GetVariables() {
-		cached, ok := rt.expressionsCache[variable.Expressions[0]]
-		if ok && cached.Resolved {
-			err := rs.UpsertValueAtPath(variable.Path, rt.expressionsCache[variable.Expressions[0]].ResolvedValue)
-			if err != nil {
-				return fmt.Errorf("failed to set value at path %s: %w", variable.Path, err)
+		for _, v := range node.Spec.Variables {
+			node.templateVars = append(node.templateVars, v)
+			for _, expr := range v.Expressions {
+				state := getOrCreateExpr(expr, v.Kind, v.Dependencies)
+				node.templateExprs = append(node.templateExprs, state)
 			}
 		}
 	}
-	return nil
+
+	// Instance status variables (if any) use the same cache.
+	for _, v := range instNode.Spec.Variables {
+		instNode.templateVars = append(instNode.templateVars, v)
+		for _, expr := range v.Expressions {
+			state := getOrCreateExpr(expr, v.Kind, v.Dependencies)
+			instNode.templateExprs = append(instNode.templateExprs, state)
+		}
+	}
+
+	return rt, nil
 }
 
-// evaluateResourceExpressions processes all expressions associated with a
-// specific resource.
-func (rt *ResourceGraphDefinitionRuntime) evaluateResourceExpressions(resource string) error {
-	yes, _ := rt.ReadyToProcessResource(resource)
-	if !yes {
-		return nil
+// Nodes returns nodes in topological order (instance excluded).
+func (r *Runtime) Nodes() []*Node {
+	result := make([]*Node, 0, len(r.order))
+	for _, id := range r.order {
+		result = append(result, r.nodes[id])
 	}
-	exprValues := make(map[string]interface{})
-	for _, v := range rt.expressionsCache {
-		if v.Resolved {
-			exprValues[v.Expression] = v.ResolvedValue
-		}
-	}
-
-	variables := rt.resources[resource].GetVariables()
-	exprFields := make([]variable.FieldDescriptor, len(variables))
-	for i, v := range variables {
-		exprFields[i] = v.FieldDescriptor
-	}
-
-	rs := resolver.NewResolver(rt.resources[resource].Unstructured().Object, exprValues)
-
-	summary := rs.Resolve(exprFields)
-	if summary.Errors != nil {
-		return fmt.Errorf("failed to resolve resource %s: %v", resource, summary.Errors)
-	}
-	return nil
+	return result
 }
 
-// allExpressionsAreResolved checks if every expression in the runtimes cache
-// has been successfully evaluated
-func (rt *ResourceGraphDefinitionRuntime) allExpressionsAreResolved() bool {
-	for _, v := range rt.expressionsCache {
-		if !v.Resolved {
-			return false
-		}
-	}
-	return true
-}
-
-// IsResourceReady checks if a resource is ready based on the readyWhenExpressions
-// defined in the resource. If no readyWhenExpressions are defined, the resource
-// is considered ready.
-func (rt *ResourceGraphDefinitionRuntime) IsResourceReady(resourceID string) (bool, string, error) {
-	observed, ok := rt.resolvedResources[resourceID]
-	if !ok {
-		// Users need to make sure that the resource is resolved a.k.a (SetResource)
-		// before calling this function.
-		return false, fmt.Sprintf("resource %s is not resolved", resourceID), nil
-	}
-
-	expressions := rt.resources[resourceID].GetReadyWhenExpressions()
-	if len(expressions) == 0 {
-		return true, "", nil
-	}
-
-	// we should not expect errors here since we already compiled it
-	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resourceID}))
-	if err != nil {
-		return false, "", fmt.Errorf("failed creating new Environment: %w", err)
-	}
-	context := map[string]interface{}{
-		resourceID: observed.Object,
-	}
-
-	for _, expression := range expressions {
-		out, err := rt.evaluateExpression(env, context, expression)
-		if err != nil {
-			return false, "", fmt.Errorf("failed evaluating expressison %s: %w", expression, err)
-		}
-		// returning a reason here to point out which expression is not ready yet
-		if !out.(bool) {
-			return false, fmt.Sprintf("expression %s evaluated to false", expression), nil
-		}
-	}
-	return true, "", nil
-}
-
-// IgnoreResource ignores resource that has a condition expression that evaluated
-// to false or whose dependencies are ignored
-func (rt *ResourceGraphDefinitionRuntime) IgnoreResource(resourceID string) {
-	rt.ignoredByConditionsResources[resourceID] = true
-}
-
-// areDependenciesIgnored will returns true if the dependencies of the resource
-// are ignored, false if they are not.
-//
-// Naturally, if a resource is judged to be ignored, it will be marked as ignored
-// and all its dependencies will be ignored as well. Causing a chain reaction
-// of ignored resources.
-func (rt *ResourceGraphDefinitionRuntime) areDependenciesIgnored(resourceID string) bool {
-	for _, p := range rt.resources[resourceID].GetDependencies() {
-		if _, isIgnored := rt.ignoredByConditionsResources[p]; isIgnored {
-			return true
-		}
-	}
-	return false
-}
-
-// ReadyToProcessResource returns true if all the condition expressions return true
-// if not it will add itself to the ignored resources
-func (rt *ResourceGraphDefinitionRuntime) ReadyToProcessResource(resourceID string) (bool, error) {
-	if rt.areDependenciesIgnored(resourceID) {
-		return false, nil
-	}
-
-	includeWhenExpressions := rt.resources[resourceID].GetIncludeWhenExpressions()
-	if len(includeWhenExpressions) == 0 {
-		return true, nil
-	}
-
-	// we should not expect errors here since we already compiled it
-	// in the dryRun
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{"schema"}))
-	if err != nil {
-		return false, nil
-	}
-
-	context := map[string]interface{}{
-		"schema": rt.instance.Unstructured().Object,
-	}
-
-	for _, includeWhenExpression := range includeWhenExpressions {
-		// We should not expect an error here as well since we checked during dry-run
-		value, err := rt.evaluateExpression(env, context, includeWhenExpression)
-		if err != nil {
-			return false, err
-		}
-		// returning a reason here to point out which expression is not ready yet
-		if !value.(bool) {
-			return false, fmt.Errorf("skipping resource creation due to condition %s", includeWhenExpression)
-		}
-	}
-	return true, nil
-}
-
-// evaluateExpression evaluates a CEL expression and returns a value if successful, or error.
-// It caches compiled programs by expression string to avoid redundant compilation.
-func (rt *ResourceGraphDefinitionRuntime) evaluateExpression(
-	env *cel.Env,
-	context map[string]interface{},
-	expression string,
-) (interface{}, error) {
-	var program cel.Program
-	var cached bool
-
-	if rt.celProgramCache != nil {
-		rt.celProgramCacheMu.RLock()
-		program, cached = rt.celProgramCache[expression]
-		rt.celProgramCacheMu.RUnlock()
-	}
-
-	if !cached {
-		ast, issues := env.Compile(expression)
-		if issues != nil && issues.Err() != nil {
-			return nil, fmt.Errorf("failed compiling expression %s: %w", expression, issues.Err())
-		}
-
-		prog, err := env.Program(ast)
-		if err != nil {
-			return nil, fmt.Errorf("failed programming expression %s: %w", expression, err)
-		}
-
-		program = prog
-
-		if rt.celProgramCache != nil {
-			rt.celProgramCacheMu.Lock()
-			rt.celProgramCache[expression] = program
-			rt.celProgramCacheMu.Unlock()
-		}
-	}
-
-	val, _, err := program.Eval(context)
-	if err != nil {
-		return nil, fmt.Errorf("failed evaluating expression %s: %w", expression, err)
-	}
-
-	return krocel.GoNativeType(val)
-}
-
-// containsAllElements checks if all elements in the inner slice are present
-// in the outer slice.
-func containsAllElements[T comparable](outer, inner []T) bool {
-	for _, v := range inner {
-		if !slices.Contains(outer, v) {
-			return false
-		}
-	}
-	return true
+// Instance returns the instance node.
+func (r *Runtime) Instance() *Node {
+	return r.instance
 }

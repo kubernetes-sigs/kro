@@ -170,7 +170,7 @@ var _ = Describe("ExternalRef", func() {
 			},
 		}
 
-		By("ensuring instance is created but doesnt become ready yet because reference is missing")
+		By("ensuring instance is in progress while waiting for external reference")
 		Eventually(func(g Gomega, ctx SpecContext) {
 			instance := instance.DeepCopy()
 			err := env.Client.Get(ctx, types.NamespacedName{
@@ -179,7 +179,7 @@ var _ = Describe("ExternalRef", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			// Verify deployment has the ConfigMap reference in envFrom
+			// Instance should be IN_PROGRESS while waiting for external ref
 			g.Expect(instance.Object).To(HaveKey("status"))
 			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "IN_PROGRESS"))
 

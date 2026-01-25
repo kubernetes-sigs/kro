@@ -263,6 +263,22 @@ func (c *Controller) prepareRegularResource(
 	}
 
 	if current != nil {
+		// ----------------------------------------------------------
+		// Resource Conflict Check
+		// ----------------------------------------------------------
+		labels := current.GetLabels()
+		// Check 1: Is it managed by KRO?
+		if _, isManaged := labels[metadata.OwnedLabel]; !isManaged {
+			return nil, fmt.Errorf("resource conflict: %s/%s exists but is not managed by kro", current.GetKind(), current.GetName())
+		}
+		// Check 2: Does it belong to this specific Instance?
+		currentInstanceID := rcx.Instance.GetUID()
+		ownerInstanceID := labels[metadata.InstanceIDLabel]
+		if ownerInstanceID != string(currentInstanceID) {
+			return nil, fmt.Errorf("resource conflict: %s/%s is already owned by instance %s (ID: %s)",
+				current.GetKind(), current.GetName(), labels[metadata.InstanceLabel], ownerInstanceID)
+		}
+
 		node.SetObserved([]*unstructured.Unstructured{current})
 	}
 

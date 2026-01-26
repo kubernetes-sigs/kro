@@ -100,8 +100,8 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
 	@echo "Copying CRD to website docs..."
-	@mkdir -p website/static/crds
-	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/static/crds/kro.run_resourcegraphdefinitions.yaml
+	@mkdir -p website/docs/api/crds
+	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/docs/api/crds/kro.run_resourcegraphdefinitions.yaml
 	@echo "CRD copied successfully"
 
 .PHONY: generate

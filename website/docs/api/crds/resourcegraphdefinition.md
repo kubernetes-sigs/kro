@@ -6,6 +6,7 @@ hide_table_of_contents: true
 ---
 
 import RGDReference from '@site/src/components/RGDReference';
+import crdYaml from './kro.run_resourcegraphdefinitions.yaml';
 
 <head>
   <html className="fullWidthContent" />
@@ -40,4 +41,4 @@ The ResourceGraphDefinition (RGD) is kro's core API for defining custom Kubernet
 
 ## Fields Reference
 
-<RGDReference />
+<RGDReference crdYaml={crdYaml} />

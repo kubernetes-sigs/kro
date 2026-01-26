@@ -156,7 +156,7 @@ func inferSchemaFromCELType(celType *cel.Type, provider *krocel.DeclTypeProvider
 		return &extv1.JSONSchemaProps{
 			Description: "Timestamp representing a creation time",
 			Type:        "string",
-			Format:      "datetime",
+			Format:      "date-time",
 		}, nil
 	default:
 		// Unknown type - be permissive

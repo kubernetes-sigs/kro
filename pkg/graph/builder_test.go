@@ -118,6 +118,28 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "is not a valid Kubernetes object",
 		},
 		{
+			name: "cluster-scoped resource with namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("crd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name":      "tests.kro.run",
+						"namespace": "default",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cluster-scoped and must not set metadata.namespace",
+		},
+		{
 			name: "invalid CEL syntax in readyWhen",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -3106,7 +3128,7 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 					nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "all forEach dimensions must be used to produce a unique resource identity, missing: [name]",
+			errMsg:  "cluster-scoped and must not set metadata.namespace",
 		},
 	}
 

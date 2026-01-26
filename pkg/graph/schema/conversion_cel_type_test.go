@@ -144,7 +144,7 @@ func TestGenerateSchemaFromCELTypes_Timestamp(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, "string", prop.Type)
-	assert.Equal(t, "datetime", prop.Format)
+	assert.Equal(t, "date-time", prop.Format)
 	assert.Equal(t, "Timestamp representing a creation time", prop.Description)
 }
 

@@ -113,6 +113,37 @@ name: "app-${string(schema.spec.replicas)}"
 ```
 :::
 
+### Multiline Expressions and YAML Block Scalars
+
+YAML block scalars (`|` and `>`) often add a **trailing newline**. For fields that must be a *standalone* expression (like `includeWhen` and `readyWhen`), a trailing newline means the value is no longer exactly `${...}` and validation fails.
+
+Use the **chomp indicator** `-` to strip the final newline:
+
+```kro
+includeWhen:
+  - |-
+    ${
+      schema.spec.enabled &&
+      schema.spec.count > 0
+    }
+```
+
+If you prefer folded scalars (`>`), also use `>-` to avoid the trailing newline:
+
+```kro
+readyWhen:
+  - >-
+    ${
+      self.status.phase == "Ready" &&
+      self.status.observedGeneration == self.metadata.generation
+    }
+```
+
+:::note
+- `|` preserves newlines; `>` folds them into spaces.
+- The `-` is what removes the final newline.
+:::
+
 ## Referencing Data
 
 ### The `schema` Variable

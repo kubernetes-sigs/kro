@@ -260,6 +260,20 @@ spec:
                     x-kubernetes-validations:
                     - message: kind is immutable
                       rule: self == oldSelf
+                  metadata:
+                    description: Metadata to apply to the generated CRD
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations to apply to the generated CRD
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: Labels to apply to the generated CRD
+                        type: object
+                    type: object
                   spec:
                     description: |-
                       Spec defines the schema for the instance's spec section using SimpleSchema syntax.

@@ -327,6 +327,14 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to get schema for resource %s: %w", rgResource.ID, err)
 	}
 
+	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
+	}
+	if err := validateTemplateConstraints(rgResource, resourceObject, mapping.Scope.Name() == meta.RESTScopeNameNamespace); err != nil {
+		return nil, nil, err
+	}
+
 	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
@@ -377,11 +385,6 @@ func (b *Builder) buildRGResource(
 	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
-	}
-
-	mapping, err := b.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
 	}
 
 	// Determine node type

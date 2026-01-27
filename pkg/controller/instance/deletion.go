@@ -27,17 +27,19 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+// reconcileDeletion drives deletion workflow for an instance.
 func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	rcx.StateManager.State = InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
-	deletionNode, err := c.planResourcesForDeletion(rcx)
+	deletionNode, err := c.planNodesForDeletion(rcx)
 	if err != nil {
 		return err
 	}
 
 	if deletionNode != nil {
-		if err := c.deleteTarget(rcx, deletionNode); err != nil {
+		state := rcx.StateManager.NodeStates[deletionNode.Spec.Meta.ID]
+		if err := c.deleteTarget(rcx, deletionNode, state); err != nil {
 			return err
 		}
 		// Deletion is in progress; requeue.
@@ -47,9 +49,9 @@ func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
 	return c.removeFinalizer(rcx)
 }
 
-// planResourcesForDeletion resolves as much of the runtime as possible and returns the last
-// resolvable node (topologically).
-func (c *Controller) planResourcesForDeletion(
+// planNodesForDeletion resolves identities and observes existing objects to
+// select the last deletable node (topologically).
+func (c *Controller) planNodesForDeletion(
 	rcx *ReconcileContext,
 ) (*runtime.Node, error) {
 	var deletionNode *runtime.Node
@@ -58,16 +60,18 @@ func (c *Controller) planResourcesForDeletion(
 	// stop at the first node that can't be observed (e.g. due to pending data).
 	for _, node := range rcx.Runtime.Nodes() {
 		rid := node.Spec.Meta.ID
-		desc := node.Spec.Meta
+		nodeMeta := node.Spec.Meta
+
+		state := rcx.StateManager.NewNodeState(rid)
 
 		// 1/ check if the node is ignored.
 		ignored, err := node.IsIgnored()
 		if err != nil {
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+			state.SetError(err)
 			return nil, err
 		}
 		if ignored {
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateSkipped}
+			state.SetSkipped()
 			continue
 		}
 
@@ -80,22 +84,22 @@ func (c *Controller) planResourcesForDeletion(
 				// a case where identity depends on another resource that lost some data and we
 				// can't resolve it anymore. For that case we need a better deletion/versioning/tracking
 				// mechanism - as of today it is unsolved.
-				rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+				state.SetDeleted()
 				continue
 			}
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+			state.SetError(err)
 			return nil, err
 		}
 		if len(desired) == 0 {
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+			state.SetDeleted()
 			continue
 		}
 
 		// At this point, identity is resolvable and we can safely observe (GET/LIST)
 		// to find the next deletable node.
-		switch desc.Type {
+		switch nodeMeta.Type {
 		case graph.NodeTypeExternal:
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateSkipped}
+			state.SetSkipped()
 			continue
 
 		case graph.NodeTypeInstance:
@@ -107,59 +111,58 @@ func (c *Controller) planResourcesForDeletion(
 			//
 			// Differently from single resources, we do not do GETs per-item here because
 			// that would be inefficient and cause many API calls during deletion.
-			items, err := c.listCollectionItems(rcx, desc.GVR, rid)
+			items, err := c.listCollectionItems(rcx, nodeMeta.GVR, rid)
 			if err != nil {
-				rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+				state.SetError(err)
 				return nil, fmt.Errorf("failed to list collection items for %s: %w", rid, err)
 			}
 			if len(items) == 0 {
-				rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+				state.SetDeleted()
 				continue
 			}
 			node.SetObserved(items)
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateInProgress}
+			state.SetInProgress()
 			deletionNode = node
 
 		case graph.NodeTypeResource:
 			// Single resources delete by identity; GET the object to mark observed and
 			// allow DeleteTargets to return the correct target.
 			obj := desired[0]
-			rc := resourceClientFor(rcx, desc, obj.GetNamespace())
+			rc := resourceClientFor(rcx, nodeMeta, obj.GetNamespace())
 			observed, err := rc.Get(rcx.Ctx, obj.GetName(), metav1.GetOptions{})
 			if err != nil {
 				if apierrors.IsNotFound(err) {
-					rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+					state.SetDeleted()
 					continue
 				}
-				rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+				state.SetError(err)
 				return nil, err
 			}
 			node.SetObserved([]*unstructured.Unstructured{observed})
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateInProgress}
+			state.SetInProgress()
 			deletionNode = node
 
 		default:
-			panic(fmt.Sprintf("unknown node type: %v", desc.Type))
+			panic(fmt.Sprintf("unknown node type: %v", nodeMeta.Type))
 		}
 	}
 
 	return deletionNode, nil
 }
 
+// deleteTarget issues delete requests for the node's delete targets and updates state.
 func (c *Controller) deleteTarget(
 	rcx *ReconcileContext,
 	node *runtime.Node,
+	state *NodeState,
 ) error {
-	rid := node.Spec.Meta.ID
-	desc := node.Spec.Meta
-
 	targets, err := node.DeleteTargets()
 	if err != nil {
-		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+		state.SetError(err)
 		return err
 	}
 	if len(targets) == 0 {
-		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+		state.SetDeleted()
 		return nil
 	}
 
@@ -167,14 +170,14 @@ func (c *Controller) deleteTarget(
 	// mean the object is gone yet, just that deletion is in progress.
 	anyDeleted := false
 	for _, target := range targets {
-		rc := resourceClientFor(rcx, desc, target.GetNamespace())
+		rc := resourceClientFor(rcx, node.Spec.Meta, target.GetNamespace())
 		err := rc.Delete(rcx.Ctx, target.GetName(), metav1.DeleteOptions{})
 		if apierrors.IsNotFound(err) {
 			// Already gone: leave anyDeleted as is and keep checking others.
 			continue
 		}
 		if err != nil {
-			rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateError, Err: err}
+			state.SetError(err)
 			return err
 		}
 
@@ -184,15 +187,16 @@ func (c *Controller) deleteTarget(
 
 	if !anyDeleted {
 		// All targets were NotFound, so the node is fully deleted.
-		rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleted}
+		state.SetDeleted()
 		return nil
 	}
 
 	// At least one delete call succeeded; resources may still be terminating.
-	rcx.StateManager.ResourceStates[rid] = &ResourceState{State: ResourceStateDeleting}
+	state.SetDeleting()
 	return nil
 }
 
+// removeFinalizer clears managed state on the instance after deletions complete.
 func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 	patched, err := c.setUnmanaged(rcx, rcx.Instance)
 	if err != nil {
@@ -206,6 +210,7 @@ func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 	return nil
 }
 
+// resourceClientFor returns a client scoped to the node's namespace rules.
 func resourceClientFor(
 	rcx *ReconcileContext,
 	desc graph.NodeMeta,
@@ -217,6 +222,7 @@ func resourceClientFor(
 	return rcx.Client.Resource(desc.GVR)
 }
 
+// setUnmanaged removes the instance finalizer using SSA.
 func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	if exist := metadata.HasInstanceFinalizer(obj); !exist {
 		return obj, nil

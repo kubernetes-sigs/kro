@@ -19,7 +19,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -54,7 +53,7 @@ type ReconcileContext struct {
 //     readiness, inclusion etc...
 //   - instance: the instance CR being reconciled
 //
-// It also initializes internal state (Mark for conditions, StateManager for resource states).
+// It also initializes internal state (Mark for conditions, StateManager for node states).
 func NewReconcileContext(
 	ctx context.Context,
 	log logr.Logger,
@@ -83,18 +82,6 @@ func NewReconcileContext(
 
 func (rcx *ReconcileContext) delayedRequeue(err error) error {
 	return requeue.NeededAfter(err, rcx.Config.DefaultRequeueDuration)
-}
-
-// getResourceNamespace returns the namespace for a resource.
-// Checks resource namespace first, falls back to instance namespace.
-func (rcx *ReconcileContext) getResourceNamespace(desired *unstructured.Unstructured) string {
-	if ns := desired.GetNamespace(); ns != "" {
-		return ns
-	}
-	if ns := rcx.Instance.GetNamespace(); ns != "" {
-		return ns
-	}
-	return metav1.NamespaceDefault
 }
 
 func (rcx *ReconcileContext) InstanceClient() dynamic.ResourceInterface {

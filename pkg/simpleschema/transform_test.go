@@ -62,6 +62,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want: &extv1.JSONSchemaProps{
 				Type:     "object",
+				Default:  &extv1.JSON{Raw: []byte("{}")},
 				Required: []string{"name"},
 				Properties: map[string]extv1.JSONSchemaProps{
 					"name": {Type: "string"},
@@ -76,7 +77,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 							"email": {Type: "string"},
 							"phone": {
 								Type:    "string",
-								Default: &extv1.JSON{Raw: []byte("\"000-000-0000\"")},
+								Default: &extv1.JSON{Raw: []byte(`"000-000-0000"`)},
 							},
 							"address": {
 								Type: "object",
@@ -273,7 +274,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"matrix": {
 						Type: "array",
-
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{
 								Type: "array",
@@ -328,6 +328,97 @@ func TestBuildOpenAPISchema(t *testing.T) {
 													"age":  {Type: "integer"},
 												},
 											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Map of arrays",
+			obj: map[string]interface{}{
+				"tags": "map[string][]string",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"tags": {
+						Type: "object",
+						AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{Type: "string"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Array of maps",
+			obj: map[string]interface{}{
+				"configs": "[]map[string]integer",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"configs": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{
+							Schema: &extv1.JSONSchemaProps{
+								Type: "object",
+								AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+									Schema: &extv1.JSONSchemaProps{Type: "integer"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Custom types with nested collections",
+			obj: map[string]interface{}{
+				"data": "Record",
+			},
+			types: map[string]interface{}{
+				"Record": map[string]interface{}{
+					"tags":   "map[string][]string",
+					"matrix": "[][]integer",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"data": {
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"tags": {
+								Type: "object",
+								AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{Type: "string"},
+										},
+									},
+								},
+							},
+							"matrix": {
+								Type: "array",
+								Items: &extv1.JSONSchemaPropsOrArray{
+									Schema: &extv1.JSONSchemaProps{
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{Type: "integer"},
 										},
 									},
 								},
@@ -397,15 +488,16 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want: &extv1.JSONSchemaProps{
 				Type:    "object",
 				Default: &extv1.JSON{Raw: []byte("{}")},
+
 				Properties: map[string]extv1.JSONSchemaProps{
 					"logLevel": {
 						Type:    "string",
-						Default: &extv1.JSON{Raw: []byte("\"info\"")},
+						Default: &extv1.JSON{Raw: []byte(`"info"`)},
 						Enum: []extv1.JSON{
-							{Raw: []byte("\"debug\"")},
-							{Raw: []byte("\"info\"")},
-							{Raw: []byte("\"warn\"")},
-							{Raw: []byte("\"error\"")},
+							{Raw: []byte(`"debug"`)},
+							{Raw: []byte(`"info"`)},
+							{Raw: []byte(`"warn"`)},
+							{Raw: []byte(`"error"`)},
 						},
 					},
 					"features": {
@@ -414,11 +506,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Properties: map[string]extv1.JSONSchemaProps{
 							"logFormat": {
 								Type:    "string",
-								Default: &extv1.JSON{Raw: []byte("\"json\"")},
+								Default: &extv1.JSON{Raw: []byte(`"json"`)},
 								Enum: []extv1.JSON{
-									{Raw: []byte("\"json\"")},
-									{Raw: []byte("\"text\"")},
-									{Raw: []byte("\"csv\"")},
+									{Raw: []byte(`"json"`)},
+									{Raw: []byte(`"text"`)},
+									{Raw: []byte(`"csv"`)},
 								},
 							},
 							"errorCode": {
@@ -504,18 +596,19 @@ func TestBuildOpenAPISchema(t *testing.T) {
 		{
 			name: "Object with unknown fields in combination with default marker",
 			obj: map[string]interface{}{
-				"values": "object | default={\"a\": \"b\"}",
+				"values": "object | default={\"a\":\"b\"}",
 			},
 			want: &extv1.JSONSchemaProps{
-				Type: "object",
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+
 				Properties: map[string]extv1.JSONSchemaProps{
 					"values": {
 						Type:                   "object",
 						XPreserveUnknownFields: ptr.To(true),
-						Default:                &extv1.JSON{Raw: []byte("{\"a\": \"b\"}")},
+						Default:                &extv1.JSON{Raw: []byte(`{"a":"b"}`)},
 					},
 				},
-				Default: &extv1.JSON{Raw: []byte("{}")},
 			},
 			wantErr: false,
 		},
@@ -1094,6 +1187,7 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 						"street": "string",
 						"city":   "string",
 					},
+					"company": "Company",
 				},
 				"Company": map[string]interface{}{
 					"name":      "string",
@@ -1112,6 +1206,20 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 								Properties: map[string]extv1.JSONSchemaProps{
 									"street": {Type: "string"},
 									"city":   {Type: "string"},
+								},
+							},
+							"company": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"name": {Type: "string"},
+									"employees": {
+										Type: "array",
+										Items: &extv1.JSONSchemaPropsOrArray{
+											Schema: &extv1.JSONSchemaProps{
+												Type: "string",
+											},
+										},
+									},
 								},
 							},
 						},
@@ -1137,6 +1245,26 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "Invalid types with cyclic references",
+			obj: map[string]interface{}{
+				"Person": map[string]interface{}{
+					"name": "string",
+					"age":  "integer",
+					"address": map[string]interface{}{
+						"street": "string",
+						"city":   "string",
+					},
+					"company": "Company",
+				},
+				"Company": map[string]interface{}{
+					"name":      "string",
+					"employees": "[]Person",
+				},
+			},
+			want:    map[string]predefinedType{},
+			wantErr: true,
 		},
 		{
 			name: "Simple type alias",
@@ -1176,6 +1304,99 @@ func TestLoadPreDefinedTypes(t *testing.T) {
 			},
 			want:    map[string]predefinedType{},
 			wantErr: true,
+		},
+		{
+			name: "Nested cross-references",
+			obj: map[string]interface{}{
+				"Service": map[string]interface{}{
+					"target": "Deployment",
+				},
+				"Deployment": map[string]interface{}{
+					"config": "ConfigMap | required=true",
+				},
+				"ConfigMap": map[string]interface{}{
+					"data": "string | description=somedescription",
+				},
+			},
+			want: map[string]predefinedType{
+				"ConfigMap": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"data": {Type: "string", Description: "somedescription"},
+						},
+					},
+					Required: false,
+				},
+				"Deployment": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"config": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"data": {Type: "string", Description: "somedescription"},
+								},
+							},
+						},
+						Required: []string{"config"},
+					},
+					Required: false,
+				},
+				"Service": {
+					Schema: extv1.JSONSchemaProps{
+						Type: "object",
+						Properties: map[string]extv1.JSONSchemaProps{
+							"target": {
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"config": {
+										Type: "object",
+										Properties: map[string]extv1.JSONSchemaProps{
+											"data": {Type: "string", Description: "somedescription"},
+										},
+									},
+								},
+								Required: []string{"config"},
+							},
+						},
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Invalid type definition (not object or string)",
+			obj: map[string]interface{}{
+				"MyType": 12345, // Invalid: strict check should catch this
+			},
+			want:    map[string]predefinedType{},
+			wantErr: true,
+		},
+		{
+			name: "Custom types with markers",
+			obj: map[string]interface{}{
+				"ConfigMap": map[string]interface{}{
+					"data": "string | default=prod",
+				},
+			},
+			want: map[string]predefinedType{
+				"ConfigMap": {
+					Schema: extv1.JSONSchemaProps{
+						Type:    "object",
+						Default: &extv1.JSON{Raw: []byte("{}")},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"data": {
+								Type:    "string",
+								Default: &extv1.JSON{Raw: []byte(`"prod"`)},
+							},
+						},
+					},
+					Required: false,
+				},
+			},
+			wantErr: false,
 		},
 	}
 

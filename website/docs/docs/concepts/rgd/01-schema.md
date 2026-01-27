@@ -310,6 +310,25 @@ schema:
 
 Custom types are expanded inline when kro generates the CRD.
 
+### Recursive Custom Types
+
+Custom types can reference other custom types. kro resolves dependencies automatically and detects cyclic references:
+
+```yaml
+schema:
+  types:
+    Address:
+      street: string
+      city: string
+    Person:
+      name: string
+      address: Address
+  spec:
+    owner: Person
+```
+
+For more details about SimpleSchema syntax and custom types, see the [SimpleSchema Specification](../../../api/specifications/simple-schema.md).
+
 ## Additional Printer Columns
 
 Control what `kubectl get` displays:

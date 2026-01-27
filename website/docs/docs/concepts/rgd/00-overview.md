@@ -148,11 +148,11 @@ When your RGD is validated and accepted:
 
 kro reports the RGD's state through three conditions in `status.conditions`:
 
-| Condition | Description |
-|-----------|-------------|
+| Condition                 | Description                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
 | **ResourceGraphAccepted** | Whether the RGD spec passed validation. If `False`, the `message` field contains the validation error. |
-| **KindReady** | Whether the CRD for your custom API has been generated and registered with Kubernetes. |
-| **ControllerReady** | Whether kro is actively watching for instances of your custom API. |
+| **KindReady**             | Whether the CRD for your custom API has been generated and registered with Kubernetes.                 |
+| **ControllerReady**       | Whether kro is actively watching for instances of your custom API.                                     |
 
 When all three conditions are `True`, the RGD is fully operational and ready to accept instances. You can check the status with:
 
@@ -161,6 +161,41 @@ kubectl get rgd <name> -o yaml
 ```
 
 For complete status field documentation, see the [RGD API Reference](../../../api/crds/resourcegraphdefinition.md).
+
+### Annotations
+
+kro supports the following annotations on ResourceGraphDefinitions:
+
+| Annotation                       | Description                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `kro.run/allow-breaking-changes` | When set to `"true"`, allows RGD updates that would normally be blocked due to breaking changes. Use with caution. |
+
+#### Breaking Changes
+
+kro detects breaking changes when you update an RGD and blocks them by default to protect existing instances. If you need to force a breaking change, add the annotation:
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: my-rgd
+  annotations:
+    kro.run/allow-breaking-changes: "true"
+spec:
+  # ...
+```
+
+Currently, kro only detects breaking changes in the schema section of an RGD:
+
+- Field removal
+- Type changes
+- New required fields without defaults
+- Enum restrictions
+- Pattern changes
+
+:::warning
+Breaking changes can invalidate existing instances. Ensure you understand the impact before using this annotation.
+:::
 
 ## What RGDs Provide
 

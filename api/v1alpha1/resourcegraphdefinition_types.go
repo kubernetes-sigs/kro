@@ -214,6 +214,23 @@ const (
 	ResourceGraphDefinitionStateInactive ResourceGraphDefinitionState = "Inactive"
 )
 
+// CELMetrics contains metrics about CEL expression evaluation costs.
+// This helps platform teams understand the performance impact of their expressions
+// and allows for better optimization of complex ResourceGraphDefinitions.
+type CELMetrics struct {
+	// TotalCost is the total cost across all CEL expressions in the ResourceGraphDefinition.
+	// The cost value follows Kubernetes CEL cost budgeting where 1,000,000 cost units
+	// equals roughly 0.1 seconds of evaluation time.
+	//
+	// +kubebuilder:validation:Optional
+	TotalCost uint64 `json:"totalCost,omitempty"`
+	// CostPerResource maps resource IDs to their individual CEL expression costs.
+	// This breakdown helps identify which resources have the most expensive expressions.
+	//
+	// +kubebuilder:validation:Optional
+	CostPerResource map[string]uint64 `json:"costPerResource,omitempty"`
+}
+
 // ResourceGraphDefinitionStatus defines the observed state of ResourceGraphDefinition.
 // It provides information about the deployment state, resource ordering, and conditions.
 type ResourceGraphDefinitionStatus struct {
@@ -231,6 +248,8 @@ type ResourceGraphDefinitionStatus struct {
 	// Resources provides detailed information about each resource in the graph,
 	// including their dependencies.
 	Resources []ResourceInformation `json:"resources,omitempty"`
+	// +kubebuilder:validation:Optional
+	CelMetrics *CELMetrics `json:"celMetrics,omitempty"`
 }
 
 // ResourceInformation provides detailed information about a specific resource

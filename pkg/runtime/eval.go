@@ -41,13 +41,14 @@ func evalExprAny(env *cel.Env, expr *expressionEvaluationState, ctx map[string]a
 		return expr.ResolvedValue, nil
 	}
 
-	val, err := evalRawCEL(env, expr.Expression, ctx)
+	val, cost, err := evalRawCEL(env, expr.Expression, ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	expr.Resolved = true
 	expr.ResolvedValue = val
+	expr.EvaluationCost = cost
 	return val, nil
 }
 
@@ -57,7 +58,7 @@ func evalBoolExpr(env *cel.Env, expr *expressionEvaluationState, ctx map[string]
 		return expr.ResolvedValue.(bool), nil
 	}
 
-	val, err := evalRawCEL(env, expr.Expression, ctx)
+	val, cost, err := evalRawCEL(env, expr.Expression, ctx)
 	if err != nil {
 		return false, err
 	}
@@ -71,6 +72,7 @@ func evalBoolExpr(env *cel.Env, expr *expressionEvaluationState, ctx map[string]
 
 	expr.Resolved = true
 	expr.ResolvedValue = result
+	expr.EvaluationCost = cost
 	return result, nil
 }
 
@@ -80,7 +82,7 @@ func evalListExpr(env *cel.Env, expr *expressionEvaluationState, ctx map[string]
 		return expr.ResolvedValue.([]any), nil
 	}
 
-	val, err := evalRawCEL(env, expr.Expression, ctx)
+	val, cost, err := evalRawCEL(env, expr.Expression, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,29 +96,36 @@ func evalListExpr(env *cel.Env, expr *expressionEvaluationState, ctx map[string]
 
 	expr.Resolved = true
 	expr.ResolvedValue = result
+	expr.EvaluationCost = cost
 	return result, nil
 }
 
-// evalRawCEL evaluates a CEL expression string and returns the native Go value.
+// evalRawCEL evaluates a CEL expression string and returns the native Go value and its evaluation cost.
 // CEL errors are returned as-is; callers should use isCELDataPending() to check
 // if the error indicates data is pending and should be retried.
-func evalRawCEL(env *cel.Env, expr string, ctx map[string]any) (any, error) {
+func evalRawCEL(env *cel.Env, expr string, ctx map[string]any) (any, uint64, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("compile error: %w", issues.Err())
+		return nil, 0, fmt.Errorf("compile error: %w", issues.Err())
 	}
 
 	prg, err := env.Program(ast)
 	if err != nil {
-		return nil, fmt.Errorf("program error: %w", err)
+		return nil, 0, fmt.Errorf("program error: %w", err)
 	}
 
-	out, _, err := prg.Eval(ctx)
+	out, details, err := prg.Eval(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return krocel.GoNativeType(out)
+	var cost uint64
+	if details != nil && details.ActualCost() != nil {
+		cost = *details.ActualCost()
+	}
+
+	val, err := krocel.GoNativeType(out)
+	return val, cost, err
 }
 
 // toFieldDescriptors converts ResourceFields to FieldDescriptors for the resolver.

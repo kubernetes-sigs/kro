@@ -40,4 +40,13 @@ type expressionEvaluationState struct {
 
 	// ResolvedValue holds the cached result. Nil until Resolved=true.
 	ResolvedValue any
+
+	// EvaluationCost holds the CEL cost for evaluating this expression.
+	// Cost is measured in cost units where 1,000,000 equals roughly 0.1 seconds.
+	//
+	// NOTE: This represents the cost of the most recent evaluation, not the
+	// cumulative cost across all evaluations. When an expression is evaluated
+	// multiple times (e.g., readyWhen during reconciliation loops), only the
+	// last evaluation's cost is retained.
+	EvaluationCost uint64
 }

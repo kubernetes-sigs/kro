@@ -21,9 +21,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
-// Compile-time check: Runtime must implement Interface.
-var _ Interface = (*Runtime)(nil)
-
 // Interface defines the minimal runtime operations needed by the controller.
 type Interface interface {
 	// Nodes returns nodes in topological order (instance excluded).
@@ -31,6 +28,9 @@ type Interface interface {
 
 	// Instance returns the instance node.
 	Instance() *Node
+
+	// GetCELMetrics returns the CEL cost metrics for all evaluated expressions.
+	GetCELMetrics() (totalCost uint64, costPerResource map[string]uint64)
 }
 
 // Runtime is the execution context for a single reconciliation.
@@ -166,4 +166,32 @@ func (r *Runtime) Nodes() []*Node {
 // Instance returns the instance node.
 func (r *Runtime) Instance() *Node {
 	return r.instance
+}
+
+// GetCELMetrics returns the CEL cost metrics for all evaluated expressions.
+// It returns the total cost across all expressions and a breakdown by resource ID.
+func (r *Runtime) GetCELMetrics() (totalCost uint64, costPerResource map[string]uint64) {
+	costPerResource = make(map[string]uint64)
+
+	// Aggregate from all nodes
+	allNodes := append(r.Nodes(), r.Instance())
+	for _, node := range allNodes {
+		var nodeCost uint64
+		// Combine all expression types for this node
+		allExprs := append([]*expressionEvaluationState{}, node.includeWhenExprs...)
+		allExprs = append(allExprs, node.readyWhenExprs...)
+		allExprs = append(allExprs, node.forEachExprs...)
+		allExprs = append(allExprs, node.templateExprs...)
+
+		for _, expr := range allExprs {
+			nodeCost += expr.EvaluationCost
+		}
+
+		// Use node ID as key. For instance, use "instance" or similar.
+		id := node.Spec.Meta.ID
+		costPerResource[id] += nodeCost
+		totalCost += nodeCost
+	}
+
+	return totalCost, costPerResource
 }

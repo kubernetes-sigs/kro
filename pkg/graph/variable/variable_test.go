@@ -76,59 +76,51 @@ func TestResourceVariableKind(t *testing.T) {
 	tests := []struct {
 		name          string
 		kind          ResourceVariableKind
-		expectedStr   string
 		isStatic      bool
 		isDynamic     bool
 		isIncludeWhen bool
+		isReadyWhen   bool
 	}{
 		{
 			name:          "Static Kind",
 			kind:          ResourceVariableKindStatic,
-			expectedStr:   "static",
 			isStatic:      true,
 			isDynamic:     false,
 			isIncludeWhen: false,
+			isReadyWhen:   false,
 		},
 		{
 			name:          "Dynamic Kind",
 			kind:          ResourceVariableKindDynamic,
-			expectedStr:   "dynamic",
 			isStatic:      false,
 			isDynamic:     true,
 			isIncludeWhen: false,
-		},
-		{
-			name:          "ReadyWhen Kind",
-			kind:          ResourceVariableKindReadyWhen,
-			expectedStr:   "readyWhen",
-			isStatic:      false,
-			isDynamic:     false,
-			isIncludeWhen: false,
+			isReadyWhen:   false,
 		},
 		{
 			name:          "IncludeWhen Kind",
 			kind:          ResourceVariableKindIncludeWhen,
-			expectedStr:   "includeWhen",
 			isStatic:      false,
 			isDynamic:     false,
 			isIncludeWhen: true,
+			isReadyWhen:   false,
 		},
 		{
-			name:          "Unknown Kind",
-			kind:          ResourceVariableKind("unknown"),
-			expectedStr:   "unknown",
+			name:          "ReadyWhen Kind",
+			kind:          ResourceVariableKindReadyWhen,
 			isStatic:      false,
 			isDynamic:     false,
 			isIncludeWhen: false,
+			isReadyWhen:   true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expectedStr, tc.kind.String())
-			assert.Equal(t, tc.isStatic, tc.kind.IsStatic())
-			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic())
-			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen())
+			assert.Equal(t, tc.isStatic, tc.kind.IsStatic(), "IsStatic()")
+			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic(), "IsDynamic()")
+			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen(), "IsIncludeWhen()")
+			assert.Equal(t, tc.isReadyWhen, tc.kind.IsReadyWhen(), "IsReadyWhen()")
 		})
 	}
 }

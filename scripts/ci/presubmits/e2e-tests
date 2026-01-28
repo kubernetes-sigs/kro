@@ -8,7 +8,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd ${REPO_ROOT}
 
 # Build
-go build cmd
+go build ./cmd/...
 
 mkdir -p ./bin
 curl -Lo ./bin/kind https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64

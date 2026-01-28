@@ -83,3 +83,5 @@ require (
 	sigs.k8s.io/release-utils v0.11.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 )
+
+replace github.com/kubernetes-sigs/kro => ../../

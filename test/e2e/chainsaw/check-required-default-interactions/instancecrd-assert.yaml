@@ -1,0 +1,115 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: complexapps.kro.run
+spec:
+  group: kro.run
+  names:
+    kind: ComplexApp
+    listKind: ComplexAppList
+    plural: complexapps
+    singular: complexapp
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            properties:
+              appName:
+                type: string
+              environment:
+                type: string
+                default: development
+                enum:
+                  - development
+                  - staging
+                  - production
+              database:
+                type: object
+                required:
+                  - host
+                  - username
+                properties:
+                  host:
+                    type: string
+                  port:
+                    type: integer
+                    default: 8080
+                    minimum: 1
+                    maximum: 65535
+                  username:
+                    type: string
+                  database:
+                    type: string
+                    default: postgres
+              retry:
+                type: object
+                default: {}
+                properties:
+                  maxRetries:
+                    type: integer
+                    default: 3
+                    minimum: 0
+                    maximum: 10
+                  backoffMs:
+                    type: integer
+                    default: 1000
+                  exponential:
+                    type: boolean
+                    default: true
+              endpoints:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  required:
+                    - name
+                    - url
+                  properties:
+                    name:
+                      type: string
+                    url:
+                      type: string
+                      pattern: "^https?://"
+                    timeout:
+                      type: integer
+                      default: 30
+                      minimum: 1
+                      maximum: 300
+              annotations:
+                type: object
+                additionalProperties:
+                  type: string
+              clusterId:
+                type: string
+                x-kubernetes-validations:
+                  - rule: self == oldSelf
+                    message: field is immutable
+              replicas:
+                type: integer
+                default: 1
+                minimum: 0
+                maximum: 100
+                x-kubernetes-validations:
+                  - rule: self <= 10 || self % 2 == 0
+                    message: validation failed
+              resources:
+                type: object
+                default: {}
+                properties:
+                  cpu:
+                    type: string
+                    default: 100m
+                    pattern: "^[0-9]+m?$"
+                  memory:
+                    type: string
+                    default: 128Mi
+                    pattern: "^[0-9]+(Mi|Gi)$"
+            required:
+              - appName
+            type: object
+        type: object
+    served: true
+    storage: true

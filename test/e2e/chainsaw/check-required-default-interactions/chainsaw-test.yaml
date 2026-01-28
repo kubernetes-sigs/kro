@@ -1,0 +1,49 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: check-required-default-interactions
+spec:
+  description: |
+    Tests complex schema interactions between required and default markers:
+    - Custom types with required=true propagate required to fields
+    - Custom types with default values propagate defaults
+    - Objects with required children do NOT get default:{}
+    - Objects with all-default children DO get default:{}
+    - Nested structs, arrays, maps, patterns, enums, validation
+  steps:
+  - name: install-rgd
+    try:
+    - apply:
+        file: cluster-role.yaml
+      description: Apply Cluster Role
+    - apply:
+        file: rgd.yaml
+      description: Apply RGD with complex required/default schema
+    - assert:
+        file: rgd-assert.yaml
+      description: Verify RGD state
+    - assert:
+        file: instancecrd-assert.yaml
+      description: Verify Instance CRD has correct required/default schema
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system
+    finally:
+    - description: sleep operation
+      sleep:
+        duration: 5s
+  - name: create-valid-instance
+    try:
+    - apply:
+        file: valid-instance.yaml
+      description: Create ComplexApp Instance with minimal required fields
+    - assert:
+        file: valid-instance-assert.yaml
+      description: Verify defaults are applied correctly
+    catch:
+    - description: kro controller pod logs collector
+      podLogs:
+        selector: app.kubernetes.io/instance=kro
+        namespace: kro-system

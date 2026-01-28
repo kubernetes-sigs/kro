@@ -12,9 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package simpleschema provides a concise syntax for defining OpenAPI schemas
-// used in Kubernetes Custom Resource Definitions (CRDs).
-//
-// For speficications and usage, see https://kro.run/api/specifications/simple-schema
+package types
 
-package simpleschema
+import (
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+)
+
+// Resolver resolves custom type names to their schemas.
+type Resolver interface {
+	Resolve(name string) (*extv1.JSONSchemaProps, error)
+}
+
+// Type represents a parsed type that can provide dependencies and build schemas.
+type Type interface {
+	Deps() []string
+	Schema(Resolver) (*extv1.JSONSchemaProps, error)
+}

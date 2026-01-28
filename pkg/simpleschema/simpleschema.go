@@ -29,11 +29,15 @@ import (
 // the type name and the value its specification. These custom types will be
 // available as predefined types in the transformer.
 func ToOpenAPISpec(obj map[string]interface{}, customTypes map[string]interface{}) (*extv1.JSONSchemaProps, error) {
-	tf := newTransformer()
-	if err := tf.loadPreDefinedTypes(customTypes); err != nil {
+	t := &transformer{
+		customTypes: make(map[string]customType),
+	}
+
+	if err := t.loadCustomTypes(customTypes); err != nil {
 		return nil, err
 	}
-	return tf.buildOpenAPISchema(obj)
+
+	return t.buildSchema(obj)
 }
 
 // FromOpenAPISpec converts an OpenAPI schema to a SimpleSchema object.

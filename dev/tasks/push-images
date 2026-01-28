@@ -5,6 +5,8 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
+export GIT_VERSION=$(git describe --tags --always --dirty)
+
 if [[ -z ${IMAGE_PREFIX:-} ]]; then
   echo "IMAGE_PREFIX is not set"
   exit 1

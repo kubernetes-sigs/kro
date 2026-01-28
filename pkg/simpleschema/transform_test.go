@@ -62,7 +62,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want: &extv1.JSONSchemaProps{
 				Type:     "object",
-				Default:  &extv1.JSON{Raw: []byte("{}")},
 				Required: []string{"name"},
 				Properties: map[string]extv1.JSONSchemaProps{
 					"name": {Type: "string"},
@@ -1116,6 +1115,68 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want:    nil,
 			wantErr: true,
+		},
+		{
+			name: "Parent default set when no required fields and child has defaults",
+			obj: map[string]interface{}{
+				"timeout": "integer | default=30",
+				"retries": "integer | default=3",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"timeout": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("30")},
+					},
+					"retries": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("3")},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Parent default NOT set when has required fields even with child defaults",
+			obj: map[string]interface{}{
+				"name":    "string | required=true",
+				"timeout": "integer | default=30",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"name"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+					},
+					"timeout": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("30")},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Parent default NOT set when no child defaults even without required fields",
+			obj: map[string]interface{}{
+				"name":    "string",
+				"timeout": "integer",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {
+						Type: "string",
+					},
+					"timeout": {
+						Type: "integer",
+					},
+				},
+			},
+			wantErr: false,
 		},
 	}
 

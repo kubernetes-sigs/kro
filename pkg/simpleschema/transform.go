@@ -244,7 +244,7 @@ func (tf *transformer) buildOpenAPISchemaWithDefault(obj map[string]interface{},
 	}
 
 	// Only set default if this is a predefined type (allowObjectDefault=true) AND it has child defaults
-	if allowObjectDefault && childHasDefault {
+	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
 		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 

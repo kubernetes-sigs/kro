@@ -41,9 +41,9 @@ change.
 1. Add `propagateWhen` to `ResourceGraphDefinitionSpec` to control propagation to graph instances
 2. Add `propagateWhen` to `Resource` to control propagation to a resource in a graph instance
 3. Add `ready()` and `updated()` lifecycle methods available on all resources in CEL expressions
-4. Add built-in CEL functions `exponentiallyUpdated` and `linearlyUpdated` for propagation control
+4. Add built-in CEL functions `exponentiallyReady` and `linearlyReady` for propagation control
 5. The default `propagateWhen` for collections (including RGDs) is
-   `[exponentiallyUpdated(item, collection)]`
+   `[exponentiallyReady(item, collection)]`
 6. The default `propagateWhen` for individual resources is `[]`
 
 ### API Types
@@ -84,16 +84,16 @@ pods.filter(p, p.ready()).size() >= pods.size() * 0.8
 These functions are syntactic sugar over the lifecycle methods:
 
 ```cel
-// linearlyUpdated(item, collection, batchSize) -> bool
+// linearlyReady(item, collection, batchSize) -> bool
 // Item can proceed when its batch is reached
-linearlyUpdated(pod, pods, 3)
+linearlyReady(pod, pods, 3)
 
 // Equivalent to:
 indexOf(pod, pods) < (pods.filter(p, p.updated()).size() / 3 + 1) * 3
 
-// exponentiallyUpdated(item, collection) -> bool
+// exponentiallyReady(item, collection) -> bool
 // Item can proceed when exponential batch (1, 2, 4, 8...) is reached
-exponentiallyUpdated(pod, pods)
+exponentiallyReady(pod, pods)
 
 // Equivalent to (where u = pods.filter(p, p.updated()).size()):
 indexOf(pod, pods) < int(math.pow(2, math.ceil(math.log(double(u + 1)) / math.log(2.0))))
@@ -109,7 +109,7 @@ Variables are derived from the resource definition:
 - id: pods
   forEach:
     - pod: ${schema.spec.pods}
-  propagateWhen: ["exponentiallyUpdated(pod, pods)"]
+  propagateWhen: ["exponentiallyReady(pod, pods)"]
 ```
 
 **For RGD-level propagateWhen (instances of the RGD):**
@@ -121,7 +121,7 @@ from the schema's kind. If KRO were to support custom plurals, it would inherit 
 spec:
   schema:
     kind: Application # CRD generates singular: application, plural: applications
-  propagateWhen: ["exponentiallyUpdated(application, applications)"]
+  propagateWhen: ["exponentiallyReady(application, applications)"]
 ```
 
 ## Design Questions
@@ -189,14 +189,14 @@ propagations are in flight, the latest takes precedence and the graph is reevalu
 This is similar to Kubernetes Deployments, which pivot mid-rollout towards the desired state.
 
 Propagation control must reason about overlapping propagations when determining
-`exponentiallyUpdated` and `linearlyUpdated` built-in functions. When determining whether or not a
+`exponentiallyReady` and `linearlyReady` built-in functions. When determining whether or not a
 node in the graph can mutate, it's not enough to measure `readyWhen`, we must also consider whether
 or not a resource is outdated with respect to the latest desired state of the graph.
 
 Take the following double mutation:
 
 ```
-Graph: A → B, C, D (collection with linearlyUpdated)
+Graph: A → B, C, D (collection with linearlyReady)
 
 T1: Mutation   T2: Mutation Propagates   T3: Rollback Starts   T4: Rollback Propagates
       A'                A'                       A''                     A''
@@ -205,7 +205,7 @@ T1: Mutation   T2: Mutation Propagates   T3: Rollback Starts   T4: Rollback Prop
 
 ```
 
-Node D can propagate when node C is ready, according to the `linearlyUpdated` function. However,
+Node D can propagate when node C is ready, according to the `linearlyReady` function. However,
 node C is yet not updated to the latest version of the graph. Should `propagateWhen` allow us to
 update D to D' or D'' or should we wait for C' to reach C'' before propagating the change? This
 question fundamentally boils down to the number of concurrent propagations allowed in the graph.
@@ -277,8 +277,8 @@ spec:
     group: example.com
     kind: Application
   propagateWhen:
-    - exponentiallyUpdated(application, applications)
-    - linearlyUpdated(application, applications, 10)
+    - exponentiallyReady(application, applications)
+    - linearlyReady(application, applications, 10)
   resources:
     - id: deployment
       template: ...
@@ -343,7 +343,7 @@ spec:
       forEach:
         - stage: ${ schema.spec.stages }
       propagateWhen:
-        - "${ linearlyUpdated(stage, stages, 1) }" # Sequential rollout
+        - "${ linearlyReady(stage, stages, 1) }" # Sequential rollout
         - "${ !releaseBlockers.data[stage.value] }" # Per-stage blockers
       template:
         apiVersion: example.com/v1
@@ -384,7 +384,7 @@ spec:
         # Custom: wait for half to be ready before continuing
         - "${ pods.filter(p, p.ready()).size() >= pods.size() / 2 }"
         # And use exponential for the rollout
-        - "${ exponentiallyUpdated(pod, pods) }"
+        - "${ exponentiallyReady(pod, pods) }"
       template:
         apiVersion: v1
         kind: Pod

@@ -30,6 +30,7 @@ Kro is Kubernetes native and integrates seamlessly with existing tools to preser
 [kro-overview]: https://kro.run/docs/overview
 [kro-installation]: https://kro.run/docs/getting-started/Installation
 [kro-getting-started]: https://kro.run/docs/getting-started/deploy-a-resource-graph-definition
+[kro-dev-getting-started]: docs/developer-getting-started.md
 [kro-concepts]: https://kro.run/docs/concepts/resource-group-definitions
 [kro-examples]: https://kro.run/examples/
 

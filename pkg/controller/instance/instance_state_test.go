@@ -20,7 +20,7 @@ import (
 )
 
 func TestNewStateManager(t *testing.T) {
-	state := newStateManager()
+	state := newStateManager(1)
 
 	if state.State != InstanceStateInProgress {
 		t.Errorf("expected State to be %q, got %q", InstanceStateInProgress, state.State)

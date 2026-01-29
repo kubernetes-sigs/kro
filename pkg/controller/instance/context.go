@@ -76,7 +76,7 @@ func NewReconcileContext(
 		Instance:     instance,
 		Config:       config,
 		Mark:         NewConditionsMarkerFor(instance),
-		StateManager: newStateManager(),
+		StateManager: newStateManager(instance.GetGeneration()),
 	}
 }
 

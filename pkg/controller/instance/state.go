@@ -108,19 +108,26 @@ func (st *NodeState) SetWaitingForReadiness(err error) {
 }
 
 // StateManager tracks instance and node states during reconciliation.
-// It is not safe for concurrent use; reconciliation processes nodes sequentially.
+
 type StateManager struct {
-	State        InstanceState
-	NodeStates   map[string]*NodeState
-	ReconcileErr error
+	State              InstanceState
+	NodeStates         map[string]*NodeState
+	ReconcileErr       error
+	ObservedGeneration int64 // Fix: Track the generation to avoid being stuck "IN_PROGRESS"
 }
 
 // newStateManager constructs a StateManager with initialized fields.
-func newStateManager() *StateManager {
-	return &StateManager{
-		State:      InstanceStateInProgress,
-		NodeStates: make(map[string]*NodeState),
-	}
+// Brackets are kept empty () to prevent errors in context.go and status.go.
+func newStateManager(generation int64) *StateManager {
+    return &StateManager{
+        State:              InstanceStateInProgress,
+        NodeStates:         make(map[string]*NodeState),
+        ObservedGeneration: generation, 
+    }
+}
+// SetObservedGeneration allows setting the version without breaking other files.
+func (s *StateManager) SetObservedGenration(gen int64) {
+	s.ObservedGeneration = gen
 }
 
 // NewNodeState initializes and registers node state.

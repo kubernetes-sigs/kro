@@ -61,8 +61,8 @@ func generateInstance(rgd *v1alpha1.ResourceGraphDefinition) error {
 	}
 	em := emulator.NewEmulator()
 
-	crd := rgdGraph.Instance.GetCRD()
-	gvk := rgdGraph.Instance.GetCRD().GroupVersionKind()
+	crd := rgdGraph.CRD
+	gvk := rgdGraph.CRD.GroupVersionKind()
 
 	s, err := schema.ConvertJSONSchemaPropsToSpecSchema(crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
 	if err != nil {

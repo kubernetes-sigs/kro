@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -155,13 +157,59 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	ctx context.Context,
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
+	// Handle Finalizers (Blocking Deletion)
+	// This ensures we can perform cleanup or block deletion until resources are handled.
+	if result, err := r.handleFinalizer(ctx, o); err != nil {
+		return ctrl.Result{}, err
+	} else if result {
+		// If we added or removed the finalizer, the object was updated.
+		// Return here to let the update propagate and requeue.
+		return ctrl.Result{}, nil
+	}
+
 	if !o.DeletionTimestamp.IsZero() {
+		log := ctrl.LoggerFrom(ctx)
+
+		// Get the GVR for instances of this RGD
+		gvr := metadata.GetResourceGraphDefinitionInstanceGVR(
+			o.Spec.Schema.Group,
+			o.Spec.Schema.APIVersion,
+			o.Spec.Schema.Kind,
+		)
+
+		// Check if any instances still exist
+		hasInstances, err := r.hasRemainingInstances(ctx, gvr)
+		if err != nil {
+			log.Error(err, "failed to check for remaining instances")
+			return ctrl.Result{}, err
+		}
+
+		// If instances still exist, requeue and wait for them to be deleted
+		// This provides a grace period for instance cleanup before finalizer removal
+		if hasInstances {
+			log.Info("waiting for instances to be deleted before removing finalizer",
+				"gvr", gvr)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		// All instances have been deleted, proceed with cleanup
+		log.V(1).Info("all instances deleted, proceeding with cleanup")
+
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		// Remove the finalizer to allow deletion to complete
+		if controllerutil.ContainsFinalizer(o, RGDFinalizerName) {
+			controllerutil.RemoveFinalizer(o, RGDFinalizerName)
+			if err := r.Update(ctx, o); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		return ctrl.Result{}, nil
 	}
 

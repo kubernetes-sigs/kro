@@ -24,11 +24,17 @@ import (
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+)
+
+const (
+	// RGDFinalizerName is the finalizer used to block deletion until resources are cleaned up
+	RGDFinalizerName = "kro.run/cleanup"
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition by:
@@ -186,6 +192,19 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 		return newMicroControllerError(err)
 	}
 	return nil
+}
+
+func (r *ResourceGraphDefinitionReconciler) handleFinalizer(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (bool, error) {
+	if rgd.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(rgd, RGDFinalizerName) {
+			controllerutil.AddFinalizer(rgd, RGDFinalizerName)
+			if err := r.Update(ctx, rgd); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Error types for the resourcegraphdefinition controller

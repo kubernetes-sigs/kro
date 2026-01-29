@@ -20,6 +20,9 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -81,4 +84,30 @@ func extractCRDName(group, kind string) string {
 	return fmt.Sprintf("%s.%s",
 		flect.Pluralize(strings.ToLower(kind)),
 		group)
+}
+
+// hasRemainingInstances checks if any instances of the given GVR still exist in the cluster.
+// This is used during RGD deletion to ensure all instances are cleaned up before removing the finalizer.
+func (r *ResourceGraphDefinitionReconciler) hasRemainingInstances(ctx context.Context, gvr schema.GroupVersionResource) (bool, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// List all instances of the custom resource
+	list, err := r.clientSet.Dynamic().Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		// If the resource doesn't exist (404), there are no instances
+		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			log.V(1).Info("resource type not found, no instances to clean up", "gvr", gvr)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to list instances for %s: %w", gvr, err)
+	}
+
+	instanceCount := len(list.Items)
+	if instanceCount > 0 {
+		log.Info("waiting for instances to be deleted", "gvr", gvr, "count", instanceCount)
+		return true, nil
+	}
+
+	log.V(1).Info("no instances remaining", "gvr", gvr)
+	return false, nil
 }

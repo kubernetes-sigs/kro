@@ -91,7 +91,7 @@ const config: Config = {
           editUrl: "https://github.com/kubernetes-sigs/kro/tree/main/website",
           disableVersioning: false,
           includeCurrentVersion: true,
-          lastVersion: "0.8.0",
+          lastVersion: "0.8.1",
         },
         blog: false,
         theme: {

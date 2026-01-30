@@ -254,8 +254,16 @@ func TestNewKROMetaLabeler(t *testing.T) {
 	t.Run("NewKROMetaLabeler", func(t *testing.T) {
 		labeler := NewKROMetaLabeler()
 		assert.Equal(t, GenericLabeler{
-			OwnedLabel:        "true",
-			KROVersionLabel:   version.GetVersionInfo().GitVersion,
+			OwnedLabel:      "true",
+			KROVersionLabel: version.GetVersionInfo().GitVersion,
+		}, labeler)
+	})
+}
+
+func TestNewNodeLabeler(t *testing.T) {
+	t.Run("NewNodeLabeler", func(t *testing.T) {
+		labeler := NewNodeLabeler()
+		assert.Equal(t, GenericLabeler{
 			ManagedByLabelKey: ManagedByKROValue,
 		}, labeler)
 	})

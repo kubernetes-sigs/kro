@@ -166,13 +166,20 @@ func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
 	}
 }
 
-// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ManagedBy labels on a resource.
+// NewNodeLabeler returns a new labeler for child resources
+// Only includes app.kubernetes.io/managed-by label, as other labels come from the parent labeler.
+func NewNodeLabeler() GenericLabeler {
+	return map[string]string{
+		ManagedByLabelKey: ManagedByKROValue,
+	}
+}
+
+// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel, and
+// KROVersion labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:        "true",
-		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
-		ManagedByLabelKey: ManagedByKROValue,
+		OwnedLabel:      "true",
+		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
 	}
 }
 

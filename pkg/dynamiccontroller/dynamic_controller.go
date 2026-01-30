@@ -599,6 +599,16 @@ func (dc *DynamicController) handlerForChildGVR(parent, child schema.GroupVersio
 			return
 		}
 
+		// This prevents controllers from different RGDs from reconciling instances with the same name
+		// but different types.
+		instanceGroup := lbls[metadata.InstanceGroupLabel]
+		instanceVersion := lbls[metadata.InstanceVersionLabel]
+		instanceKind := lbls[metadata.InstanceKindLabel]
+
+		if instanceGroup != parentGVK.Group || instanceVersion != parentGVK.Version || instanceKind != parentGVK.Kind {
+			return
+		}
+
 		pom := &metav1.PartialObjectMetadata{}
 		pom.SetGroupVersionKind(parentGVK)
 		pom.SetName(name)

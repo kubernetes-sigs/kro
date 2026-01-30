@@ -140,7 +140,7 @@ var _ = Describe("Labels and Annotations", func() {
 			), "default kro labels should also be present")
 
 			g.Expect(instance.GetLabels()).ToNot(HaveKey(metadata.ManagedByLabelKey),
-				"instance should not have app.kubernetes.io/managed-by label to avoid conflicts with Helm")
+				"instance should not have app.kubernetes.io/managed-by label as it may be used by other application lifecycle tooling")
 
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 

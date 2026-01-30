@@ -17,6 +17,7 @@ package runtime
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/cel-go/cel"
 
@@ -101,9 +102,19 @@ func evalListExpr(env *cel.Env, expr *expressionEvaluationState, ctx map[string]
 // CEL errors are returned as-is; callers should use isCELDataPending() to check
 // if the error indicates data is pending and should be retried.
 func evalRawCEL(env *cel.Env, expr string, ctx map[string]any) (any, error) {
+	// Measure compilation time
+	compileStart := time.Now()
 	ast, issues := env.Compile(expr)
+	compileDuration := time.Since(compileStart).Seconds()
+
+	var compileErr error
 	if issues != nil && issues.Err() != nil {
-		return nil, fmt.Errorf("compile error: %w", issues.Err())
+		compileErr = fmt.Errorf("compile error: %w", issues.Err())
+	}
+	krocel.Metrics.ObserveCompilation(compileDuration, compileErr)
+
+	if compileErr != nil {
+		return nil, compileErr
 	}
 
 	prg, err := env.Program(ast)
@@ -111,7 +122,12 @@ func evalRawCEL(env *cel.Env, expr string, ctx map[string]any) (any, error) {
 		return nil, fmt.Errorf("program error: %w", err)
 	}
 
+	// Measure evaluation time
+	evalStart := time.Now()
 	out, _, err := prg.Eval(ctx)
+	evalDuration := time.Since(evalStart).Seconds()
+	krocel.Metrics.ObserveEvaluation(evalDuration, err)
+
 	if err != nil {
 		return nil, err
 	}

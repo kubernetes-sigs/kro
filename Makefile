@@ -126,7 +126,12 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go tool ginkgo -p -v --cover --coverprofile=integration-cover.out ./test/integration/suites/...
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go tool ginkgo -p -v \
+		--cover \
+		--coverprofile=integration-cover.out \
+		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
+		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
 	go test -v ./pkg/... -coverprofile unit-cover.out
 else
@@ -134,6 +139,19 @@ else
 	@echo "Usage: make test WHAT=unit|integration"
 	@exit 1
 endif
+
+.PHONY: test-coverage
+test-coverage: ## Run all tests and report coverage
+	@$(MAKE) test WHAT=unit
+	@$(MAKE) test WHAT=integration
+	@head -1 unit-cover.out > combined-cover.out
+	@tail -n +2 unit-cover.out >> combined-cover.out
+	@tail -n +2 integration-cover.out >> combined-cover.out
+	@echo ""
+	@echo "=== Coverage Summary ==="
+	@echo "Unit:        $$(go tool cover -func=unit-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Integration: $$(go tool cover -func=integration-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.8.0

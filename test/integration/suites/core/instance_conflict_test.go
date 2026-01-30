@@ -221,36 +221,52 @@ var _ = Describe("Instance Isolation", func() {
 		Expect(cfgMap1.Data).To(HaveKeyWithValue("source", "app1"))
 		Expect(cfgMap2.Data).To(HaveKeyWithValue("source", "app2"))
 
-		// Intentional reconcile to validate behavior here
-		// We want to ensure that instance with change reconciles
+		By("Deleting instance1 ConfigMap to check if it is created again")
+		Expect(env.Client.Delete(ctx, cfgMap1)).To(Succeed())
+
 		Eventually(func(g Gomega, ctx SpecContext) {
-			err := env.Client.Get(ctx, types.NamespacedName{
-				Name:      instance1.GetName(),
+			cfgMap1 = &corev1.ConfigMap{}
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      "shared-resource",
 				Namespace: namespace,
-			}, instance1)
-			g.Expect(err).ToNot(HaveOccurred())
+			}, cfgMap1)).ToNot(HaveOccurred())
 
-			instance1.Object["spec"] = map[string]interface{}{
-				"name": "shared-resource",
-			}
-			err = env.Client.Update(ctx, instance1)
-			g.Expect(err).ToNot(HaveOccurred())
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			g.Expect(cfgMap1.GetLabels()).To(SatisfyAll(
+				HaveKeyWithValue(metadata.InstanceLabel, "my-app"),
+				HaveKeyWithValue(metadata.InstanceGroupLabel, krov1alpha1.KRODomainName),
+				HaveKeyWithValue(metadata.InstanceVersionLabel, "v1alpha1"),
+				HaveKeyWithValue(metadata.InstanceKindLabel, "TestConflictApp1"),
+			), "Recreated ConfigMap should have correct instance GVK labels for TestConflictApp1")
 
-		time.Sleep(5 * time.Second)
+			g.Expect(cfgMap1.Data).To(SatisfyAll(
+				HaveKeyWithValue("source", "app1"),
+			))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		Consistently(func(g Gomega, ctx SpecContext) {
+		By("Modify instance2 ConfigMap data to check if the data is changed back to original state")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			cfgMap2 := &corev1.ConfigMap{}
 			g.Expect(env.Client.Get(ctx, types.NamespacedName{
 				Name:      "shared-resource",
 				Namespace: namespace2,
 			}, cfgMap2)).ToNot(HaveOccurred())
 
-			g.Expect(cfgMap2.GetLabels()).To(SatisfyAll(
-				HaveKeyWithValue(metadata.InstanceKindLabel, "TestConflictApp2"),
-				HaveKeyWithValue(metadata.InstanceLabel, "my-app"),
-			))
-			g.Expect(cfgMap2.Data).To(HaveKeyWithValue("source", "app2"))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed(),
-			"Instance2 ConfigMap should not be affected by instance1 updates due to GVK label filtering")
+			cfgMap2.Data["source"] = "app3"
+			err := env.Client.Update(ctx, cfgMap2)
+
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			cfgMap2 := &corev1.ConfigMap{}
+			g.Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      "shared-resource",
+				Namespace: namespace2,
+			}, cfgMap2)).ToNot(HaveOccurred())
+
+			g.Expect(cfgMap2.Data).To(SatisfyAll(
+				HaveKeyWithValue("source", "app2"),
+			), "ConfigMap should be reconciled back to original values by instance2 controller")
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 })

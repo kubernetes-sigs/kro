@@ -203,7 +203,11 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 
 			if i == len(segments)-1 {
 				array := current.([]interface{})
-				array[segment.Index] = value
+				if value == nil {
+					array = append(array[:segment.Index], array[segment.Index+1:]...)
+				} else {
+					array[segment.Index] = value
+				}
 				return nil
 			}
 			parent = current
@@ -217,7 +221,13 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 			}
 
 			if i == len(segments)-1 {
-				currentMap[segment.Name] = value
+				// if the expression value evaluates to nil
+				// remove field (specifically in cases where we have optionals)
+				if value == nil {
+					delete(currentMap, segment.Name)
+				} else {
+					currentMap[segment.Name] = value
+				}
 				return nil
 			}
 

@@ -113,7 +113,7 @@ func TestOrderedIntersection(t *testing.T) {
 			name:     "empty desired",
 			observed: []*unstructured.Unstructured{newUnstructured("v1", "Pod", "ns", "a")},
 			desired:  nil,
-			want:     []string{"a"},
+			want:     nil, // intersection with empty = empty
 		},
 		{
 			name: "reorders to match desired",

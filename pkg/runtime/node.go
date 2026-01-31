@@ -160,36 +160,38 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 // and skips readiness gating. It is used for deletion/observation when we only need
 // stable identities and want to avoid being blocked by unrelated template fields.
 //
-// NOTE: This method does not cache its result in n.desired; callers in non-deletion
-// paths should continue using GetDesired().
+// This method caches its result in n.desired so that SetObserved can properly filter
+// observed items. The cached objects contain only identity fields, but that's sufficient
+// for deletion flows which only need name/namespace for matching.
 func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
+	if n.desired != nil {
+		return n.desired, nil
+	}
+
 	vars := n.templateVarsForPaths(identityPaths)
+	var result []*unstructured.Unstructured
+	var err error
+
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeCollection:
-		result, err := n.hardResolveCollection(vars, false)
-		if err != nil {
-			return nil, err
-		}
-		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
-			normalizeNamespaces(result, inst.observed[0].GetNamespace())
-		}
-		return result, nil
+		result, err = n.hardResolveCollection(vars, false)
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
-		result, err := n.hardResolveSingleResource(vars)
-		if err != nil {
-			return nil, err
-		}
-		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
-			normalizeNamespaces(result, inst.observed[0].GetNamespace())
-		}
-		return result, nil
+		result, err = n.hardResolveSingleResource(vars)
 	case graph.NodeTypeInstance:
 		panic("GetDesiredIdentity called for instance node")
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	if n.Spec.Meta.Namespaced {
+		inst := n.deps[graph.InstanceNodeID]
+		normalizeNamespaces(result, inst.observed[0].GetNamespace())
+	}
+	n.desired = result
+	return result, nil
 }
 
 func normalizeNamespaces(objs []*unstructured.Unstructured, namespace string) {

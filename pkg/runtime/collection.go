@@ -58,7 +58,7 @@ func orderedIntersection(
 	observed, desired []*unstructured.Unstructured,
 ) []*unstructured.Unstructured {
 	if len(observed) == 0 || len(desired) == 0 {
-		return observed
+		return nil
 	}
 
 	observedByKey := make(map[string]*unstructured.Unstructured, len(observed))

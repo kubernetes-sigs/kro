@@ -128,6 +128,26 @@ func TestGetValueFromPath(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "invalid path parse error",
+			resource: map[string]interface{}{
+				"field": "value",
+			},
+			path:    `[invalid["path"]`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "expected array but got map",
+			resource: map[string]interface{}{
+				"field": map[string]interface{}{
+					"nested": "value",
+				},
+			},
+			path:    "field[0]",
+			want:    nil,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -284,6 +304,50 @@ func TestSetValueAtPath(t *testing.T) {
 			want:     map[string]interface{}{},
 		},
 		{
+			name:     "empty path returns early",
+			resource: map[string]interface{}{"existing": "value"},
+			path:     "",
+			value:    "ignored",
+			wantErr:  false,
+			want:     map[string]interface{}{"existing": "value"},
+		},
+		{
+			name: "expected map but got string",
+			resource: map[string]interface{}{
+				"field": "string-value",
+			},
+			path:    "field.nested",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": "string-value",
+			},
+		},
+		{
+			name: "expected map but got array for field access",
+			resource: map[string]interface{}{
+				"field": []interface{}{"a", "b"},
+			},
+			path:    "field.nested",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": []interface{}{"a", "b"},
+			},
+		},
+		{
+			name: "array segment on non-array non-nil value",
+			resource: map[string]interface{}{
+				"field": "string-not-array",
+			},
+			path:    "field[0]",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": "string-not-array",
+			},
+		},
+		{
 			name:     "nested arrays and field at the end",
 			resource: map[string]interface{}{},
 			path:     `matrix[0][0][0].value`,
@@ -323,6 +387,38 @@ func TestSetValueAtPath(t *testing.T) {
 								},
 							},
 						},
+					},
+				},
+			},
+		},
+		{
+			name: "array segment on nil value creates array",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"items": nil,
+				},
+			},
+			path:  "spec.items[0]",
+			value: "first",
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"items": []interface{}{"first"},
+				},
+			},
+		},
+		{
+			name: "nested nil array creation",
+			resource: map[string]interface{}{
+				"data": map[string]interface{}{
+					"matrix": []interface{}{nil},
+				},
+			},
+			path:  "data.matrix[0][2]",
+			value: "deep",
+			want: map[string]interface{}{
+				"data": map[string]interface{}{
+					"matrix": []interface{}{
+						[]interface{}{nil, nil, "deep"},
 					},
 				},
 			},
@@ -368,7 +464,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[notProvided]",
 				Resolved: false,
 				Error:    fmt.Errorf("no data provided for expression: notProvided"),
 			},
@@ -390,7 +485,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: []float64{1, 2, 3.5},
 			},
@@ -412,7 +506,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[value1 value2]",
 				Resolved: true,
 				Replaced: "prefix-one-two-suffix",
 			},
@@ -436,7 +529,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.array[0]",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: "resolved",
 			},
@@ -455,9 +547,8 @@ func TestResolveField(t *testing.T) {
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[missing]",
-				Error:    fmt.Errorf("no data provided for expression: missing"),
+				Path:  "spec.field",
+				Error: fmt.Errorf("no data provided for expression: missing"),
 			},
 		},
 		{
@@ -474,9 +565,8 @@ func TestResolveField(t *testing.T) {
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
-				Path:     "spec.nonexistent.field",
-				Original: "[value]",
-				Error:    fmt.Errorf("error getting value: key not found: nonexistent"),
+				Path:  "spec.nonexistent.field",
+				Error: fmt.Errorf("error getting value: key not found: nonexistent"),
 			},
 		},
 		{
@@ -494,9 +584,8 @@ func TestResolveField(t *testing.T) {
 				Expressions: []string{"value"},
 			},
 			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[value]",
-				Error:    fmt.Errorf("expected string value for path spec.field"),
+				Path:  "spec.field",
+				Error: fmt.Errorf("expected string value for path spec.field"),
 			},
 		},
 		{
@@ -522,7 +611,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.nested.array[0].field",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: "papa-ou-t-es",
 			},
@@ -545,7 +633,6 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[count name active]",
 				Resolved: true,
 				Replaced: "Count: 42, Name: test, Active: true",
 			},
@@ -573,9 +660,48 @@ func TestResolveField(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.containers[2].image",
-				Original: "[image.name image.tag]",
 				Resolved: true,
 				Replaced: "nginx:latest",
+			},
+		},
+		{
+			name: "error - leading dot in path fails consistently",
+			resource: map[string]interface{}{
+				"field": "${value}",
+			},
+			data: map[string]interface{}{
+				"value": "resolved",
+			},
+			field: variable.FieldDescriptor{
+				Path:                 ".field",
+				Expressions:          []string{"value"},
+				StandaloneExpression: true,
+			},
+			want: ResolutionResult{
+				Path:     ".field",
+				Resolved: false,
+				Error:    fmt.Errorf("error getting value: invalid path '.field': empty field name at position 0"),
+			},
+		},
+		{
+			name: "error - missing data for one expression in template",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"field": "prefix-${value1}-${value2}-suffix",
+				},
+			},
+			data: map[string]interface{}{
+				"value1": "one",
+				// value2 is missing
+			},
+			field: variable.FieldDescriptor{
+				Path:        "spec.field",
+				Expressions: []string{"value1", "value2"},
+			},
+			want: ResolutionResult{
+				Path:     "spec.field",
+				Resolved: false,
+				Error:    fmt.Errorf("no data provided for expression: value2"),
 			},
 		},
 	}
@@ -586,7 +712,6 @@ func TestResolveField(t *testing.T) {
 			got := r.resolveField(tt.field)
 
 			assert.Equal(t, tt.want.Path, got.Path)
-			assert.Equal(t, tt.want.Original, got.Original)
 			assert.Equal(t, tt.want.Resolved, got.Resolved)
 			assert.Equal(t, tt.want.Replaced, got.Replaced)
 
@@ -642,26 +767,60 @@ func TestResolveDynamicArrayIndexes(t *testing.T) {
 }
 
 func TestResolver(t *testing.T) {
-	r := NewResolver(
-		map[string]interface{}{
-			"spec": map[string]interface{}{
-				"field": "${value}-${suffix}",
+	t.Run("successful resolution", func(t *testing.T) {
+		r := NewResolver(
+			map[string]interface{}{
+				"spec": map[string]interface{}{
+					"field": "${value}-${suffix}",
+				},
 			},
-		},
-		map[string]interface{}{
-			"value":  "resolved",
-			"suffix": "done",
-		},
-	)
-	summary := r.Resolve([]variable.FieldDescriptor{
-		{
-			Path:        "spec.field",
-			Expressions: []string{"value", "suffix"},
-		},
+			map[string]interface{}{
+				"value":  "resolved",
+				"suffix": "done",
+			},
+		)
+		summary := r.Resolve([]variable.FieldDescriptor{
+			{
+				Path:        "spec.field",
+				Expressions: []string{"value", "suffix"},
+			},
+		})
+		assert.Equal(t, 1, summary.TotalExpressions)
+		assert.Equal(t, 1, summary.ResolvedExpressions)
+		assert.Equal(t, "resolved-done", summary.Results[0].Replaced)
+		assert.Empty(t, summary.Errors)
 	})
-	assert.Equal(t, summary.TotalExpressions, 1)
-	assert.Equal(t, summary.ResolvedExpressions, 1)
-	assert.Equal(t, "resolved-done", summary.Results[0].Replaced)
+
+	t.Run("error aggregation", func(t *testing.T) {
+		r := NewResolver(
+			map[string]interface{}{
+				"spec": map[string]interface{}{
+					"field1": "${value1}",
+					"field2": "${value2}",
+				},
+			},
+			map[string]interface{}{
+				"value1": "resolved",
+				// value2 is missing - will cause error
+			},
+		)
+		summary := r.Resolve([]variable.FieldDescriptor{
+			{
+				Path:                 "spec.field1",
+				Expressions:          []string{"value1"},
+				StandaloneExpression: true,
+			},
+			{
+				Path:                 "spec.field2",
+				Expressions:          []string{"value2"},
+				StandaloneExpression: true,
+			},
+		})
+		assert.Equal(t, 2, summary.TotalExpressions)
+		assert.Equal(t, 1, summary.ResolvedExpressions)
+		assert.Len(t, summary.Errors, 1)
+		assert.Contains(t, summary.Errors[0].Error(), "no data provided for expression: value2")
+	})
 }
 
 func TestUpsertValueAtPath(t *testing.T) {
@@ -726,7 +885,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "metadata.annotations",
-				Original: "[includeAnnotations ? annotations : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{},
 			},
@@ -750,7 +908,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.config",
-				Original: "[has(schema.config) && includeConfig ? schema.config : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{
 					"key": "value",
@@ -774,7 +931,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "data.field",
-				Original: "[condition ? {} : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{},
 			},
@@ -795,7 +951,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			want: ResolutionResult{
 				Path:     "spec.value",
-				Original: "[expr ? value : {}]",
 				Resolved: true,
 				Replaced: "prefix-resolved-suffix",
 			},
@@ -808,7 +963,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			got := r.resolveField(tt.field)
 
 			assert.Equal(t, tt.want.Path, got.Path)
-			assert.Equal(t, tt.want.Original, got.Original)
 			assert.Equal(t, tt.want.Resolved, got.Resolved)
 			assert.Equal(t, tt.want.Replaced, got.Replaced)
 

@@ -335,6 +335,10 @@ cli:
 	sudo mv bin/kro /usr/local/bin
 	@echo "CLI built successfully"
 
+.PHONY: kro-render
+kro-render:
+	go build -ldflags=${LDFLAGS} -o bin/kro-render ./cmd/kro-render
+
 ##@ E2E Tests
 
 .PHONY: test-e2e

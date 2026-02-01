@@ -16,6 +16,8 @@ package generate
 
 import (
 	"github.com/spf13/cobra"
+	
+	"github.com/kro-run/kro/cmd/kro/commands/render"
 )
 
 type GenerateConfig struct {
@@ -42,5 +44,6 @@ func AddGenerateCommands(rootCmd *cobra.Command) {
 	generateCmd.AddCommand(generateCRDCmd)
 	generateCmd.AddCommand(generateDiagramCmd)
 	generateCmd.AddCommand(generateInstanceCmd)
+	generateCmd.AddCommand(render.NewRenderCommand())
 	rootCmd.AddCommand(generateCmd)
 }

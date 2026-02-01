@@ -158,9 +158,12 @@ type registration struct {
 //     (handler map). This allows concurrent updates to
 //     different GVRs without blocking each other.
 type DynamicController struct {
+	// startedLock protects the ctx field.
+	startedLock sync.Mutex
 	// Parent run context, inherited by all informer stop contexts.
 	// It is set by Start and meant to be used to register the controller context with a global handler
 	// such as the controller-runtime manager.
+	// Protected by startedLock.
 	ctx context.Context
 
 	// mu is a global mutex protecting watches and registrations.
@@ -226,16 +229,18 @@ func NewDynamicController(
 
 // Start starts workers and blocks until ctx.Done().
 func (dc *DynamicController) Start(ctx context.Context) error {
+	dc.startedLock.Lock()
 	if dc.ctx != nil {
+		dc.startedLock.Unlock()
 		return fmt.Errorf("already running")
 	}
+	dc.ctx = ctx
+	dc.startedLock.Unlock()
 
 	defer utilruntime.HandleCrash()
 
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
-
-	dc.ctx = ctx
 
 	// Workers.
 	for i := 0; i < dc.config.Workers; i++ {
@@ -244,6 +249,13 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 
 	<-ctx.Done()
 	return dc.gracefulShutdown()
+}
+
+// getContext returns the controller's context, protected by startedLock.
+func (dc *DynamicController) getContext() context.Context {
+	dc.startedLock.Lock()
+	defer dc.startedLock.Unlock()
+	return dc.ctx
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
@@ -477,7 +489,7 @@ func (dc *DynamicController) reconcileParentLocked(
 	// create handler if missing
 	if reg.parentHandlerID == "" {
 		parentHandlerID := parentHandlerID(parent)
-		if err := w.AddHandler(dc.ctx, parentHandlerID, cache.ResourceEventHandlerFuncs{
+		if err := w.AddHandler(dc.getContext(), parentHandlerID, cache.ResourceEventHandlerFuncs{
 			AddFunc:    func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeAdd) },
 			UpdateFunc: func(oldObj, newObj interface{}) { dc.updateFunc(parent, oldObj, newObj) },
 			DeleteFunc: func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeDelete) },
@@ -540,7 +552,7 @@ func (dc *DynamicController) reconcileChildrenLocked(
 			return fmt.Errorf("creating child handler for %s for parent %s failed: %w", child, parent, err)
 		}
 
-		if err := w.AddHandler(dc.ctx, childHandlerID, childHandler); err != nil {
+		if err := w.AddHandler(dc.getContext(), childHandlerID, childHandler); err != nil {
 			return fmt.Errorf("add child handler %s: %w", child, err)
 		}
 		reg.childHandlerIDs[child] = childHandlerID

@@ -141,18 +141,33 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	inst.Object["status"] = status
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := c.client.Dynamic().
-			Resource(c.gvr).
-			Namespace(inst.GetNamespace()).
-			Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
+		var cur *unstructured.Unstructured
+		var err error
+		// Handle cluster-scoped instances (namespace will be empty)
+		if inst.GetNamespace() != "" {
+			cur, err = c.client.Dynamic().
+				Resource(c.gvr).
+				Namespace(inst.GetNamespace()).
+				Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
+		} else {
+			cur, err = c.client.Dynamic().
+				Resource(c.gvr).
+				Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
+		}
 		if err != nil {
 			return err
 		}
 		cur.Object["status"] = status
-		_, err = c.client.Dynamic().
-			Resource(c.gvr).
-			Namespace(inst.GetNamespace()).
-			UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
+		if inst.GetNamespace() != "" {
+			_, err = c.client.Dynamic().
+				Resource(c.gvr).
+				Namespace(inst.GetNamespace()).
+				UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
+		} else {
+			_, err = c.client.Dynamic().
+				Resource(c.gvr).
+				UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
+		}
 		return err
 	})
 }

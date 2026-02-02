@@ -16,6 +16,7 @@ package cel
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 const (
@@ -83,10 +84,6 @@ func (m *CelMetrics) MustRegister(registry prometheus.Registerer) {
 	registry.MustRegister(m.evaluationTime)
 }
 
-// For now, register with the default registry
-//
-// TODO(a-hilaly): rework all kro custom metrics to use a custom registry, and
-// register them all somewhere central.
 func init() {
-	Metrics.MustRegister(prometheus.DefaultRegisterer)
+	Metrics.MustRegister(metrics.Registry)
 }

@@ -169,6 +169,9 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 		metadata.OwnedLabel:             "true",
 		metadata.InstanceLabel:          deploy.GetName(),
 		metadata.InstanceNamespaceLabel: deploy.GetNamespace(),
+		metadata.InstanceGroupLabel:     deployGVK.Group,
+		metadata.InstanceVersionLabel:   deployGVK.Version,
+		metadata.InstanceKindLabel:      deployGVK.Kind,
 	})
 	secretUpdates <- watch.Event{
 		Type:   watch.Modified,

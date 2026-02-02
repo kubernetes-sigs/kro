@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
@@ -49,6 +50,9 @@ const (
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
+	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
+	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
+	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
 
 	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
@@ -158,21 +162,34 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 // NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
 // InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
 // and name of the instance that was reconciled to create the resource.
-func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
+// It also includes the instance's GVK to allow child
+// resource handlers to filter events by parent instance type.
+func NewInstanceLabeler(instance *unstructured.Unstructured) GenericLabeler {
+	gvk := instance.GroupVersionKind()
 	return map[string]string{
-		InstanceIDLabel:        string(instanceMeta.GetUID()),
-		InstanceLabel:          instanceMeta.GetName(),
-		InstanceNamespaceLabel: instanceMeta.GetNamespace(),
+		InstanceIDLabel:        string(instance.GetUID()),
+		InstanceLabel:          instance.GetName(),
+		InstanceNamespaceLabel: instance.GetNamespace(),
+		InstanceGroupLabel:     gvk.Group,
+		InstanceVersionLabel:   gvk.Version,
+		InstanceKindLabel:      gvk.Kind,
 	}
 }
 
-// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ManagedBy labels on a resource.
+// NewNodeLabeler returns a new labeler for child resources
+// Only includes app.kubernetes.io/managed-by label, as other labels come from the parent labeler.
+func NewNodeLabeler() GenericLabeler {
+	return map[string]string{
+		ManagedByLabelKey: ManagedByKROValue,
+	}
+}
+
+// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel, and
+// KROVersion labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:        "true",
-		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
-		ManagedByLabelKey: ManagedByKROValue,
+		OwnedLabel:      "true",
+		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
 	}
 }
 

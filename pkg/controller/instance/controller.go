@@ -17,6 +17,7 @@ package instance
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -229,7 +230,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 		}
 	}
 
-	if !needFinalizer && !needLabelPatch {
+	if needPatch := needFinalizer || needLabelPatch; !needPatch {
 		return obj, nil
 	}
 
@@ -247,19 +248,11 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 		},
 	}
 
-	// Finalizer patch
-	if needFinalizer {
-		metadata.SetInstanceFinalizer(patch)
-	}
-
-	// Label patch
-	if needLabelPatch {
-		lbl := make(map[string]string, len(wantLabels))
-		for k, v := range wantLabels {
-			lbl[k] = v
-		}
-		patch.SetLabels(lbl)
-	}
+	// Label + finalizers patch
+	// we patch together here because otherwise we could revert a previous patch
+	// result if only one of finalizers or labels change.
+	patch.SetLabels(maps.Clone(wantLabels))
+	metadata.SetInstanceFinalizer(patch)
 
 	patched, err := rcx.InstanceClient().Apply(
 		rcx.Ctx,

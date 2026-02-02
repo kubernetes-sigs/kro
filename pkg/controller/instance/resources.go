@@ -399,7 +399,13 @@ func (c *Controller) applyDecoratorLabels(
 	// Merge tool labels from labeler. On conflict (duplicate keys), log and use
 	// instance labels only - this avoids panic from nil dereference.
 	instanceLabeler := metadata.NewInstanceLabeler(rcx.Instance)
-	toolLabels, err := instanceLabeler.Merge(rcx.Labeler)
+	nodeLabeler := metadata.NewNodeLabeler()
+	merged, err := instanceLabeler.Merge(nodeLabeler)
+	if err != nil {
+		rcx.Log.V(1).Info("label merge conflict between instance and node labeler, using instance labels only", "error", err)
+		merged = instanceLabeler
+	}
+	toolLabels, err := merged.Merge(rcx.Labeler)
 	if err != nil {
 		rcx.Log.V(1).Info("label merge conflict, using instance labels only", "error", err)
 		toolLabels = instanceLabeler

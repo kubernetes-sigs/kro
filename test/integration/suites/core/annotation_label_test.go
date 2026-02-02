@@ -139,6 +139,9 @@ var _ = Describe("Labels and Annotations", func() {
 				HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.GetName()),
 			), "default kro labels should also be present")
 
+			g.Expect(instance.GetLabels()).ToNot(HaveKey(metadata.ManagedByLabelKey),
+				"instance should not have app.kubernetes.io/managed-by label it may be used by other application lifecycle tooling")
+
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		cfgMap := &corev1.ConfigMap{}

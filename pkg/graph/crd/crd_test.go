@@ -111,11 +111,11 @@ func TestSynthesizeCRD(t *testing.T) {
 					Annotations: map[string]string{},
 				},
 			},
-			expectedName:  "widgets.kro.com",
-			expectedGroup: "kro.com",
-			scope:         extv1.NamespaceScoped,
-			expectedLabels:       nil,
-			expectedAnnotations:  nil,
+			expectedName:        "widgets.kro.com",
+			expectedGroup:       "kro.com",
+			scope:               extv1.NamespaceScoped,
+			expectedLabels:      nil,
+			expectedAnnotations: nil,
 		},
 	}
 

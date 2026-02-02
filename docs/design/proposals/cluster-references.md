@@ -1,303 +1,187 @@
-# KREP-7: Cluster References for Multi-Cluster Resource Management
+# KREP-007: Cluster References for Cross-Cluster Resource Orchestration
 
 ## Summary
 
-This KREP introduces cluster references to KRO, enabling ResourceGraphDefinitions to read from and deploy resources to remote Kubernetes clusters. By adding a `cluster` field to external references, resource definitions, and the RGD spec, KRO can orchestrate resources across multiple clusters while maintaining its declarative model and dependency management capabilities.
+KRO currently orchestrates resources within a single Kubernetes cluster. This proposal introduces cluster references to enable cross-cluster resource orchestration, allowing ResourceGraphDefinitions to create, manage, and reference resources across multiple Kubernetes clusters. Cluster references are defined at the RGD level and use kubeconfig-based authentication stored in Kubernetes Secrets. By default, KRO watches resources in remote clusters for changes, with polling support deferred to future work.
 
 ## Motivation
 
-Modern Kubernetes deployments increasingly span multiple clusters for high availability, geographic distribution, regulatory compliance, and workload isolation. Organizations need to:
+Modern Kubernetes architectures increasingly span multiple clusters for high availability, geographic distribution, environment separation, and blast radius reduction. Organizations deploy hub-and-spoke topologies, multi-region setups, and hybrid cloud configurations where resources in one cluster depend on or complement resources in others.
 
-- Deploy applications across multiple environments (dev, staging, production) in different clusters
-- Reference shared configuration or infrastructure resources from central clusters
-- Manage edge deployments from a central control plane
-- Orchestrate multi-cluster architectures (hub-and-spoke, multi-region)
+Today, orchestrating resources across clusters requires external tooling, custom operators, or manual coordination. Users cannot express cross-cluster dependencies or lifecycle management within a single ResourceGraphDefinition. This forces them to:
 
-Today, users must either:
-1. Run separate KRO instances in each cluster with manual coordination
-2. Use external tools to replicate resources across clusters
-3. Build custom operators for cross-cluster orchestration
-
-None of these approaches leverage KRO's dependency management and CEL-based orchestration across cluster boundaries. Users lose the declarative, unified resource graph model when working with multiple clusters.
+- Maintain separate RGDs per cluster with manual coordination
+- Build custom controllers to handle cross-cluster logic
+- Use external orchestration tools that lack KRO's dependency management
+- Accept operational complexity and reduced reliability
 
 ### Use Cases
 
-**Shared Configuration**: A central platform cluster hosts shared ConfigMaps and Secrets that application clusters reference for consistent configuration.
+**Multi-Region Application Deployment**: Deploy application components across regional clusters while maintaining centralized configuration and dependency management. A control plane cluster manages RGD instances that deploy workloads to edge clusters based on geographic requirements.
 
-**Multi-Region Deployment**: Deploy the same application stack to multiple regional clusters with region-specific parameters, all managed from a single RGD instance.
+**Shared Infrastructure References**: Reference shared infrastructure resources (databases, message queues, configuration) from a central platform cluster while deploying application workloads to tenant clusters.
 
-**Hub-and-Spoke Architecture**: A management cluster deploys and monitors workloads across dozens or hundreds of edge clusters.
-
-**Cross-Cluster Dependencies**: An application in cluster A depends on a database provisioned in cluster B, with KRO managing the dependency relationship.
+**Environment Promotion**: Define promotion workflows where resources in development clusters trigger creation of corresponding resources in staging and production clusters, with proper dependency ordering.
 
 ## Proposal
 
 ### Overview
 
-This KREP introduces the `cluster` field at three levels:
+This KREP introduces a `cluster` field to the ResourceGraphDefinition schema that specifies remote cluster access configuration. Cluster references enable KRO to:
 
-1. **ExternalRef cluster** - Read resources from remote clusters
-2. **Resource-level cluster** - Deploy individual resources to remote clusters
-3. **RGD-level cluster** - Deploy all resources in an RGD to a remote cluster
-
-The cluster reference specifies authentication (kubeconfig Secret) and synchronization behavior (watch by default, or poll with configurable interval and jitter). KRO extends its existing reconciliation model to manage resources across cluster boundaries while preserving dependency ordering and CEL expression evaluation.
+- Create and manage resources in remote Kubernetes clusters
+- Watch remote cluster resources for changes and reconcile accordingly
+- Maintain dependency ordering across cluster boundaries
+- Validate remote cluster accessibility during RGD reconciliation (for static cluster references)
 
 ### Core Concepts
 
-**Cluster Reference Scope**
+**Cluster Reference Scope**: Cluster references apply to all resources within an RGD. When a cluster reference is specified, all resources defined in that RGD are created in the referenced cluster, not the cluster where the RGD instance exists.
 
-Cluster references operate at three levels with clear precedence:
-- Resource-level cluster overrides RGD-level cluster
-- RGD-level cluster applies to all resources unless overridden
-- No cluster reference means local cluster (current behavior)
+**Watch-Based Reconciliation**: By default, KRO establishes watches on resources in remote clusters, receiving real-time notifications of changes. This maintains KRO's existing reconciliation model across cluster boundaries. (See Future Directions for more information)
 
-**Static vs Dynamic Cluster References**
+**Static vs. Parameterized References**: All ClusterRef fields (Name, Namespace, Key) support CEL expressions that evaluate instance spec fields. Static references enable validation at RGD creation time, while parameterized references provide runtime flexibility. Fields can mix static and CEL values (e.g., static Name with CEL Namespace).
 
-Static cluster references (literal values) enable validation at RGD creation time. KRO can verify cluster connectivity and run static analysis on remote resources.
+**Kubeconfig Storage**: Remote cluster credentials are stored as Kubernetes Secrets in the cluster where KRO runs. This leverages existing Kubernetes RBAC and secret management capabilities.
 
-Dynamic cluster references (CEL expressions) defer cluster selection to instance creation time. KRO skips static analysis for these resources since the target cluster is unknown until runtime.
-
-**Synchronization Strategies**
-
-By default, cluster references use watch mode, establishing a watch connection to the remote cluster for real-time updates. For scenarios involving hundreds or thousands of clusters, users can specify a `pollConfig` to switch to polling mode with configurable interval and jitter.
-
-**Dependency Constraints**
-
-Resources deployed to remote clusters (RGD-level cluster) cannot depend on resources in the RGD. This prevents circular dependencies where remote resources would need to reference the local cluster. Resource-level cluster references have no such restriction since they remain part of the local dependency graph.
+**Dependency Constraints**: Cluster references specified at the RGD level cannot depend on resources defined within that RGD. This prevents circular dependencies and ensures cluster selection happens before resource creation.
 
 ## API Changes
 
-### ClusterReference Type
+### ClusterRef Field
 
-```yaml
-type ClusterReference struct {
-    // Name is the identifier for this cluster reference.
-    // Used in error messages and status reporting.
-    //
-    // +kubebuilder:validation:Required
-    Name string `json:"name"`
-    
-    // KubeconfigSecret references a Secret containing the kubeconfig
-    // for accessing the remote cluster.
-    //
-    // +kubebuilder:validation:Required
-    KubeconfigSecret SecretReference `json:"kubeconfigSecret"`
-    
-    // PollConfig defines polling behavior for the remote cluster.
-    // If not specified, the cluster reference uses watch mode (default).
-    // When specified, switches to polling mode with the given configuration.
-    //
-    // +kubebuilder:validation:Optional
-    PollConfig *PollConfig `json:"pollConfig,omitempty"`
-}
+Add a new `ClusterRef` type and field to the ResourceGraphDefinition schema:
 
-type SecretReference struct {
-    // Name of the Secret containing the kubeconfig.
-    //
-    // +kubebuilder:validation:Required
-    Name string `json:"name"`
-    
-    // Namespace of the Secret.
-    //
-    // +kubebuilder:validation:Required
-    Namespace string `json:"namespace"`
-    
-    // Key within the Secret that contains the kubeconfig data.
-    // Defaults to "kubeconfig" if not specified.
-    //
-    // +kubebuilder:validation:Optional
-    // +kubebuilder:default="kubeconfig"
-    Key string `json:"key,omitempty"`
-}
+```go
+// ClusterRef specifies a remote Kubernetes cluster where resources should be created.
+// When specified, all resources in the RGD are created in the referenced cluster
+// instead of the cluster where the RGD instance exists.
+//
+// All fields support CEL expressions using ${...} syntax to enable dynamic cluster
+// selection based on instance spec fields.
+type ClusterRef struct {
+	// Name is the name of the Secret containing kubeconfig data.
+	// Can be either:
+	// - A static Secret name: "my-kubeconfig-secret"
+	// - A CEL expression: "${schema.spec.targetCluster}"
+	//
+	// For static references, the Secret must exist before the RGD is created.
+	// For CEL expressions, the Secret must exist when instances are created.
+	//
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
 
-type PollConfig struct {
-    // Interval is the base polling interval.
-    // Example: "30s", "5m", "1h"
-    //
-    // +kubebuilder:validation:Required
-    // +kubebuilder:validation:Pattern=`^[0-9]+(s|m|h)$`
-    Interval string `json:"interval"`
-    
-    // Jitter is the maximum random duration added to the interval
-    // to prevent thundering herd. Example: "5s", "1m"
-    //
-    // +kubebuilder:validation:Optional
-    // +kubebuilder:validation:Pattern=`^[0-9]+(s|m|h)$`
-    Jitter string `json:"jitter,omitempty"`
+	// Namespace is the namespace of the Secret containing kubeconfig data.
+	// Can be either:
+	// - A static namespace: "kro-system"
+	// - A CEL expression: "${schema.spec.clusterNamespace}"
+	// - Empty: defaults to the instance's namespace
+	//
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Key within the Secret that contains the kubeconfig data.
+	// Can be either:
+	// - A static key: "kubeconfig"
+	// - A CEL expression: "${schema.spec.kubeconfigKey}"
+	// - Empty: defaults to "kubeconfig"
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="kubeconfig"
+	Key string `json:"key,omitempty"`
 }
 ```
 
-### ExternalRef Changes
+Add the `Cluster` field to ResourceGraphDefinitionSpec:
 
-```yaml
-type ExternalRef struct {
-    // APIVersion is the API version of the external resource.
-    //
-    // +kubebuilder:validation:Required
-    APIVersion string `json:"apiVersion"`
-    
-    // Kind is the kind of the external resource.
-    //
-    // +kubebuilder:validation:Required
-    Kind string `json:"kind"`
-    
-    // Metadata contains the name and optional namespace of the external resource.
-    //
-    // +kubebuilder:validation:Required
-    Metadata ExternalRefMetadata `json:"metadata"`
-    
-    // Cluster specifies a remote cluster to read this resource from.
-    // If not specified, uses the local cluster.
-    // Can be a static cluster reference or a CEL expression.
-    // Uses watch mode by default; specify pollConfig to switch to polling.
-    //
-    // +kubebuilder:validation:Optional
-    Cluster *ClusterReference `json:"cluster,omitempty"`
-}
-```
-
-### Resource Changes
-
-```yaml
-type Resource struct {
-    // ID is a unique identifier for this resource within the ResourceGraphDefinition.
-    //
-    // +kubebuilder:validation:Required
-    ID string `json:"id,omitempty"`
-    
-    // Template is the Kubernetes resource manifest to create.
-    //
-    // +kubebuilder:validation:Optional
-    Template runtime.RawExtension `json:"template,omitempty"`
-    
-    // ExternalRef references an existing resource in the cluster instead of creating one.
-    //
-    // +kubebuilder:validation:Optional
-    ExternalRef *ExternalRef `json:"externalRef,omitempty"`
-    
-    // ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
-    //
-    // +kubebuilder:validation:Optional
-    ReadyWhen []string `json:"readyWhen,omitempty"`
-    
-    // IncludeWhen is a list of CEL expressions that determine whether this resource should be created.
-    //
-    // +kubebuilder:validation:Optional
-    IncludeWhen []string `json:"includeWhen,omitempty"`
-    
-    // Cluster specifies a remote cluster to deploy this resource to.
-    // Overrides RGD-level cluster if both are specified.
-    // Can be a static cluster reference or a CEL expression.
-    // Uses watch mode by default; specify pollConfig to switch to polling.
-    //
-    // +kubebuilder:validation:Optional
-    Cluster *ClusterReference `json:"cluster,omitempty"`
-}
-```
-
-### ResourceGraphDefinitionSpec Changes
-
-```yaml
+```go
 type ResourceGraphDefinitionSpec struct {
-    // Schema defines the structure of instances created from this ResourceGraphDefinition.
-    //
-    // +kubebuilder:validation:Required
-    Schema *Schema `json:"schema,omitempty"`
-    
-    // Resources is the list of Kubernetes resources that will be created and managed
-    // for each instance.
-    //
-    // +kubebuilder:validation:Optional
-    Resources []*Resource `json:"resources,omitempty"`
-    
-    // Cluster specifies a remote cluster to deploy all resources to.
-    // Individual resources can override this with their own cluster reference.
-    // Resources deployed via RGD-level cluster cannot depend on other
-    // resources in the RGD.
-    // Uses watch mode by default; specify pollConfig to switch to polling.
-    //
-    // +kubebuilder:validation:Optional
-    // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || self.resources.all(r, !has(r.template) || size(extractDependencies(r.template)) == 0)",message="resources with RGD-level cluster cannot have dependencies"
-    Cluster *ClusterReference `json:"cluster,omitempty"`
+	// Schema defines the structure of instances created from this ResourceGraphDefinition.
+	Schema *Schema `json:"schema,omitempty"`
+
+	// Resources is the list of Kubernetes resources that will be created and managed.
+	Resources []*Resource `json:"resources,omitempty"`
+
+	// Cluster specifies a remote Kubernetes cluster where all resources in this RGD
+	// should be created. When specified, KRO connects to the remote cluster using
+	// the provided kubeconfig and manages resources there instead of the local cluster.
+	//
+	// Cluster references cannot depend on resources defined in this RGD. For static
+	// cluster references, KRO validates cluster accessibility when the RGD is created.
+	// For parameterized references (using CEL), validation occurs when instances are
+	// created.
+	//
+	// +kubebuilder:validation:Optional
+	Cluster *ClusterRef `json:"cluster,omitempty"`
 }
 ```
+
+### Validation Rules
+
+The Name field is required and validated at the API level. All fields support CEL expressions, detected at RGD creation time by checking for `${...}` syntax.
 
 ## Examples
 
-### Example 1: Reading Shared Configuration from Central Cluster
+### Example 1: Static Cluster Reference
+
+Deploy resources to a fixed remote cluster using a static kubeconfig Secret:
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: central-cluster-kubeconfig
-  namespace: default
-type: Opaque
-stringData:
-  kubeconfig: |
-    apiVersion: v1
-    kind: Config
-    clusters:
-    - cluster:
-        certificate-authority-data: LS0tLS1CRUdJTi...
-        server: https://central-cluster.example.com:6443
-      name: central-cluster
-    contexts:
-    - context:
-        cluster: central-cluster
-        user: kro-reader
-      name: central-cluster
-    current-context: central-cluster
-    users:
-    - name: kro-reader
-      user:
-        token: eyJhbGciOiJSUzI1NiIsImtpZCI6...
----
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
-  name: app-with-shared-config
+  name: edge-application
 spec:
+  cluster:
+    name: us-west-edge-kubeconfig
+    namespace: kro-system
   schema:
     apiVersion: v1alpha1
-    kind: Application
+    kind: EdgeApp
     spec:
-      name: "string"
-      replicas: "integer | default=1"
+      replicas: "integer | default=3"
+      image: "string"
   resources:
-    - id: sharedConfig
-      externalRef:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: platform-defaults
-          namespace: shared-config
-        cluster:
-          name: central-cluster
-          kubeconfigSecret:
-            name: central-cluster-kubeconfig
-            namespace: default
-          # Uses watch mode by default (no pollConfig specified)
-    
     - id: deployment
       template:
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: ${schema.spec.name}
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
         spec:
           replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
           template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
             spec:
               containers:
-              - name: app
-                image: ${sharedConfig.data.defaultImage}
-                env:
-                - name: LOG_LEVEL
-                  value: ${sharedConfig.data.logLevel}
+                - name: app
+                  image: ${schema.spec.image}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.metadata.name}
+          namespace: ${schema.metadata.namespace}
+        spec:
+          selector:
+            app: ${schema.metadata.name}
+          ports:
+            - port: 80
+              targetPort: 8080
 ```
 
-### Example 2: Multi-Region Deployment with Resource-Level Cluster
+The kubeconfig Secret must exist before the RGD is created.
+
+### Example 2: Parameterized Cluster Reference
+
+Allow instance creators to specify the target cluster dynamically:
 
 ```yaml
 apiVersion: kro.run/v1alpha1
@@ -305,524 +189,493 @@ kind: ResourceGraphDefinition
 metadata:
   name: multi-region-app
 spec:
+  cluster:
+    name: ${schema.spec.targetCluster}
+    namespace: ${schema.spec.clusterNamespace}
   schema:
     apiVersion: v1alpha1
     kind: MultiRegionApp
     spec:
-      regions: "[]string"
+      targetCluster: "string"
+      clusterNamespace: "string"
+      replicas: "integer | default=3"
       image: "string"
   resources:
-    - id: regionalDeployments
-      forEach:
-        - region: ${schema.spec.regions}
-      cluster:
-        name: ${region + '-cluster'}
-        kubeconfigSecret:
-          name: ${region + '-kubeconfig'}
-          namespace: default
-        pollConfig:
-          interval: "1m"
-          jitter: "10s"
-      template:
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: ${schema.metadata.name}
-          namespace: default
-        spec:
-          replicas: 3
-          template:
-            spec:
-              containers:
-              - name: app
-                image: ${schema.spec.image}
-```
-
-### Example 3: Hub-and-Spoke with RGD-Level Cluster
-
-```yaml
-apiVersion: kro.run/v1alpha1
-kind: ResourceGraphDefinition
-metadata:
-  name: edge-workload
-spec:
-  schema:
-    apiVersion: v1alpha1
-    kind: EdgeWorkload
-    spec:
-      targetCluster: "string"
-      workloadConfig: "object"
-  cluster:
-    name: ${schema.spec.targetCluster}
-    kubeconfigSecret:
-      name: edge-clusters-kubeconfig
-      namespace: default
-    pollConfig:
-      interval: "5m"
-      jitter: "30s"
-  resources:
-    - id: namespace
-      template:
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: edge-workloads
-    
     - id: deployment
       template:
         apiVersion: apps/v1
         kind: Deployment
         metadata:
           name: ${schema.metadata.name}
-          namespace: edge-workloads
         spec:
-          replicas: ${schema.spec.workloadConfig.replicas}
+          replicas: ${schema.spec.replicas}
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
           template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
             spec:
               containers:
-              - name: workload
-                image: ${schema.spec.workloadConfig.image}
+                - name: app
+                  image: ${schema.spec.image}
 ```
 
-### Example 4: Static Cluster Reference with Watch
+Users create instances specifying the target cluster:
+
+```yaml
+apiVersion: example.com/v1alpha1
+kind: MultiRegionApp
+metadata:
+  name: my-app-us-east
+spec:
+  targetCluster: us-east-cluster-kubeconfig
+  clusterNamespace: kro-system
+  replicas: 5
+  image: myapp:v1.2.3
+---
+apiVersion: example.com/v1alpha1
+kind: MultiRegionApp
+metadata:
+  name: my-app-eu-west
+spec:
+  targetCluster: eu-west-cluster-kubeconfig
+  clusterNamespace: kro-system
+  replicas: 3
+  image: myapp:v1.2.3
+```
+
+### Example 3: Mixed Static and Dynamic Fields
+
+Use static namespace with dynamic Secret name and key:
 
 ```yaml
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
-  name: cross-cluster-app
+  name: flexible-app
 spec:
+  cluster:
+    name: ${schema.spec.secretName}
+    namespace: kro-system
+    key: ${schema.spec.kubeconfigKey}
   schema:
     apiVersion: v1alpha1
-    kind: CrossClusterApp
+    kind: FlexibleApp
     spec:
-      name: "string"
+      secretName: "string"
+      kubeconfigKey: "string | default=kubeconfig"
+      image: "string"
   resources:
-    - id: database
-      cluster:
-        name: data-cluster
-        kubeconfigSecret:
-          name: data-cluster-kubeconfig
-          namespace: default
-        # Uses watch mode by default
-      template:
-        apiVersion: db.example.com/v1
-        kind: Database
-        metadata:
-          name: ${schema.spec.name}-db
-        spec:
-          size: large
-    
-    - id: application
+    - id: deployment
       template:
         apiVersion: apps/v1
         kind: Deployment
         metadata:
-          name: ${schema.spec.name}
+          name: ${schema.metadata.name}
         spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.metadata.name}
           template:
+            metadata:
+              labels:
+                app: ${schema.metadata.name}
             spec:
               containers:
-              - name: app
-                env:
-                - name: DB_HOST
-                  value: ${database.status.endpoint}
+                - name: app
+                  image: ${schema.spec.image}
 ```
 
-## Design Details
+### Kubeconfig Secret Structure
 
-### Static Analysis and Validation
-
-**Static Cluster References**
-
-When a cluster reference uses literal values (no CEL expressions), KRO performs validation at RGD creation time:
-
-1. Verify the kubeconfig Secret exists and is accessible
-2. Attempt to connect to the remote cluster
-3. Validate API server reachability
-4. Run static analysis on resources targeting that cluster (schema validation, RBAC checks)
-5. Mark RGD as not ready if cluster is unreachable
-
-**Dynamic Cluster References**
-
-When cluster references contain CEL expressions (e.g., `${schema.spec.targetCluster}`), KRO:
-
-1. Skips cluster connectivity validation at RGD creation
-2. Skips static analysis for resources targeting dynamic clusters
-3. Defers all validation to instance creation time
-4. Evaluates CEL expressions when processing each instance
-
-### Dependency Management
-
-**RGD-Level Cluster Constraint**
-
-Resources deployed via RGD-level cluster cannot reference other resources in the RGD. This is enforced via CEL validation:
-
-```yaml
-+kubebuilder:validation:XValidation:rule="!has(self.cluster) || self.resources.all(r, !has(r.template) || size(extractDependencies(r.template)) == 0)",message="resources with RGD-level cluster cannot have dependencies"
-```
-
-This prevents scenarios where:
-- Remote resources try to reference local resources (cross-cluster CEL evaluation)
-- Circular dependencies between local and remote clusters
-- Ambiguous dependency ordering across cluster boundaries
-
-**Resource-Level Cluster Dependencies**
-
-Resources with resource-level cluster references remain part of the local dependency graph. They can:
-- Depend on local resources
-- Depend on externalRef resources from remote clusters
-- Depend on other remote resources (same or different clusters)
-- Be referenced by local resources via CEL expressions
-
-KRO evaluates dependencies normally, fetching remote resource state as needed for CEL expressions.
-
-### Synchronization Behavior
-
-**Watch Mode (Default)**
-
-When no `pollConfig` is specified, KRO establishes a watch connection to the remote cluster's API server:
-- Real-time updates when resources change
-- Automatic reconnection on connection loss
-- Suitable for small to medium numbers of clusters
-- Lower latency for detecting changes
-
-**Poll Mode**
-
-When `pollConfig` is specified, KRO periodically fetches resource state:
-- Configurable interval with jitter to prevent thundering herd
-- Scales to thousands of clusters
-- Higher latency for detecting changes
-- Reduced load on remote API servers
-- Essential for hub-and-spoke architectures managing large numbers of edge clusters
-
-### Error Handling
-
-**Cluster Unreachable at RGD Creation**
-
-For static cluster references, if the cluster is unreachable:
-- RGD validation fails
-- RGD status shows "Inactive" state
-- Condition indicates cluster connectivity issue
-- User must fix connectivity before RGD becomes ready
-
-**Cluster Unreachable During Reconciliation**
-
-If a cluster becomes unreachable after RGD is active:
-- Instance reconciliation retries with exponential backoff
-- Instance status reflects connectivity error
-- Other instances continue reconciling normally
-- Resources in unreachable clusters remain in last known state
-
-**Cluster Unreachable During Deletion**
-
-If a cluster is unreachable during instance deletion:
-- Deletion hangs until cluster access is restored
-- Finalizers prevent instance removal
-- Status indicates waiting for cluster access
-- User must restore connectivity or manually remove finalizers
-
-**Future Enhancement**: More sophisticated error handling and lifecycle control (timeouts, orphan policies, force deletion, graceful degradation) will be addressed in a follow-up KREP.
-
-### Kubeconfig Secret Format
-
-KRO expects kubeconfig Secrets in standard Kubernetes Secret format:
+Kubeconfig Secrets must contain a `kubeconfig` key with valid kubeconfig YAML. The kubeconfig should specify a single context that KRO will use:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: remote-cluster-kubeconfig
-  namespace: default
+  name: production-cluster-kubeconfig
+  namespace: kro-system
 type: Opaque
 stringData:
   kubeconfig: |
     apiVersion: v1
     kind: Config
     clusters:
-    - cluster:
-        certificate-authority-data: <base64-encoded-ca-cert>
-        server: https://remote-cluster.example.com:6443
-      name: remote-cluster
-    contexts:
-    - context:
-        cluster: remote-cluster
-        user: kro-user
-      name: remote-cluster
-    current-context: remote-cluster
+      - name: production
+        cluster:
+          server: https://prod-api.example.com:6443
+          certificate-authority-data: LS0tLS1CRUdJTi...
     users:
-    - name: kro-user
-      user:
-        token: <service-account-token>
+      - name: kro-service-account
+        user:
+          token: eyJhbGciOiJSUzI1NiIsImtpZCI6Ii...
+    contexts:
+      - name: production
+        context:
+          cluster: production
+          user: kro-service-account
+          namespace: default
+    current-context: production
 ```
 
-The Secret must contain a valid kubeconfig with sufficient permissions to perform required operations (read for externalRef, full CRUD for resource deployment).
+KRO supports multiple authentication methods in kubeconfig:
+- Client certificates (`client-certificate-data`, `client-key-data`)
+- Bearer tokens (`token`)
+- Exec-based authentication (`exec`)
+- Username/password (not recommended)
 
-### Cluster Reference Precedence
+## Design Details
 
-When multiple cluster references are specified:
+### RGD Validation and Static Analysis
 
-1. Resource-level `cluster` takes highest precedence
-2. RGD-level `cluster` applies if no resource-level cluster
-3. No cluster reference means local cluster (current behavior)
+When an RGD with a cluster reference is created or updated:
 
-Example:
+1. **CEL Expression Detection**: Check each ClusterRef field for `${...}` syntax:
+   - Fields with `${...}` are treated as CEL expressions (parameterized)
+   - Fields without `${...}` are treated as static values
+   - A ClusterRef is fully static only if all fields are static
 
-```yaml
-spec:
-  cluster:
-    name: default-remote  # Applies to all resources
-  resources:
-    - id: resource1
-      template: {...}  # Deployed to default-remote
-    
-    - id: resource2
-      cluster:
-        name: specific-remote  # Overrides default-remote
-      template: {...}  # Deployed to specific-remote
-    
-    - id: resource3
-      template: {...}  # Deployed to default-remote
-```
+2. **Static Reference Validation**: For fully static references (no CEL in any field):
+   - Verify the referenced Secret exists in the specified namespace
+   - Verify the Secret contains the specified Key (default: "kubeconfig")
+   - Parse the kubeconfig and validate its structure
+   - Attempt to connect to the remote cluster and verify accessibility
+   - If the cluster is unreachable or the kubeconfig is invalid, mark the RGD as not ready with a descriptive error condition
+
+3. **Parameterized Reference Handling**: For any field containing CEL expressions:
+   - Validate all CEL expression syntax
+   - Verify expressions reference only instance spec fields (not resources in the RGD)
+   - Skip cluster connectivity validation (cannot be performed until instance creation)
+   - Mark the RGD as ready if all CEL expressions are valid
+
+4. **Resource Static Analysis**: For fully static cluster references:
+   - Perform static analysis on resources using the remote cluster's API server
+   - Validate resource schemas against the remote cluster's CRDs and API versions
+   - Report validation errors in RGD status conditions
+
+5. For any parameterized cluster references, skip static analysis for resources that will be created in the remote cluster
+
+### Instance Reconciliation
+
+When an instance of an RGD with a cluster reference is created:
+
+1. **Cluster Resolution**: 
+   - Evaluate all ClusterRef fields, resolving any CEL expressions
+   - For fully static references, use the pre-validated cluster connection
+   - For parameterized fields, evaluate CEL expressions to determine values
+   - Retrieve the kubeconfig Secret from the resolved namespace using the resolved Key
+   - Parse the kubeconfig and establish a connection to the remote cluster
+   - If the cluster is unreachable, update instance status with an error condition and requeue
+
+2. **Resource Creation**:
+   - Create a Kubernetes client for the remote cluster using the kubeconfig
+   - Process resources in dependency order (existing topological sorting)
+   - Apply resources to the remote cluster instead of the local cluster
+   - Establish watches on remote cluster resources for change notifications
+
+3. **Watch Management**:
+   - Create informers for each resource type in the remote cluster
+   - Register event handlers to trigger reconciliation when remote resources change
+   - Maintain watch connections with automatic reconnection on failure
+   - Update instance status based on remote resource states
+
+4. **Status Synchronization**:
+   - Read resource status from the remote cluster
+   - Evaluate `readyWhen` conditions against remote resource state
+   - Project status fields from remote resources to instance status
+   - Update instance status conditions to reflect remote cluster state
+
+### Deletion Handling
+
+When an instance with cluster references is deleted:
+
+1. **Resource Deletion**:
+   - Connect to the remote cluster using the kubeconfig
+   - Delete resources in reverse dependency order (existing deletion logic)
+   - Wait for each resource to be fully deleted before proceeding
+
+2. **Cluster Unreachability**:
+   - If the remote cluster is unreachable during deletion, the instance deletion will hang
+   - KRO will continuously retry connecting to the cluster
+   - Instance finalizer will not be removed until all remote resources are confirmed deleted
+   - This prevents orphaned resources in remote clusters
+   - Users must restore cluster connectivity to complete deletion
+
+3. **Kubeconfig Secret Deletion**:
+   - If the kubeconfig Secret is deleted while instances exist, mark instances as degraded
+   - Continue attempting reconciliation with exponential backoff
+   - Do not remove instance finalizers until remote resources are confirmed deleted
+
+### Error Handling and Status Conditions
+
+Cluster reference operations introduce new error scenarios that must be surfaced to users:
+
+**RGD Status Conditions**:
+- `ClusterAccessible`: Indicates whether the remote cluster is reachable (static references only)
+- `ClusterValidated`: Indicates whether the kubeconfig is valid and authentication succeeds
+- `StaticAnalysisComplete`: Indicates whether resource validation against the remote cluster succeeded
+
+**Instance Status Conditions**:
+- `ClusterResolved`: Indicates whether the cluster reference was successfully resolved (parameterized references)
+- `RemoteResourcesReady`: Indicates whether all resources in the remote cluster are ready
+- `RemoteClusterConnected`: Indicates current connectivity status to the remote cluster
+
+Error messages must include:
+- The cluster reference namespace/name
+- The specific operation that failed (connect, create, update, delete, watch)
+- The underlying error from the Kubernetes client
+- Guidance on resolution (e.g., "verify kubeconfig Secret exists and contains valid credentials")
+
+### Security Considerations
+
+**Kubeconfig Secret Access**: KRO requires RBAC permissions to read Secrets in namespaces where cluster references are defined. This should be limited to Secrets with a specific label or naming convention to prevent unauthorized access to unrelated Secrets. The Namespace field allows flexibility in Secret placement while maintaining security boundaries.
+
+**Remote Cluster Permissions**: The credentials in kubeconfig Secrets must have appropriate RBAC permissions in remote clusters. KRO should document recommended RBAC configurations for remote cluster service accounts.
+
+**Secret Rotation**: When kubeconfig Secrets are updated (e.g., certificate rotation), KRO must detect the change and re-establish connections. This requires watching the kubeconfig Secrets for changes.
+
+**Audit Logging**: All cross-cluster operations should be logged with sufficient detail for security auditing, including cluster names, operations performed, and authentication methods used.
+
+**Network Security**: Cross-cluster communication should use TLS with certificate validation. KRO should reject kubeconfig files that disable certificate verification.
 
 ## Scope
 
 ### In Scope
 
-- `cluster` field for ExternalRef (reading from remote clusters)
-- `cluster` field for Resource (deploying individual resources to remote clusters)
-- `cluster` field for ResourceGraphDefinitionSpec (deploying all resources to remote cluster)
-- Static and dynamic cluster references (literal values and CEL expressions)
-- Watch mode (default) and poll mode synchronization
-- Kubeconfig Secret-based authentication
-- Static analysis for static cluster references
-- Dependency constraint enforcement for RGD-level cluster
-- Basic error handling (unreachable clusters, invalid kubeconfigs)
+- `cluster` field on ResourceGraphDefinition schema
+- Static cluster references using `kubeconfigSecret`
+- Parameterized cluster references using `kubeconfigSecretRef` with CEL expressions
+- Watch-based reconciliation for remote cluster resources
+- Kubeconfig storage in Kubernetes Secrets
+- Static analysis for statically defined cluster references
+- Validation of cluster accessibility for static references
+- Error handling and status conditions for cluster operations
+- Deletion handling with cluster unreachability protection
+- Documentation and examples
 
 ### Out of Scope
 
-The following are explicitly out of scope for this KREP and will be addressed in future work:
+The following are explicitly out of scope for this KREP and are addressed in the Future Directions section:
 
-- **ExternalRef selectors** - Collection watching via label selectors (KREP-3). Cluster references are designed to be compatible with this feature when accepted.
-- **Advanced error handling** - Timeout policies, orphan handling, force deletion, graceful degradation and lifecyle controls
-- **Instance objects in remote clusters** - Deploying the RGD instance itself to a remote cluster
-- **Alternative authentication methods** - Service account projection, OIDC, certificate-based auth
-- **Cluster discovery** - Automatic discovery of clusters via labels or external registries
-- **Cluster health monitoring** - Proactive health checks and alerting for remote clusters
-- **Bandwidth optimization** - Compression, delta updates, or other optimizations for poll mode
+- **Polling-based reconciliation**: Alternative to watches for high-scale scenarios (50+ clusters)
+- **Cluster references on individual resources**: Allows simplified RGD structure for cross cluster deployments
+- **Cluster references on ExternalRef**: Reading and watching external resources from remote clusters
+- **Custom error handling logic**: Advanced error recovery and retry strategies
+- **Lifecycle controls**: Dynamic behavior modification based on error conditions
+
+### Non-Goals
+
+- Replace dedicated multi-cluster management tools (Cluster API, Fleet, ArgoCD)
+- Provide cluster provisioning or lifecycle management
+- Implement custom service mesh or networking solutions
+- Support non-Kubernetes target systems
+
+## Required Dependencies
+
+This KREP has two required dependencies that must be implemented before or alongside cluster references:
+
+### Dependency 1: Enhanced Status Tracking
+
+**Requirement**: KRO must track detailed status for each managed resource, including last update time, last observed generation, and error messages.
+
+**Rationale**: Cross-cluster orchestration introduces more complex error scenarios. When a remote cluster becomes unreachable or a resource fails to apply, users need detailed information about which specific resource failed and why. Current status tracking is insufficient for debugging cross-cluster issues.
+
+**Required Enhancements**:
+- Per-resource status conditions on Instance objects
+- Last update timestamp for each resource
+- Last observed generation to detect changes
+- Detailed error messages including resource identity (GVK, namespace, name)
+- Error messages must be accessible via CEL expressions for lifecycle controls
+
+**Impact on Cluster References**: 
+- Enables users to identify which resources in which clusters are failing
+- Supports future lifecycle controls that react to specific error conditions
+- Provides observability for cross-cluster operations
+
+**Implementation Note**: KRO currently watches event streams and performs server-side apply without comparing object generations. For cross-cluster polling (future work), KRO will need to list resources and events as well as compare generation values to detect changes. Enhanced status tracking is a prerequisite for this capability.
+
+### Dependency 2: Lifecycle Controls
+
+**Requirement**: RGD authors must be able to define dynamic behavior based on resource status and error conditions.
+
+**Rationale**: Cross-cluster orchestration creates more numerous and complex error cases. A single unreachable cluster may not justify blocking other operations. RGD authors need control over how errors are handled, how resources are deleted, and how changes propagate.
+
+**Required Capabilities**:
+- Conditional resource scaling based on error classification (e.g., reduce replicas when a dependency fails)
+- Selective resource deletion (e.g., skip deleting certain resources when instance is deleted)
+- Forced deletion after timeout (e.g., remove finalizer after 5 minutes if cluster unreachable)
+- Custom deletion ordering based on runtime conditions
+- Temporary resource creation during deletion (e.g., backup jobs before cleanup)
+
+**Impact on Cluster References**:
+- Allows graceful degradation when remote clusters are unreachable
+- Enables sophisticated deletion strategies for cross-cluster resources
+- Supports backup and cleanup workflows during instance deletion
+- Provides flexibility for handling partial failures
+
+**Integration with Enhanced Status**: Lifecycle controls use CEL expressions that reference the enhanced status conditions from Dependency 1. For example, a lifecycle control might check `${database.status.error.contains('connection refused')}` to determine whether to skip deletion.
+
+## Future Directions
+
+The following enhancements are explicitly deferred to future work and must not be included in the initial implementation:
+
+### 1. Polling-Based Reconciliation
+
+**Motivation**: Watch-based reconciliation can create scaling challenges when managing 50+ remote clusters. Each watch maintains a persistent connection, consuming memory and network resources.
+
+**Proposal**: Add a `pollConfig` field to ClusterRef:
+
+```go
+type ClusterRef struct {
+	Name                string            `json:"name"`
+	KubeconfigSecret    *SecretReference  `json:"kubeconfigSecret,omitempty"`
+	KubeconfigSecretRef string            `json:"kubeconfigSecretRef,omitempty"`
+	
+	// PollConfig enables polling instead of watching for resource changes.
+	// When specified, KRO periodically lists resources and compares generation
+	// values to detect changes instead of maintaining persistent watch connections.
+	//
+	// +kubebuilder:validation:Optional
+	PollConfig *PollConfig `json:"pollConfig,omitempty"`
+}
+
+type PollConfig struct {
+	// Interval specifies how frequently to poll the remote cluster.
+	// Minimum value is 10s to prevent excessive API server load.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Format=duration
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(s|m|h))+$`
+	Interval metav1.Duration `json:"interval"`
+}
+```
+
+**Requirements**: Depends on Enhanced Status Tracking (Dependency 1) to track resource generations and detect changes.
+
+### 2. Cluster References on ExternalRef
+
+**Motivation**: Enable reading existing resources from remote clusters without managing them.
+
+**Proposal**: Add `cluster` field to ExternalRef:
+
+```go
+type ExternalRef struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Metadata   ExternalRefMetadata `json:"metadata"`
+	
+	// Cluster specifies a remote cluster to read this resource from.
+	// When specified, KRO reads the resource from the remote cluster
+	// instead of the local cluster.
+	//
+	// +kubebuilder:validation:Optional
+	Cluster *ClusterRef `json:"cluster,omitempty"`
+}
+```
+
+**Use Case**: Reference shared configuration or infrastructure from a central platform cluster while deploying application resources to tenant clusters.
+
+### 3. Cluster References on Resource Schema
+
+**Motivation**: Simplify RGD structure when only some resources need to be created in remote clusters.
+
+**Proposal**: Add `cluster` field to Resource:
+
+```go
+type Resource struct {
+	ID          string               `json:"id,omitempty"`
+	Template    runtime.RawExtension `json:"template,omitempty"`
+	ExternalRef *ExternalRef         `json:"externalRef,omitempty"`
+	ReadyWhen   []string             `json:"readyWhen,omitempty"`
+	IncludeWhen []string             `json:"includeWhen,omitempty"`
+	
+	// Cluster specifies a remote cluster where this specific resource
+	// should be created. Overrides the RGD-level cluster reference.
+	//
+	// +kubebuilder:validation:Optional
+	Cluster *ClusterRef `json:"cluster,omitempty"`
+}
+```
+
+**Use Case**: Create most resources locally but deploy specific resources (e.g., edge workloads) to remote clusters.
+
+
+### 4. External References on Schema Schema
+
+**Motivation**: Allows existing types to be used as Instance objects. Allows a more natural implementation of decorator pattern for use with [KREP-003](https://github.com/kubernetes-sigs/kro/pull/738)
+
+**Proposal**: Add 'externalRef' to `schema`
+
+```go
+type Schema struct {
+	Kind string `json:"kind,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	Group string `json:"group,omitempty"`
+	Spec runtime.RawExtension `json:"spec,omitempty"`
+	Types runtime.RawExtension `json:"types,omitempty"`
+	Status runtime.RawExtension `json:"status,omitempty"`
+	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+
+    // ExternalRef references an existing resource instead of creating one.
+	// Exactly one of spec or externalRef must be provided.
+	//
+	// +kubebuilder:validation:Optional
+	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
+}
+```
+
 
 ## Alternatives Considered
 
-### Delegate to External Multi-Cluster Operator
+### Alternative 1: Delegate to External Operator
 
-**Approach**: Build a separate Kubernetes operator that handles cross-cluster resource management, with KRO delegating to it.
-
-**Trade-offs**:
-
-This approach requires either:
-
-1. **Monkey-patching existing types**: Modify standard Kubernetes resources (Deployment, Service, etc.) to add cluster targeting metadata. This is infeasible because:
-   - Violates Kubernetes API conventions
-   - Breaks compatibility with standard tooling
-   - Requires API server modifications or admission webhooks
-   - Creates maintenance burden across Kubernetes versions
-
-2. **Wrapper types**: Create custom resources that wrap standard Kubernetes types (e.g., `RemoteDeployment` wrapping `Deployment`). This has narrow utility because:
-   - Requires a powerful orchestrator to introspect wrappers and understand their contents
-   - Adds indirection and complexity for users
-   - Breaks compatibility with existing Kubernetes tooling
-   - Since KRO is already that powerful orchestrator, combining functionality is more natural
-
-**Why rejected**: KRO already has the introspection, dependency management, and CEL evaluation capabilities needed for cross-cluster orchestration. Adding cluster references to KRO's existing model is simpler and more powerful than building a separate operator with wrapper types.
-
-### Cluster-Scoped RGD Instances
-
-**Approach**: Allow RGD instances to specify a target cluster, deploying all resources to that cluster.
+**Approach**: KRO could delegate cross-cluster access to a separate Kubernetes operator that specializes in multi-cluster management.
 
 **Trade-offs**:
-- Simpler API (single cluster per instance)
-- Cannot mix local and remote resources in one instance
-- Cannot reference resources across clusters within a single RGD
-- Less flexible for hybrid architectures
+- **Rejected**: This approach requires either monkey-patching existing Kubernetes types or wrapping them in a custom type
+- Monkey-patching is infeasible and violates Kubernetes API conventions
+- A wrapper type has limited utility because consumers need to understand the wrapped content
+- Since KRO already introspects and orchestrates resources, combining cross-cluster functionality with KRO's orchestration capabilities is more natural
+- Reduces operational complexity by avoiding an additional operator dependency
 
-**Why rejected**: Resource-level and RGD-level cluster references provide more flexibility while still supporting the single-cluster-per-instance use case.
+### Alternative 2: Instance-Level Cluster References
 
-### Implicit Cluster Discovery
-
-**Approach**: Automatically discover clusters via labels, annotations, or external registries instead of explicit kubeconfig references.
+**Approach**: Allow instances to specify target clusters instead of defining them in the RGD.
 
 **Trade-offs**:
-- Reduces configuration verbosity
-- Adds complexity to cluster authentication and authorization
-- Makes security model less explicit
-- Harder to audit and troubleshoot
+- **Rejected**: Prevents static analysis and validation at RGD creation time
+- Cannot verify cluster accessibility or resource schemas until instance creation
+- Reduces safety guarantees and increases likelihood of runtime errors
+- Makes RGD behavior less predictable and harder to reason about
+- The parameterized cluster reference approach provides sufficient flexibility while maintaining validation capabilities
 
-**Why rejected**: Explicit kubeconfig references provide clear security boundaries and make cluster access auditable. Discovery can be added later as an optional enhancement.
+### Alternative 3: Implicit Cluster Discovery
+
+**Approach**: Automatically discover clusters using labels or annotations instead of explicit kubeconfig references.
+
+**Trade-offs**:
+- **Rejected**: Adds complexity and reduces explicitness
+- Requires additional CRDs or conventions for cluster registration
+- Makes it harder to understand which clusters an RGD will interact with
+- Complicates RBAC and security auditing
+- Explicit kubeconfig references are clearer and more secure
+
+### Alternative 4: Built-in Cluster API Integration
+
+**Approach**: Integrate directly with Cluster API to discover and access clusters.
+
+**Trade-offs**:
+- **Rejected**: Creates a hard dependency on Cluster API
+- Many organizations use other cluster management tools (Rancher, GKE Hub, EKS Anywhere)
+- Kubeconfig-based approach is vendor-agnostic and works with any cluster
+- Users can integrate with Cluster API by creating Secrets from Cluster API resources if desired
 
 ## Backward Compatibility
 
-The `cluster` field is purely additive. Existing RGDs continue to function unchanged:
-- Resources without `cluster` field deploy to local cluster (current behavior)
-- ExternalRefs without `cluster` field read from local cluster (current behavior)
-- No API version bump required
-- Users can adopt cluster references incrementally
+The `cluster` field is purely additive. Existing RGDs continue to function unchanged, creating resources in the local cluster as before. No API version bump is required. Users can adopt cluster references incrementally.
 
-## Testing Strategy
-
-### Requirements
-
-- Kubernetes 1.30+
-- Multiple test clusters (local + remote)
-- Integration test suite with cross-cluster scenarios
-
-### Test Plan
-
-1. **Static Cluster References**
-   - Verify RGD validation with reachable clusters
-   - Verify RGD fails validation with unreachable clusters
-   - Test static analysis runs on remote resources
-   - Confirm kubeconfig Secret changes trigger revalidation
-
-2. **Dynamic Cluster References**
-   - Verify static analysis is skipped for dynamic clusters
-   - Test CEL expression evaluation for cluster selection
-   - Confirm validation occurs at instance creation time
-
-3. **ExternalRef with Cluster**
-   - Read single resources from remote clusters
-   - Verify watch mode (default) receives real-time updates
-   - Verify poll mode fetches at correct intervals when pollConfig specified
-
-4. **Resource-Level Cluster**
-   - Deploy resources to remote clusters
-   - Verify dependencies work across clusters
-   - Test resource-level overrides RGD-level cluster
-   - Confirm CEL expressions can reference remote resources
-
-5. **RGD-Level Cluster**
-   - Deploy all resources to remote cluster
-   - Verify dependency constraint enforcement (no internal dependencies)
-   - Test that resource-level cluster overrides RGD-level
-
-6. **Synchronization Strategies**
-   - Watch mode (default): verify real-time updates and reconnection
-   - Poll mode: verify interval and jitter behavior when pollConfig specified
-   - Test that omitting pollConfig uses watch mode
-
-7. **Error Handling**
-   - Unreachable cluster at RGD creation (static)
-   - Cluster becomes unreachable during reconciliation
-   - Cluster unreachable during deletion (verify hang)
-   - Invalid kubeconfig Secret
-
-8. **Security**
-   - Verify RBAC enforcement for Secret access
-   - Test with minimal-permission kubeconfigs
-   - Confirm audit logging of cross-cluster operations
-
-## Integration with ExternalRef Selectors
-
-This KREP focuses on cluster references for single named resources. If KREP-3 (Decorators/Collection Watching) is accepted, cluster references would naturally extend to collection-based externalRefs.
-
-**ExternalRef with Selectors and Cluster**
-
-When KREP-3 adds `Selector` and `NamespaceSelector` to ExternalRef, cluster references would work seamlessly:
-
-```yaml
-resources:
-  - id: remoteDeployments
-    externalRef:
-      apiVersion: apps/v1
-      kind: DeploymentList
-      selector:
-        matchLabels:
-          app: backend
-      namespaceSelector:
-        matchLabels:
-          env: production
-      cluster:
-        name: production-cluster
-        kubeconfigSecret:
-          name: prod-kubeconfig
-          namespace: default
-        # Uses watch mode by default
-```
-
-**With Polling for Large-Scale Collection Watching**
-
-```yaml
-resources:
-  - id: edgeDeployments
-    externalRef:
-      apiVersion: apps/v1
-      kind: DeploymentList
-      selector:
-        matchLabels:
-          tier: edge
-      cluster:
-        name: ${schema.spec.edgeCluster}
-        kubeconfigSecret:
-          name: edge-kubeconfig
-          namespace: default
-        pollConfig:
-          interval: "2m"
-          jitter: "20s"
-```
-
-This would enable:
-- Watching collections of resources in remote clusters
-- Decorating resources across cluster boundaries
-- Building multi-cluster aggregation patterns
-- Scaling collection watching to thousands of clusters via polling
-
-**Design Considerations**
-
-The cluster reference design is intentionally compatible with collection watching:
-- Watch mode supports watching multiple resources efficiently
-- Poll mode scales to large collections across many clusters
-- CEL expressions can iterate over remote collections using forEach
-- Dependency management works identically for single resources and collections
-
-No API changes would be needed to support this integration - cluster references would simply work with whatever ExternalRef capabilities exist.
-
-## Future Work
-
-### Instance Objects in Remote Clusters
-
-Allow the RGD instance itself to be created in a remote cluster, with resources deployed relative to that cluster.
-
-### Alternative Authentication Methods
-
-- Service account token projection
-- OIDC-based authentication
-- Certificate-based authentication
-- Cloud provider IAM integration
-
-### Cluster Discovery and Management
-
-- Automatic cluster discovery via labels or external registries
-- Cluster health monitoring and alerting
-- Dynamic cluster pool management
-
-### Multi-Cluster Status Aggregation
-
-- Unified status view across all cluster deployments
-- Cross-cluster resource health dashboards
-- Aggregated metrics and events
-
-### Performance Optimizations
-
-- Compression for poll mode
-- Delta updates to reduce bandwidth
-- Connection pooling for multiple resources in same cluster
-- Batch operations for collections
-
-## Migration Path
-
-Users can adopt cluster references incrementally:
-
-1. **Phase 1**: Add cluster references to externalRef for reading shared configuration
-2. **Phase 2**: Deploy individual resources to remote clusters using resource-level cluster
-3. **Phase 3**: Deploy entire RGDs to remote clusters using RGD-level cluster
-
-No migration of existing RGDs is required. The feature is opt-in via the `cluster` field.
+RGDs without a `cluster` field behave identically to current behavior. The feature is opt-in and does not affect existing functionality.

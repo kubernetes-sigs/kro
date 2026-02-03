@@ -541,3 +541,101 @@ func TestValidateForEachDimensions(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateNoKROOwnedLabels(t *testing.T) {
+	tests := []struct {
+		name        string
+		resourceID  string
+		obj         map[string]interface{}
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:       "no labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "empty labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name":   "test",
+					"labels": map[string]interface{}{},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "valid labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app": "test",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "kro-owned labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app":           "test",
+						"kro.run/owned": "false",
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "kro.run/",
+		},
+		{
+			name:       "valid labels without kro.run/ prefix",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app":           "test",
+						"kro-run-owned": "false",
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNoKROOwnedLabels(tt.resourceID, tt.obj)
+			if (err != nil) != tt.expectError {
+				t.Errorf("validateNoKROOwnedLabels() error = %v, expectError %v", err, tt.expectError)
+			}
+			if tt.expectError && err != nil && tt.errorMsg != "" {
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("validateNoKROOwnedLabels() error = %v, should contain %q", err, tt.errorMsg)
+				}
+			}
+		})
+	}
+}

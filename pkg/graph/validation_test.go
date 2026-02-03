@@ -544,18 +544,18 @@ func TestValidateForEachDimensions(t *testing.T) {
 
 func TestValidateNoKROOwnedLabels(t *testing.T) {
 	tests := []struct {
-		name string
-		resourceID string
-		obj map[string]interface{}
+		name        string
+		resourceID  string
+		obj         map[string]interface{}
 		expectError bool
-		errorMsg string
+		errorMsg    string
 	}{
 		{
-			name: "no labels",
+			name:       "no labels",
 			resourceID: "testResource",
 			obj: map[string]interface{}{
 				"apiVersion": "v1",
-				"kind": "ConfigMap",
+				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
 					"name": "test",
 				},
@@ -563,24 +563,24 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "empty labels",
+			name:       "empty labels",
 			resourceID: "testResource",
 			obj: map[string]interface{}{
 				"apiVersion": "v1",
-				"kind": "ConfigMap",
+				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
-					"name": "test",
+					"name":   "test",
 					"labels": map[string]interface{}{},
 				},
 			},
 			expectError: false,
 		},
 		{
-			name: "valid labels",
+			name:       "valid labels",
 			resourceID: "testResource",
 			obj: map[string]interface{}{
 				"apiVersion": "v1",
-				"kind": "ConfigMap",
+				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
 					"name": "test",
 					"labels": map[string]interface{}{
@@ -591,32 +591,32 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "kro-owned labels",
+			name:       "kro-owned labels",
 			resourceID: "testResource",
 			obj: map[string]interface{}{
 				"apiVersion": "v1",
-				"kind": "ConfigMap",
+				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
 					"name": "test",
 					"labels": map[string]interface{}{
-						"app": "test",
+						"app":           "test",
 						"kro.run/owned": "false",
 					},
 				},
 			},
 			expectError: true,
-			errorMsg: "kro.run/",
+			errorMsg:    "kro.run/",
 		},
 		{
-			name: "valid labels without kro.run/ prefix",
+			name:       "valid labels without kro.run/ prefix",
 			resourceID: "testResource",
 			obj: map[string]interface{}{
 				"apiVersion": "v1",
-				"kind": "ConfigMap",
+				"kind":       "ConfigMap",
 				"metadata": map[string]interface{}{
 					"name": "test",
 					"labels": map[string]interface{}{
-						"app": "test",
+						"app":           "test",
 						"kro-run-owned": "false",
 					},
 				},

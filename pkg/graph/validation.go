@@ -264,7 +264,6 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
-//
 func validateTemplateConstraints(rgResource *v1alpha1.Resource, resourceObject map[string]interface{}, namespaced bool) error {
 	if !namespaced {
 		_, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "namespace")

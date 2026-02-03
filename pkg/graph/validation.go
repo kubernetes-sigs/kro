@@ -17,11 +17,13 @@ package graph
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 var (
@@ -263,7 +265,6 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
 //
-// TODO: We need more constraints here, e.g, you cannot set kro owned labels/annotations...
 func validateTemplateConstraints(rgResource *v1alpha1.Resource, resourceObject map[string]interface{}, namespaced bool) error {
 	if !namespaced {
 		_, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "namespace")
@@ -272,6 +273,33 @@ func validateTemplateConstraints(rgResource *v1alpha1.Resource, resourceObject m
 		}
 		if found {
 			return fmt.Errorf("resource %q is cluster-scoped and must not set metadata.namespace", rgResource.ID)
+		}
+	}
+
+	// Validate that users don't set KRO-owned labels
+	if err := validateNoKROOwnedLabels(rgResource.ID, resourceObject); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateNoKROOwnedLabels enforces that the resource template doesn't define any label with
+// LabelKROPrefix (kro.run/). These labels are reserved for internal use ONLY.
+func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]interface{}) error {
+	labelsRaw, found, err := unstructured.NestedFieldCopy(resourceObject, "metadata", "labels")
+	if err != nil || !found {
+		return nil
+	}
+
+	labelsMap, ok := labelsRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for key := range labelsMap {
+		if strings.HasPrefix(key, metadata.LabelKROPrefix) {
+			return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, metadata.LabelKROPrefix)
 		}
 	}
 

@@ -204,6 +204,20 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		errMsg                      string
 	}{
 		{
+			name: "invalid status",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					nil,
+					map[string]interface{}{
+						"status": "string", // Invalid reference
+					},
+				),
+			},
+			wantErr: true,
+			errMsg:  "status fields without expressions are not supported",
+		},
+		{
 			name: "invalid resource type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

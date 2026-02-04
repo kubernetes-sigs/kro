@@ -370,7 +370,7 @@ func (b *Builder) buildRGResource(
 	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
 	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
-		fieldDescriptors, err = parser.ParseSchemalessResource(resourceObject)
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
 		}
@@ -718,9 +718,13 @@ func buildStatusSchema(
 	}
 
 	// Extract CEL expressions from the status field.
-	fieldDescriptors, err := parser.ParseSchemalessResource(unstructuredStatus)
+	fieldDescriptors, noExpressionFields, err := parser.ParseSchemalessResource(unstructuredStatus)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to extract CEL expressions from status: %w", err)
+	}
+
+	if len(noExpressionFields) > 0 {
+		return nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
 	// Instance status expressions can ONLY reference resources, not schema.

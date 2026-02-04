@@ -23,9 +23,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/internal"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -44,6 +41,10 @@ import (
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller/internal"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // NOTE(a-hilaly): I'm just playing around with the dynamic controller code here
@@ -615,20 +616,26 @@ func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
 
 		dc.queue.Add(oi)
 
+		// First attempt (NumRequeues=0): should be requeued with rate limiting
 		result := dc.processNextWorkItem(t.Context())
 		assert.True(t, result)
-		time.Sleep(10 * time.Millisecond)
-		assert.Equal(t, 1, dc.queue.Len())
+		require.Eventually(t, func() bool {
+			return dc.queue.Len() == 1
+		}, 100*time.Millisecond, 1*time.Millisecond, "item should be requeued after first failure")
 
+		// Second attempt (NumRequeues=1): should be requeued again
 		result = dc.processNextWorkItem(t.Context())
 		assert.True(t, result)
-		time.Sleep(10 * time.Millisecond)
-		assert.Equal(t, 1, dc.queue.Len())
+		require.Eventually(t, func() bool {
+			return dc.queue.Len() == 1
+		}, 100*time.Millisecond, 1*time.Millisecond, "item should be requeued after second failure")
 
+		// Third attempt (NumRequeues=2 >= QueueMaxRetries): should be dropped
 		result = dc.processNextWorkItem(t.Context())
 		assert.True(t, result)
+		// Give a brief moment for any async operations, then verify item was dropped
 		time.Sleep(10 * time.Millisecond)
-		assert.Equal(t, 0, dc.queue.Len())
+		assert.Equal(t, 0, dc.queue.Len(), "item should be dropped after max retries")
 	})
 
 	t.Run("queue shutdown returns false", func(t *testing.T) {

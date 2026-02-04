@@ -205,7 +205,7 @@ func TestDynamicController_WatchBehavior(t *testing.T) {
 		}
 	}()
 	require.Eventually(t, func() bool {
-		return ctrl.getContext() != nil
+		return ctrl.ctx.Load() != nil
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Register parent (ConfigMap) watching child (Secret)
@@ -352,10 +352,12 @@ func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)
 
-	dc := NewDynamicController(logger, Config{MinRetryDelay: 200 * time.Millisecond,
+	dc := NewDynamicController(logger, Config{
+		MinRetryDelay: 200 * time.Millisecond,
 		MaxRetryDelay: 1000 * time.Second,
 		RateLimit:     10,
-		BurstLimit:    100}, client, mapper)
+		BurstLimit:    100,
+	}, client, mapper)
 
 	obj := &v1.PartialObjectMetadata{}
 	obj.SetName("test-object")
@@ -394,7 +396,8 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	dc := NewDynamicController(logger, Config{}, client, mapper)
-	dc.ctx = t.Context() // simulate a start through dc.Run
+	ctx := t.Context()
+	dc.ctx.Store(&ctx) // simulate a start through dc.Run
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		fmt.Println("reconciling instance", req)
@@ -479,7 +482,7 @@ func TestStart_AlreadyRunning(t *testing.T) {
 	}()
 
 	<-startedCh
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	err := dc.Start(ctx)
 	assert.Error(t, err)
@@ -963,7 +966,7 @@ func TestRegister_WithChildren(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil
@@ -1013,7 +1016,7 @@ func TestReconcileParentLocked_RemoveHandler(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil
@@ -1045,9 +1048,8 @@ func TestReconcileParentLocked_HandlerFuncs(t *testing.T) {
 	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
 	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
-	dc.startedLock.Lock()
-	dc.ctx = context.Background()
-	dc.startedLock.Unlock()
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
 
 	watch := internal.NewLazyInformer(client, parentGVR, time.Second, nil, noopLogger())
 	capture := &capturingInformer{}
@@ -1190,7 +1192,7 @@ func TestReconcileChildrenLocked_RemoveObsolete(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil
@@ -1282,7 +1284,7 @@ func TestRegister_AddHandlerError(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	cancel()
 	time.Sleep(50 * time.Millisecond)
@@ -1317,7 +1319,7 @@ func TestRegister_AddChildHandlerError(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil
@@ -1356,7 +1358,7 @@ func TestDeregister_DetachErrors(t *testing.T) {
 	go func() {
 		_ = dc.Start(ctx)
 	}()
-	require.Eventually(t, func() bool { return dc.getContext() != nil }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil

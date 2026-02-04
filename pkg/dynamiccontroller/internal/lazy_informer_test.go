@@ -16,6 +16,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -26,7 +27,9 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/metadata/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -34,6 +37,24 @@ import (
 func noopLogger() logr.Logger {
 	opts := zap.Options{DestWriter: io.Discard}
 	return zap.New(zap.UseFlagOptions(&opts))
+}
+
+type addErrorInformer struct {
+	cache.SharedIndexInformer
+	addErr error
+}
+
+func (a *addErrorInformer) AddEventHandler(cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
+	return nil, a.addErr
+}
+
+type removeErrorInformer struct {
+	cache.SharedIndexInformer
+	removeErr error
+}
+
+func (r *removeErrorInformer) RemoveEventHandler(cache.ResourceEventHandlerRegistration) error {
+	return r.removeErr
 }
 
 func TestLazyInformer_AddAndRemoveHandler(t *testing.T) {
@@ -182,4 +203,182 @@ func TestLazyInformer_ShutdownSafetyAndRestart(t *testing.T) {
 	assert.Len(t, li.handlers, 1)
 	assert.NotNil(t, li.cancel)
 	assert.NotNil(t, li.done)
+}
+
+func TestLazyInformer_EnsureInformerAlreadyExists(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx := t.Context()
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+	firstInformer := li.Informer()
+	assert.NotNil(t, firstInformer)
+
+	require.NoError(t, li.AddHandler(ctx, "h2", cache.ResourceEventHandlerFuncs{}))
+	secondInformer := li.Informer()
+	assert.Same(t, firstInformer, secondInformer)
+	assert.Len(t, li.handlers, 2)
+}
+
+func TestLazyInformer_RemoveNonExistentHandler(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx := t.Context()
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+	assert.Len(t, li.handlers, 1)
+
+	stopped, err := li.RemoveHandler("nonexistent")
+	assert.NoError(t, err)
+	assert.False(t, stopped)
+	assert.Len(t, li.handlers, 1)
+	assert.NotNil(t, li.Informer())
+}
+
+func TestLazyInformer_AddHandler_ErrorFromInformer(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx := t.Context()
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	t.Cleanup(li.Shutdown)
+
+	li.ensureInformer()
+	li.informer = &addErrorInformer{
+		SharedIndexInformer: li.informer,
+		addErr:              fmt.Errorf("add failed"),
+	}
+
+	err := li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "add failed")
+	assert.Empty(t, li.handlers)
+}
+
+func TestLazyInformer_RemoveHandler_ErrorFromInformer(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	ctx := t.Context()
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+	t.Cleanup(li.Shutdown)
+
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+
+	li.informer = &removeErrorInformer{
+		SharedIndexInformer: li.informer,
+		removeErr:           fmt.Errorf("remove failed"),
+	}
+
+	stopped, err := li.RemoveHandler("h1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "remove failed")
+	assert.False(t, stopped)
+	assert.Len(t, li.handlers, 1)
+}
+
+func TestLazyInformer_CacheSyncFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to sync")
+	assert.Nil(t, li.Informer())
+	assert.Empty(t, li.handlers)
+}
+
+func TestLazyInformer_InformerWithTweak(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	logger := noopLogger()
+	tweak := func(opts *v1.ListOptions) {
+		opts.LabelSelector = "test=value"
+	}
+
+	li := NewLazyInformer(client, gvr, time.Second, tweak, logger)
+
+	assert.NotNil(t, li.tweak)
+
+	ctx := t.Context()
+	_ = li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})
+}
+
+func TestLazyInformer_WatchError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+
+	fakeWatch := watch.NewFake()
+	client.PrependWatchReactor("tests", func(action k8stesting.Action) (handled bool, ret watch.Interface, err error) {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			fakeWatch.Error(&v1.Status{
+				Status:  "Failure",
+				Message: "simulated watch error",
+			})
+		}()
+		return true, fakeWatch, nil
+	})
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	err := li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{})
+	if err != nil {
+		assert.Contains(t, err.Error(), "failed to sync")
+	}
+}
+
+func TestLazyInformer_RemoveHandler_InformerNil(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	logger := noopLogger()
+	li := NewLazyInformer(client, gvr, time.Second, nil, logger)
+
+	ctx := t.Context()
+	require.NoError(t, li.AddHandler(ctx, "h1", cache.ResourceEventHandlerFuncs{}))
+
+	li.mu.Lock()
+	li.informer = nil
+	li.mu.Unlock()
+
+	stopped, err := li.RemoveHandler("h1")
+	assert.NoError(t, err)
+	assert.False(t, stopped)
 }

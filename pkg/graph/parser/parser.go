@@ -188,7 +188,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}
@@ -225,7 +225,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}

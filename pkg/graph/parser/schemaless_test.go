@@ -73,40 +73,45 @@ func areEqualSlices(slice1, slice2 []string) bool {
 
 func TestParseSchemalessResource(t *testing.T) {
 	tests := []struct {
-		name     string
-		resource map[string]interface{}
-		want     []variable.FieldDescriptor
-		wantErr  bool
+		name                string
+		resource            map[string]interface{}
+		expressionsWant     []variable.FieldDescriptor
+		plainFieldPathsWant []string
+		wantErr             bool
 	}{
 		{
 			name: "Simple string field",
 			resource: map[string]interface{}{
-				"field": "${resource.value}",
+				"field":        "${resource.value}",
+				"anotherField": "value",
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("resource.value"),
 					Path:                 "field",
 					StandaloneExpression: true,
 				},
 			},
-			wantErr: false,
+			plainFieldPathsWant: []string{"anotherField"},
+			wantErr:             false,
 		},
 		{
 			name: "Nested map",
 			resource: map[string]interface{}{
 				"outer": map[string]interface{}{
-					"inner": "${nested.value}",
+					"inner":        "${nested.value}",
+					"anotherInner": "nestedValue",
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("nested.value"),
 					Path:                 "outer.inner",
 					StandaloneExpression: true,
 				},
 			},
-			wantErr: false,
+			plainFieldPathsWant: []string{"outer.anotherInner"},
+			wantErr:             false,
 		},
 		{
 			name: "array field",
@@ -116,7 +121,7 @@ func TestParseSchemalessResource(t *testing.T) {
 					"${array[1]}",
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("array[0]"),
 					Path:                 "array[0]",
@@ -135,7 +140,7 @@ func TestParseSchemalessResource(t *testing.T) {
 			resource: map[string]interface{}{
 				"field": "Start ${expr1} middle ${expr2} end",
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions: krocel.NewUncompiledSlice("expr1", "expr2"),
 					Path:        "field",
@@ -156,7 +161,7 @@ func TestParseSchemalessResource(t *testing.T) {
 					},
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("string.value"),
 					Path:                 "string",
@@ -168,33 +173,37 @@ func TestParseSchemalessResource(t *testing.T) {
 					StandaloneExpression: true,
 				},
 			},
-			wantErr: false,
+			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]"},
+			wantErr:             false,
 		},
 		{
-			name:     "Empty resource",
-			resource: map[string]interface{}{},
-			want:     []variable.FieldDescriptor{},
-			wantErr:  false,
+			name:            "Empty resource",
+			resource:        map[string]interface{}{},
+			expressionsWant: []variable.FieldDescriptor{},
+			wantErr:         false,
 		},
 		{
 			name: "Nested expression (should error)",
 			resource: map[string]interface{}{
 				"field": "${outer(${inner})}",
 			},
-			want:    nil,
-			wantErr: true,
+			expressionsWant: nil,
+			wantErr:         true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseSchemalessResource(tt.resource)
+			expressionsGot, plainFieldPathsGot, err := ParseSchemalessResource(tt.resource)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseSchemalessResource() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !areEqualExpressionFields(got, tt.want) {
-				t.Errorf("ParseSchemalessResource() = %v, want %v", got, tt.want)
+			if !areEqualExpressionFields(expressionsGot, tt.expressionsWant) {
+				t.Errorf("ParseSchemalessResource() expressions = %v, want %v", expressionsGot, tt.expressionsWant)
+			}
+			if !areEqualSlices(plainFieldPathsGot, tt.plainFieldPathsWant) {
+				t.Errorf("ParseSchemalessResource() plainFieldPaths = %v, want %v", plainFieldPathsGot, tt.plainFieldPathsWant)
 			}
 		})
 	}
@@ -202,10 +211,11 @@ func TestParseSchemalessResource(t *testing.T) {
 
 func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 	tests := []struct {
-		name     string
-		resource map[string]interface{}
-		want     []variable.FieldDescriptor
-		wantErr  bool
+		name                string
+		resource            map[string]interface{}
+		expressionsWant     []variable.FieldDescriptor
+		plainFieldPathsWant []string
+		wantErr             bool
 	}{
 		{
 			name: "Deeply nested structure",
@@ -218,7 +228,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("deeply.nested.value"),
 					Path:                 "level1.level2.level3.level4",
@@ -239,7 +249,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("expr1"),
 					Path:                 "array[0]",
@@ -251,7 +261,8 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					StandaloneExpression: true,
 				},
 			},
-			wantErr: false,
+			plainFieldPathsWant: []string{"array[1]", "array[2]"},
+			wantErr:             false,
 		},
 		{
 			name: "Empty string expressions",
@@ -259,7 +270,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"empty1": "${}",
 				"empty2": "${    }",
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice(""),
 					Path:                 "empty1",
@@ -280,8 +291,9 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 				"incomplete2": "incomplete}",
 				"incomplete3": "$not_an_expression",
 			},
-			want:    []variable.FieldDescriptor{},
-			wantErr: false,
+			expressionsWant:     []variable.FieldDescriptor{},
+			plainFieldPathsWant: []string{"incomplete1", "incomplete2", "incomplete3"},
+			wantErr:             false,
 		},
 		{
 			name: "Complex structure with various expressions combinations",
@@ -307,7 +319,7 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					},
 				},
 			},
-			want: []variable.FieldDescriptor{
+			expressionsWant: []variable.FieldDescriptor{
 				{
 					Expressions:          krocel.NewUncompiledSlice("string.value"),
 					Path:                 "string",
@@ -338,18 +350,22 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					StandaloneExpression: true,
 				},
 			},
+			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]", "complex.array[0]"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseSchemalessResource(tt.resource)
+			expressionsGot, plainFieldPathsGot, err := ParseSchemalessResource(tt.resource)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseSchemalessResource() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !areEqualExpressionFields(got, tt.want) {
-				t.Errorf("ParseSchemalessResource() = %v, want %v", got, tt.want)
+			if !areEqualExpressionFields(expressionsGot, tt.expressionsWant) {
+				t.Errorf("ParseSchemalessResource() expressions = %v, want %v", expressionsGot, tt.expressionsWant)
+			}
+			if !areEqualSlices(plainFieldPathsGot, tt.plainFieldPathsWant) {
+				t.Errorf("ParseSchemalessResource() plainFieldPaths = %v, want %v", plainFieldPathsGot, tt.plainFieldPathsWant)
 			}
 		})
 	}

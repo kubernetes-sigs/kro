@@ -114,6 +114,21 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 		return n.desired, nil
 	}
 
+	// Skip CEL evaluation entirely if this resource should be ignored.
+	// This prevents errors when includeWhen=false and template references
+	// fields that don't exist (e.g., optional nested objects).
+	if n.Spec.Meta.Type != graph.NodeTypeInstance {
+		ignored, err := n.IsIgnored()
+		if err != nil {
+			return nil, err
+		}
+		if ignored {
+			// Cache empty result for ignored resources
+			n.desired = []*unstructured.Unstructured{}
+			return n.desired, nil
+		}
+	}
+
 	// For resource types, block until all dependencies are ready.
 	// This enforces readyWhen semantics: dependents wait for parents.
 	if n.Spec.Meta.Type != graph.NodeTypeInstance {

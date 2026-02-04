@@ -61,6 +61,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -160,8 +161,8 @@ type registration struct {
 type DynamicController struct {
 	// Parent run context, inherited by all informer stop contexts.
 	// It is set by Start and meant to be used to register the controller context with a global handler
-	// such as the controller-runtime manager.
-	ctx context.Context
+	// such as the controller-runtime manager. Thread-safe.
+	ctx atomic.Pointer[context.Context]
 
 	// mu is a global mutex protecting watches and registrations.
 	// Required because StartServingGVK and StopServiceGVK may run concurrently,
@@ -226,7 +227,7 @@ func NewDynamicController(
 
 // Start starts workers and blocks until ctx.Done().
 func (dc *DynamicController) Start(ctx context.Context) error {
-	if dc.ctx != nil {
+	if !dc.ctx.CompareAndSwap(nil, &ctx) {
 		return fmt.Errorf("already running")
 	}
 
@@ -234,8 +235,6 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 
 	dc.log.Info("Starting dynamic controller")
 	defer dc.log.Info("Shutting down dynamic controller")
-
-	dc.ctx = ctx
 
 	// Workers.
 	for i := 0; i < dc.config.Workers; i++ {
@@ -477,7 +476,7 @@ func (dc *DynamicController) reconcileParentLocked(
 	// create handler if missing
 	if reg.parentHandlerID == "" {
 		parentHandlerID := parentHandlerID(parent)
-		if err := w.AddHandler(dc.ctx, parentHandlerID, cache.ResourceEventHandlerFuncs{
+		if err := w.AddHandler(*dc.ctx.Load(), parentHandlerID, cache.ResourceEventHandlerFuncs{
 			AddFunc:    func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeAdd) },
 			UpdateFunc: func(oldObj, newObj interface{}) { dc.updateFunc(parent, oldObj, newObj) },
 			DeleteFunc: func(obj interface{}) { dc.enqueueParent(parent, obj, eventTypeDelete) },
@@ -540,7 +539,7 @@ func (dc *DynamicController) reconcileChildrenLocked(
 			return fmt.Errorf("creating child handler for %s for parent %s failed: %w", child, parent, err)
 		}
 
-		if err := w.AddHandler(dc.ctx, childHandlerID, childHandler); err != nil {
+		if err := w.AddHandler(*dc.ctx.Load(), childHandlerID, childHandler); err != nil {
 			return fmt.Errorf("add child handler %s: %w", child, err)
 		}
 		reg.childHandlerIDs[child] = childHandlerID

@@ -133,7 +133,7 @@ ifeq ($(WHAT),integration)
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -v ./pkg/... -coverprofile unit-cover.out
+	go test -race -v ./pkg/... -coverprofile unit-cover.out
 else
 	@echo "Error: WHAT must be either 'unit' or 'integration'"
 	@echo "Usage: make test WHAT=unit|integration"

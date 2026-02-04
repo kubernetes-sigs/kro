@@ -404,6 +404,43 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 				},
 			},
 		},
+		// ConfigMap
+		{Version: "v1", Kind: "ConfigMap"}: {
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					"metadata":   metadataSchema(),
+					"data": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type: []string{"string"},
+									},
+								},
+							},
+						},
+					},
+					"binaryData": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type: []string{"string"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		// CRDs
 		{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}: {
 			SchemaProps: spec.SchemaProps{
@@ -505,6 +542,12 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 					Name:       "pods",
 					Namespaced: true,
 					Kind:       "Pod",
+					Verbs:      []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
+				{
+					Name:       "configmaps",
+					Namespaced: true,
+					Kind:       "ConfigMap",
 					Verbs:      []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 				},
 			},

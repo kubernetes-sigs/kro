@@ -23,12 +23,161 @@ import (
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
+
+func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
+	tests := []struct {
+		name         string
+		schema       *spec.Schema
+		field        string
+		expectNil    bool
+		expectedType string
+	}{
+		{
+			name: "direct property lookup works",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				},
+			},
+			field:        "name",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "additionalProperties lookup should return value schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+						},
+					},
+				},
+			},
+			field:        "anyDynamicKey",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "ConfigMap.data style schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"data": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "data",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "labels style map[string]string",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+						},
+					},
+				},
+			},
+			field:        "app",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "nested map - first level",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"integer"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "outerKey",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "array items with additionalProperties",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"array"},
+					Items: &spec.SchemaOrArray{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "dynamicKey",
+			expectNil:    false,
+			expectedType: "string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := lookupSchemaAtField(tt.schema, tt.field)
+
+			if tt.expectNil {
+				assert.Nil(t, result, "expected nil schema")
+				return
+			}
+
+			require.NotNil(t, result, "expected non-nil schema but got nil (AdditionalProperties not handled?)")
+			if tt.expectedType != "" && len(result.Type) > 0 {
+				assert.Equal(t, tt.expectedType, result.Type[0], "unexpected schema type")
+			}
+		})
+	}
+}
 
 func TestGraphBuilder_Validation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
@@ -1872,6 +2021,66 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: false,
+		},
+		{
+			name: "ConfigMap.data type mismatch - list where string expected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+					},
+					"data": map[string]interface{}{
+						"items": "${schema.spec.items}",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
+		},
+		{
+			name: "ConfigMap.data type mismatch - map() result where string expected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"ForEachTest", "v1alpha1",
+					map[string]interface{}{
+						"queues": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("queues", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${schema.metadata.name + '-' + queue}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"queue": "${schema.spec.queues}"},
+					},
+					nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name":      "${schema.metadata.name}-output",
+						"namespace": "${schema.metadata.namespace}",
+					},
+					"data": map[string]interface{}{
+						"queues": "${queues.map(q, {\"name\": q.metadata.name, \"queueARN\": q.status.phase})}",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
 		},
 	}
 

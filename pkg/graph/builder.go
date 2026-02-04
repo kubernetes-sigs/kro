@@ -879,7 +879,7 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 	for _, seg := range segments {
 		if seg.Name != "" {
 			typeName = typeName + "." + seg.Name
-			currentSchema = lookupSchemaAtPath(currentSchema, seg.Name)
+			currentSchema = lookupSchemaAtField(currentSchema, seg.Name)
 			if currentSchema == nil {
 				return nil, "", fmt.Errorf("field %q not found in schema", seg.Name)
 			}
@@ -934,42 +934,30 @@ func getCelTypeFromSchema(schema *spec.Schema, typeName string) *cel.Type {
 	return declType.CelType()
 }
 
-// lookupSchemaAtPath traverses a schema following a field path and returns the schema at that location
-func lookupSchemaAtPath(schema *spec.Schema, path string) *spec.Schema {
-	if path == "" {
+// lookupSchemaAtField resolves a single field name within a schema.
+func lookupSchemaAtField(schema *spec.Schema, field string) *spec.Schema {
+	if schema == nil || field == "" {
 		return schema
 	}
 
-	// Split path by "." to get field names
-	parts := strings.Split(path, ".")
-	current := schema
-
-	for _, part := range parts {
-		if current == nil {
-			return nil
-		}
-
-		// Check if it's an object with properties
-		if prop, ok := current.Properties[part]; ok {
-			current = &prop
-			continue
-		}
-
-		// Check if it's an array and we need to look at items
-		if current.Items != nil && current.Items.Schema != nil {
-			current = current.Items.Schema
-			// Try again with this part on the items schema
-			if prop, ok := current.Properties[part]; ok {
-				current = &prop
-				continue
-			}
-		}
-
-		// Couldn't find the field
-		return nil
+	if prop, ok := schema.Properties[field]; ok {
+		return &prop
 	}
 
-	return current
+	if schema.AdditionalProperties != nil {
+		if schema.AdditionalProperties.Schema != nil {
+			return schema.AdditionalProperties.Schema
+		}
+		if schema.AdditionalProperties.Allows {
+			return &spec.Schema{}
+		}
+	}
+
+	if schema.Items != nil && schema.Items.Schema != nil {
+		return lookupSchemaAtField(schema.Items.Schema, field)
+	}
+
+	return nil
 }
 
 // validateNode validates all CEL expressions for a single node:

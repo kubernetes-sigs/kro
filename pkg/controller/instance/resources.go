@@ -215,12 +215,6 @@ func (c *Controller) processNode(
 		return nil, "", err
 	}
 
-	// Nothing to apply (empty desired)
-	if len(desired) == 0 {
-		state.SetSkipped()
-		return nil, "", nil
-	}
-
 	switch node.Spec.Meta.Type {
 	case graph.NodeTypeExternal:
 		if err := c.processExternalRefNode(rcx, node, state, desired); err != nil {
@@ -303,12 +297,6 @@ func (c *Controller) processCollectionNode(
 
 	collectionSize := len(expandedResources)
 
-	// Empty collection is already handled - state would be Ready
-	if collectionSize == 0 {
-		state.SetReady()
-		return nil, nil
-	}
-
 	// LIST all existing collection items with single call (more efficient than N GETs)
 	existingItems, err := c.listCollectionItems(rcx, gvr, id)
 	if err != nil {
@@ -319,6 +307,12 @@ func (c *Controller) processCollectionNode(
 	// Pass unordered observed items to runtime; it will align them to desired
 	// order by identity.
 	node.SetObserved(existingItems)
+
+	// Empty collection: observed is set (possibly with orphans to prune), mark ready.
+	if collectionSize == 0 {
+		state.SetReady()
+		return nil, nil
+	}
 
 	// Build lookup map for current items keyed by namespace/name.
 	existingByKey := make(map[string]*unstructured.Unstructured, len(existingItems))

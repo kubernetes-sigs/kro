@@ -464,6 +464,148 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 	}
 }
 
+func TestNode_GetDesired_SkipsEvaluationForIgnoredResources(t *testing.T) {
+	tests := []struct {
+		name        string
+		node        func() *Node
+		wantLen     int
+		wantErr     bool
+		errContain  string
+		description string
+	}{
+		{
+			name: "ignored resource with missing optional fields - should NOT error",
+			node: func() *Node {
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"resourceName": "my-resource",
+							"podIdentity": map[string]any{
+								"enabled": false,
+								// Note: clusterName and serviceAccount NOT defined
+							},
+						},
+					}).build()
+
+				return newTestNode("podidentityassociation", graph.NodeTypeResource).
+					withDep(schema).
+					withIncludeWhen("schema.spec.podIdentity.enabled").
+					withTemplate(map[string]any{
+						"apiVersion": "eks.services.k8s.aws/v1alpha1",
+						"kind":       "PodIdentityAssociation",
+						"metadata":   map[string]any{"name": "placeholder"},
+						"spec": map[string]any{
+							"clusterName":    "placeholder",
+							"serviceAccount": "placeholder",
+						},
+					}).
+					withTemplateVar("spec.clusterName", "schema.spec.podIdentity.clusterName").
+					withTemplateVar("spec.serviceAccount", "schema.spec.podIdentity.serviceAccount").
+					withTemplateExpr("schema.spec.podIdentity.clusterName", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.podIdentity.serviceAccount", variable.ResourceVariableKindStatic).
+					build()
+			},
+			wantLen:     0,
+			wantErr:     false,
+			description: "When includeWhen=false, GetDesired() should skip CEL evaluation and return empty without error, even if template references undefined fields",
+		},
+		{
+			name: "included resource with missing fields - should error",
+			node: func() *Node {
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"resourceName": "my-resource",
+							"podIdentity": map[string]any{
+								"enabled": true,
+								// Missing clusterName and serviceAccount
+							},
+						},
+					}).build()
+
+				return newTestNode("podidentityassociation", graph.NodeTypeResource).
+					withDep(schema).
+					withIncludeWhen("schema.spec.podIdentity.enabled").
+					withTemplate(map[string]any{
+						"apiVersion": "eks.services.k8s.aws/v1alpha1",
+						"kind":       "PodIdentityAssociation",
+						"metadata":   map[string]any{"name": "placeholder"},
+						"spec": map[string]any{
+							"clusterName":    "placeholder",
+							"serviceAccount": "placeholder",
+						},
+					}).
+					withTemplateVar("spec.clusterName", "schema.spec.podIdentity.clusterName").
+					withTemplateVar("spec.serviceAccount", "schema.spec.podIdentity.serviceAccount").
+					withTemplateExpr("schema.spec.podIdentity.clusterName", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.podIdentity.serviceAccount", variable.ResourceVariableKindStatic).
+					build()
+			},
+			wantErr:     true,
+			errContain:  "data pending",
+			description: "When includeWhen=true, missing fields should cause ErrDataPending",
+		},
+		{
+			name: "included resource with all fields defined - should succeed",
+			node: func() *Node {
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"resourceName": "my-resource",
+							"podIdentity": map[string]any{
+								"enabled":        true,
+								"clusterName":    "my-cluster",
+								"serviceAccount": "my-sa",
+							},
+						},
+					}).build()
+
+				return newTestNode("podidentityassociation", graph.NodeTypeResource).
+					withDep(schema).
+					withIncludeWhen("schema.spec.podIdentity.enabled").
+					withTemplate(map[string]any{
+						"apiVersion": "eks.services.k8s.aws/v1alpha1",
+						"kind":       "PodIdentityAssociation",
+						"metadata":   map[string]any{"name": "placeholder"},
+						"spec": map[string]any{
+							"clusterName":    "placeholder",
+							"serviceAccount": "placeholder",
+						},
+					}).
+					withTemplateVar("spec.clusterName", "schema.spec.podIdentity.clusterName").
+					withTemplateVar("spec.serviceAccount", "schema.spec.podIdentity.serviceAccount").
+					withTemplateExpr("schema.spec.podIdentity.clusterName", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.podIdentity.serviceAccount", variable.ResourceVariableKindStatic).
+					build()
+			},
+			wantLen:     1,
+			wantErr:     false,
+			description: "When includeWhen=true and all fields exist, should succeed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.description != "" {
+				t.Log(tt.description)
+			}
+
+			result, err := tt.node().GetDesired()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContain != "" {
+					assert.Contains(t, err.Error(), tt.errContain)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Len(t, result, tt.wantLen)
+		})
+	}
+}
+
 func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 	tests := []struct {
 		name       string

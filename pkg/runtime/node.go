@@ -21,7 +21,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -79,17 +78,13 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	// includeWhen only allows schema references; restrict env/context to schema.
-	env, err := buildEnv([]string{graph.InstanceNodeID}, nil)
-	if err != nil {
-		return false, err
-	}
+	// includeWhen only allows schema references; restrict context to schema.
 	ctx := n.buildContext(graph.InstanceNodeID)
 
 	for _, expr := range n.includeWhenExprs {
-		val, err := evalBoolExpr(env, expr, ctx)
+		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression, err)
+			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
 		}
 		if !val {
 			return true, nil
@@ -271,18 +266,15 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		return []*unstructured.Unstructured{}, nil
 	}
 
-	// Build iteration env with all iterator names added as singles (dyn, not list).
-	singles, collections, _ := n.contextDependencyIDs(nil)
-	iteratorNames := make([]string, 0, len(n.Spec.ForEach))
-	for _, dim := range n.Spec.ForEach {
-		iteratorNames = append(iteratorNames, dim.Name)
-	}
-	allSingles := append(singles, iteratorNames...)
-	iterEnv, err := buildEnv(allSingles, collections)
-	if err != nil {
-		return nil, err
-	}
 	baseCtx := n.buildContext()
+
+	// Build a map from expression string to expressionEvaluationState for iteration expressions.
+	iterExprStates := make(map[string]*expressionEvaluationState, len(n.templateExprs))
+	for _, expr := range n.templateExprs {
+		if expr.Kind.IsIteration() {
+			iterExprStates[expr.Expression.Original] = expr
+		}
+	}
 
 	expanded := make([]*unstructured.Unstructured, 0, len(items))
 	for idx, iterCtx := range items {
@@ -294,15 +286,17 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		maps.Copy(ctx, baseCtx)
 		maps.Copy(ctx, iterCtx)
 
-		for expr := range iterExprs {
-			val, err := evalRawCEL(iterEnv, expr, ctx)
+		// Evaluate iteration expressions (not cached - different context per iteration).
+		for exprStr := range iterExprs {
+			exprState := iterExprStates[exprStr]
+			val, err := exprState.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					return nil, ErrDataPending
 				}
-				return nil, fmt.Errorf("collection iteration eval %q: %w", expr, err)
+				return nil, fmt.Errorf("collection iteration eval %q: %w", exprStr, err)
 			}
-			values[expr] = val
+			values[exprStr] = val
 		}
 
 		desired := n.Spec.Template.DeepCopy()
@@ -341,7 +335,7 @@ func (n *Node) softResolve() ([]*unstructured.Unstructured, error) {
 	for _, v := range n.templateVars {
 		complete := true
 		for _, expr := range v.Expressions {
-			if _, ok := values[expr]; !ok {
+			if _, ok := values[expr.Original]; !ok {
 				complete = false
 				break
 			}
@@ -388,11 +382,6 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 		return map[string]any{}, false, nil
 	}
 
-	singles, collections, _ := n.contextDependencyIDs(nil)
-	env, err := buildEnv(singles, collections)
-	if err != nil {
-		return nil, false, err
-	}
 	ctx := n.buildContext()
 
 	capacity := len(n.templateExprs)
@@ -406,12 +395,12 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 			continue
 		}
 		if exprs != nil {
-			if _, ok := exprs[expr.Expression]; !ok {
+			if _, ok := exprs[expr.Expression.Original]; !ok {
 				continue
 			}
 		}
 		if !expr.Resolved {
-			val, err := evalExprAny(env, expr, ctx)
+			val, err := evalExprAny(expr, ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					hasPending = true
@@ -425,7 +414,7 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 			expr.Resolved = true
 			expr.ResolvedValue = val
 		}
-		values[expr.Expression] = expr.ResolvedValue
+		values[expr.Expression.Original] = expr.ResolvedValue
 	}
 	return values, hasPending, nil
 }
@@ -460,15 +449,15 @@ func (n *Node) exprSetsForVars(
 
 	exprKinds := make(map[string]variable.ResourceVariableKind, len(n.templateExprs))
 	for _, expr := range n.templateExprs {
-		exprKinds[expr.Expression] = expr.Kind
+		exprKinds[expr.Expression.Original] = expr.Kind
 	}
 
 	for _, v := range vars {
 		for _, expr := range v.Expressions {
-			if kind, ok := exprKinds[expr]; ok && kind.IsIteration() {
-				iterExprs[expr] = struct{}{}
+			if kind, ok := exprKinds[expr.Original]; ok && kind.IsIteration() {
+				iterExprs[expr.Original] = struct{}{}
 			} else {
-				baseExprs[expr] = struct{}{}
+				baseExprs[expr.Original] = struct{}{}
 			}
 		}
 	}
@@ -484,7 +473,7 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 		if len(v.Expressions) == 0 {
 			continue
 		}
-		if val, ok := values[v.Expressions[0]]; ok {
+		if val, ok := values[v.Expressions[0].Original]; ok {
 			_ = res.UpsertValueAtPath(v.Path, val)
 		}
 	}
@@ -528,20 +517,15 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 	}
 
 	nodeID := n.Spec.Meta.ID
-	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{nodeID}))
-	if err != nil {
-		return false, err
-	}
-
 	ctx := map[string]any{nodeID: n.observed[0].Object}
 
 	for _, expr := range n.readyWhenExprs {
-		result, err := evalBoolExpr(env, expr, ctx)
+		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
 				return false, nil
 			}
-			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression, err)
+			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression.Original, err)
 		}
 		if !result {
 			return false, nil
@@ -566,28 +550,22 @@ func (n *Node) isCollectionReady() (bool, error) {
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
-	env, err := krocel.DefaultEnvironment(
-		krocel.WithResourceIDs([]string{graph.EachVarName}),
-	)
-	if err != nil {
-		return false, err
-	}
-
+	// Each item has different context, so we evaluate directly (not cached).
 	for i, obj := range n.observed {
 		ctx := map[string]any{graph.EachVarName: obj.Object}
 		for _, expr := range n.readyWhenExprs {
 			// readyWhen for collections must NOT be cached - each item has different "each" context.
-			// Use evalRawCEL directly instead of evalBoolExpr.
-			val, err := evalRawCEL(env, expr.Expression, ctx)
+			// Use Expression.Eval directly instead of evalBoolExpr.
+			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					return false, nil
 				}
-				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression, i, err)
+				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression)
+				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
 			}
 			if !result {
 				return false, nil
@@ -605,15 +583,10 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 	}
 
 	ctx := n.buildContext()
-	singles, collections, _ := n.contextDependencyIDs(nil)
-	env, err := buildEnv(singles, collections)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build forEach env: %w", err)
-	}
 
 	dimensions := make([]evaluatedDimension, len(n.Spec.ForEach))
 	for i, dim := range n.Spec.ForEach {
-		values, err := evalListExpr(env, n.forEachExprs[i], ctx)
+		values, err := evalListExpr(n.forEachExprs[i], ctx)
 		if err != nil {
 			if isCELDataPending(err) {
 				return nil, ErrDataPending

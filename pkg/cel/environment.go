@@ -90,9 +90,11 @@ func WithListVariables(names []string) EnvOption {
 	}
 }
 
-// DefaultEnvironment returns the default CEL environment.
-func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
-	declarations := []cel.EnvOption{
+// BaseDeclarations returns the base CEL environment options shared by all kro
+// CEL environments. Includes list/string extensions, optional types, encoders,
+// and Kubernetes CEL libraries (URLs, Regex, Random).
+func BaseDeclarations() []cel.EnvOption {
+	return []cel.EnvOption{
 		ext.Lists(),
 		ext.Strings(),
 		cel.OptionalTypes(),
@@ -104,6 +106,11 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		k8scellib.Regex(),
 		library.Random(),
 	}
+}
+
+// DefaultEnvironment returns the default CEL environment.
+func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
+	declarations := BaseDeclarations()
 
 	opts := &envOptions{}
 	for _, opt := range options {

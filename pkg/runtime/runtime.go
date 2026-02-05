@@ -17,6 +17,7 @@ package runtime
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
@@ -54,11 +55,12 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 
 	// Expression cache for non-iteration expressions only.
 	// Iteration expressions are not cached because they're evaluated per-item
-	// with different iterator bindings each time.
+	// with different iterator bindings each time. Cache key is the original string.
 	expressionsCache := make(map[string]*expressionEvaluationState)
 
 	// Helper to get or create expression state. Only caches non-iteration expressions.
-	getOrCreateExpr := func(expr string, kind variable.ResourceVariableKind, deps []string) *expressionEvaluationState {
+	// The Expression contains the pre-compiled Program from build time.
+	getOrCreateExpr := func(expr *krocel.Expression, kind variable.ResourceVariableKind, deps []string) *expressionEvaluationState {
 		// Don't cache iteration expressions - they need fresh evaluation per iteration.
 		if kind.IsIteration() {
 			return &expressionEvaluationState{
@@ -67,7 +69,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 				Kind:         kind,
 			}
 		}
-		if cached, ok := expressionsCache[expr]; ok {
+		if cached, ok := expressionsCache[expr.Original]; ok {
 			return cached
 		}
 		state := &expressionEvaluationState{
@@ -75,7 +77,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 			Dependencies: deps,
 			Kind:         kind,
 		}
-		expressionsCache[expr] = state
+		expressionsCache[expr.Original] = state
 		return state
 	}
 
@@ -136,7 +138,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 		for _, v := range node.Spec.Variables {
 			node.templateVars = append(node.templateVars, v)
 			for _, expr := range v.Expressions {
-				state := getOrCreateExpr(expr, v.Kind, v.Dependencies)
+				state := getOrCreateExpr(expr, v.Kind, expr.References)
 				node.templateExprs = append(node.templateExprs, state)
 			}
 		}
@@ -146,7 +148,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 	for _, v := range instNode.Spec.Variables {
 		instNode.templateVars = append(instNode.templateVars, v)
 		for _, expr := range v.Expressions {
-			state := getOrCreateExpr(expr, v.Kind, v.Dependencies)
+			state := getOrCreateExpr(expr, v.Kind, expr.References)
 			instNode.templateExprs = append(instNode.templateExprs, state)
 		}
 	}

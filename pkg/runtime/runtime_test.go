@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
@@ -100,7 +101,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: []string{"schema.spec.name"},
+									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
 								},
 							},
 						},
@@ -111,7 +112,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: []string{"schema.spec.name"},
+									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
 								},
 							},
 						},
@@ -135,7 +136,7 @@ func TestFromGraph(t *testing.T) {
 				Nodes: map[string]*graph.Node{
 					"node": {
 						Meta:        graph.NodeMeta{ID: "node", Type: graph.NodeTypeResource, Dependencies: []string{"dep1"}},
-						IncludeWhen: []string{"schema.spec.enabled"},
+						IncludeWhen: krocel.NewUncompiledSlice("schema.spec.enabled"),
 					},
 				},
 				Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
@@ -145,7 +146,7 @@ func TestFromGraph(t *testing.T) {
 				// Mutate runtime node
 				nodes := rt.Nodes()
 				nodes[0].Spec.Meta.Dependencies = append(nodes[0].Spec.Meta.Dependencies, "new")
-				nodes[0].Spec.IncludeWhen = append(nodes[0].Spec.IncludeWhen, "new")
+				nodes[0].Spec.IncludeWhen = append(nodes[0].Spec.IncludeWhen, krocel.NewUncompiled("new"))
 			},
 		},
 	}
@@ -153,10 +154,11 @@ func TestFromGraph(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Capture original state for mutation test
-			var origDeps, origInclude []string
+			var origDeps []string
+			var origIncludeLen int
 			if node, ok := tt.graph.Nodes["node"]; ok {
 				origDeps = append([]string{}, node.Meta.Dependencies...)
-				origInclude = append([]string{}, node.IncludeWhen...)
+				origIncludeLen = len(node.IncludeWhen)
 			}
 
 			rt, err := FromGraph(tt.graph, tt.instance)
@@ -167,7 +169,7 @@ func TestFromGraph(t *testing.T) {
 			// Verify original graph unchanged (for mutation test)
 			if node, ok := tt.graph.Nodes["node"]; ok {
 				assert.Equal(t, origDeps, node.Meta.Dependencies, "original graph was mutated")
-				assert.Equal(t, origInclude, node.IncludeWhen, "original graph was mutated")
+				assert.Equal(t, origIncludeLen, len(node.IncludeWhen), "original graph was mutated")
 			}
 		})
 	}
@@ -192,9 +194,8 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 					Kind: variable.ResourceVariableKindDynamic,
 					FieldDescriptor: variable.FieldDescriptor{
 						Path:        "status.deploymentReady",
-						Expressions: []string{"deployment.status.ready"},
+						Expressions: krocel.NewUncompiledSlice("deployment.status.ready"),
 					},
-					Dependencies: []string{"deployment"},
 				},
 			},
 		},

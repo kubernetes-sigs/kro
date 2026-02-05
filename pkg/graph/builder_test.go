@@ -26,6 +26,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
@@ -177,6 +178,15 @@ func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exprOriginals extracts Original strings from expressions for test comparison.
+func exprOriginals(exprs []*krocel.Expression) []string {
+	result := make([]string, len(exprs))
+	for i, e := range exprs {
+		result[i] = e.Original
+	}
+	return result
 }
 
 func TestGraphBuilder_Validation(t *testing.T) {
@@ -402,7 +412,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "found unknown resources",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "valid VPC with valid conditional subnets",
@@ -507,7 +517,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "undeclared reference to 'nonexistent'",
+			errMsg:  "references unknown identifiers: [nonexistent]",
 		},
 		{
 			name: "invalid field type in resource spec",
@@ -884,7 +894,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "found unknown resources",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "cyclic dependency",
@@ -1443,7 +1453,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.ReadyWhen)
+				}, exprOriginals(vpc.ReadyWhen))
 				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
@@ -1482,7 +1492,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
-				assert.Equal(t, []string{"schema.spec.createMonitoring"}, cluster.IncludeWhen)
+				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
 
 				// Verify monitor pod with all types of expressions
 				monitor := g.Resources["monitor"]
@@ -1531,8 +1541,8 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 						standaloneExpression: true,
 					},
 				})
-				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, monitor.ReadyWhen)
-				assert.Equal(t, []string{"schema.spec.createMonitoring == true"}, monitor.IncludeWhen)
+				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, exprOriginals(monitor.ReadyWhen))
+				assert.Equal(t, []string{"schema.spec.createMonitoring == true"}, exprOriginals(monitor.IncludeWhen))
 			},
 		},
 		{
@@ -1600,7 +1610,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.ReadyWhen)
+				}, exprOriginals(vpc.ReadyWhen))
 				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
@@ -1644,9 +1654,14 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
+		// Extract Original strings from expressions for comparison
+		exprs := make([]string, len(v.Expressions))
+		for j, e := range v.Expressions {
+			exprs[j] = e.Original
+		}
 		actualVars[i] = expectedVar{
 			path:                 v.Path,
-			expressions:          v.Expressions,
+			expressions:          exprs,
 			kind:                 v.Kind,
 			standaloneExpression: v.StandaloneExpression,
 		}
@@ -2500,7 +2515,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 				iterators := resource.ForEach
 				require.Len(t, iterators, 1)
 				assert.Equal(t, "workerName", iterators[0].Name)
-				assert.Equal(t, "schema.spec.workers", iterators[0].Expression)
+				assert.Equal(t, "schema.spec.workers", iterators[0].Expression.Original)
 			},
 		},
 		{
@@ -2736,7 +2751,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					nil),
 			},
 			wantErr: true,
-			errMsg:  "resource \"pods\" readyWhen expression",
+			errMsg:  "resource \"pods\" readyWhen: references unknown identifiers: [pods]",
 		},
 		{
 			name: "collection readyWhen cannot reference other resources",
@@ -2788,7 +2803,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					nil),
 			},
 			wantErr: true,
-			errMsg:  "resource \"workerPods\" readyWhen expression",
+			errMsg:  "resource \"workerPods\" readyWhen: references unknown identifiers: [mainPod]",
 		},
 		{
 			name: "collection with valid each-based readyWhen",
@@ -2827,7 +2842,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 				resource := graph.Resources["pods"]
 				require.NotNil(t, resource)
 				assert.True(t, resource.Meta.Type == NodeTypeCollection)
-				assert.Equal(t, []string{"each.status.phase == 'Running'"}, resource.ReadyWhen)
+				assert.Equal(t, []string{"each.status.phase == 'Running'"}, exprOriginals(resource.ReadyWhen))
 			},
 		},
 	}

@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -24,6 +25,9 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/utils/ptr"
 )
+
+// ErrUnknownMarker is returned when an unrecognized marker is encountered.
+var ErrUnknownMarker = errors.New("unknown marker")
 
 // This package is used find extra markers in the NeoCRD schema that maps to
 // something in OpenAPI schema. For example, the `required` marker in the NeoCRD
@@ -93,7 +97,7 @@ func markerTypeFromString(s string) (MarkerType, error) {
 		MarkerTypeMaxItems:
 		return MarkerType(s), nil
 	default:
-		return "", fmt.Errorf("unknown marker type: %s", s)
+		return "", fmt.Errorf("%w: %s", ErrUnknownMarker, s)
 	}
 }
 
@@ -104,10 +108,9 @@ type Marker struct {
 	Value      string
 }
 
-// parseMarkers parses a marker string and returns a `Marker` struct.
+// ParseMarkers parses a string of markers and returns a slice of Marker structs.
 // The marker string should be in the format `marker=value`.
-// parseMarkers parses a string of markers and returns a slice of Marker structs
-func parseMarkers(markers string) ([]*Marker, error) {
+func ParseMarkers(markers string) ([]*Marker, error) {
 	var result []*Marker
 	var currentMarker *Marker
 	var inQuotes bool
@@ -124,7 +127,7 @@ func parseMarkers(markers string) ([]*Marker, error) {
 			}
 			markerType, err := markerTypeFromString(key)
 			if err != nil {
-				return nil, fmt.Errorf("invalid marker key '%s': %v", key, err)
+				return nil, fmt.Errorf("invalid marker key %q: %w", key, err)
 			}
 			currentMarker = &Marker{MarkerType: markerType, Key: key}
 			buffer.Reset()
@@ -251,6 +254,8 @@ func applyMarker(schema *extv1.JSONSchemaProps, marker *Marker, key string, pare
 		return applyMinItemsMarker(schema, marker)
 	case MarkerTypeMaxItems:
 		return applyMaxItemsMarker(schema, marker)
+	default:
+		return fmt.Errorf("%w: %s", ErrUnknownMarker, marker.MarkerType)
 	}
 	return nil
 }

@@ -71,6 +71,10 @@ func (s Struct) Schema(r Resolver) (*extv1.JSONSchemaProps, error) {
 }
 
 // Custom represents a reference to a user-defined type.
+// At parse time, this type is unvalidated - the name may not exist in the
+// type registry. Resolution happens later when Schema() is called with a
+// Resolver that has the custom types loaded. If the type doesn't exist,
+// Schema() will return an error from the Resolver.
 type Custom string
 
 func (c Custom) Deps() []string { return []string{string(c)} }

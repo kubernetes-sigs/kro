@@ -19,12 +19,23 @@ import (
 )
 
 // Resolver resolves custom type names to their schemas.
+// It is used by Type.Schema to look up user-defined types during schema generation.
 type Resolver interface {
+	// Resolve returns the OpenAPI schema for a custom type by name.
+	// Returns an error if the type is not found.
 	Resolve(name string) (*extv1.JSONSchemaProps, error)
 }
 
-// Type represents a parsed type that can provide dependencies and build schemas.
+// Type represents a parsed SimpleSchema type that can provide dependencies
+// and build OpenAPI schemas. Implementations include Atomic (primitives),
+// Slice, Map (collections), Object, Struct, and Custom (user-defined types).
 type Type interface {
+	// Deps returns the names of custom types this type depends on.
+	// Used for topological sorting when loading custom types.
+	// Returns nil for types with no dependencies (e.g., atomics).
 	Deps() []string
+
+	// Schema generates the OpenAPI JSONSchemaProps for this type.
+	// The resolver is used to look up custom type schemas.
 	Schema(Resolver) (*extv1.JSONSchemaProps, error)
 }

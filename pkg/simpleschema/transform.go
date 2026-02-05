@@ -34,6 +34,17 @@ type transformer struct {
 	customTypes map[string]customType
 }
 
+// newTransformer creates a new transformer with the given custom types.
+func newTransformer(customTypes map[string]interface{}) (*transformer, error) {
+	t := &transformer{
+		customTypes: make(map[string]customType),
+	}
+	if err := t.loadCustomTypes(customTypes); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // Resolve implements types.Resolver.
 func (t *transformer) Resolve(name string) (*extv1.JSONSchemaProps, error) {
 	ct, ok := t.customTypes[name]

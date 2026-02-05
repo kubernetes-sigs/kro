@@ -15,6 +15,7 @@
 package simpleschema
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -324,9 +325,9 @@ func TestApplyMarkers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			markers, err := parseMarkers(tt.markers)
+			markers, err := ParseMarkers(tt.markers)
 			if err != nil {
-				t.Fatalf("parseMarkers() error = %v", err)
+				t.Fatalf("ParseMarkers() error = %v", err)
 			}
 
 			schema := &extv1.JSONSchemaProps{Type: tt.schemaType}
@@ -590,14 +591,29 @@ func TestParseMarkers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseMarkers(tt.input)
+			got, err := ParseMarkers(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseMarkers() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseMarkers() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseMarkers() = %v, want %v", got, tt.want)
+				t.Errorf("ParseMarkers() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// unreachable code but 100% coverage is better than 99.7%.
+func TestApplyMarkerUnknownType(t *testing.T) {
+	schema := &extv1.JSONSchemaProps{Type: "string"}
+	parent := &extv1.JSONSchemaProps{}
+	marker := &Marker{MarkerType: MarkerType("unknown"), Key: "unknown", Value: "foo"}
+
+	err := applyMarker(schema, marker, "field", parent)
+	if err == nil {
+		t.Error("expected error for unknown marker type")
+	}
+	if !errors.Is(err, ErrUnknownMarker) {
+		t.Errorf("expected ErrUnknownMarker, got %v", err)
 	}
 }

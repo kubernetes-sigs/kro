@@ -37,6 +37,7 @@ func (s Slice) Schema(r Resolver) (*extv1.JSONSchemaProps, error) {
 }
 
 // Map represents a map type: map[string]V.
+// we do not support non-string keys in maps.
 type Map struct {
 	Value Type
 }

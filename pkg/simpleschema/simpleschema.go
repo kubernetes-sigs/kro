@@ -29,14 +29,10 @@ import (
 // the type name and the value its specification. These custom types will be
 // available as predefined types in the transformer.
 func ToOpenAPISpec(obj map[string]interface{}, customTypes map[string]interface{}) (*extv1.JSONSchemaProps, error) {
-	t := &transformer{
-		customTypes: make(map[string]customType),
-	}
-
-	if err := t.loadCustomTypes(customTypes); err != nil {
+	t, err := newTransformer(customTypes)
+	if err != nil {
 		return nil, err
 	}
-
 	return t.buildSchema(obj)
 }
 

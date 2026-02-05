@@ -58,6 +58,7 @@ func TestParseField(t *testing.T) {
 		{name: "map with trailing space no value", input: "map[string] ", wantErr: true},
 		{name: "incomplete map type", input: "map[string]", wantErr: true},
 		{name: "map missing closing bracket", input: "map[stringPerson", wantErr: true},
+		{name: "type nesting too deep", input: "[][][][][][][][][][][][][][][][][]string", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -154,24 +155,27 @@ func TestParseMapString(t *testing.T) {
 		name    string
 		input   string
 		wantVal string
-		wantOk  bool
+		wantErr bool
 	}{
-		{name: "simple", input: "map[string]integer", wantVal: "integer", wantOk: true},
-		{name: "nested value", input: "map[string][]string", wantVal: "[]string", wantOk: true},
-		{name: "nested map", input: "map[string]map[string]int", wantVal: "map[string]int", wantOk: true},
-		{name: "non-string key", input: "map[integer]string", wantOk: false},
-		{name: "not a map", input: "string", wantOk: false},
-		{name: "empty value", input: "map[string]", wantOk: false},
+		{name: "simple", input: "map[string]integer", wantVal: "integer"},
+		{name: "nested value", input: "map[string][]string", wantVal: "[]string"},
+		{name: "nested map", input: "map[string]map[string]int", wantVal: "map[string]int"},
+		{name: "non-string key", input: "map[integer]string", wantErr: true},
+		{name: "not a map", input: "string", wantVal: ""},
+		{name: "empty value", input: "map[string]", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			val, ok := parseMapString(tt.input)
-			if ok != tt.wantOk {
-				t.Errorf("ok = %v, want %v", ok, tt.wantOk)
+			val, err := parseMapString(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
 				return
 			}
-			if !ok {
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
 				return
 			}
 			if val != tt.wantVal {

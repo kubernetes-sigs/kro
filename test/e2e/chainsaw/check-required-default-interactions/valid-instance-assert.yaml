@@ -1,0 +1,28 @@
+apiVersion: kro.run/v1alpha1
+kind: ComplexApp
+metadata:
+  name: test-app
+spec:
+  appName: my-application
+  environment: development
+  replicas: 1
+  database:
+    host: db.example.com
+    port: 8080
+    username: admin
+    database: postgres
+  retry:
+    maxRetries: 3
+    backoffMs: 1000
+    exponential: true
+  endpoints:
+    - name: api
+      url: https://api.example.com
+      timeout: 30
+  resources:
+    cpu: 100m
+    memory: 128Mi
+status:
+  (conditions[?type == 'Ready']):
+    - status: 'True'
+  state: ACTIVE

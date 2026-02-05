@@ -15,9 +15,343 @@
 package simpleschema
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/utils/ptr"
 )
+
+func TestApplyMarkers(t *testing.T) {
+	tests := []struct {
+		name       string
+		schemaType string
+		markers    string
+		want       *extv1.JSONSchemaProps
+		wantParent *extv1.JSONSchemaProps
+		wantErr    bool
+	}{
+		// Required marker
+		{
+			name:       "required=true adds to parent",
+			schemaType: "string",
+			markers:    "required=true",
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+			wantParent: &extv1.JSONSchemaProps{Required: []string{"field"}},
+		},
+		{
+			name:       "required=false does not add to parent",
+			schemaType: "string",
+			markers:    "required=false",
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+			wantParent: &extv1.JSONSchemaProps{},
+		},
+		{
+			name:       "invalid required value",
+			schemaType: "string",
+			markers:    "required=invalid",
+			wantErr:    true,
+		},
+		// Default marker
+		{
+			name:       "string default",
+			schemaType: "string",
+			markers:    `default="hello"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Default: &extv1.JSON{Raw: []byte(`"hello"`)}},
+		},
+		{
+			name:       "integer default",
+			schemaType: "integer",
+			markers:    "default=42",
+			want:       &extv1.JSONSchemaProps{Type: "integer", Default: &extv1.JSON{Raw: []byte("42")}},
+		},
+		{
+			name:       "boolean default",
+			schemaType: "boolean",
+			markers:    "default=true",
+			want:       &extv1.JSONSchemaProps{Type: "boolean", Default: &extv1.JSON{Raw: []byte("true")}},
+		},
+		// Description marker
+		{
+			name:       "description",
+			schemaType: "string",
+			markers:    `description="A helpful description"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Description: "A helpful description"},
+		},
+		// Minimum/Maximum markers
+		{
+			name:       "minimum",
+			schemaType: "integer",
+			markers:    "minimum=0",
+			want:       &extv1.JSONSchemaProps{Type: "integer", Minimum: ptr.To(0.0)},
+		},
+		{
+			name:       "maximum",
+			schemaType: "integer",
+			markers:    "maximum=100",
+			want:       &extv1.JSONSchemaProps{Type: "integer", Maximum: ptr.To(100.0)},
+		},
+		{
+			name:       "minimum and maximum",
+			schemaType: "number",
+			markers:    "minimum=0.5 maximum=99.5",
+			want:       &extv1.JSONSchemaProps{Type: "number", Minimum: ptr.To(0.5), Maximum: ptr.To(99.5)},
+		},
+		{
+			name:       "invalid minimum",
+			schemaType: "integer",
+			markers:    "minimum=notanumber",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid maximum",
+			schemaType: "integer",
+			markers:    "maximum=notanumber",
+			wantErr:    true,
+		},
+		// Validation marker
+		{
+			name:       "validation rule",
+			schemaType: "string",
+			markers:    `validation="self.size() > 0"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self.size() > 0", Message: "validation failed"},
+				},
+			},
+		},
+		{
+			name:       "empty validation",
+			schemaType: "string",
+			markers:    `validation=""`,
+			wantErr:    true,
+		},
+		// Immutable marker
+		{
+			name:       "immutable=true",
+			schemaType: "string",
+			markers:    "immutable=true",
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+				},
+			},
+		},
+		{
+			name:       "immutable=false",
+			schemaType: "string",
+			markers:    "immutable=false",
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+		},
+		{
+			name:       "invalid immutable",
+			schemaType: "string",
+			markers:    "immutable=invalid",
+			wantErr:    true,
+		},
+		// Enum marker
+		{
+			name:       "string enum",
+			schemaType: "string",
+			markers:    `enum="a,b,c"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "string",
+				Enum: []extv1.JSON{
+					{Raw: []byte(`"a"`)},
+					{Raw: []byte(`"b"`)},
+					{Raw: []byte(`"c"`)},
+				},
+			},
+		},
+		{
+			name:       "integer enum",
+			schemaType: "integer",
+			markers:    `enum="1,2,3"`,
+			want: &extv1.JSONSchemaProps{
+				Type: "integer",
+				Enum: []extv1.JSON{
+					{Raw: []byte("1")},
+					{Raw: []byte("2")},
+					{Raw: []byte("3")},
+				},
+			},
+		},
+		{
+			name:       "invalid integer enum",
+			schemaType: "integer",
+			markers:    `enum="1,2,abc"`,
+			wantErr:    true,
+		},
+		{
+			name:       "empty enum value",
+			schemaType: "string",
+			markers:    `enum="a,,c"`,
+			wantErr:    true,
+		},
+		{
+			name:       "enum on unsupported type",
+			schemaType: "boolean",
+			markers:    `enum="true,false"`,
+			wantErr:    true,
+		},
+		// Pattern marker
+		{
+			name:       "pattern",
+			schemaType: "string",
+			markers:    `pattern="^[a-z]+$"`,
+			want:       &extv1.JSONSchemaProps{Type: "string", Pattern: "^[a-z]+$"},
+		},
+		{
+			name:       "invalid pattern regex",
+			schemaType: "string",
+			markers:    `pattern="[unclosed"`,
+			wantErr:    true,
+		},
+		{
+			name:       "empty pattern",
+			schemaType: "string",
+			markers:    `pattern=""`,
+			wantErr:    true,
+		},
+		{
+			name:       "pattern on non-string",
+			schemaType: "integer",
+			markers:    `pattern="[0-9]+"`,
+			wantErr:    true,
+		},
+		// MinLength/MaxLength markers
+		{
+			name:       "minLength and maxLength",
+			schemaType: "string",
+			markers:    "minLength=3 maxLength=20",
+			want:       &extv1.JSONSchemaProps{Type: "string", MinLength: ptr.To[int64](3), MaxLength: ptr.To[int64](20)},
+		},
+		{
+			name:       "invalid minLength",
+			schemaType: "string",
+			markers:    "minLength=abc",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid maxLength",
+			schemaType: "string",
+			markers:    "maxLength=xyz",
+			wantErr:    true,
+		},
+		{
+			name:       "minLength on non-string",
+			schemaType: "integer",
+			markers:    "minLength=5",
+			wantErr:    true,
+		},
+		{
+			name:       "maxLength on non-string",
+			schemaType: "boolean",
+			markers:    "maxLength=10",
+			wantErr:    true,
+		},
+		// UniqueItems marker
+		{
+			name:       "uniqueItems=true sets list type",
+			schemaType: "array",
+			markers:    "uniqueItems=true",
+			want:       &extv1.JSONSchemaProps{Type: "array", XListType: ptr.To("set")},
+		},
+		{
+			name:       "uniqueItems=false",
+			schemaType: "array",
+			markers:    "uniqueItems=false",
+			want:       &extv1.JSONSchemaProps{Type: "array"},
+		},
+		{
+			name:       "invalid uniqueItems",
+			schemaType: "array",
+			markers:    "uniqueItems=invalid",
+			wantErr:    true,
+		},
+		{
+			name:       "uniqueItems on non-array",
+			schemaType: "string",
+			markers:    "uniqueItems=true",
+			wantErr:    true,
+		},
+		// MinItems/MaxItems markers
+		{
+			name:       "minItems and maxItems",
+			schemaType: "array",
+			markers:    "minItems=2 maxItems=10",
+			want:       &extv1.JSONSchemaProps{Type: "array", MinItems: ptr.To[int64](2), MaxItems: ptr.To[int64](10)},
+		},
+		{
+			name:       "invalid minItems",
+			schemaType: "array",
+			markers:    "minItems=abc",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid maxItems",
+			schemaType: "array",
+			markers:    "maxItems=xyz",
+			wantErr:    true,
+		},
+		{
+			name:       "minItems on non-array",
+			schemaType: "string",
+			markers:    "minItems=5",
+			wantErr:    true,
+		},
+		{
+			name:       "maxItems on non-array",
+			schemaType: "integer",
+			markers:    "maxItems=10",
+			wantErr:    true,
+		},
+		// Combined markers
+		{
+			name:       "multiple markers",
+			schemaType: "string",
+			markers:    `required=true default="test" description="A test field"`,
+			want: &extv1.JSONSchemaProps{
+				Type:        "string",
+				Default:     &extv1.JSON{Raw: []byte(`"test"`)},
+				Description: "A test field",
+			},
+			wantParent: &extv1.JSONSchemaProps{Required: []string{"field"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			markers, err := ParseMarkers(tt.markers)
+			if err != nil {
+				t.Fatalf("ParseMarkers() error = %v", err)
+			}
+
+			schema := &extv1.JSONSchemaProps{Type: tt.schemaType}
+			parent := &extv1.JSONSchemaProps{}
+
+			err = applyMarkers(schema, markers, "field", parent)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("applyMarkers() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr {
+				return
+			}
+
+			if tt.want != nil && !reflect.DeepEqual(schema, tt.want) {
+				t.Errorf("schema mismatch:\ngot:  %+v\nwant: %+v", schema, tt.want)
+			}
+			if tt.wantParent != nil && !reflect.DeepEqual(parent, tt.wantParent) {
+				t.Errorf("parent mismatch:\ngot:  %+v\nwant: %+v", parent, tt.wantParent)
+			}
+		})
+	}
+}
 
 func TestParseMarkers(t *testing.T) {
 	tests := []struct {
@@ -47,6 +381,12 @@ func TestParseMarkers(t *testing.T) {
 		{
 			name:    "empty marker key",
 			input:   "=value",
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "unmatched closing bracket",
+			input:   "default=}",
 			want:    nil,
 			wantErr: true,
 		},
@@ -251,14 +591,29 @@ func TestParseMarkers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseMarkers(tt.input)
+			got, err := ParseMarkers(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("parseMarkers() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseMarkers() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseMarkers() = %v, want %v", got, tt.want)
+				t.Errorf("ParseMarkers() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// unreachable code but 100% coverage is better than 99.7%.
+func TestApplyMarkerUnknownType(t *testing.T) {
+	schema := &extv1.JSONSchemaProps{Type: "string"}
+	parent := &extv1.JSONSchemaProps{}
+	marker := &Marker{MarkerType: MarkerType("unknown"), Key: "unknown", Value: "foo"}
+
+	err := applyMarker(schema, marker, "field", parent)
+	if err == nil {
+		t.Error("expected error for unknown marker type")
+	}
+	if !errors.Is(err, ErrUnknownMarker) {
+		t.Errorf("expected ErrUnknownMarker, got %v", err)
 	}
 }

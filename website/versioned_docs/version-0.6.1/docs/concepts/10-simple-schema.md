@@ -15,7 +15,7 @@ metadata:
   name: web-application
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: WebApplication
     spec:
       # Basic types

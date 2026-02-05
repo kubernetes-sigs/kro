@@ -65,11 +65,20 @@ func ExtractGVKFromUnstructured(unstructured map[string]interface{}) (schema.Gro
 	}, nil
 }
 
+func ParseGroupVersion(apiVersion, fallbackGroup string) (group, version string) {
+	if strings.Contains(apiVersion, "/") {
+		parts := strings.SplitN(apiVersion, "/", 2)
+		return parts[0], parts[1]
+	}
+	return fallbackGroup, apiVersion
+}
+
 func GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind string) schema.GroupVersionResource {
+	finalGroup, version := ParseGroupVersion(apiVersion, group)
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 	return schema.GroupVersionResource{
-		Group:    group,
-		Version:  apiVersion,
+		Group:    finalGroup,
+		Version:  version,
 		Resource: pluralKind,
 	}
 }

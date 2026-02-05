@@ -73,12 +73,18 @@ func TestNode_IsReady(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "no readyWhen expressions means ready",
+			name:      "single resource without readyWhen, not observed - not ready",
 			node:      newTestNode("test", graph.NodeTypeResource).build(),
+			wantReady: false,
+		},
+		{
+			name: "single resource without readyWhen, observed - ready",
+			node: newTestNode("test", graph.NodeTypeResource).
+				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
 			wantReady: true,
 		},
 		{
-			name:      "no observed state means not ready",
+			name:      "single resource with readyWhen, not observed - not ready",
 			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
 			wantReady: false,
 		},
@@ -151,12 +157,12 @@ func TestNode_SetObserved(t *testing.T) {
 
 func TestNode_BuildContext(t *testing.T) {
 	tests := []struct {
-		name         string
-		node         *Node
-		onlyFilter   []string
-		wantKeys     []string
-		notWantKeys  []string
-		checkBuckets bool
+		name        string
+		node        *Node
+		onlyFilter  []string
+		wantKeys    []string
+		notWantKeys []string
+		wantLen     int
 	}{
 		{
 			name: "builds context from observed deps",
@@ -184,8 +190,8 @@ func TestNode_BuildContext(t *testing.T) {
 						map[string]any{"metadata": map[string]any{"name": "bucket-2"}},
 					).build()).
 				build(),
-			wantKeys:     []string{"buckets"},
-			checkBuckets: true,
+			wantKeys: []string{"buckets"},
+			wantLen:  2,
 		},
 		{
 			name: "only filter limits context",
@@ -199,6 +205,19 @@ func TestNode_BuildContext(t *testing.T) {
 			wantKeys:    []string{"a"},
 			notWantKeys: []string{"b"},
 		},
+		{
+			name: "empty collection included in context as empty list",
+			node: func() *Node {
+				entries := newTestNode("entries", graph.NodeTypeCollection).build()
+				entries.desired = []*unstructured.Unstructured{}
+				entries.SetObserved([]*unstructured.Unstructured{})
+				return newTestNode("summary", graph.NodeTypeResource).
+					withDep(entries).
+					build()
+			}(),
+			wantKeys: []string{"entries"},
+			wantLen:  0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -206,15 +225,15 @@ func TestNode_BuildContext(t *testing.T) {
 			ctx := tt.node.buildContext(tt.onlyFilter...)
 
 			for _, key := range tt.wantKeys {
-				assert.Contains(t, ctx, key)
+				require.Contains(t, ctx, key)
 			}
 			for _, key := range tt.notWantKeys {
-				assert.NotContains(t, ctx, key)
+				require.NotContains(t, ctx, key)
 			}
-			if tt.checkBuckets {
-				buckets, ok := ctx["buckets"].([]any)
-				require.True(t, ok, "collection should be a list")
-				assert.Len(t, buckets, 2)
+			for _, key := range tt.wantKeys {
+				if col, ok := ctx[key].([]any); ok {
+					assert.Len(t, col, tt.wantLen)
+				}
 			}
 		})
 	}
@@ -361,6 +380,45 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				withObservedUnstructured(newUnstructured("v1", "Pod", "ns", "bucket-1")).
 				withReadyWhen("each.status.ready == true").build(),
 			wantReady: false,
+		},
+		{
+			name:      "collection without readyWhen, nil desired - not ready",
+			node:      newTestNode("items", graph.NodeTypeCollection).build(),
+			wantReady: false,
+		},
+		{
+			name: "collection without readyWhen, empty desired - ready",
+			node: func() *Node {
+				n := newTestNode("items", graph.NodeTypeCollection).build()
+				n.desired = []*unstructured.Unstructured{}
+				return n
+			}(),
+			wantReady: true,
+		},
+		{
+			name: "collection without readyWhen, observed < desired - not ready",
+			node: newTestNode("items", graph.NodeTypeCollection).
+				withDesired(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "cm-1")).
+				build(),
+			wantReady: false,
+		},
+		{
+			name: "collection without readyWhen, observed >= desired - ready",
+			node: newTestNode("items", graph.NodeTypeCollection).
+				withDesired(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				withObservedUnstructured(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				build(),
+			wantReady: true,
 		},
 	}
 

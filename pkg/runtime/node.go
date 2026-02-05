@@ -513,9 +513,6 @@ func (n *Node) IsReady() (bool, error) {
 		return true, nil
 	}
 
-	if len(n.readyWhenExprs) == 0 {
-		return true, nil
-	}
 	if n.Spec.Meta.Type == graph.NodeTypeCollection {
 		return n.isCollectionReady()
 	}
@@ -525,6 +522,9 @@ func (n *Node) IsReady() (bool, error) {
 func (n *Node) isSingleResourceReady() (bool, error) {
 	if len(n.observed) == 0 {
 		return false, nil
+	}
+	if len(n.readyWhenExprs) == 0 {
+		return true, nil
 	}
 
 	nodeID := n.Spec.Meta.ID
@@ -551,6 +551,7 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 }
 
 func (n *Node) isCollectionReady() (bool, error) {
+	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 	if n.desired == nil {
 		return false, nil
 	}
@@ -559,6 +560,9 @@ func (n *Node) isCollectionReady() (bool, error) {
 	}
 	if len(n.observed) < len(n.desired) {
 		return false, nil
+	}
+	if len(n.readyWhenExprs) == 0 {
+		return true, nil
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
@@ -631,7 +635,8 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 func (n *Node) buildContext(only ...string) map[string]any {
 	ctx := make(map[string]any)
 	for depID, dep := range n.deps {
-		if len(dep.observed) == 0 {
+		// Use nil check (not len==0) to include empty collections in context.
+		if dep.observed == nil {
 			continue
 		}
 		if len(only) > 0 && !slices.Contains(only, depID) {

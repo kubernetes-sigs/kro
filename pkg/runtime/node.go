@@ -295,7 +295,7 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		maps.Copy(ctx, iterCtx)
 
 		for expr := range iterExprs {
-			val, err := evalRawCEL(iterEnv, expr, ctx)
+			val, _, err := evalRawCEL(iterEnv, expr, ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					return nil, ErrDataPending
@@ -578,7 +578,7 @@ func (n *Node) isCollectionReady() (bool, error) {
 		for _, expr := range n.readyWhenExprs {
 			// readyWhen for collections must NOT be cached - each item has different "each" context.
 			// Use evalRawCEL directly instead of evalBoolExpr.
-			val, err := evalRawCEL(env, expr.Expression, ctx)
+			val, _, err := evalRawCEL(env, expr.Expression, ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					return false, nil

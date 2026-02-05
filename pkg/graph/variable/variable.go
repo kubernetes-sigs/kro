@@ -167,3 +167,8 @@ func (r ResourceVariableKind) IsIncludeWhen() bool {
 func (r ResourceVariableKind) IsIteration() bool {
 	return r == ResourceVariableKindIteration
 }
+
+// IsReadyWhen returns true if the ResourceVariableKind is readyWhen
+func (r ResourceVariableKind) IsReadyWhen() bool {
+	return r == ResourceVariableKindReadyWhen
+}

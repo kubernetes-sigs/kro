@@ -310,6 +310,28 @@ spec:
               ResourceGraphDefinitionStatus defines the observed state of ResourceGraphDefinition.
               It provides information about the deployment state, resource ordering, and conditions.
             properties:
+              celMetrics:
+                description: |-
+                  CELMetrics contains metrics about CEL expression evaluation costs.
+                  This helps platform teams understand the performance impact of their expressions
+                  and allows for better optimization of complex ResourceGraphDefinitions.
+                properties:
+                  costPerResource:
+                    additionalProperties:
+                      format: int64
+                      type: integer
+                    description: |-
+                      CostPerResource maps resource IDs to their individual CEL expression costs.
+                      This breakdown helps identify which resources have the most expensive expressions.
+                    type: object
+                  totalCost:
+                    description: |-
+                      TotalCost is the total cost across all CEL expressions in the ResourceGraphDefinition.
+                      The cost value follows Kubernetes CEL cost budgeting where 1,000,000 cost units
+                      equals roughly 0.1 seconds of evaluation time.
+                    format: int64
+                    type: integer
+                type: object
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the ResourceGraphDefinition's state.

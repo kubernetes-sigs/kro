@@ -241,16 +241,16 @@ envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
-.PHONY: image
-build-image: ko ## Build the kro controller images using ko build
-	echo "Building kro image $(RELEASE_VERSION).."
+.PHONY: build-image
+build-image: ko ## Build kro controller image. Use GOFLAGS="-tags=pprof" for debug build.
+	@echo "Building kro image ${RELEASE_VERSION}..."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		$(if $(filter true,$(KO_LOCAL)),--local,--oci-layout-path rendered/oci/layout) \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
-.PHONY: publish
-publish-image: ko ## Publish the kro controller images
+.PHONY: publish-image
+publish-image: ko ## Publish kro controller image. Use GOFLAGS="-tags=pprof" for debug build.
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
@@ -282,8 +282,13 @@ render-static-manifests: inject-helm-version
 		rm -f $$tmpfile; \
 	done
 
-.PHONY:
-release: build-image publish-image package-helm publish-helm
+.PHONY: release
+release: ko package-helm ## Full release pipeline (images + debug images + helm)
+	@echo "Building and publishing standard image..."
+	$(MAKE) build-image publish-image
+	@echo "Building and publishing debug image..."
+	$(MAKE) build-image publish-image GOFLAGS="-tags=pprof" RELEASE_VERSION=${RELEASE_VERSION}-debug
+	$(MAKE) publish-helm
 
 ##@ Deployment
 

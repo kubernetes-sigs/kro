@@ -1,5 +1,5 @@
 ---
-sidebar_position: 405
+sidebar_position: 408
 ---
 
 # GKECluster
@@ -22,7 +22,7 @@ Everything related to these resources would be hidden from the end user, simplif
 The administrator needs to install the RGD first.
 The end user creates a `GKECluster` resource something like this:
 
-```kro
+```yaml
 apiVersion: kro.run/v1alpha1
 kind: GKECluster
 metadata:
@@ -66,14 +66,14 @@ Once all user created instances are deleted, the administrator can choose to del
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+  ```yaml title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: gkecluster.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: GKECluster
     spec:
       name: string
@@ -194,7 +194,7 @@ spec:
         #workloadIdentityConfig:
         #  # Workload Identity supports only a single namespace based on your project name.
         #  # Replace ${PROJECT_ID?} below with your project ID.
-        #  workloadPool: ${PROJECT_ID?}.svc.id.goog      
+        #  workloadPool: ${PROJECT_ID?}.svc.id.goog
         notificationConfig:
           pubsub:
             enabled: true
@@ -228,6 +228,5 @@ spec:
             sysctls:
               net.core.somaxconn: "4096"
             cgroupMode: "CGROUP_MODE_UNSPECIFIED"
-      
   ```
 </details>

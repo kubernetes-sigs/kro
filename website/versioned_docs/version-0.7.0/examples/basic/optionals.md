@@ -25,7 +25,7 @@ metadata:
   name: deploymentservice
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: DeploymentService
     spec:
       name: string
@@ -82,7 +82,7 @@ metadata:
   name: secret-transformation
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: test
     spec:
       name: string     

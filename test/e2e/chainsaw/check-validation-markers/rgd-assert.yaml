@@ -4,7 +4,7 @@ metadata:
   name: check-validation-markers
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: ValidationTestApp
     spec:
       email: string | pattern="^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$" description="Valid email address"

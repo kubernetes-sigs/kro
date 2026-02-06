@@ -4,7 +4,7 @@ metadata:
   name: azuretodo.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: AzureToDoDeployment
     spec:
       name: string | default=my-todo

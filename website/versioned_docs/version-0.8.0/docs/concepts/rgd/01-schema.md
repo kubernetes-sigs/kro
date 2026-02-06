@@ -25,7 +25,7 @@ metadata:
   name: application
 spec:
   schema:
-    apiVersion: v1alpha1         # Your API version
+    apiVersion: kro.run/v1alpha1         # Your API version
     kind: Application            # Your custom resource kind
 
     spec:                        # User-provided fields
@@ -349,7 +349,7 @@ metadata:
   name: web-application
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: WebApplication
 
     spec:

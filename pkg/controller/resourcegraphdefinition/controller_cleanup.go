@@ -41,7 +41,8 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	}
 
 	// cleanup CRD
-	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
+	group, _ := metadata.ParseGroupVersion(rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Group)
+	crdName := extractCRDName(group, rgd.Spec.Schema.Kind)
 	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
 		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}

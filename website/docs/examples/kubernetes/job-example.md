@@ -6,14 +6,14 @@ sidebar_position: 708
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+  ```yaml title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: job-deployment.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: JobDeployment
     spec:
       replicas: integer | default=1

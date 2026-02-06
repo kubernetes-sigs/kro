@@ -73,7 +73,7 @@ func convertList(v ref.Val) (interface{}, error) {
 	if !ok {
 		return v.ConvertToNative(reflect.TypeOf([]interface{}{}))
 	}
-	var result []interface{}
+	result := make([]interface{}, 0)
 	it := lister.Iterator()
 	for it.HasNext() == types.True {
 		elem := it.Next()

@@ -24,6 +24,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGoNativeType_EmptyList(t *testing.T) {
+	env, err := cel.NewEnv()
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`[]`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	val, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+
+	native, err := GoNativeType(val)
+	require.NoError(t, err)
+
+	list, ok := native.([]interface{})
+	require.True(t, ok, "Expected []interface{}, got %T", native)
+	assert.NotNil(t, list)
+	assert.Equal(t, 0, len(list))
+}
+
 func TestGoNativeType_ListMap(t *testing.T) {
 	env, err := cel.NewEnv()
 	require.NoError(t, err)

@@ -69,6 +69,14 @@ type Schema struct {
 	// +kubebuilder:default="kro.run"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="group is immutable"
 	Group string `json:"group,omitempty"`
+	// Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
+	// Default is Namespaced to preserve current behavior. This field is immutable.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="Namespaced"
+	// +kubebuilder:validation:Enum=Namespaced;Cluster
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="scope is immutable"
+	Scope ResourceScope `json:"scope,omitempty"`
 	// Spec defines the schema for the instance's spec section using SimpleSchema syntax.
 	// This becomes the OpenAPI schema for instances of the generated CRD.
 	// Use SimpleSchema's concise syntax to define fields, types, defaults, and validations.
@@ -251,6 +259,14 @@ type Dependency struct {
 	// ID is the unique identifier of the resource that this resource depends on.
 	ID string `json:"id,omitempty"`
 }
+
+// ResourceScope defines the scope of the generated instance CRD.
+type ResourceScope string
+
+const (
+	ScopeNamespaced ResourceScope = "Namespaced"
+	ScopeCluster    ResourceScope = "Cluster"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

@@ -189,12 +189,19 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
 	}
 
+	// Determine the scope for the instance CRD based on the schema definition.
+	scope := extv1.NamespaceScoped
+	if rgd.Spec.Schema.Scope == v1alpha1.ScopeCluster {
+		scope = extv1.ClusterScoped
+	}
+
 	// Synthesize CRD early with empty status.
 	// We'll update the status later after inferring it from CEL expressions.
 	instanceCRD := crd.SynthesizeCRD(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
+		scope,
 		*instanceSpecSchema,
 		extv1.JSONSchemaProps{}, // empty status placeholder
 		false,                   // don't add default fields yet
@@ -281,6 +288,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
+		scope == extv1.ClusterScoped, // isClusterScoped
 		statusVariables,
 		statusTemplate,
 		inspector,
@@ -606,12 +614,12 @@ func extractForEachDependencies(
 // Uses the shared inspectorEnv for AST inspection.
 func buildInstanceNode(
 	group, apiVersion, kind string,
+	isClusterScoped bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
 	inspector *ast.Inspector,
 ) (*Node, error) {
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(group, apiVersion, kind)
-
 	// Collect dependencies for instance status fields
 	var instanceDeps []string
 	instanceStatusVariables := []*variable.ResourceField{}
@@ -651,7 +659,7 @@ func buildInstanceNode(
 			ID:           InstanceNodeID,
 			Type:         NodeTypeInstance,
 			GVR:          gvr,
-			Namespaced:   true, // Instances are always namespaced
+			Namespaced:   !isClusterScoped, // Set based on scope
 			Dependencies: instanceDeps,
 		},
 		Template: &unstructured.Unstructured{

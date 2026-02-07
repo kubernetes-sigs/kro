@@ -223,4 +223,3 @@ spec:
 - Maintainer feedback requested explicit scope field (enum) rather than boolean
 - Scope immutability matches Kubernetes CRD behavior
 - Default to `Namespaced` ensures zero breaking changes
-

@@ -288,6 +288,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
+		scope == extv1.ClusterScoped, // isClusterScoped
 		statusVariables,
 		statusTemplate,
 		inspector,
@@ -613,6 +614,7 @@ func extractForEachDependencies(
 // Uses the shared inspectorEnv for AST inspection.
 func buildInstanceNode(
 	group, apiVersion, kind string,
+	isClusterScoped bool,
 	statusVariables []variable.FieldDescriptor,
 	statusTemplate map[string]interface{},
 	inspector *ast.Inspector,
@@ -657,7 +659,7 @@ func buildInstanceNode(
 			ID:           InstanceNodeID,
 			Type:         NodeTypeInstance,
 			GVR:          gvr,
-			Namespaced:   true, // Instances are always namespaced
+			Namespaced:   !isClusterScoped, // Set based on scope
 			Dependencies: instanceDeps,
 		},
 		Template: &unstructured.Unstructured{

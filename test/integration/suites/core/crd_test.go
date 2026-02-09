@@ -476,5 +476,86 @@ var _ = Describe("CRD", func() {
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
+
+		It("should detect externally deleted CRD and recreate it", func(ctx SpecContext) {
+			rgdName := "test-crd-ext-deletion"
+			rgd := generator.NewResourceGraphDefinition(rgdName,
+				generator.WithSchema(
+					"TestExtDeletion", "v1alpha1",
+					map[string]interface{}{
+						"field1": "string",
+						"field2": "integer | default=42",
+					},
+					nil,
+				),
+				generator.WithResource("res1", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.field1}",
+					},
+					"data": map[string]interface{}{
+						"key":  "value",
+						"key2": "${string(schema.spec.field2)}",
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			// Wait for RGD to become Active and CRD to be created
+			crdName := "testextdeletions.kro.run"
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(metadata.IsKROOwned(&crd.ObjectMeta)).To(BeTrue())
+				g.Expect(crd.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Record the original CRD UID so we can verify it gets recreated
+			// (not just the old one surviving deletion).
+			originalUID := crd.UID
+
+			// Externally delete the managed CRD to simulate an out-of-band deletion.
+			Expect(env.Client.Delete(ctx, crd)).To(Succeed())
+
+			// The controller's CRD metadata watch should detect the deletion event and
+			// trigger a reconciliation of the owning RGD, which calls crdManager.Ensure()
+			// to recreate the CRD.
+			//
+			// Without the fix (DeleteFunc returning false in the CRD watch predicate),
+			// this would timeout because the delete event would be silently filtered
+			// out, leaving the CRD permanently deleted.
+			recreatedCRD := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName}, recreatedCRD)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// A different UID proves this is a new object, not the original
+				g.Expect(recreatedCRD.UID).NotTo(Equal(originalUID))
+
+				g.Expect(metadata.IsKROOwned(&recreatedCRD.ObjectMeta)).To(BeTrue())
+				g.Expect(recreatedCRD.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
+
+				schemaProps := recreatedCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties
+				g.Expect(schemaProps["field1"].Type).To(Equal("string"))
+				g.Expect(schemaProps["field2"].Type).To(Equal("integer"))
+				g.Expect(schemaProps["field2"].Default.Raw).To(Equal([]byte("42")))
+			}, 30*time.Second, 2*time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify the RGD recovers to Active state after CRD recreation
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
 	})
 })

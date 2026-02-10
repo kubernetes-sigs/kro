@@ -216,7 +216,7 @@ var _ = Describe("Validation", func() {
 
 	Context("RGD Status", func() {
 		It("should reject RGDs with plain fileds (no expression)", func(ctx SpecContext) {
-			rgd := generator.NewResourceGraphDefinition("test-k8s-valid",
+			rgd := generator.NewResourceGraphDefinition("test-k8s-invalid-status",
 				generator.WithSchema(
 					"TestK8sValidation", "v1alpha1",
 					map[string]interface{}{

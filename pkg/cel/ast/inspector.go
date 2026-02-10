@@ -112,6 +112,8 @@ type Inspector struct {
 // call is better suited than maintaining a hardcoded list.
 var knownFunctions = []string{
 	"random.seededString",
+	"json.unmarshal",
+	"json.marshal",
 	"base64.decode",
 	"base64.encode",
 	"lists.range",

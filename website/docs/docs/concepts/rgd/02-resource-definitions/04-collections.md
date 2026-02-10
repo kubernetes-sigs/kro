@@ -533,6 +533,21 @@ and increases cluster churn:
 Keep iterator lists bounded and avoid combining large dimensions unless you
 intentionally want the expanded set.
 
+### Collection Size Limit
+
+Collections are limited to **1000 resources** per collection. If a `forEach`
+expression or cartesian product would end up creating more than 1000 resources, the
+reconciliation will fail with an error.
+
+This limit helps prevent accidental resource explosion and protects cluster
+performance. If you need more than 1000 resources you may consider splitting the collection across multiple resource definitions.
+
+:::warning Deletion Limitation
+Currently, collections that exceed this limit will get stuck during deletion. If you
+accidentally create a collection larger than 1000 resources, manual cleanup may
+be required.
+:::
+
 ### includeWhen Is Collection-wide
 
 `includeWhen` applies to the entire collection. If it evaluates to `false`, the

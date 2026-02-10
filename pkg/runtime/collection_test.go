@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -177,10 +178,19 @@ func TestOrderedIntersection(t *testing.T) {
 }
 
 func TestCartesianProduct(t *testing.T) {
+	var overSizeDims []evaluatedDimension
+	for i := 0; i < 32; i++ {
+		overSizeDims = append(overSizeDims, evaluatedDimension{
+			name:   fmt.Sprintf("2^%d", i),
+			values: []any{0, 1},
+		})
+	}
+
 	tests := []struct {
-		name       string
-		dimensions []evaluatedDimension
-		want       []map[string]any
+		name          string
+		dimensions    []evaluatedDimension
+		want          []map[string]any
+		errorContains string
 	}{
 		{
 			name:       "empty dimensions",
@@ -242,11 +252,22 @@ func TestCartesianProduct(t *testing.T) {
 			},
 			want: nil,
 		},
+		{
+			name:          "over size limit",
+			dimensions:    overSizeDims,
+			want:          nil,
+			errorContains: "over the maximum collection size",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := cartesianProduct(tt.dimensions)
+			result, err := cartesianProduct(tt.dimensions)
+			if tt.errorContains == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.errorContains)
+			}
 			assert.Equal(t, tt.want, result)
 		})
 	}

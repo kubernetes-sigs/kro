@@ -169,6 +169,8 @@ func Test_CELEnvHasFunction(t *testing.T) {
 		"int", "uint", "double", "bool", "string", "bytes", "timestamp", "duration", "type",
 		// Custom functions
 		"random.seededString",
+		"json.unmarshal",
+		"json.marshal",
 	}
 	for _, fn := range expectedFns {
 		t.Run(fn, func(t *testing.T) {

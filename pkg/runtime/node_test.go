@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -1181,6 +1182,30 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				return n
 			}(),
 			wantLen: 0,
+		},
+		{
+			name: "collection exceeds max size",
+			node: func() *Node {
+				var items []any
+				for i := 0; i < maxCollectionSize+1; i++ {
+					items = append(items, fmt.Sprintf("item-%d", i))
+				}
+
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"items": items,
+						},
+					}).build()
+				n := newTestNode("resources", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.items").build()
+				n.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				}
+				return n
+			}(),
+			wantErr: true,
 		},
 	}
 

@@ -81,20 +81,25 @@ type evaluatedDimension struct {
 	values []any
 }
 
+const maxCollectionSize = 1000
+
 // cartesianProduct computes the cartesian product of multiple dimensions.
 // Each dimension's Values are iterated over, producing all combinations.
 // Values can be any type - scalars, lists, maps - they are not flattened.
-func cartesianProduct(dimensions []evaluatedDimension) []map[string]any {
+func cartesianProduct(dimensions []evaluatedDimension) ([]map[string]any, error) {
 	if len(dimensions) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	total := 1
 	for _, dim := range dimensions {
 		if len(dim.values) == 0 {
-			return nil
+			return nil, nil
 		}
 		total *= len(dim.values)
+		if total > maxCollectionSize {
+			return nil, fmt.Errorf("collection size of %d is over the maximum collection size of %d", total, maxCollectionSize)
+		}
 	}
 
 	result := make([]map[string]any, 0, total)
@@ -121,7 +126,7 @@ func cartesianProduct(dimensions []evaluatedDimension) []map[string]any {
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 func setCollectionIndexLabel(obj *unstructured.Unstructured, index int) {

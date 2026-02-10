@@ -290,6 +290,7 @@ The `?` operator prevents kro from validating the field's existence at build tim
 | Strings | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
 | Encoders | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
 | Random | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go) |
+| JSON | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go) |
 | URLs | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs) |
 | Regex | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
 

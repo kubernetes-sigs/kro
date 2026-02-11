@@ -21,6 +21,58 @@ Users have expressed the need for this capability, particularly for RGDs that cr
 
 2. **Mixed Scope Resources**: Create RGDs that manage both cluster-scoped and namespaced resources together, where the instance itself needs to be cluster-scoped to properly represent the cluster-level component.
 
+   **Example**: An RGD that creates a `ClusterRole` (cluster-scoped) along with a `RoleBinding` (namespaced) that binds it to a `ServiceAccount` in a specific namespace. The instance itself must be cluster-scoped because `ClusterRole` is cluster-scoped, even though the `RoleBinding` and `ServiceAccount` are namespaced:
+
+   ```yaml
+   apiVersion: kro.run/v1alpha1
+   kind: ResourceGraphDefinition
+   metadata:
+     name: cluster-role-with-binding
+   spec:
+     schema:
+       apiVersion: v1alpha1
+       kind: ClusterAccessPolicy
+       scope: Cluster  # Instance is cluster-scoped
+       spec:
+         roleName: string
+         namespace: string  # Where to create the RoleBinding
+         serviceAccountName: string
+         rules: list<map>
+     resources:
+       # Cluster-scoped resource
+       - id: clusterrole
+         template:
+           apiVersion: rbac.authorization.k8s.io/v1
+           kind: ClusterRole
+           metadata:
+             name: ${schema.spec.roleName}
+           rules: ${schema.spec.rules}
+       # Namespaced resource
+       - id: serviceaccount
+         template:
+           apiVersion: v1
+           kind: ServiceAccount
+           metadata:
+             name: ${schema.spec.serviceAccountName}
+             namespace: ${schema.spec.namespace}
+       # Namespaced resource that references cluster-scoped ClusterRole
+       - id: rolebinding
+         template:
+           apiVersion: rbac.authorization.k8s.io/v1
+           kind: RoleBinding
+           metadata:
+             name: ${schema.spec.roleName}-binding
+             namespace: ${schema.spec.namespace}
+           roleRef:
+             apiGroup: rbac.authorization.k8s.io
+             kind: ClusterRole
+             name: ${clusterrole.metadata.name}
+           subjects:
+             - kind: ServiceAccount
+               name: ${serviceaccount.metadata.name}
+               namespace: ${schema.spec.namespace}
+   ```
+
 3. **Operator Patterns**: Support operator-like patterns where the instance CRD represents a cluster-wide configuration that manages multiple namespaced resources.
 
 ## Proposal

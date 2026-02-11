@@ -174,15 +174,32 @@ var _ = Describe("CRD", func() {
 			)
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			// Wait for CRD creation
+			// Wait for RGD to become Active and CRD to be created
 			crdName := "testdeletes.kro.run"
 			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})).To(Succeed())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			// Delete ResourceGraphDefinition
+			// Delete ResourceGraphDefinition and bump spec to trigger
+			// reconciliation. The controller's GenerationChangedPredicate
+			// filters the DeletionTimestamp metadata-only update (no
+			// generation change), so a spec update is needed to let the
+			// reconciler observe the pending deletion.
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			Eventually(func(g Gomega, ctx SpecContext) {
+				current := &krov1alpha1.ResourceGraphDefinition{}
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, current)).To(Succeed())
+				current.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"field1": "string",
+					"field2": "boolean",
+				})
+				g.Expect(env.Client.Update(ctx, current)).To(Succeed())
+			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Verify CRD is deleted
 			Eventually(func(g Gomega, ctx SpecContext) {

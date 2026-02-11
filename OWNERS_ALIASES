@@ -14,11 +14,11 @@ aliases:
     - jakobmoellerdev
     - jlbutler
     - matthchr
-    - nicslatts
   kro-reviewers:
     - michaelhtm
     - n3wscott
   emeritus-kro-maintainers:
     - eqe-aws
+    - nicslatts
     - rynowak
 

@@ -541,26 +541,36 @@ func (a *ApplySet) prune(
 
 	for _, c := range candidates {
 		eg.Go(func() error {
+			uid := c.obj.GetUID()
+			deleteOpts := metav1.DeleteOptions{
+				Preconditions: &metav1.Preconditions{UID: &uid},
+			}
 			var err error
 			if c.obj.GetNamespace() != "" {
-				err = a.client.Resource(c.gvr).Namespace(c.obj.GetNamespace()).Delete(egCtx, c.obj.GetName(), metav1.DeleteOptions{})
+				err = a.client.Resource(c.gvr).Namespace(c.obj.GetNamespace()).Delete(egCtx, c.obj.GetName(), deleteOpts)
 			} else {
-				err = a.client.Resource(c.gvr).Delete(egCtx, c.obj.GetName(), metav1.DeleteOptions{})
+				err = a.client.Resource(c.gvr).Delete(egCtx, c.obj.GetName(), deleteOpts)
 			}
 
-			if err != nil && !apierrors.IsNotFound(err) {
+			switch {
+			case err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err):
 				return fmt.Errorf("delete %s/%s: %w", c.obj.GetNamespace(), c.obj.GetName(), err)
+			case apierrors.IsConflict(err):
+				a.log.V(2).Info("skipped prune due to UID mismatch (resource recreated)",
+					"name", c.obj.GetName(),
+					"namespace", c.obj.GetNamespace(),
+					"gvr", c.gvr.String(),
+				)
+			case err == nil:
+				mu.Lock()
+				results = append(results, PruneResultItem{Object: c.obj})
+				mu.Unlock()
+				a.log.V(2).Info("pruned resource",
+					"name", c.obj.GetName(),
+					"namespace", c.obj.GetNamespace(),
+					"gvr", c.gvr.String(),
+				)
 			}
-
-			mu.Lock()
-			results = append(results, PruneResultItem{Object: c.obj})
-			mu.Unlock()
-
-			a.log.V(2).Info("pruned resource",
-				"name", c.obj.GetName(),
-				"namespace", c.obj.GetNamespace(),
-				"gvr", c.gvr.String(),
-			)
 			return nil
 		})
 	}

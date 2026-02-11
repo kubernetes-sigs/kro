@@ -730,13 +730,11 @@ func buildStatusSchema(
 	// Reject reserved status field names. The instance controller uses "state"
 	// and "conditions" for lifecycle tracking and will silently overwrite any
 	// user-defined values for these fields.
-	reservedStatusFields := map[string]bool{"state": true, "conditions": true}
 	for _, fd := range fieldDescriptors {
-		topLevel := strings.SplitN(fd.Path, ".", 2)[0]
-		if reservedStatusFields[topLevel] {
+		if strings.HasPrefix(fd.Path, "state") || strings.HasPrefix(fd.Path, "conditions") {
 			return nil, nil, nil, fmt.Errorf(
-				"status field %q uses reserved name %q: kro reserves \"state\" and \"conditions\" for instance lifecycle tracking",
-				fd.Path, topLevel,
+				"status field at path %q uses a reserved status field managed by kro",
+				fd.Path,
 			)
 		}
 	}

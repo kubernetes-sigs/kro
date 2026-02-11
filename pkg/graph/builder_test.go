@@ -241,7 +241,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "uses reserved name \"state\"",
+			errMsg:  "uses a reserved status field managed by kro",
 		},
 		{
 			name: "reserved status field name: conditions",
@@ -267,7 +267,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "uses reserved name \"conditions\"",
+			errMsg:  "uses a reserved status field managed by kro",
 		},
 		{
 			name: "invalid resource type",

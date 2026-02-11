@@ -18,6 +18,8 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+
+	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 )
 
 // Expression wraps a CEL expression with its compiled program and metadata.
@@ -72,7 +74,7 @@ func (e *Expression) Eval(ctx map[string]any) (any, error) {
 		return nil, fmt.Errorf("eval %q: %w", e.Original, err)
 	}
 
-	native, err := GoNativeType(out)
+	native, err := conversion.GoNativeType(out)
 	if err != nil {
 		return nil, fmt.Errorf("convert %q: %w", e.Original, err)
 	}

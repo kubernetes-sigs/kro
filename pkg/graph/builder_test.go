@@ -218,6 +218,58 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "status fields without expressions are not supported",
 		},
 		{
+			name: "reserved status field name: state",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"state": "${vpc.status.state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "uses reserved name \"state\"",
+		},
+		{
+			name: "reserved status field name: conditions",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"conditions": "${vpc.status.conditions}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "uses reserved name \"conditions\"",
+		},
+		{
 			name: "invalid resource type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -684,8 +736,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"replicas": "integer | default=3",
 					},
 					map[string]interface{}{
-						"state": "${vpc.status.state}",
-						"id":    "${vpc.status.vpcID}",
+						"vpcState": "${vpc.status.state}",
+						"id":       "${vpc.status.vpcID}",
 					},
 				),
 				generator.WithResource("vpc", map[string]interface{}{
@@ -710,8 +762,8 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"name": "string",
 					},
 					map[string]interface{}{
-						"state": "${vpc.status.?state}",
-						"vpcID": "${vpc.status.?vpcID}",
+						"vpcState": "${vpc.status.?state}",
+						"vpcID":    "${vpc.status.?vpcID}",
 					},
 				),
 				generator.WithResource("vpc", map[string]interface{}{
@@ -1937,7 +1989,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 						"name": "string",
 					},
 					map[string]interface{}{
-						"state": "${vpc.status.?state}",
+						"vpcState": "${vpc.status.?state}",
 					},
 				),
 				generator.WithResource("vpc", map[string]interface{}{

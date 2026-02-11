@@ -35,6 +35,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -1177,7 +1178,7 @@ func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditio
 
 	// Verify the expression returns bool or optional_type(bool)
 	outputType := checkedAST.OutputType()
-	if !krocel.IsBoolOrOptionalBool(outputType) {
+	if !conversion.IsBoolOrOptionalBool(outputType) {
 		return fmt.Errorf(
 			"%s expression %q in resource %q must return bool or optional_type(bool), but returns %q",
 			conditionType, expr.Original, resourceID, outputType.String(),

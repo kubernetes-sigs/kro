@@ -43,6 +43,8 @@ type Node struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
+
+	rgdConfig RGDConfig
 }
 
 var identityPaths = []string{
@@ -599,7 +601,7 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		dimensions[i] = evaluatedDimension{name: dim.Name, values: values}
 	}
 
-	product, err := cartesianProduct(dimensions)
+	product, err := cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
 	if err != nil {
 		return nil, err
 	}

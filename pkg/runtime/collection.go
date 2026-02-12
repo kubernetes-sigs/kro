@@ -81,12 +81,10 @@ type evaluatedDimension struct {
 	values []any
 }
 
-const maxCollectionSize = 1000
-
 // cartesianProduct computes the cartesian product of multiple dimensions.
 // Each dimension's Values are iterated over, producing all combinations.
 // Values can be any type - scalars, lists, maps - they are not flattened.
-func cartesianProduct(dimensions []evaluatedDimension) ([]map[string]any, error) {
+func cartesianProduct(dimensions []evaluatedDimension, maxCollectionSize int) ([]map[string]any, error) {
 	if len(dimensions) == 0 {
 		return nil, nil
 	}

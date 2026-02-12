@@ -262,7 +262,7 @@ func TestCartesianProduct(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := cartesianProduct(tt.dimensions)
+			result, err := cartesianProduct(tt.dimensions, 1000)
 			if tt.errorContains == "" {
 				require.NoError(t, err)
 			} else {

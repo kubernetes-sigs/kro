@@ -28,6 +28,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
+const testMaxCollectionSize = 1000
+
 func TestNode_IsIgnored(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1187,7 +1189,7 @@ func TestNode_EvaluateForEach(t *testing.T) {
 			name: "collection exceeds max size",
 			node: func() *Node {
 				var items []any
-				for i := 0; i < maxCollectionSize+1; i++ {
+				for i := 0; i < testMaxCollectionSize+1; i++ {
 					items = append(items, fmt.Sprintf("item-%d", i))
 				}
 
@@ -1509,6 +1511,9 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
+		rgdConfig: RGDConfig{
+			MaxCollectionSize: testMaxCollectionSize,
+		},
 	}
 	return node
 }

@@ -16,6 +16,7 @@ package library
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 
 	"github.com/google/cel-go/cel"
@@ -58,11 +59,28 @@ import (
 //	json.marshal({"name": "test", "count": 42})
 //	json.marshal([1, 2, 3])
 //	json.marshal(schema.spec.config)
-func JSON() cel.EnvOption {
-	return cel.Lib(&jsonLibrary{})
+func JSON(options ...JSONOption) cel.EnvOption {
+	lib := &jsonLibrary{version: math.MaxUint32}
+	for _, o := range options {
+		lib = o(lib)
+	}
+	return cel.Lib(lib)
 }
 
-type jsonLibrary struct{}
+type jsonLibrary struct {
+	version uint32
+}
+
+// JSONOption is a functional option for configuring the json library.
+type JSONOption func(*jsonLibrary) *jsonLibrary
+
+// JSONVersion configures the version of the json library.
+func JSONVersion(version uint32) JSONOption {
+	return func(lib *jsonLibrary) *jsonLibrary {
+		lib.version = version
+		return lib
+	}
+}
 
 func (l *jsonLibrary) LibraryName() string {
 	return "json"

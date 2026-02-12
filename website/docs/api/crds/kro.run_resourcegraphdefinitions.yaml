@@ -134,6 +134,7 @@ spec:
                         maxProperties: 1
                         minProperties: 1
                         type: object
+                      maxItems: 5
                       type: array
                     id:
                       description: |-

@@ -201,6 +201,7 @@ type Resource struct {
 	// Example: [{"region": "${schema.spec.regions}"}, {"tier": "${schema.spec.tiers}"}]
 	//
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=5
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
 }
 

@@ -98,7 +98,14 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
 		For(&v1alpha1.ResourceGraphDefinition{}).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithEventFilter(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					return !e.ObjectNew.GetDeletionTimestamp().IsZero()
+				},
+			},
+		)).
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,

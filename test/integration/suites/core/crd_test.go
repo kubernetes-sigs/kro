@@ -185,25 +185,25 @@ var _ = Describe("CRD", func() {
 					&apiextensionsv1.CustomResourceDefinition{})).To(Succeed())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			// Delete ResourceGraphDefinition and bump spec to trigger
-			// reconciliation. The controller's GenerationChangedPredicate
-			// filters the DeletionTimestamp metadata-only update (no
-			// generation change), so a spec update is needed to let the
-			// reconciler observe the pending deletion.
-			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			// Wait for the finalizer to be set before deleting
 			Eventually(func(g Gomega, ctx SpecContext) {
 				current := &krov1alpha1.ResourceGraphDefinition{}
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, current)).To(Succeed())
-				current.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
-					"field1": "string",
-					"field2": "boolean",
-				})
-				g.Expect(env.Client.Update(ctx, current)).To(Succeed())
-			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+				g.Expect(current.Finalizers).To(ContainElement("kro.run/finalizer"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			// Verify CRD is deleted
+			// Delete the RGD - the controller should observe the
+			// DeletionTimestamp, run cleanup (delete the CRD), and
+			// remove the finalizer so the RGD is fully deleted.
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+
+			// Verify both RGD and CRD are fully deleted
 			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name},
+					&krov1alpha1.ResourceGraphDefinition{})
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())

@@ -211,3 +211,9 @@ func TestJSONMarshal(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONVersion(t *testing.T) {
+	lib := &jsonLibrary{}
+	JSONVersion(1)(lib)
+	assert.Equal(t, uint32(1), lib.version)
+}

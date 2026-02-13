@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
@@ -1457,6 +1458,102 @@ var _ = Describe("ApplySet", func() {
 					"ApplySet parent ID should still be present")
 				g.Expect(annotations).To(HaveKey(applyset.ApplySetToolingAnnotation),
 					"ApplySet tooling should still be present")
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		})
+	})
+	Describe("Expressions with Nil Values", func() {
+		It("should remove the field if its expression evaluates to nil", func(ctx SpecContext) {
+			By("creating RGD")
+			rgd := generator.NewResourceGraphDefinition("test-nil-field",
+				generator.WithSchema(
+					"NullField", "v1alpha1",
+					map[string]interface{}{
+						"name":            "string",
+						"instanceTenancy": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks":      []interface{}{"1.2.3.4"},
+						"instanceTenancy": "${schema.spec.?instanceTenancy}",
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			By("waiting for RGD to become active")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("creating instance with custom labels and annotations")
+			instance := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "NullField",
+					"metadata": map[string]interface{}{
+						"name":      "test-null",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"name": "null",
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				_ = env.Client.Delete(ctx, instance)
+			})
+
+			By("waiting for instance to become ACTIVE")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      instance.GetName(),
+					Namespace: namespace,
+				}, instance)
+				g.Expect(err).ToNot(HaveOccurred())
+				status, _, _ := unstructured.NestedString(instance.Object, "status", "state")
+				g.Expect(status).To(Equal("ACTIVE"))
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("verifying VPC is created")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				vpc := &unstructured.Unstructured{}
+				vpc.SetGroupVersionKind(schema.GroupVersionKind{
+					Group:   "ec2.services.k8s.aws",
+					Version: "v1alpha1",
+					Kind:    "VPC",
+				})
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "null-vpc",
+					Namespace: namespace,
+				}, vpc)
+				g.Expect(err).ToNot(HaveOccurred(), "VPC should be created")
+
+				// Check that instanceTenancy is not present in the spec
+				spec, _, _ := unstructured.NestedMap(vpc.Object, "spec")
+				g.Expect(spec).ToNot(HaveKey("instanceTenancy"), "instanceTenancy should be removed from spec when nil")
+
+				// Check that the VPC has the correct labels
+				labels := vpc.GetLabels()
+				applySetID := applyset.ID(instance)
+				g.Expect(labels).To(HaveKeyWithValue(
+					applyset.ApplysetPartOfLabel,
+					applySetID,
+				), "VPC should belong to the ApplySet")
+				g.Expect(err).ToNot(HaveOccurred())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})

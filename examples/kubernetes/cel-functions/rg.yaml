@@ -43,6 +43,10 @@ spec:
                       value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
                     - name: RANDOM_SEEDED_STRING
                       value: ${random.seededString(10, schema.metadata.uid)}
+                    - name: JSON_UNMARSHAL_EXAMPLE
+                      value: "${json.unmarshal('{\"exampleJSONKey\": \"exampleJSONValue\"}').exampleJSONKey}"
+                    - name: JSON_MARSHAL_EXAMPLE
+                      value: "${json.marshal({\"name\": schema.spec.name})}"
     - id: service
       template:
         apiVersion: v1

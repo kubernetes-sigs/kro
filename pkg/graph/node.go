@@ -41,6 +41,12 @@ const (
 	MetadataNamePath = "metadata.name"
 	// MetadataNamespacePath is the path to the resource namespace field.
 	MetadataNamespacePath = "metadata.namespace"
+	// ReservedStatusFieldState is the status field reserved by the instance
+	// controller for lifecycle state tracking.
+	ReservedStatusFieldState = "state"
+	// ReservedStatusFieldConditions is the status field reserved by the
+	// instance controller for condition reporting.
+	ReservedStatusFieldConditions = "conditions"
 )
 
 // NodeType identifies the kind of node in the resource graph.

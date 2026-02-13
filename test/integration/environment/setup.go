@@ -37,6 +37,7 @@ import (
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 type Environment struct {
@@ -173,6 +174,9 @@ func (e *Environment) setupController() error {
 		dc,
 		e.GraphBuilder,
 		10,
+		runtime.RGDConfig{
+			MaxCollectionSize: 1000,
+		},
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {

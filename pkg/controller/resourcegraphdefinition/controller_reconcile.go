@@ -118,6 +118,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 			DefaultRequeueDuration:    3 * time.Second,
 			DeletionGraceTimeDuration: 30 * time.Second,
 			DeletionPolicy:            "Delete",
+			RGDConfig:                 r.rgdConfig,
 		},
 		gvr,
 		processedRGD,

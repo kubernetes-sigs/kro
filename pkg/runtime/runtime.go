@@ -34,23 +34,30 @@ type Interface interface {
 	Instance() *Node
 }
 
+// RGDConfig holds RGD runtime configuration parameters.
+type RGDConfig struct {
+	MaxCollectionSize int
+}
+
 // Runtime is the execution context for a single reconciliation.
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
 type Runtime struct {
-	order    []string
-	nodes    map[string]*Node
-	instance *Node
+	order     []string
+	nodes     map[string]*Node
+	instance  *Node
+	rgdConfig RGDConfig
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, error) {
+func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig RGDConfig) (*Runtime, error) {
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
-		order: g.TopologicalOrder,
-		nodes: make(map[string]*Node),
+		order:     g.TopologicalOrder,
+		nodes:     make(map[string]*Node),
+		rgdConfig: rgdConfig,
 	}
 
 	// Expression cache for non-iteration expressions only.
@@ -84,15 +91,17 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, e
 	// Phase 1: Create all nodes first (without deps wired).
 	for _, id := range rt.order {
 		rt.nodes[id] = &Node{
-			Spec: g.Nodes[id].DeepCopy(),
-			deps: make(map[string]*Node),
+			Spec:      g.Nodes[id].DeepCopy(),
+			deps:      make(map[string]*Node),
+			rgdConfig: rgdConfig,
 		}
 	}
 
 	// Create instance node.
 	instNode := &Node{
-		Spec: g.Instance.DeepCopy(),
-		deps: make(map[string]*Node),
+		Spec:      g.Instance.DeepCopy(),
+		deps:      make(map[string]*Node),
+		rgdConfig: rgdConfig,
 	}
 	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
 	rt.instance = instNode

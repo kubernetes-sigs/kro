@@ -73,7 +73,7 @@ metadata:
   name: gkecluster.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: GKECluster
     spec:
       name: string

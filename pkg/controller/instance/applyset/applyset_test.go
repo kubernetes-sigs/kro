@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -588,6 +589,133 @@ func TestPrune(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrune_UIDPrecondition(t *testing.T) {
+	ctx := t.Context()
+	mapper := newTestRESTMapper()
+
+	parent := &testParent{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-instance",
+			Namespace: "default",
+			UID:       types.UID("test-parent-uid"),
+			Annotations: map[string]string{
+				ApplySetGKsAnnotation:                  "ConfigMap",
+				ApplySetAdditionalNamespacesAnnotation: "default",
+			},
+		},
+		gvk: schema.GroupVersionKind{Group: "kro.run", Version: "v1alpha1", Kind: "TestKind"},
+	}
+	applySetID := ID(parent)
+
+	t.Run("uid matches - resource pruned", func(t *testing.T) {
+		orphan := newConfigMap("orphan-cm", "default")
+		orphan.SetLabels(map[string]string{
+			ApplysetPartOfLabel: applySetID,
+		})
+		orphan.SetUID(types.UID("orphan-uid"))
+
+		client := newFakeDynamicClient(orphan)
+		addSSAReactor(client)
+
+		applier := New(Config{
+			Client:          client,
+			RESTMapper:      mapper,
+			Log:             logr.Discard(),
+			ParentNamespace: "default",
+		}, parent)
+
+		resources := []Resource{
+			{ID: "cm1", Object: newConfigMap("cm1", "default")},
+		}
+		result, _, err := applier.Apply(ctx, resources, ApplyMode{})
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+
+		projectMeta, err := applier.Project(resources)
+		if err != nil {
+			t.Fatalf("Project() error = %v", err)
+		}
+		pruneResult, err := applier.Prune(ctx, PruneOptions{
+			KeepUIDs: result.ObservedUIDs(),
+			Scope:    projectMeta.PruneScope(),
+		})
+		if err != nil {
+			t.Fatalf("Prune() error = %v", err)
+		}
+		if len(pruneResult.Pruned) != 1 {
+			t.Errorf("Prune() pruned %d resources, want 1", len(pruneResult.Pruned))
+		}
+	})
+
+	t.Run("uid mismatch - resource not pruned", func(t *testing.T) {
+		// Simulate: between LIST and DELETE, the resource was recreated with a new UID.
+		// The fake client has the recreated object (new UID), so when DELETE comes in
+		// with precondition for the old UID, it should fail with 409 Conflict.
+		recreated := newConfigMap("orphan-cm", "default")
+		recreated.SetLabels(map[string]string{
+			ApplysetPartOfLabel: applySetID,
+		})
+		recreated.SetUID(types.UID("new-uid"))
+
+		client := newFakeDynamicClient(recreated)
+		addSSAReactor(client)
+
+		// Intercept DELETE calls and return 409 Conflict when UID doesn't match
+		client.PrependReactor("delete", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			deleteAction, ok := action.(k8stesting.DeleteAction)
+			if !ok {
+				return false, nil, nil
+			}
+			if deleteAction.GetName() == "orphan-cm" {
+				return true, nil, apierrors.NewConflict(
+					schema.GroupResource{Group: "", Resource: "configmaps"},
+					"orphan-cm",
+					errors.New("the UID in the precondition does not match the UID in record"),
+				)
+			}
+			return false, nil, nil
+		})
+
+		applier := New(Config{
+			Client:          client,
+			RESTMapper:      mapper,
+			Log:             logr.Discard(),
+			ParentNamespace: "default",
+		}, parent)
+
+		resources := []Resource{
+			{ID: "cm1", Object: newConfigMap("cm1", "default")},
+		}
+		result, _, err := applier.Apply(ctx, resources, ApplyMode{})
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+
+		projectMeta, err := applier.Project(resources)
+		if err != nil {
+			t.Fatalf("Project() error = %v", err)
+		}
+		pruneResult, err := applier.Prune(ctx, PruneOptions{
+			KeepUIDs: result.ObservedUIDs(),
+			Scope:    projectMeta.PruneScope(),
+		})
+		if err != nil {
+			t.Fatalf("Prune() error = %v, want nil (409 Conflict should be ignored)", err)
+		}
+		if len(pruneResult.Pruned) != 0 {
+			t.Errorf("Prune() pruned %d resources, want 0 (UID mismatch should skip)", len(pruneResult.Pruned))
+		}
+
+		// Verify the resource still exists in the fake client
+		cmGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+		_, getErr := client.Resource(cmGVR).Namespace("default").Get(ctx, "orphan-cm", metav1.GetOptions{})
+		if getErr != nil {
+			t.Errorf("Resource orphan-cm should still exist after UID mismatch, but Get() returned: %v", getErr)
+		}
+	})
 }
 
 func TestErrors_ShouldPreventPrune(t *testing.T) {

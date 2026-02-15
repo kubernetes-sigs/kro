@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ui
-data:
-  RETAIL_UI_BANNER: Staging Environment

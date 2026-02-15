@@ -172,7 +172,7 @@ func (e *Environment) setupController() error {
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
-		1,
+		10,
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {

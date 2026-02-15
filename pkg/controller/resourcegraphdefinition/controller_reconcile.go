@@ -58,12 +58,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
-	crd := processedRGD.Instance.GetCRD()
+	crd := processedRGD.CRD
 	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd); err != nil {
+	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
@@ -86,9 +87,9 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 }
 
 func (r *ResourceGraphDefinitionReconciler) getResourceGVRsToWatchForRGD(processedRGD *graph.Graph) []schema.GroupVersionResource {
-	resourceHandlers := make(map[schema.GroupVersionResource]struct{}, len(processedRGD.Resources))
-	for _, resource := range processedRGD.Resources {
-		resourceHandlers[resource.GetGroupVersionResource()] = struct{}{}
+	resourceHandlers := make(map[schema.GroupVersionResource]struct{}, len(processedRGD.Nodes))
+	for _, node := range processedRGD.Nodes {
+		resourceHandlers[node.Meta.GVR] = struct{}{}
 	}
 	return slices.Collect(maps.Keys(resourceHandlers))
 }
@@ -104,11 +105,11 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
 	labeler metadata.Labeler,
 ) *instancectrl.Controller {
-	gvr := processedRGD.Instance.GetGroupVersionResource()
+	gvr := processedRGD.Instance.Meta.GVR
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
 		"controller", gvr.Resource,
-		"controllerGroup", processedRGD.Instance.GetCRD().Spec.Group,
-		"controllerKind", processedRGD.Instance.GetCRD().Spec.Names.Kind,
+		"controllerGroup", processedRGD.CRD.Spec.Group,
+		"controllerKind", processedRGD.CRD.Spec.Names.Kind,
 	)
 
 	return instancectrl.NewController(
@@ -121,7 +122,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		gvr,
 		processedRGD,
 		r.clientSet,
-		r.clientSet.RESTMapper(),
 		labeler,
 	)
 }
@@ -134,9 +134,9 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGrap
 		return nil, nil, newGraphError(err)
 	}
 
-	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRGD.Resources))
-	for name, resource := range processedRGD.Resources {
-		deps := resource.GetDependencies()
+	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRGD.Nodes))
+	for name, node := range processedRGD.Nodes {
+		deps := node.Meta.Dependencies
 		if len(deps) > 0 {
 			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))
 		}
@@ -158,8 +158,8 @@ func buildResourceInfo(name string, deps []string) v1alpha1.ResourceInformation 
 }
 
 // reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition) error {
-	if err := r.crdManager.Ensure(ctx, *crd); err != nil {
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, allowBreakingChanges bool) error {
+	if err := r.crdManager.Ensure(ctx, *crd, allowBreakingChanges); err != nil {
 		return newCRDError(err)
 	}
 	return nil
@@ -179,7 +179,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 	controller := r.setupMicroController(processedRGD, graphExecLabeler)
 
 	ctrl.LoggerFrom(ctx).V(1).Info("reconciling resource graph definition micro controller")
-	gvr := processedRGD.Instance.GetGroupVersionResource()
+	gvr := processedRGD.Instance.Meta.GVR
 
 	err := r.dynamicController.Register(ctx, gvr, controller.Reconcile, resourceGVRsToWatch...)
 	if err != nil {

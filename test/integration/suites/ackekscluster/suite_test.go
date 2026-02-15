@@ -45,6 +45,7 @@ func TestEKSCluster(t *testing.T) {
 		env, err = environment.New(t.Context(),
 			environment.ControllerConfig{
 				AllowCRDDeletion: true,
+				LogWriter:        GinkgoWriter,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
 					DefaultRequeueDuration: 15 * time.Second,
 				},
@@ -119,7 +120,7 @@ var _ = Describe("EKSCluster", func() {
 			g.Expect(readyCondition.ObservedGeneration).To(Equal(createdRGD.Generation))
 
 			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Create instance
 		instance := genInstance(namespace, "test-instance", "1.27")

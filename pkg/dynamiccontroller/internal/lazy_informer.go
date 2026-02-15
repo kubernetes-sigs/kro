@@ -110,9 +110,12 @@ func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.Resour
 
 	// Start informer if first handler
 	if len(w.handlers) == 1 {
-		go w.run()
+		// Capture references to avoid race when sync fails and we nil out w.informer
+		inf := w.informer
+		done := w.done
+		go w.run(inf, done)
 
-		if !cache.WaitForCacheSync(w.done, w.informer.HasSynced) {
+		if !cache.WaitForCacheSync(done, inf.HasSynced) {
 			w.log.Error(fmt.Errorf("cache sync failed"), "lazy informer sync failure", "gvr", w.gvr)
 			w.cancel()
 			w.cancel = nil
@@ -124,8 +127,8 @@ func (w *LazyInformer) AddHandler(ctx context.Context, id string, h cache.Resour
 	return nil
 }
 
-func (w *LazyInformer) run() {
-	w.informer.Run(w.done)
+func (w *LazyInformer) run(inf cache.SharedIndexInformer, done <-chan struct{}) {
+	inf.Run(done)
 }
 
 // RemoveHandler unregisters a handler. Returns true if informer was stopped.
@@ -179,4 +182,12 @@ func (w *LazyInformer) Shutdown() {
 
 	w.informer = nil
 	w.handlers = make(map[string]cache.ResourceEventHandlerRegistration)
+}
+
+// SetInformerForTesting replaces the internal informer for testing purposes.
+// This should only be used in tests to inject mock informers.
+func (w *LazyInformer) SetInformerForTesting(inf cache.SharedIndexInformer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.informer = inf
 }

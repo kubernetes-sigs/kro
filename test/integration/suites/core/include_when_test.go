@@ -225,8 +225,8 @@ var _ = Describe("Conditions", func() {
 			g.Expect(createdRGD.Status.TopologicalOrder).To(Equal([]string{
 				"deploymentA",
 				"serviceAccountA",
-				"serviceA",
 				"deploymentB",
+				"serviceA",
 				"serviceAccountB",
 				"serviceB",
 			}))

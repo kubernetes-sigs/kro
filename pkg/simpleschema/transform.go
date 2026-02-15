@@ -15,400 +15,184 @@
 package simpleschema
 
 import (
+	"errors"
 	"fmt"
-	"regexp"
-	"slices"
-	"strconv"
-	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
+
+	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
+	"github.com/kubernetes-sigs/kro/pkg/simpleschema/types"
 )
 
-const (
-	keyTypeString  = string(AtomicTypeString)
-	keyTypeInteger = string(AtomicTypeInteger)
-	keyTypeBoolean = string(AtomicTypeBool)
-	keyTypeNumber  = "number"
-	keyTypeObject  = "object"
-	keyTypeArray   = "array"
-)
-
-// A predefinedType is a type that is predefined in the schema.
-// It is used to resolve references in the schema, while capturing the fact
-// whether the type has the required marker set (this information would
-// otherwise be lost in the parsing process).
-type predefinedType struct {
+// customType stores the schema and required state for a custom type.
+type customType struct {
 	Schema   extv1.JSONSchemaProps
 	Required bool
 }
 
-// transformer is a transformer for OpenAPI schemas
 type transformer struct {
-	preDefinedTypes map[string]predefinedType
+	customTypes map[string]customType
 }
 
-// newTransformer creates a new transformer
-func newTransformer() *transformer {
-	return &transformer{
-		preDefinedTypes: make(map[string]predefinedType),
+// newTransformer creates a new transformer with the given custom types.
+func newTransformer(customTypes map[string]interface{}) (*transformer, error) {
+	t := &transformer{
+		customTypes: make(map[string]customType),
 	}
+	if err := t.loadCustomTypes(customTypes); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
-// loadPreDefinedTypes loads pre-defined types into the transformer.
-// The pre-defined types are used to resolve references in the schema.
-//
-// As of today, kro doesn't support custom types in the schema - do
-// not use this function.
-func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
-	t.preDefinedTypes = make(map[string]predefinedType)
+// Resolve implements types.Resolver.
+func (t *transformer) Resolve(name string) (*extv1.JSONSchemaProps, error) {
+	ct, ok := t.customTypes[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown type: %s", name)
+	}
+	return ct.Schema.DeepCopy(), nil
+}
 
-	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
-	if err != nil {
-		return fmt.Errorf("failed to build pre-defined types schema: %w", err)
+// IsRequired returns whether a custom type has required=true marker.
+// Precondition: name must exist in customTypes (caller ensures this via Schema resolution).
+func (t *transformer) IsRequired(name string) bool {
+	return t.customTypes[name].Required
+}
+
+func (t *transformer) loadCustomTypes(customTypes map[string]interface{}) error {
+	if len(customTypes) == 0 {
+		return nil
 	}
 
-	for k, properties := range jsonSchemaProps.Properties {
-		required := false
-		if slices.Contains(jsonSchemaProps.Required, k) {
-			required = true
+	// Parse types to extract dependencies for DAG ordering
+	parsed := make(map[string]types.Type)
+	for name, spec := range customTypes {
+		typ, err := parseSpec(spec)
+		if err != nil {
+			return fmt.Errorf("parsing type %s: %w", name, err)
 		}
-		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
+		parsed[name] = typ
 	}
+
+	// Build DAG for dependency ordering
+	graph := dag.NewDirectedAcyclicGraph[string]()
+	for name := range parsed {
+		// AddVertex cannot fail here - map keys are unique
+		_ = graph.AddVertex(name, 0)
+	}
+	for name, typ := range parsed {
+		if err := graph.AddDependencies(name, typ.Deps()); err != nil {
+			var cycleErr *dag.CycleError[string]
+			if errors.As(err, &cycleErr) {
+				return fmt.Errorf("cyclic dependency in type %s: %w", name, err)
+			}
+			return err
+		}
+	}
+
+	// Build schemas in topological order
+	// TopologicalSort cannot fail here - cycles are caught by AddDependencies above
+	order, _ := graph.TopologicalSort()
+
+	for _, name := range order {
+		spec := customTypes[name]
+		schema, required, err := t.buildCustomTypeSchema(name, spec)
+		if err != nil {
+			return fmt.Errorf("building schema for %s: %w", name, err)
+		}
+		t.customTypes[name] = customType{Schema: *schema, Required: required}
+	}
+
 	return nil
 }
 
-// buildOpenAPISchema builds an OpenAPI schema from the given object
-// of a SimpleSchema.
-func (tf *transformer) buildOpenAPISchema(obj map[string]interface{}) (*extv1.JSONSchemaProps, error) {
+// buildCustomTypeSchema builds a schema for a custom type definition.
+// Returns the schema and whether the type has required=true marker.
+// Precondition: spec is string or map[string]interface{} (parseSpec validates this).
+func (t *transformer) buildCustomTypeSchema(name string, spec interface{}) (*extv1.JSONSchemaProps, bool, error) {
+	switch val := spec.(type) {
+	case string:
+		// Type alias: "MyType": "string | default=foo"
+		dummyParent := &extv1.JSONSchemaProps{}
+		schema, err := t.buildFieldFromString(name, val, dummyParent)
+		if err != nil {
+			return nil, false, err
+		}
+		required := len(dummyParent.Required) > 0
+		return schema, required, nil
+	default:
+		// Struct type: "MyType": { "field": "string" }
+		schema, err := t.buildSchema(val.(map[string]interface{}))
+		if err != nil {
+			return nil, false, err
+		}
+		return schema, false, nil
+	}
+}
+
+func (t *transformer) buildSchema(spec map[string]interface{}) (*extv1.JSONSchemaProps, error) {
 	schema := &extv1.JSONSchemaProps{
 		Type:       "object",
-		Properties: map[string]extv1.JSONSchemaProps{},
+		Properties: make(map[string]extv1.JSONSchemaProps),
 	}
+
 	childHasDefault := false
 
-	for key, value := range obj {
-		fieldSchema, err := tf.transformField(key, value, schema)
+	for fieldName, fieldSpec := range spec {
+		fieldSchema, err := t.buildFieldSchema(fieldName, fieldSpec, schema)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("field %s: %w", fieldName, err)
 		}
-		schema.Properties[key] = *fieldSchema
+		schema.Properties[fieldName] = *fieldSchema
+
 		if fieldSchema.Default != nil {
 			childHasDefault = true
 		}
 	}
 
+	// Only set default if no required fields and a child has defaults.
+	// Setting default:{} on an object with required fields would violate
+	// the schema since {} doesn't include the required fields.
 	if len(schema.Required) == 0 && childHasDefault && schema.Default == nil {
 		schema.Default = &extv1.JSON{Raw: []byte("{}")}
 	}
 
 	return schema, nil
 }
-func (tf *transformer) transformField(
-	key string, value interface{},
-	// parentSchema is used to add the key to the required list
-	parentSchema *extv1.JSONSchemaProps,
-) (*extv1.JSONSchemaProps, error) {
-	switch v := value.(type) {
-	case map[interface{}]interface{}:
-		nMap := transformMap(v)
-		return tf.buildOpenAPISchema(nMap)
-	case map[string]interface{}:
-		return tf.buildOpenAPISchema(v)
+
+func (t *transformer) buildFieldSchema(name string, spec interface{}, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
+	switch val := spec.(type) {
 	case string:
-		return tf.parseFieldSchema(key, v, parentSchema)
+		return t.buildFieldFromString(name, val, parent)
+	case map[string]interface{}:
+		return t.buildSchema(val)
 	default:
-		return nil, fmt.Errorf("unknown type in schema: key: %s, value: %v", key, value)
+		return nil, fmt.Errorf("unexpected type: %T", spec)
 	}
 }
 
-func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
-	fieldType, markers, err := parseFieldSchema(fieldValue)
+func (t *transformer) buildFieldFromString(name, fieldValue string, parent *extv1.JSONSchemaProps) (*extv1.JSONSchemaProps, error) {
+	typ, markers, err := ParseField(fieldValue)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse field schema for %s: %v", key, err)
+		return nil, err
 	}
 
-	fieldJSONSchemaProps := &extv1.JSONSchemaProps{}
-
-	if isAtomicType(fieldType) {
-		fieldJSONSchemaProps.Type = fieldType
-	} else if fieldType == keyTypeObject {
-		fieldJSONSchemaProps.Type = fieldType
-		fieldJSONSchemaProps.XPreserveUnknownFields = ptr.To(true)
-	} else if isCollectionType(fieldType) {
-		if isMapType(fieldType) {
-			fieldJSONSchemaProps, err = tf.handleMapType(key, fieldType)
-		} else if isSliceType(fieldType) {
-			fieldJSONSchemaProps, err = tf.handleSliceType(key, fieldType)
-		} else {
-			return nil, fmt.Errorf("unknown collection type: %s", fieldType)
-		}
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		preDefinedType, ok := tf.preDefinedTypes[fieldType]
-		if !ok {
-			return nil, fmt.Errorf("unknown type: %s", fieldType)
-		}
-		fieldJSONSchemaProps = &preDefinedType.Schema
-		if preDefinedType.Required {
-			parentSchema.Required = append(parentSchema.Required, key)
-		}
-	}
-
-	if err := tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema); err != nil {
-		return nil, fmt.Errorf("failed to apply markers: %w", err)
-	}
-
-	return fieldJSONSchemaProps, nil
-}
-
-func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
-	keyType, valueType, err := parseMapType(fieldType)
+	schema, err := typ.Schema(t)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse map type for %s: %w", key, err)
-	}
-	if keyType != keyTypeString {
-		return nil, fmt.Errorf("unsupported key type for maps: %s", keyType)
+		return nil, err
 	}
 
-	fieldJSONSchemaProps := &extv1.JSONSchemaProps{
-		Type: "object",
-		AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
-			Schema: &extv1.JSONSchemaProps{},
-		},
-	}
-
-	if isCollectionType(valueType) {
-		valueSchema, err := tf.parseFieldSchema(key, valueType, fieldJSONSchemaProps)
-		if err != nil {
-			return nil, err
-		}
-		fieldJSONSchemaProps.AdditionalProperties.Schema = valueSchema
-	} else if preDefinedType, ok := tf.preDefinedTypes[valueType]; ok {
-		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType.Schema
-	} else if isAtomicType(valueType) {
-		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
-	} else if valueType == keyTypeObject {
-		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
-		fieldJSONSchemaProps.AdditionalProperties.Schema.XPreserveUnknownFields = ptr.To(true)
-	} else {
-		return nil, fmt.Errorf("unknown type: %s", valueType)
-	}
-
-	return fieldJSONSchemaProps, nil
-}
-
-func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchemaProps, error) {
-	elementType, err := parseSliceType(fieldType)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse slice type for %s: %w", key, err)
-	}
-
-	fieldJSONSchemaProps := &extv1.JSONSchemaProps{
-		Type: keyTypeArray,
-		Items: &extv1.JSONSchemaPropsOrArray{
-			Schema: &extv1.JSONSchemaProps{},
-		},
-	}
-
-	if isCollectionType(elementType) {
-		elementSchema, err := tf.parseFieldSchema(key, elementType, fieldJSONSchemaProps)
-		if err != nil {
-			return nil, err
-		}
-		fieldJSONSchemaProps.Items.Schema = elementSchema
-	} else if isAtomicType(elementType) {
-		fieldJSONSchemaProps.Items.Schema.Type = elementType
-	} else if elementType == keyTypeObject {
-		fieldJSONSchemaProps.Items.Schema.Type = elementType
-		fieldJSONSchemaProps.Items.Schema.XPreserveUnknownFields = ptr.To(true)
-	} else if preDefinedType, ok := tf.preDefinedTypes[elementType]; ok {
-		fieldJSONSchemaProps.Items.Schema = &preDefinedType.Schema
-	} else {
-		return nil, fmt.Errorf("unknown type: %s", elementType)
-	}
-
-	return fieldJSONSchemaProps, nil
-}
-
-//nolint:gocyclo
-func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
-	for _, marker := range markers {
-		switch marker.MarkerType {
-		case MarkerTypeRequired:
-			switch isRequired, err := strconv.ParseBool(marker.Value); {
-			case err != nil:
-				return fmt.Errorf("failed to parse required marker value: %w", err)
-			case parentSchema == nil:
-				return fmt.Errorf("required marker can't be applied; parent schema is nil")
-			case isRequired:
-				parentSchema.Required = append(parentSchema.Required, key)
-			default:
-				// ignore
-			}
-		case MarkerTypeDefault:
-			var defaultValue []byte
-			switch schema.Type {
-			case keyTypeString:
-				defaultValue = []byte(fmt.Sprintf("\"%s\"", marker.Value))
-			case keyTypeInteger, keyTypeNumber, keyTypeBoolean:
-				defaultValue = []byte(marker.Value)
-			default:
-				defaultValue = []byte(marker.Value)
-			}
-			schema.Default = &extv1.JSON{Raw: defaultValue}
-		case MarkerTypeDescription:
-			schema.Description = marker.Value
-		case MarkerTypeMinimum:
-			val, err := strconv.ParseFloat(marker.Value, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse minimum enum value: %w", err)
-			}
-			schema.Minimum = &val
-		case MarkerTypeMaximum:
-			val, err := strconv.ParseFloat(marker.Value, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse maximum enum value: %w", err)
-			}
-			schema.Maximum = &val
-		case MarkerTypeValidation:
-			if strings.TrimSpace(marker.Value) == "" {
-				return fmt.Errorf("validation failed")
-			}
-			validation := []extv1.ValidationRule{
-				{
-					Rule:    marker.Value,
-					Message: "validation failed",
-				},
-			}
-			schema.XValidations = validation
-		case MarkerTypeImmutable:
-			isImmutable, err := strconv.ParseBool(marker.Value)
-			if err != nil {
-				return fmt.Errorf("failed to parse immutable marker value: %w", err)
-			}
-			if isImmutable {
-				immutableValidation := []extv1.ValidationRule{
-					{
-						Rule:    "self == oldSelf",
-						Message: "field is immutable",
-					},
-				}
-				schema.XValidations = append(schema.XValidations, immutableValidation...)
-			}
-		case MarkerTypeEnum:
-			var enumJSONValues []extv1.JSON
-
-			enumValues := strings.Split(marker.Value, ",")
-			for _, val := range enumValues {
-				val = strings.TrimSpace(val)
-				if val == "" {
-					return fmt.Errorf("empty enum values are not allowed")
-				}
-
-				var rawValue []byte
-				switch schema.Type {
-				case keyTypeString:
-					rawValue = []byte(fmt.Sprintf("%q", val))
-				case keyTypeInteger:
-					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
-						return fmt.Errorf("failed to parse integer enum value: %w", err)
-					}
-					rawValue = []byte(val)
-				default:
-					return fmt.Errorf("enum values only supported for string and integer types, got type: %s", schema.Type)
-				}
-				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
-			}
-			if len(enumJSONValues) > 0 {
-				schema.Enum = enumJSONValues
-			}
-		case MarkerTypeMinLength:
-			// MinLength is only valid for string types
-			if schema.Type != keyTypeString {
-				return fmt.Errorf("minLength marker is only valid for string types, got type: %s", schema.Type)
-			}
-			val, err := strconv.ParseInt(marker.Value, 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse minLength value: %w", err)
-			}
-			schema.MinLength = &val
-
-		case MarkerTypeMaxLength:
-			// MaxLength is only valid for string types
-			if schema.Type != keyTypeString {
-				return fmt.Errorf("maxLength marker is only valid for string types, got type: %s", schema.Type)
-			}
-			val, err := strconv.ParseInt(marker.Value, 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse maxLength value: %w", err)
-			}
-			schema.MaxLength = &val
-		case MarkerTypePattern:
-			if marker.Value == "" {
-				return fmt.Errorf("pattern marker value cannot be empty")
-			}
-			// Pattern is only valid for string types
-			if schema.Type != keyTypeString {
-				return fmt.Errorf("pattern marker is only valid for string types, got type: %s", schema.Type)
-			}
-			// Validate regex
-			if _, err := regexp.Compile(marker.Value); err != nil {
-				return fmt.Errorf("invalid pattern regex: %w", err)
-			}
-			schema.Pattern = marker.Value
-		case MarkerTypeUniqueItems:
-			// UniqueItems is only valid for array types
-			switch isUnique, err := strconv.ParseBool(marker.Value); {
-			case err != nil:
-				return fmt.Errorf("failed to parse uniqueItems marker value: %w", err)
-			case schema.Type != keyTypeArray:
-				return fmt.Errorf("uniqueItems marker is only valid for array types, got type: %s", schema.Type)
-			case isUnique:
-				// Always set x-kubernetes-list-type to "set" when uniqueItems is true
-				// https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions
-				// https://stackoverflow.com/questions/79399232/forbidden-uniqueitems-cannot-be-set-to-true-since-the-runtime-complexity-become
-				schema.XListType = ptr.To("set")
-			default:
-				// ignore
-			}
-		case MarkerTypeMinItems:
-			// MinItems is only valid for array types
-			if schema.Type != keyTypeArray {
-				return fmt.Errorf("minItems marker is only valid for array types, got type: %s", schema.Type)
-			}
-			val, err := strconv.ParseInt(marker.Value, 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse minItems value: %w", err)
-			}
-			schema.MinItems = &val
-		case MarkerTypeMaxItems:
-			// MaxItems is only valid for array types
-			if schema.Type != keyTypeArray {
-				return fmt.Errorf("maxItems marker is only valid for array types, got type: %s", schema.Type)
-			}
-			val, err := strconv.ParseInt(marker.Value, 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse maxItems value: %w", err)
-			}
-			schema.MaxItems = &val
+	// Check if this is a custom type that has required=true
+	if custom, ok := typ.(types.Custom); ok {
+		if t.IsRequired(string(custom)) {
+			parent.Required = append(parent.Required, name)
 		}
 	}
-	return nil
-}
 
-// Other functions (LoadPreDefinedTypes, transformMap) remain unchanged
-func transformMap(original map[interface{}]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-	for key, value := range original {
-		strKey, ok := key.(string)
-		if !ok {
-			// If the key is not a string, convert it to a string
-			strKey = fmt.Sprintf("%v", key)
-		}
-		result[strKey] = value
+	if err := applyMarkers(schema, markers, name, parent); err != nil {
+		return nil, err
 	}
-	return result
+
+	return schema, nil
 }

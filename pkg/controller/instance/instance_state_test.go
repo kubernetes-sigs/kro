@@ -19,19 +19,19 @@ import (
 	"testing"
 )
 
-func TestNewInstanceState(t *testing.T) {
-	state := newInstanceState()
+func TestNewStateManager(t *testing.T) {
+	state := newStateManager()
 
 	if state.State != InstanceStateInProgress {
 		t.Errorf("expected State to be %q, got %q", InstanceStateInProgress, state.State)
 	}
 
-	if state.ResourceStates == nil {
-		t.Error("expected ResourceStates to be initialized, got nil")
+	if state.NodeStates == nil {
+		t.Error("expected NodeStates to be initialized, got nil")
 	}
 
-	if len(state.ResourceStates) != 0 {
-		t.Errorf("expected ResourceStates to be empty, got %d items", len(state.ResourceStates))
+	if len(state.NodeStates) != 0 {
+		t.Errorf("expected NodeStates to be empty, got %d items", len(state.NodeStates))
 	}
 
 	if state.ReconcileErr != nil {
@@ -39,18 +39,18 @@ func TestNewInstanceState(t *testing.T) {
 	}
 }
 
-func TestResourceErrors(t *testing.T) {
+func TestNodeErrors(t *testing.T) {
 	err1 := errors.New("error 1")
 	err2 := errors.New("error 2")
-	singleErr := errors.New("resource failed")
+	singleErr := errors.New("node failed")
 
 	tests := map[string]struct {
-		resourceStates map[string]*ResourceState
+		nodeStates     map[string]*NodeState
 		expectError    bool
 		expectedErrors []error
 	}{
 		"no errors": {
-			resourceStates: map[string]*ResourceState{
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "ACTIVE", Err: nil},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
@@ -58,7 +58,7 @@ func TestResourceErrors(t *testing.T) {
 			expectedErrors: nil,
 		},
 		"single error": {
-			resourceStates: map[string]*ResourceState{
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: singleErr},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
@@ -66,15 +66,15 @@ func TestResourceErrors(t *testing.T) {
 			expectedErrors: []error{singleErr},
 		},
 		"multiple errors": {
-			resourceStates: map[string]*ResourceState{
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: err1},
 				"resource2": {State: "FAILED", Err: err2},
 			},
 			expectError:    true,
 			expectedErrors: []error{err1, err2},
 		},
-		"empty resource states": {
-			resourceStates: map[string]*ResourceState{},
+		"empty node states": {
+			nodeStates:     map[string]*NodeState{},
 			expectError:    false,
 			expectedErrors: nil,
 		},
@@ -82,11 +82,11 @@ func TestResourceErrors(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			state := &InstanceState{
-				ResourceStates: tt.resourceStates,
+			state := &StateManager{
+				NodeStates: tt.nodeStates,
 			}
 
-			err := state.ResourceErrors()
+			err := state.NodeErrors()
 
 			if tt.expectError {
 				if err == nil {

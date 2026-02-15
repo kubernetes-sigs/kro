@@ -110,6 +110,10 @@ config:
   # will attempt to use the namespace of the service account mounted to the Controller
   # pod.
   leaderElectionNamespace: ""
+  # Enable controller warmup to start controller sources (watches/informers) before
+  # leader election is won. This pre-populates caches and improves leader failover time.
+  # Requires enableLeaderElection to be true.
+  enableControllerWarmup: false
   # The address the metric endpoint binds to
   metricsBindAddress: :8078
   # The address the probe endpoint binds to

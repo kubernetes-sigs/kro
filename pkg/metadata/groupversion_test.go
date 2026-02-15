@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,12 +68,36 @@ func TestExtractGVKFromUnstructured(t *testing.T) {
 			expectedErr: "apiVersion not found or not a string",
 		},
 		{
-			name: "Invalid apiVersion format",
+			name: "Invalid apiVersion format - too many slashes",
 			unstructured: map[string]interface{}{
 				"apiVersion": "apps/v1/beta",
 				"kind":       "Deployment",
 			},
-			expectedErr: "invalid apiVersion format: apps/v1/beta",
+			expectedErr: "invalid apiVersion format",
+		},
+		{
+			name: "Invalid kind - not DNS-1035 label (contains underscore)",
+			unstructured: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "Invalid_Kind",
+			},
+			expectedErr: "invalid kind",
+		},
+		{
+			name: "Invalid kind - not DNS-1035 label (starts with number)",
+			unstructured: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "123Kind",
+			},
+			expectedErr: "invalid kind",
+		},
+		{
+			name: "Invalid kind - not DNS-1035 label (too long)",
+			unstructured: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       strings.Repeat("a", 64), // DNS-1035 labels max length is 63
+			},
+			expectedErr: "invalid kind",
 		},
 		{
 			name: "Non-string kind",

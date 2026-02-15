@@ -15,6 +15,7 @@
 package cel
 
 import (
+	"fmt"
 	"maps"
 
 	"github.com/google/cel-go/cel"
@@ -78,9 +79,22 @@ func WithTypedResources(schemas map[string]*spec.Schema) EnvOption {
 	}
 }
 
-// DefaultEnvironment returns the default CEL environment.
-func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
-	declarations := []cel.EnvOption{
+// WithListVariables adds list-typed variable declarations to the CEL environment.
+// Used for collection resources so they support list operations/macros like all()
+// exists(), filter(), and map() etc...
+func WithListVariables(names []string) EnvOption {
+	return func(opts *envOptions) {
+		for _, name := range names {
+			opts.customDeclarations = append(opts.customDeclarations, cel.Variable(name, cel.ListType(cel.DynType)))
+		}
+	}
+}
+
+// BaseDeclarations returns the base CEL environment options shared by all kro
+// CEL environments. Includes list/string extensions, optional types, encoders,
+// and Kubernetes CEL libraries (URLs, Regex, Random).
+func BaseDeclarations() []cel.EnvOption {
+	return []cel.EnvOption{
 		ext.Lists(),
 		ext.Strings(),
 		cel.OptionalTypes(),
@@ -92,6 +106,11 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		k8scellib.Regex(),
 		library.Random(),
 	}
+}
+
+// DefaultEnvironment returns the default CEL environment.
+func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
+	declarations := BaseDeclarations()
 
 	opts := &envOptions{}
 	for _, opt := range options {
@@ -188,4 +207,21 @@ func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
 	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
 	provider.SetRecognizeKeywordAsFieldName(true)
 	return provider
+}
+
+// ListElementType extracts the element type from a CEL list type.
+// Returns the element type if the input is a list type, or an error otherwise.
+// This is useful for inferring the type of forEach iterator variables from
+// the forEach expression's return type.
+func ListElementType(listType *cel.Type) (*cel.Type, error) {
+	params := listType.Parameters()
+	if len(params) != 1 {
+		return nil, fmt.Errorf("type %q is not a list type", listType.String())
+	}
+	// Verify it's actually a list by checking if list(elemType) matches
+	elemType := params[0]
+	if cel.ListType(elemType).IsAssignableType(listType) {
+		return elemType, nil
+	}
+	return nil, fmt.Errorf("type %q is not a list type", listType.String())
 }

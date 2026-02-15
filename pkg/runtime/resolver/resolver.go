@@ -26,7 +26,6 @@ import (
 type ResolutionResult struct {
 	Path     string
 	Resolved bool
-	Original string
 	Replaced interface{}
 	Error    error
 }
@@ -90,30 +89,26 @@ func (r *Resolver) UpsertValueAtPath(path string, value interface{}) error {
 // resolution process
 func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult {
 	result := ResolutionResult{
-		Path:     field.Path,
-		Original: fmt.Sprintf("%v", field.Expressions),
+		Path: field.Path,
 	}
 
 	value, err := r.getValueFromPath(field.Path)
 	if err != nil {
-		// Not sure if these kinds of errors should be fatal, these paths are produced
-		// by the parser, so they should be valid.
-		// Maybe we should log them instead…
+		// Callers are responsible for providing valid paths.
 		result.Error = fmt.Errorf("error getting value: %v", err)
 		return result
 	}
 
 	if field.StandaloneExpression {
-		resolvedValue, ok := r.data[field.Expressions[0]]
+		expr := field.Expressions[0].Original
+		resolvedValue, ok := r.data[expr]
 		if !ok {
-			result.Error = fmt.Errorf("no data provided for expression: %s", field.Expressions[0])
+			result.Error = fmt.Errorf("no data provided for expression: %s", expr)
 			return result
 		}
-		err = r.setValueAtPath(field.Path, resolvedValue)
-		if err != nil {
-			result.Error = fmt.Errorf("error setting value: %v", err)
-			return result
-		}
+		// setValueAtPath cannot fail here: if getValueFromPath succeeded,
+		// the path is valid and traversable.
+		_ = r.setValueAtPath(field.Path, resolvedValue)
 		result.Resolved = true
 		result.Replaced = resolvedValue
 	} else {
@@ -125,19 +120,17 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 
 		replaced := strValue
 		for _, expr := range field.Expressions {
-			replacement, ok := r.data[expr]
+			replacement, ok := r.data[expr.Original]
 			if !ok {
-				result.Error = fmt.Errorf("no data provided for expression: %s", expr)
+				result.Error = fmt.Errorf("no data provided for expression: %s", expr.Original)
 				return result
 			}
-			replaced = strings.ReplaceAll(replaced, "${"+expr+"}", fmt.Sprintf("%v", replacement))
+			replaced = strings.ReplaceAll(replaced, "${"+expr.Original+"}", fmt.Sprintf("%v", replacement))
 		}
 
-		err = r.setValueAtPath(field.Path, replaced)
-		if err != nil {
-			result.Error = fmt.Errorf("error setting value: %v", err)
-			return result
-		}
+		// setValueAtPath cannot fail here: if getValueFromPath succeeded,
+		// the path is valid and traversable.
+		_ = r.setValueAtPath(field.Path, replaced)
 		result.Resolved = true
 		result.Replaced = replaced
 	}
@@ -145,12 +138,8 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 	return result
 }
 
-// getValueFromPath retrieves a value from the resource using a dot separated path.
-// NOTE(a-hilaly): this is very similar to the `setValueAtPath` function maybe
-// we can refactor something here.
 // getValueFromPath retrieves a value from the resource using a dot-separated path.
 func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
-	path = strings.TrimPrefix(path, ".") // Remove leading dot if present
 	segments, err := fieldpath.Parse(path)
 	if err != nil {
 		return nil, fmt.Errorf("invalid path '%s': %v", path, err)
@@ -194,10 +183,6 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 	segments, err := fieldpath.Parse(path)
 	if err != nil {
 		return fmt.Errorf("invalid path '%s': %v", path, err)
-	}
-
-	if len(segments) == 0 {
-		return nil
 	}
 
 	// We need to keep track of the parent and current object to be able to
@@ -248,11 +233,11 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 			current = currentMap[segment.Name]
 		}
 	}
-
 	return nil
 }
 
 // handleArraySegment manages array access including creation and resizing.
+// current is never nil here - callers ensure it via getOrCreateNext or map init.
 func handleArraySegment(
 	current, parent interface{},
 	segment fieldpath.Segment,
@@ -260,12 +245,8 @@ func handleArraySegment(
 	parentIndex int,
 ) (interface{}, error) {
 	array, ok := current.([]interface{})
-	if !ok && current == nil {
-		array = make([]interface{}, segment.Index+1)
-		updateParent(parent, parentKey, parentIndex, array)
-		return array, nil
-	} else if !ok {
-		return nil, fmt.Errorf("expected array or nil at segment %v, got %T", segment, current)
+	if !ok {
+		return nil, fmt.Errorf("expected array at segment %v, got %T", segment, current)
 	}
 
 	if segment.Index >= len(array) {

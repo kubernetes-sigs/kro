@@ -3,7 +3,7 @@ OCI_REPO ?= registry.k8s.io/kro
 HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 
-HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.5
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -100,8 +100,8 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
 	@echo "Copying CRD to website docs..."
-	@mkdir -p website/static/crds
-	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/static/crds/kro.run_resourcegraphdefinitions.yaml
+	@mkdir -p website/docs/api/crds
+	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/docs/api/crds/kro.run_resourcegraphdefinitions.yaml
 	@echo "CRD copied successfully"
 
 .PHONY: generate
@@ -126,17 +126,35 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go tool ginkgo -p -v \
+		--cover \
+		--coverprofile=integration-cover.out \
+		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
+		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -v ./pkg/... -coverprofile unit-cover.out
+	go test -race -v ./pkg/... -coverprofile unit-cover.out
 else
 	@echo "Error: WHAT must be either 'unit' or 'integration'"
 	@echo "Usage: make test WHAT=unit|integration"
 	@exit 1
 endif
 
+.PHONY: test-coverage
+test-coverage: ## Run all tests and report coverage
+	@$(MAKE) test WHAT=unit
+	@$(MAKE) test WHAT=integration
+	@head -1 unit-cover.out > combined-cover.out
+	@tail -n +2 unit-cover.out >> combined-cover.out
+	@tail -n +2 integration-cover.out >> combined-cover.out
+	@echo ""
+	@echo "=== Coverage Summary ==="
+	@echo "Unit:        $$(go tool cover -func=unit-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Integration: $$(go tool cover -func=integration-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
+
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.6.1
+GOLANGCI_LINT_VERSION ?= v2.8.0
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -178,10 +196,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
-KO_VERSION ?= v0.17.1
-KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.19.0
-CHAINSAW_VERSION ?= v0.2.12
+KO_VERSION ?= v0.18.1
+KUSTOMIZE_VERSION ?= v5.8.0
+CONTROLLER_TOOLS_VERSION ?= v0.20.0
+CHAINSAW_VERSION ?= v0.2.14
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -192,7 +210,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.31.x
+ENVTEST_VERSION ?= 1.35.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.

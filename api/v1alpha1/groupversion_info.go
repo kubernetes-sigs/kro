@@ -25,6 +25,14 @@ const (
 	KRODomainName = "kro.run"
 )
 
+// Annotations for ResourceGraphDefinitions
+const (
+	// AllowBreakingChangesAnnotation allows RGD updates that would otherwise be
+	// blocked due to breaking schema changes. Use with caution - breaking changes
+	// can invalidate existing instances.
+	AllowBreakingChangesAnnotation = KRODomainName + "/allow-breaking-changes"
+)
+
 var (
 	// GroupVersion is group version used to register these objects
 	GroupVersion = schema.GroupVersion{Group: KRODomainName, Version: "v1alpha1"}

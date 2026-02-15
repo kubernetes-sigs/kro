@@ -173,6 +173,7 @@ func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
 			order = append(order, vertex.ID)
 			visited[vertex.ID] = true
 			progress = true
+			break // restart inner loop to re-check lower order vertices
 		}
 
 		if !progress {

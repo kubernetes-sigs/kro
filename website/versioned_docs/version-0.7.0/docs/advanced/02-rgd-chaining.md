@@ -25,7 +25,7 @@ metadata:
   name: full-stack-app
 spec:
   schema:
-    apiVersion: kro.run/v1alpha1
+    apiVersion: v1alpha1
     kind: FullStackApp
     spec:
       name: string
@@ -72,7 +72,7 @@ metadata:
   name: database
 spec:
   schema:
-    apiVersion: kro.run/v1alpha1
+    apiVersion: v1alpha1
     kind: Database
     spec:
       size: string | default="small"
@@ -144,7 +144,7 @@ metadata:
   name: web-application
 spec:
   schema:
-    apiVersion: kro.run/v1alpha1
+    apiVersion: v1alpha1
     kind: WebApplication
     spec:
       name: string

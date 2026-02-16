@@ -794,7 +794,8 @@ func buildStatusSchema(
 // path reserved by the instance controller (e.g. "state", "conditions").
 func validateReservedStatusFields(fieldDescriptors []variable.FieldDescriptor) error {
 	for _, fd := range fieldDescriptors {
-		if strings.HasPrefix(fd.Path, ReservedStatusFieldState) || strings.HasPrefix(fd.Path, ReservedStatusFieldConditions) {
+		if fd.Path == ReservedStatusFieldState || strings.HasPrefix(fd.Path, ReservedStatusFieldState+".") ||
+			fd.Path == ReservedStatusFieldConditions || strings.HasPrefix(fd.Path, ReservedStatusFieldConditions+".") {
 			return fmt.Errorf(
 				"status field at path %q uses a reserved status field managed by kro",
 				fd.Path,

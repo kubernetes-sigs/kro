@@ -270,6 +270,112 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "uses a reserved status field managed by kro",
 		},
 		{
+			name: "reserved status field subpath: state object",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"state": map[string]interface{}{
+							"subfield": "${vpc.status.state}",
+						},
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "uses a reserved status field managed by kro",
+		},
+		{
+			name: "reserved status field subpath: conditions object",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"conditions": map[string]interface{}{
+							"ready": "${vpc.status.conditions}",
+						},
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "uses a reserved status field managed by kro",
+		},
+		{
+			name: "allowed status field: stateValue",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"stateValue": "${vpc.status.state}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "allowed status field: conditionsz",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"conditionsz": "${vpc.status.conditions}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid resource type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

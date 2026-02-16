@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -63,6 +64,8 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
+	nodeIgnoredCheckTotal.Inc()
+
 	// Check if any dependency is ignored (contagious).
 	for _, dep := range n.deps {
 		ignored, err := dep.IsIgnored()
@@ -70,6 +73,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, err
 		}
 		if ignored {
+			nodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -87,6 +91,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
 		}
 		if !val {
+			nodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -103,11 +108,21 @@ func (n *Node) IsIgnored() (bool, error) {
 //   - External: resolves template (for name/namespace CEL), caller reads instead of applies
 //
 // Note: The caller should call IsIgnored() before GetDesired() for resource nodes.
-func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
+func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 	// Return cached result if available.
 	if n.desired != nil {
 		return n.desired, nil
 	}
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		nodeEvalDuration.Observe(duration.Seconds())
+		nodeEvalTotal.Inc()
+		if err != nil {
+			nodeEvalErrorsTotal.Inc()
+		}
+	}()
 
 	// For resource types, block until all dependencies are ready.
 	// This enforces readyWhen semantics: dependents wait for parents.
@@ -126,8 +141,6 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 		}
 	}
 
-	var result []*unstructured.Unstructured
-	var err error
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeInstance:
 		result, err = n.softResolve()
@@ -157,11 +170,21 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 //
 // NOTE: This method does not cache its result in n.desired; callers in non-deletion
 // paths should continue using GetDesired().
-func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
+func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		nodeEvalDuration.Observe(duration.Seconds())
+		nodeEvalTotal.Inc()
+		if err != nil {
+			nodeEvalErrorsTotal.Inc()
+		}
+	}()
+
 	vars := n.templateVarsForPaths(identityPaths)
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeCollection:
-		result, err := n.hardResolveCollection(vars, false)
+		result, err = n.hardResolveCollection(vars, false)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +194,7 @@ func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
 		}
 		return result, nil
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
-		result, err := n.hardResolveSingleResource(vars)
+		result, err = n.hardResolveSingleResource(vars)
 		if err != nil {
 			return nil, err
 		}
@@ -259,6 +282,8 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 	if err != nil {
 		return nil, err
 	}
+
+	collectionSize.Observe(float64(len(items)))
 
 	if len(items) == 0 {
 		// Resolved empty collection: return non-nil empty slice to distinguish
@@ -493,6 +518,8 @@ func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
 // IsReady evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
 func (n *Node) IsReady() (bool, error) {
+	nodeReadyCheckTotal.Inc()
+
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
@@ -502,10 +529,21 @@ func (n *Node) IsReady() (bool, error) {
 		return true, nil
 	}
 
+	var ready bool
 	if n.Spec.Meta.Type == graph.NodeTypeCollection {
-		return n.isCollectionReady()
+		ready, err = n.isCollectionReady()
+	} else {
+		ready, err = n.isSingleResourceReady()
 	}
-	return n.isSingleResourceReady()
+
+	if err != nil {
+		return false, err
+	}
+	if !ready {
+		nodeNotReadyTotal.Inc()
+	}
+
+	return ready, nil
 }
 
 func (n *Node) isSingleResourceReady() (bool, error) {

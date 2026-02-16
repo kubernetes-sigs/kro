@@ -355,6 +355,28 @@ func (a *ApplySet) applyResource(
 	// Conflict check using observed state (from controller GET), if provided.
 	var currentApplySetID string
 
+	// If controller did not provide Current, we must defensively check
+	// whether the resource already exists in the cluster to avoid
+	// silently overwriting resources owned by other KRO instances.
+	if r.Current == nil {
+		dynResource := a.resourceClient(mapping, r.Object.GetNamespace())
+
+		existing, err := dynResource.Get(ctx, r.Object.GetName(), metav1.GetOptions{})
+		if err == nil {
+			// Resource exists — treat it as Current so ownership
+			// checks and applyset conflict detection can work.
+			r.Current = existing
+		} else if !apierrors.IsNotFound(err) {
+			item.Error = fmt.Errorf(
+				"failed to check existing resource %s/%s: %w",
+				r.Object.GetNamespace(),
+				r.Object.GetName(),
+				err,
+			)
+			return item
+		}
+	}
+
 	if r.Current != nil {
 		existing := r.Current.GetLabels()
 		desired := r.Object.GetLabels()

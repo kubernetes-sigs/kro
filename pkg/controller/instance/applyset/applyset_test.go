@@ -389,7 +389,7 @@ func TestApply_ApplySetConflict_SameOwner(t *testing.T) {
 	}
 }
 
-func TestApply_DefensiveGetDetectsOwnershipConflict(t *testing.T) {
+func TestApply_DetectsOwnershipConflict(t *testing.T) {
 	ctx := context.Background()
 	mapper := newTestRESTMapper()
 	parent := newTestParent(schema.GroupVersionKind{
@@ -402,7 +402,8 @@ func TestApply_DefensiveGetDetectsOwnershipConflict(t *testing.T) {
 		metadata.OwnedLabel:                     "true",
 		metadata.InstanceIDLabel:                "some-other-instance",
 		metadata.ResourceGraphDefinitionIDLabel: "some-other-rgd",
-		metadata.NodeIDLabel:                    "node-a",
+		metadata.NodeIDLabel:                    "workers",
+		metadata.CollectionIndexLabel:           "3",
 		ApplysetPartOfLabel:                     "applyset-different-owner-v1",
 	})
 	existing.SetUID(types.UID("existing-uid"))

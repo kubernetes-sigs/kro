@@ -120,6 +120,8 @@ func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 }
 
 func (c *Controller) updateStatus(rcx *ReconcileContext) error {
+	previousState, _, _ := unstructured.NestedString(rcx.Instance.Object, "status", "state")
+
 	rcx.updateInstanceState()
 	status := rcx.initialStatus()
 
@@ -140,7 +142,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	inst := rcx.Instance.DeepCopy()
 	inst.Object["status"] = status
 
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cur, err := c.client.Dynamic().
 			Resource(c.gvr).
 			Namespace(inst.GetNamespace()).
@@ -155,6 +157,21 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 			UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
 		return err
 	})
+	if err != nil {
+		return err
+	}
+
+	newState := rcx.StateManager.State
+	if InstanceState(previousState) != newState {
+		gvk := rcx.Instance.GroupVersionKind().String()
+		instanceStateTransitionsTotal.WithLabelValues(
+			gvk,
+			previousState,
+			string(newState),
+		).Inc()
+	}
+
+	return nil
 }
 
 func (rcx *ReconcileContext) initialStatus() map[string]interface{} {

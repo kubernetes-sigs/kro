@@ -16,6 +16,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"time"
@@ -30,6 +31,7 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
@@ -105,6 +107,21 @@ func NewController(
 // Reconcile implements the controller-runtime Reconcile interface.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error) {
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
+
+	start := time.Now()
+	defer func() {
+		gvr := c.gvr.String()
+		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
+		instanceReconcileTotal.WithLabelValues(gvr).Inc()
+		if err != nil {
+			var rn *requeue.RequeueNeeded
+			var rna *requeue.RequeueNeededAfter
+			if !errors.As(err, &rn) && !errors.As(err, &rna) {
+				log.V(1).Info("reporting reconcile error metric", "error", err)
+				instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
+			}
+		}
+	}()
 
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do

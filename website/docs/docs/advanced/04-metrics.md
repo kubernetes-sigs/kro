@@ -76,6 +76,19 @@ metrics:
 | `cel_expr_eval_total` | Counter | Total number of CEL expression evaluations | ALPHA |
 | `cel_expr_eval_duration_seconds` | Histogram | Duration of CEL expression evaluations in seconds | ALPHA |
 
+## ResourceGraphDefinition Controller Metrics
+
+All RGD controller metrics include the label `rgd_kind` (the schema kind of the ResourceGraphDefinition).
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `rgd_graph_build_total` | Counter | Total number of RGD graph validations during reconciliation | ALPHA |
+| `rgd_graph_build_duration_seconds` | Histogram | Duration of RGD graph validations in seconds | ALPHA |
+| `rgd_graph_build_errors_total` | Counter | Total number of RGD graph validation errors | ALPHA |
+| `rgd_state_transitions_total` | Counter | Total number of RGD state transitions (additional labels: `from`, `to`) | ALPHA |
+| `rgd_deletions_total` | Counter | Total number of RGD deletions | ALPHA |
+| `rgd_deletion_duration_seconds` | Histogram | Duration of RGD deletions in seconds | ALPHA |
+
 ## Controller Runtime Metrics
 
 The RGD reconciler uses controller-runtime and exposes its [standard metrics](https://book.kubebuilder.io/reference/metrics.html):

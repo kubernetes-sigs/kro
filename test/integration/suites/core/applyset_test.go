@@ -1514,7 +1514,7 @@ func verifyChildResourceLabelsWithNodeID(
 ) {
 	verifyChildResourceLabels(g, labels, applySetID, instance, rgd)
 
-	// Verify exact node ID
-	g.Expect(labels).To(HaveKeyWithValue(metadata.NodeIDLabel, nodeID),
-		"child should have exact node-id label")
+	// Verify hashed node ID label
+	g.Expect(labels).To(HaveKeyWithValue(metadata.NodeIDLabel, metadata.SafeNodeID(nodeID)),
+		"child should have hashed node-id label")
 }

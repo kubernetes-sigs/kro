@@ -15,6 +15,8 @@
 package metadata
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -34,7 +36,8 @@ const (
 )
 
 const (
-	NodeIDLabel = LabelKROPrefix + "node-id"
+	NodeIDLabel      = LabelKROPrefix + "node-id"
+	NodeIDAnnotation = LabelKROPrefix + "node-id-original"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.
@@ -200,10 +203,17 @@ func NewKROMetaLabeler() GenericLabeler {
 // - collection-size: the total number of items in the collection (e.g "3")
 func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
 	return map[string]string{
-		NodeIDLabel:          nodeID,
+		NodeIDLabel:          SafeNodeID(nodeID),
 		CollectionIndexLabel: strconv.Itoa(index),
 		CollectionSizeLabel:  strconv.Itoa(size),
 	}
+}
+
+// SafeNodeID returns a deterministic fix length (16 chars) nodeId.
+// k8s label safe representation due to char limit
+func SafeNodeID(nodeID string) string {
+	hash := sha256.Sum256([]byte(nodeID))
+	return hex.EncodeToString(hash[:])[:16]
 }
 
 func safeVersion(version string) string {

@@ -46,6 +46,17 @@ metrics:
 | `schema_resolver_singleflight_deduplicated_total` | Counter | Total number of requests deduplicated by singleflight | ALPHA |
 | `schema_resolver_errors_total` | Counter | Total number of schema resolution errors | ALPHA |
 
+## ResourceGraphDefinition Controller Metrics
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `rgd_graph_build_total` | Counter | Total number of RGD graph validations during reconciliation | ALPHA |
+| `rgd_graph_build_duration_seconds` | Histogram | Duration of RGD graph validations in seconds | ALPHA |
+| `rgd_graph_build_errors_total` | Counter | Total number of RGD graph validation errors | ALPHA |
+| `rgd_state_transitions_total` | Counter | Total number of RGD state transitions (labels: from, to) | ALPHA |
+| `rgd_deletions_total` | Counter | Total number of RGD deletions | ALPHA |
+| `rgd_deletion_duration_seconds` | Histogram | Duration of RGD deletions in seconds | ALPHA |
+
 ## Controller Runtime Metrics
 
 The RGD reconciler uses controller-runtime and exposes its [standard metrics](https://book.kubebuilder.io/reference/metrics.html):

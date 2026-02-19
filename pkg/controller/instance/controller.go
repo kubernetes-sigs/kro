@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -170,12 +171,19 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile nodes (SSA + prune) and update runtime state
+	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
 	//--------------------------------------------------------------
-	if err := c.reconcileNodes(rcx); err != nil {
-		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
-		_ = c.updateStatus(rcx)
-		return err
+	labels := inst.GetLabels()
+	reconcileState, ok := labels[metadata.InstanceSuspendReconciliationLabel]
+	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+		rcx.Mark.ReconciliationActive()
+		if err := c.reconcileNodes(rcx); err != nil {
+			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+			_ = c.updateStatus(rcx)
+			return err
+		}
+	} else {
+		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceSuspendReconciliationLabel, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,

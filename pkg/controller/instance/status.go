@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	Ready           = "Ready"
-	InstanceManaged = "InstanceManaged"
-	GraphResolved   = "GraphResolved"
-	ResourcesReady  = "ResourcesReady"
+	Ready                   = "Ready"
+	InstanceManaged         = "InstanceManaged"
+	GraphResolved           = "GraphResolved"
+	ResourcesReady          = "ResourcesReady"
+	ReconciliationSuspended = "ReconciliationSuspended"
 )
 
 var condSet = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)
@@ -112,6 +113,16 @@ func (m *ConditionsMarker) ResourcesReady() {
 // ResourcesNotReady signals there are resources in the graph that are not ready.
 func (m *ConditionsMarker) ResourcesNotReady(msg string, args ...any) {
 	m.cs.SetFalse(ResourcesReady, "NotReady", fmt.Sprintf(msg, args...))
+}
+
+// ReconciliationSuspended signals that reconciliation is suspended
+func (m *ConditionsMarker) ReconciliationSuspended(msg string, args ...any) {
+	m.cs.SetTrueWithReason(ReconciliationSuspended, "Suspended", fmt.Sprintf(msg, args...))
+}
+
+// ReconciliationActive signals that reconciliation is active
+func (m *ConditionsMarker) ReconciliationActive() {
+	m.cs.SetFalse(ReconciliationSuspended, "Active", "Reconciliation is Active")
 }
 
 // ResourcesUnderDeletion signals the controller is currently deleting resources.

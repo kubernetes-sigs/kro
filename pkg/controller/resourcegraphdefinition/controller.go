@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -196,12 +197,15 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
+		startTime := time.Now()
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
+		deletionDuration.WithLabelValues(o.Spec.Schema.Kind).Observe(time.Since(startTime).Seconds())
+		deletionsTotal.WithLabelValues(o.Spec.Schema.Kind).Inc()
 		return ctrl.Result{}, nil
 	}
 

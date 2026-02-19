@@ -1,0 +1,92 @@
+// Copyright 2025 The Kubernetes Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package resourcegraphdefinition
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
+)
+
+var (
+	rgdLabels = []string{"rgd_kind"}
+
+	graphBuildTotal       *prometheus.CounterVec
+	graphBuildDuration    *prometheus.HistogramVec
+	graphBuildErrorsTotal *prometheus.CounterVec
+	stateTransitionsTotal *prometheus.CounterVec
+	deletionsTotal        *prometheus.CounterVec
+	deletionDuration      *prometheus.HistogramVec
+)
+
+func init() {
+	graphBuildTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rgd_graph_build_total",
+			Help: "Total number of resource graph builds",
+		},
+		rgdLabels,
+	)
+
+	graphBuildDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rgd_graph_build_duration_seconds",
+			Help:    "Duration of resource graph builds in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		rgdLabels,
+	)
+
+	graphBuildErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rgd_graph_build_errors_total",
+			Help: "Total number of resource graph build errors",
+		},
+		rgdLabels,
+	)
+
+	stateTransitionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rgd_state_transitions_total",
+			Help: "Total number of RGD state transitions",
+		},
+		append(rgdLabels, "from", "to"),
+	)
+
+	deletionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rgd_deletions_total",
+			Help: "Total number of RGD deletions",
+		},
+		rgdLabels,
+	)
+
+	deletionDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rgd_deletion_duration_seconds",
+			Help:    "Duration of RGD deletions in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		rgdLabels,
+	)
+
+	metrics.Registry.MustRegister(
+		graphBuildTotal,
+		graphBuildDuration,
+		graphBuildErrorsTotal,
+		stateTransitionsTotal,
+		deletionsTotal,
+		deletionDuration,
+	)
+}

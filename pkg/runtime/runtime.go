@@ -15,6 +15,8 @@
 package runtime
 
 import (
+	"time"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -46,6 +48,13 @@ type Runtime struct {
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
 func FromGraph(g *graph.Graph, instance *unstructured.Unstructured) (*Runtime, error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		runtimeCreationDuration.Observe(duration.Seconds())
+		runtimeCreationTotal.Inc()
+	}()
+
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{

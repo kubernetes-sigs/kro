@@ -60,7 +60,7 @@ func NewInstanceAndResourceGraphDefinitionSelector(instance metav1.Object, resou
 func NewNodeAndInstanceAndResourceGraphDefinitionSelector(node metav1.Object, instance metav1.Object, resourceGraphDefinition metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			NodeIDLabel:                    node.GetName(),
+			NodeIDLabel:                    SafeNodeID(node.GetName()),
 			InstanceIDLabel:                string(instance.GetUID()),
 			ResourceGraphDefinitionIDLabel: string(resourceGraphDefinition.GetUID()),
 		},

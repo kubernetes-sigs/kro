@@ -71,7 +71,7 @@ func (c *Controller) processCollectionNode(
 	// selector listCollectionItems uses to LIST them.
 	selector := labels.SelectorFromSet(labels.Set{
 		metadata.InstanceIDLabel: string(rcx.Instance.GetUID()),
-		metadata.NodeIDLabel:     id,
+		metadata.NodeIDLabel:     metadata.SafeNodeID(id),
 	})
 	requestCollectionWatch(rcx, id, gvr, rcx.Instance.GetNamespace(), selector)
 
@@ -125,7 +125,7 @@ func (c *Controller) listCollectionItems(
 	instanceUID := string(rcx.Instance.GetUID())
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		metadata.InstanceIDLabel, instanceUID,
-		metadata.NodeIDLabel, nodeID,
+		metadata.NodeIDLabel, metadata.SafeNodeID(nodeID),
 	)
 
 	// List across all namespaces - collection items may span namespaces

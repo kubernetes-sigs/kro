@@ -404,8 +404,8 @@ func (c *Controller) applyDecoratorLabels(
 		labels[k] = v
 	}
 
-	// Add node ID label
-	labels[metadata.NodeIDLabel] = nodeID
+	// Add node ID label (hashed to respect the 63-char Kubernetes limit)
+	labels[metadata.NodeIDLabel] = metadata.SafeNodeID(nodeID)
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {
@@ -414,6 +414,13 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[metadata.NodeIDAnnotation] = nodeID
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

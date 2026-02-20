@@ -14,7 +14,10 @@
 
 package runtime
 
-import "github.com/kubernetes-sigs/kro/pkg/graph/variable"
+import (
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+)
 
 // expressionEvaluationState tracks per-expression evaluation state.
 // Expressions are cached globally and shared via pointers - if the same
@@ -22,8 +25,9 @@ import "github.com/kubernetes-sigs/kro/pkg/graph/variable"
 //
 // This design mirrors the old runtime's proven caching architecture.
 type expressionEvaluationState struct {
-	// Expression is the CEL expression string.
-	Expression string
+	// Expression holds the CEL expression with its pre-compiled Program.
+	// The Program was compiled at graph build time and is reused here.
+	Expression *krocel.Expression
 
 	// Dependencies is the list of resource IDs this expression depends on.
 	// All dependencies must be resolved/ready before evaluation.

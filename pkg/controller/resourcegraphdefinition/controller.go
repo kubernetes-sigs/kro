@@ -116,7 +116,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 					return false
 				},
 				DeleteFunc: func(e event.DeleteEvent) bool {
-					return false
+					return true
 				},
 			}),
 		).

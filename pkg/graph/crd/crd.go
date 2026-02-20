@@ -116,3 +116,25 @@ func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResou
 
 	return additionalPrinterColumns
 }
+
+// SetCRDStatus updates the status schema in a CRD.
+// This allows synthesizing a CRD early (with empty status) and updating it later
+// after the status schema has been inferred from CEL expressions.
+func SetCRDStatus(crd *extv1.CustomResourceDefinition, status extv1.JSONSchemaProps, statusFieldsOverride bool) {
+	if status.Properties == nil {
+		status.Properties = make(map[string]extv1.JSONSchemaProps)
+	}
+	if statusFieldsOverride {
+		if _, ok := status.Properties["state"]; !ok {
+			status.Properties["state"] = defaultStateType
+		}
+		if _, ok := status.Properties["conditions"]; !ok {
+			status.Properties["conditions"] = defaultConditionsType
+		}
+	}
+
+	// Update the status in the CRD schema
+	if len(crd.Spec.Versions) > 0 && crd.Spec.Versions[0].Schema != nil {
+		crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"] = status
+	}
+}

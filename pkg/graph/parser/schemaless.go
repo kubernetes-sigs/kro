@@ -18,72 +18,75 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/cel-go/cel"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // ParseSchemalessResource extracts CEL expressions without a schema, this is useful
 // when the schema is not available. e.g RGI statuses
-func ParseSchemalessResource(resource map[string]interface{}) ([]variable.FieldDescriptor, error) {
+func ParseSchemalessResource(resource map[string]interface{}) ([]variable.FieldDescriptor, []string, error) {
 	return parseSchemalessResource(resource, "")
 }
 
 // parseSchemalessResource is a helper function that recursively
 // extracts expressions from a resource. It uses a depth first search to traverse
 // the resource and extract expressions from string fields
-func parseSchemalessResource(resource interface{}, path string) ([]variable.FieldDescriptor, error) {
+func parseSchemalessResource(resource interface{}, path string) ([]variable.FieldDescriptor, []string, error) {
 	var expressionsFields []variable.FieldDescriptor
+	var allPlainFieldPaths []string
 	switch field := resource.(type) {
 	case map[string]interface{}:
 		for field, value := range field {
 			fieldPath := joinPathAndFieldName(path, field)
-			fieldExpressions, err := parseSchemalessResource(value, fieldPath)
+			fieldExpressions, plainFieldPaths, err := parseSchemalessResource(value, fieldPath)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			expressionsFields = append(expressionsFields, fieldExpressions...)
+			allPlainFieldPaths = append(allPlainFieldPaths, plainFieldPaths...)
 		}
 	case []interface{}:
 		for i, item := range field {
 			itemPath := fmt.Sprintf("%s[%d]", path, i)
-			itemExpressions, err := parseSchemalessResource(item, itemPath)
+			itemExpressions, plainFieldPaths, err := parseSchemalessResource(item, itemPath)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			expressionsFields = append(expressionsFields, itemExpressions...)
+			allPlainFieldPaths = append(allPlainFieldPaths, plainFieldPaths...)
 		}
 	case string:
 		ok, err := isStandaloneExpression(field)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if ok {
 			expr := strings.TrimPrefix(field, "${")
 			expr = strings.TrimSuffix(expr, "}")
 			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-				Expressions:          []string{expr},
-				ExpectedType:         cel.DynType, // No schema, so we use dynamic type
+				Expressions:          []*krocel.Expression{{Original: expr}},
 				Path:                 path,
 				StandaloneExpression: true,
 			})
 		} else {
 			expressions, err := extractExpressions(field)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if len(expressions) > 0 {
 				// String template in schemaless parsing - always produces string
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:          expressions,
-					ExpectedType:         cel.StringType,
+					Expressions:          krocel.NewUncompiledSlice(expressions...),
 					Path:                 path,
 					StandaloneExpression: false,
 				})
+			} else {
+				allPlainFieldPaths = append(allPlainFieldPaths, path)
 			}
 		}
 
 	default:
-		// Ignore other types
+		allPlainFieldPaths = append(allPlainFieldPaths, path)
 	}
-	return expressionsFields, nil
+	return expressionsFields, allPlainFieldPaths, nil
 }

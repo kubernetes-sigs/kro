@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -96,8 +97,8 @@ type NodeMeta struct {
 type ForEachDimension struct {
 	// Name is the iterator variable name (e.g., "region")
 	Name string
-	// Expression is the CEL expression that returns a list (e.g., "schema.spec.regions")
-	Expression string
+	// Expression is the compiled CEL expression that returns a list (e.g., "schema.spec.regions")
+	Expression *krocel.Expression
 }
 
 // Node is the immutable node spec produced by the builder.
@@ -115,13 +116,13 @@ type Node struct {
 	// Variables holds the CEL expression fields found in the template.
 	Variables []*variable.ResourceField
 
-	// IncludeWhen are CEL expressions that must all evaluate to true
+	// IncludeWhen are compiled CEL expressions that must all evaluate to true
 	// for this resource to be included. Empty means always include.
-	IncludeWhen []string
+	IncludeWhen []*krocel.Expression
 
-	// ReadyWhen are CEL expressions that must all evaluate to true
+	// ReadyWhen are compiled CEL expressions that must all evaluate to true
 	// for this resource to be considered ready.
-	ReadyWhen []string
+	ReadyWhen []*krocel.Expression
 
 	// ForEach holds the forEach dimensions for collection resources.
 	// nil or empty means this is not a collection.
@@ -158,7 +159,6 @@ func (n *Node) DeepCopy() *Node {
 		for i, v := range n.Variables {
 			copyVar := *v
 			copyVar.Expressions = slices.Clone(v.Expressions)
-			copyVar.Dependencies = slices.Clone(v.Dependencies)
 			cp.Variables[i] = &copyVar
 		}
 	}

@@ -1,0 +1,32 @@
+apiVersion: kro.run/v1alpha1
+kind: ComplexApp
+metadata:
+  name: test-app
+spec:
+  # Required field
+  appName: my-application
+
+  # environment uses default: "development"
+  # retry uses default: {} (all fields have defaults)
+  # resources uses default: {} (all fields have defaults)
+  # replicas uses default: 1
+
+  # Required nested object - must provide required fields
+  database:
+    host: db.example.com
+    username: admin
+    # port uses default: 8080
+    # database uses default: "postgres"
+
+  # At least 1 endpoint required
+  endpoints:
+    - name: api
+      url: https://api.example.com
+      # timeout uses default: 30
+
+  # Optional map
+  annotations:
+    app: test
+
+  # Optional immutable field
+  clusterId: cluster-123

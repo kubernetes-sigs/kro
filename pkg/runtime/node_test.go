@@ -17,10 +17,12 @@ package runtime
 import (
 	"testing"
 
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
@@ -73,12 +75,18 @@ func TestNode_IsReady(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "no readyWhen expressions means ready",
+			name:      "single resource without readyWhen, not observed - not ready",
 			node:      newTestNode("test", graph.NodeTypeResource).build(),
+			wantReady: false,
+		},
+		{
+			name: "single resource without readyWhen, observed - ready",
+			node: newTestNode("test", graph.NodeTypeResource).
+				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
 			wantReady: true,
 		},
 		{
-			name:      "no observed state means not ready",
+			name:      "single resource with readyWhen, not observed - not ready",
 			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
 			wantReady: false,
 		},
@@ -151,12 +159,12 @@ func TestNode_SetObserved(t *testing.T) {
 
 func TestNode_BuildContext(t *testing.T) {
 	tests := []struct {
-		name         string
-		node         *Node
-		onlyFilter   []string
-		wantKeys     []string
-		notWantKeys  []string
-		checkBuckets bool
+		name        string
+		node        *Node
+		onlyFilter  []string
+		wantKeys    []string
+		notWantKeys []string
+		wantLen     int
 	}{
 		{
 			name: "builds context from observed deps",
@@ -184,8 +192,8 @@ func TestNode_BuildContext(t *testing.T) {
 						map[string]any{"metadata": map[string]any{"name": "bucket-2"}},
 					).build()).
 				build(),
-			wantKeys:     []string{"buckets"},
-			checkBuckets: true,
+			wantKeys: []string{"buckets"},
+			wantLen:  2,
 		},
 		{
 			name: "only filter limits context",
@@ -199,6 +207,19 @@ func TestNode_BuildContext(t *testing.T) {
 			wantKeys:    []string{"a"},
 			notWantKeys: []string{"b"},
 		},
+		{
+			name: "empty collection included in context as empty list",
+			node: func() *Node {
+				entries := newTestNode("entries", graph.NodeTypeCollection).build()
+				entries.desired = []*unstructured.Unstructured{}
+				entries.SetObserved([]*unstructured.Unstructured{})
+				return newTestNode("summary", graph.NodeTypeResource).
+					withDep(entries).
+					build()
+			}(),
+			wantKeys: []string{"entries"},
+			wantLen:  0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -206,15 +227,15 @@ func TestNode_BuildContext(t *testing.T) {
 			ctx := tt.node.buildContext(tt.onlyFilter...)
 
 			for _, key := range tt.wantKeys {
-				assert.Contains(t, ctx, key)
+				require.Contains(t, ctx, key)
 			}
 			for _, key := range tt.notWantKeys {
-				assert.NotContains(t, ctx, key)
+				require.NotContains(t, ctx, key)
 			}
-			if tt.checkBuckets {
-				buckets, ok := ctx["buckets"].([]any)
-				require.True(t, ok, "collection should be a list")
-				assert.Len(t, buckets, 2)
+			for _, key := range tt.wantKeys {
+				if col, ok := ctx[key].([]any); ok {
+					assert.Len(t, col, tt.wantLen)
+				}
 			}
 		})
 	}
@@ -361,6 +382,45 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				withObservedUnstructured(newUnstructured("v1", "Pod", "ns", "bucket-1")).
 				withReadyWhen("each.status.ready == true").build(),
 			wantReady: false,
+		},
+		{
+			name:      "collection without readyWhen, nil desired - not ready",
+			node:      newTestNode("items", graph.NodeTypeCollection).build(),
+			wantReady: false,
+		},
+		{
+			name: "collection without readyWhen, empty desired - ready",
+			node: func() *Node {
+				n := newTestNode("items", graph.NodeTypeCollection).build()
+				n.desired = []*unstructured.Unstructured{}
+				return n
+			}(),
+			wantReady: true,
+		},
+		{
+			name: "collection without readyWhen, observed < desired - not ready",
+			node: newTestNode("items", graph.NodeTypeCollection).
+				withDesired(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "cm-1")).
+				build(),
+			wantReady: false,
+		},
+		{
+			name: "collection without readyWhen, observed >= desired - ready",
+			node: newTestNode("items", graph.NodeTypeCollection).
+				withDesired(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				withObservedUnstructured(
+					newUnstructured("v1", "ConfigMap", "ns", "cm-1"),
+					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
+				).
+				build(),
+			wantReady: true,
 		},
 	}
 
@@ -582,7 +642,7 @@ func TestNode_EvaluateExprs(t *testing.T) {
 					withDep(schema).build()
 				n.templateExprs = []*expressionEvaluationState{
 					{
-						Expression:    "schema.spec.name",
+						Expression:    krocel.NewUncompiled("schema.spec.name"),
 						Kind:          variable.ResourceVariableKindStatic,
 						Resolved:      true,
 						ResolvedValue: "cached-name",
@@ -796,28 +856,9 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 			wantErr:    true,
 			errContain: "division by zero",
 		},
-		{
-			name: "schema is not available in readyWhen",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{
-						"spec": map[string]any{"minReplicas": int64(2)},
-					}).build()
-				return newTestNode("pods", graph.NodeTypeCollection).
-					withDep(schema).
-					withDesired(
-						newUnstructured("v1", "Pod", "ns", "pod-1"),
-						newUnstructured("v1", "Pod", "ns", "pod-2"),
-					).
-					withObserved(
-						map[string]any{"status": map[string]any{"replicas": int64(1)}},
-						map[string]any{"status": map[string]any{"replicas": int64(1)}},
-					).
-					withReadyWhen("each.status.replicas >= schema.spec.minReplicas").build()
-			},
-			wantErr:    true,
-			errContain: "undeclared reference",
-		},
+		// Note: The test case "schema is not available in readyWhen" was removed because
+		// this constraint is now enforced at compile time by the graph builder, not at runtime.
+		// The builder validates that readyWhen expressions only reference self or "each".
 	}
 
 	for _, tt := range tests {
@@ -1098,7 +1139,7 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("buckets", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.regions").build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: "schema.spec.regions"}}
+				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
 				return n
 			}(),
 			wantLen: 2,
@@ -1117,8 +1158,8 @@ func TestNode_EvaluateForEach(t *testing.T) {
 					withDep(schema).
 					withForEach("schema.spec.regions", "schema.spec.azs").build()
 				n.Spec.ForEach = []graph.ForEachDimension{
-					{Name: "region", Expression: "schema.spec.regions"},
-					{Name: "az", Expression: "schema.spec.azs"},
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+					{Name: "az", Expression: krocel.NewUncompiled("schema.spec.azs")},
 				}
 				return n
 			}(),
@@ -1136,7 +1177,7 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("buckets", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.regions").build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: "schema.spec.regions"}}
+				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
 				return n
 			}(),
 			wantLen: 0,
@@ -1187,7 +1228,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "${region}"},
 					}).build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: "schema.spec.regions"}}
+				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
 				return n
 			}(),
 			wantLen: 0,
@@ -1213,7 +1254,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "${schema.spec.name + '-' + region}"},
 					}).build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: "schema.spec.regions"}}
+				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
 				return n
 			}(),
 			wantLen: 2,
@@ -1238,7 +1279,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 					withTemplateVar("data.result", "item.value / item.divisor").
 					withTemplateExpr("item.value / item.divisor", variable.ResourceVariableKindIteration).
 					build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "item", Expression: "schema.spec.items"}}
+				n.Spec.ForEach = []graph.ForEachDimension{{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")}}
 				return n
 			}(),
 			wantErr:    true,
@@ -1273,6 +1314,35 @@ func TestNode_HardResolveCollection(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Test Helpers - Builder pattern for creating test Nodes
 // -----------------------------------------------------------------------------
+
+var testEnv = func() *cel.Env {
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{
+		"schema", "vpc", "subnet", "deployment", "configmap",
+		"pods", "test", "each", "item", "region", "az", "iterator",
+		"child", "parent", "grandparent", "ignoredParent", "missing",
+		"buckets", "external", "a", "b", "policy", "configs", "results",
+		"optional", "subnets",
+	}))
+	if err != nil {
+		panic(err)
+	}
+	return env
+}()
+
+func mustCompileTestExpr(expr string) *krocel.Expression {
+	celAST, issues := testEnv.Compile(expr)
+	if issues != nil && issues.Err() != nil {
+		panic(issues.Err())
+	}
+	program, err := testEnv.Program(celAST)
+	if err != nil {
+		panic(err)
+	}
+	return &krocel.Expression{
+		Original: expr,
+		Program:  program,
+	}
+}
 
 // testNodeBuilder provides a fluent API for constructing test Nodes.
 type testNodeBuilder struct {
@@ -1329,7 +1399,7 @@ func (b *testNodeBuilder) withDesired(objects ...*unstructured.Unstructured) *te
 func (b *testNodeBuilder) withIncludeWhen(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.includeWhenExprs = append(b.includeWhenExprs, &expressionEvaluationState{
-			Expression: expr,
+			Expression: mustCompileTestExpr(expr),
 			Kind:       variable.ResourceVariableKindIncludeWhen,
 		})
 	}
@@ -1339,7 +1409,7 @@ func (b *testNodeBuilder) withIncludeWhen(exprs ...string) *testNodeBuilder {
 // withResolvedIncludeWhen adds a pre-resolved includeWhen expression.
 func (b *testNodeBuilder) withResolvedIncludeWhen(expr string, value bool) *testNodeBuilder {
 	b.includeWhenExprs = append(b.includeWhenExprs, &expressionEvaluationState{
-		Expression:    expr,
+		Expression:    krocel.NewUncompiled(expr),
 		Kind:          variable.ResourceVariableKindIncludeWhen,
 		Resolved:      true,
 		ResolvedValue: value,
@@ -1351,7 +1421,7 @@ func (b *testNodeBuilder) withResolvedIncludeWhen(expr string, value bool) *test
 func (b *testNodeBuilder) withReadyWhen(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.readyWhenExprs = append(b.readyWhenExprs, &expressionEvaluationState{
-			Expression: expr,
+			Expression: mustCompileTestExpr(expr),
 			Kind:       variable.ResourceVariableKindReadyWhen,
 		})
 	}
@@ -1362,7 +1432,7 @@ func (b *testNodeBuilder) withReadyWhen(exprs ...string) *testNodeBuilder {
 func (b *testNodeBuilder) withForEach(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.forEachExprs = append(b.forEachExprs, &expressionEvaluationState{
-			Expression: expr,
+			Expression: mustCompileTestExpr(expr),
 			Kind:       variable.ResourceVariableKindIteration,
 		})
 	}
@@ -1372,7 +1442,7 @@ func (b *testNodeBuilder) withForEach(exprs ...string) *testNodeBuilder {
 // withTemplateExpr adds template expressions.
 func (b *testNodeBuilder) withTemplateExpr(expr string, kind variable.ResourceVariableKind) *testNodeBuilder {
 	b.templateExprs = append(b.templateExprs, &expressionEvaluationState{
-		Expression: expr,
+		Expression: mustCompileTestExpr(expr),
 		Kind:       kind,
 	})
 	return b
@@ -1383,7 +1453,7 @@ func (b *testNodeBuilder) withTemplateVar(path string, exprs ...string) *testNod
 	b.templateVars = append(b.templateVars, &variable.ResourceField{
 		FieldDescriptor: variable.FieldDescriptor{
 			Path:                 path,
-			Expressions:          exprs,
+			Expressions:          krocel.NewUncompiledSlice(exprs...),
 			StandaloneExpression: true,
 		},
 	})

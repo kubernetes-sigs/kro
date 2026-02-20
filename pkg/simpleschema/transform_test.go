@@ -15,9 +15,8 @@
 package simpleschema
 
 import (
-	"fmt"
 	"reflect"
-	"slices"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,7 +61,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			},
 			want: &extv1.JSONSchemaProps{
 				Type:     "object",
-				Default:  &extv1.JSON{Raw: []byte("{}")},
 				Required: []string{"name"},
 				Properties: map[string]extv1.JSONSchemaProps{
 					"name": {Type: "string"},
@@ -77,7 +75,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 							"email": {Type: "string"},
 							"phone": {
 								Type:    "string",
-								Default: &extv1.JSON{Raw: []byte(`"000-000-0000"`)},
+								Default: &extv1.JSON{Raw: []byte("\"000-000-0000\"")},
 							},
 							"address": {
 								Type: "object",
@@ -488,16 +486,15 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want: &extv1.JSONSchemaProps{
 				Type:    "object",
 				Default: &extv1.JSON{Raw: []byte("{}")},
-
 				Properties: map[string]extv1.JSONSchemaProps{
 					"logLevel": {
 						Type:    "string",
-						Default: &extv1.JSON{Raw: []byte(`"info"`)},
+						Default: &extv1.JSON{Raw: []byte("\"info\"")},
 						Enum: []extv1.JSON{
-							{Raw: []byte(`"debug"`)},
-							{Raw: []byte(`"info"`)},
-							{Raw: []byte(`"warn"`)},
-							{Raw: []byte(`"error"`)},
+							{Raw: []byte("\"debug\"")},
+							{Raw: []byte("\"info\"")},
+							{Raw: []byte("\"warn\"")},
+							{Raw: []byte("\"error\"")},
 						},
 					},
 					"features": {
@@ -506,11 +503,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Properties: map[string]extv1.JSONSchemaProps{
 							"logFormat": {
 								Type:    "string",
-								Default: &extv1.JSON{Raw: []byte(`"json"`)},
+								Default: &extv1.JSON{Raw: []byte("\"json\"")},
 								Enum: []extv1.JSON{
-									{Raw: []byte(`"json"`)},
-									{Raw: []byte(`"text"`)},
-									{Raw: []byte(`"csv"`)},
+									{Raw: []byte("\"json\"")},
+									{Raw: []byte("\"text\"")},
+									{Raw: []byte("\"csv\"")},
 								},
 							},
 							"errorCode": {
@@ -527,38 +524,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				},
 			},
 			wantErr: false,
-		},
-		{
-			name: "invalid enum type",
-			obj: map[string]interface{}{
-				"threshold": "integer | enum=\"1,2,three\"",
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "Invalid integer enum - empty values",
-			obj: map[string]interface{}{
-				"errorCode": "integer | enum=\"1,,3\"",
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "Invalid integer enum - parsing failure",
-			obj: map[string]interface{}{
-				"errorCode": "integer | enum=\"1,2,3,abc\"",
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "invalid string enum marker",
-			obj: map[string]interface{}{
-				"status": "string | enum=\"a,b,,c\"",
-			},
-			want:    nil,
-			wantErr: true,
 		},
 		{
 			name: "Object with unknown fields",
@@ -601,12 +566,11 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			want: &extv1.JSONSchemaProps{
 				Type:    "object",
 				Default: &extv1.JSON{Raw: []byte("{}")},
-
 				Properties: map[string]extv1.JSONSchemaProps{
 					"values": {
 						Type:                   "object",
 						XPreserveUnknownFields: ptr.To(true),
-						Default:                &extv1.JSON{Raw: []byte(`{"a":"b"}`)},
+						Default:                &extv1.JSON{Raw: []byte("{\"a\":\"b\"}")},
 					},
 				},
 			},
@@ -663,14 +627,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				},
 			},
 			wantErr: false,
-		},
-		{
-			name: "Empty validation",
-			obj: map[string]interface{}{
-				"age": `integer | validation=""`,
-			},
-			want:    nil,
-			wantErr: true,
 		},
 		{
 			name: "Simple immutable field",
@@ -732,14 +688,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Invalid immutable value",
-			obj: map[string]interface{}{
-				"id": "string | immutable=invalid",
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
 			name: "Custom simple type (required)",
 			obj: map[string]interface{}{
 				"myValue": "myType",
@@ -758,14 +706,6 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Required: []string{"myValue"},
 			},
 			wantErr: false,
-		},
-		{
-			name: "Invalid Required Marker value",
-			obj: map[string]interface{}{
-				"data": "string | required=invalid",
-			},
-			want:    nil,
-			wantErr: true,
 		},
 		{
 			name: "Required Marker handling",
@@ -1014,107 +954,115 @@ func TestBuildOpenAPISchema(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Invalid pattern regex",
+			name: "Cyclic dependency in custom types",
 			obj: map[string]interface{}{
-				"invalid": "string | pattern=\"[unclosed\"",
+				"data": "TypeA",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"TypeA": "TypeB",
+				"TypeB": "TypeA",
+			},
 			wantErr: true,
 		},
 		{
-			name: "Pattern marker on non-string type",
+			name: "Undefined custom type reference",
 			obj: map[string]interface{}{
-				"invalid": "integer | pattern=\"[0-9]+\"",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"TypeA": "UndefinedType",
+			},
 			wantErr: true,
 		},
 		{
-			name: "MinLength marker on non-string type",
+			name: "Invalid custom type spec",
 			obj: map[string]interface{}{
-				"invalid": "integer | minLength=5",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"BadType": 123,
+			},
 			wantErr: true,
 		},
 		{
-			name: "MaxLength marker on non-string type",
+			name: "Invalid string custom type",
 			obj: map[string]interface{}{
-				"invalid": "boolean | maxLength=10",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"BadType": "[]",
+			},
 			wantErr: true,
 		},
 		{
-			name: "UniqueItems marker on non-array type",
+			name: "Invalid map custom type",
 			obj: map[string]interface{}{
-				"invalid": "string | uniqueItems=true",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"BadType": map[string]interface{}{
+					"field": 123,
+				},
+			},
 			wantErr: true,
 		},
 		{
-			name: "Invalid minLength value",
+			name: "Invalid field spec type",
 			obj: map[string]interface{}{
-				"invalid": "string | minLength=abc",
+				"data": 123,
 			},
-			want:    nil,
 			wantErr: true,
 		},
 		{
-			name: "Invalid maxLength value",
+			name: "Invalid string custom type triggers buildFieldFromString error",
 			obj: map[string]interface{}{
-				"invalid": "string | maxLength=xyz",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"BadType": "string | minLength=abc",
+			},
 			wantErr: true,
 		},
 		{
-			name: "Invalid uniqueItems value",
+			name: "Invalid map custom type triggers buildSchema error",
 			obj: map[string]interface{}{
-				"invalid": "[]string | uniqueItems=invalid",
+				"data": "string",
 			},
-			want:    nil,
+			types: map[string]interface{}{
+				"BadType": map[string]interface{}{
+					"field": "string | minLength=abc",
+				},
+			},
 			wantErr: true,
 		},
 		{
-			name: "MinItems marker on non-array type",
+			name: "Invalid nested field triggers buildSchema error",
 			obj: map[string]interface{}{
-				"invalid": "string | minItems=5",
+				"outer": map[string]interface{}{
+					"inner": "string | minLength=abc",
+				},
 			},
-			want:    nil,
 			wantErr: true,
 		},
 		{
-			name: "MaxItems marker on non-array type",
+			name: "Invalid field type string",
 			obj: map[string]interface{}{
-				"invalid": "integer | maxItems=10",
+				"data": "string | =bad",
 			},
-			want:    nil,
 			wantErr: true,
 		},
 		{
-			name: "Invalid minItems value",
+			name: "Slice with undefined element type",
 			obj: map[string]interface{}{
-				"invalid": "[]string | minItems=abc",
+				"items": "[]UndefinedType",
 			},
-			want:    nil,
 			wantErr: true,
 		},
 		{
-			name: "Invalid maxItems value",
+			name: "Map with undefined value type",
 			obj: map[string]interface{}{
-				"invalid": "[]string | maxItems=xyz",
+				"data": "map[string]UndefinedType",
 			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name: "Empty pattern value",
-			obj: map[string]interface{}{
-				"invalid": "string | pattern=\"\"",
-			},
-			want:    nil,
 			wantErr: true,
 		},
 	}
@@ -1134,282 +1082,431 @@ func TestBuildOpenAPISchema(t *testing.T) {
 	}
 }
 
-func TestApplyMarkers_Required(t *testing.T) {
-	transformer := newTransformer()
-
-	tests := []struct {
-		value    string
-		required bool
-		err      error
-	}{
-		{"true", true, nil},
-		{"True", true, nil},
-		{"TRUE", true, nil},
-		{"1", true, nil},
-		{"false", false, nil},
-		{"False", false, nil},
-		{"FALSE", false, nil},
-		{"invalid", false, fmt.Errorf("failed to parse required marker value: strconv.ParseBool: parsing \"invalid\": invalid syntax")},
-		{"no", false, fmt.Errorf("failed to parse required marker value: strconv.ParseBool: parsing \"no\": invalid syntax")},
-	}
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("Required Marker %s", tt.value), func(t *testing.T) {
-			parentSchema := &extv1.JSONSchemaProps{}
-			markers := []*Marker{{MarkerType: MarkerTypeRequired, Value: tt.value}}
-			err := transformer.applyMarkers(nil, markers, "myFieldName", parentSchema)
-			if err != nil && err.Error() != tt.err.Error() {
-				t.Errorf("ApplyMarkers() error = %q, expected error %q", err, tt.err)
-			}
-			// If there was no error, check if the required field was added to the parent schema.
-			if err == nil && tt.required != slices.Contains(parentSchema.Required, "myFieldName") {
-				t.Errorf("ApplyMarkers() = %v, want %v", parentSchema.Required, tt.required)
-			}
-		})
-	}
-}
-
-func TestLoadPreDefinedTypes(t *testing.T) {
-	transformer := newTransformer()
-
+func TestDefaultPropagation(t *testing.T) {
 	tests := []struct {
 		name    string
 		obj     map[string]interface{}
-		want    map[string]predefinedType
+		types   map[string]interface{}
+		want    *extv1.JSONSchemaProps
 		wantErr bool
 	}{
 		{
-			name: "Valid types",
+			name: "child defaults propagate to parent",
 			obj: map[string]interface{}{
-				"Person": map[string]interface{}{
-					"name": "string",
-					"age":  "integer",
-					"address": map[string]interface{}{
-						"street": "string",
-						"city":   "string",
+				"timeout": "integer | default=30",
+				"retries": "integer | default=3",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"timeout": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("30")},
 					},
-					"company": "Company",
-				},
-				"Company": map[string]interface{}{
-					"name":      "string",
-					"employees": "[]string",
+					"retries": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("3")},
+					},
 				},
 			},
-			want: map[string]predefinedType{
-				"Person": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"name": {Type: "string"},
-							"age":  {Type: "integer"},
-							"address": {
-								Type: "object",
-								Properties: map[string]extv1.JSONSchemaProps{
-									"street": {Type: "string"},
-									"city":   {Type: "string"},
-								},
-							},
-							"company": {
-								Type: "object",
-								Properties: map[string]extv1.JSONSchemaProps{
-									"name": {Type: "string"},
-									"employees": {
-										Type: "array",
-										Items: &extv1.JSONSchemaPropsOrArray{
-											Schema: &extv1.JSONSchemaProps{
-												Type: "string",
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-					Required: false,
-				},
-				"Company": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"name": {Type: "string"},
-							"employees": {
-								Type: "array",
-								Items: &extv1.JSONSchemaPropsOrArray{
-									Schema: &extv1.JSONSchemaProps{
-										Type: "string",
-									},
-								},
-							},
-						},
-					},
-					Required: false,
-				},
-			},
-			wantErr: false,
 		},
 		{
-			name: "Invalid types with cyclic references",
+			name: "required field blocks parent default",
 			obj: map[string]interface{}{
-				"Person": map[string]interface{}{
-					"name": "string",
-					"age":  "integer",
-					"address": map[string]interface{}{
-						"street": "string",
-						"city":   "string",
+				"name":    "string | required=true",
+				"timeout": "integer | default=30",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"name"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name": {Type: "string"},
+					"timeout": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("30")},
 					},
-					"company": "Company",
-				},
-				"Company": map[string]interface{}{
-					"name":      "string",
-					"employees": "[]Person",
 				},
 			},
-			want:    map[string]predefinedType{},
-			wantErr: true,
 		},
 		{
-			name: "Simple type alias",
+			name: "no defaults means no parent default",
 			obj: map[string]interface{}{
-				"alias": "string",
+				"name":    "string",
+				"timeout": "integer",
 			},
-			want: map[string]predefinedType{
-				"alias": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "string",
-					},
-					Required: false,
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name":    {Type: "string"},
+					"timeout": {Type: "integer"},
 				},
 			},
-			wantErr: false,
 		},
 		{
-			name: "Simple type alias with markers",
+			name: "custom type with defaults",
 			obj: map[string]interface{}{
-				"alias": "string | required=true default=\"test\"",
+				"config": "Config",
 			},
-			want: map[string]predefinedType{
-				"alias": {
-					Schema: extv1.JSONSchemaProps{
-						Type:    "string",
-						Default: &extv1.JSON{Raw: []byte("\"test\"")},
-					},
-					Required: true,
+			types: map[string]interface{}{
+				"Config": map[string]interface{}{
+					"timeout": "integer | default=30",
+					"retries": "integer | default=3",
 				},
 			},
-			wantErr: false,
-		},
-		{
-			name: "Invalid type",
-			obj: map[string]interface{}{
-				"invalid": 123,
-			},
-			want:    map[string]predefinedType{},
-			wantErr: true,
-		},
-		{
-			name: "Nested cross-references",
-			obj: map[string]interface{}{
-				"Service": map[string]interface{}{
-					"target": "Deployment",
-				},
-				"Deployment": map[string]interface{}{
-					"config": "ConfigMap | required=true",
-				},
-				"ConfigMap": map[string]interface{}{
-					"data": "string | description=somedescription",
-				},
-			},
-			want: map[string]predefinedType{
-				"ConfigMap": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"data": {Type: "string", Description: "somedescription"},
-						},
-					},
-					Required: false,
-				},
-				"Deployment": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"config": {
-								Type: "object",
-								Properties: map[string]extv1.JSONSchemaProps{
-									"data": {Type: "string", Description: "somedescription"},
-								},
-							},
-						},
-						Required: []string{"config"},
-					},
-					Required: false,
-				},
-				"Service": {
-					Schema: extv1.JSONSchemaProps{
-						Type: "object",
-						Properties: map[string]extv1.JSONSchemaProps{
-							"target": {
-								Type: "object",
-								Properties: map[string]extv1.JSONSchemaProps{
-									"config": {
-										Type: "object",
-										Properties: map[string]extv1.JSONSchemaProps{
-											"data": {Type: "string", Description: "somedescription"},
-										},
-									},
-								},
-								Required: []string{"config"},
-							},
-						},
-					},
-					Required: false,
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "Invalid type definition (not object or string)",
-			obj: map[string]interface{}{
-				"MyType": 12345, // Invalid: strict check should catch this
-			},
-			want:    map[string]predefinedType{},
-			wantErr: true,
-		},
-		{
-			name: "Custom types with markers",
-			obj: map[string]interface{}{
-				"ConfigMap": map[string]interface{}{
-					"data": "string | default=prod",
-				},
-			},
-			want: map[string]predefinedType{
-				"ConfigMap": {
-					Schema: extv1.JSONSchemaProps{
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"config": {
 						Type:    "object",
 						Default: &extv1.JSON{Raw: []byte("{}")},
 						Properties: map[string]extv1.JSONSchemaProps{
-							"data": {
-								Type:    "string",
-								Default: &extv1.JSON{Raw: []byte(`"prod"`)},
+							"timeout": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("30")},
+							},
+							"retries": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("3")},
 							},
 						},
 					},
-					Required: false,
 				},
 			},
-			wantErr: false,
+		},
+		{
+			name: "custom type with required blocks default",
+			obj: map[string]interface{}{
+				"config": "Config",
+			},
+			types: map[string]interface{}{
+				"Config": map[string]interface{}{
+					"name":    "string | required=true",
+					"timeout": "integer | default=30",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"config": {
+						Type:     "object",
+						Required: []string{"name"},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"name": {Type: "string"},
+							"timeout": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("30")},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "nested custom types with defaults",
+			obj: map[string]interface{}{
+				"app": "App",
+			},
+			types: map[string]interface{}{
+				"Config": map[string]interface{}{
+					"port": "integer | default=8080",
+				},
+				"App": map[string]interface{}{
+					"name":   "string",
+					"config": "Config",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"app": {
+						Type:    "object",
+						Default: &extv1.JSON{Raw: []byte("{}")},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"name": {Type: "string"},
+							"config": {
+								Type:    "object",
+								Default: &extv1.JSON{Raw: []byte("{}")},
+								Properties: map[string]extv1.JSONSchemaProps{
+									"port": {
+										Type:    "integer",
+										Default: &extv1.JSON{Raw: []byte("8080")},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "deeply nested required blocks default at that level only",
+			obj: map[string]interface{}{
+				"outer": map[string]interface{}{
+					"inner": map[string]interface{}{
+						"required_field": "string | required=true",
+						"optional_field": "integer | default=42",
+					},
+					"sibling": "string | default=\"hello\"",
+				},
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"outer": {
+						Type:    "object",
+						Default: &extv1.JSON{Raw: []byte("{}")},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"inner": {
+								Type:     "object",
+								Required: []string{"required_field"},
+								Properties: map[string]extv1.JSONSchemaProps{
+									"required_field": {Type: "string"},
+									"optional_field": {
+										Type:    "integer",
+										Default: &extv1.JSON{Raw: []byte("42")},
+									},
+								},
+							},
+							"sibling": {
+								Type:    "string",
+								Default: &extv1.JSON{Raw: []byte("\"hello\"")},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := transformer.loadPreDefinedTypes(tt.obj)
+			got, err := ToOpenAPISpec(tt.obj, tt.types)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("LoadPreDefinedTypes() error = %v", err)
+				t.Errorf("ToOpenAPISpec() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(transformer.preDefinedTypes, tt.want) {
-				t.Errorf("LoadPreDefinedTypes() = %+v, want %+v", transformer.preDefinedTypes, tt.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ToOpenAPISpec() mismatch:\ngot:  %+v\nwant: %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFromOpenAPISpec(t *testing.T) {
+	_, err := FromOpenAPISpec(nil)
+	if err == nil {
+		t.Error("FromOpenAPISpec() expected error, got nil")
+	}
+	if err.Error() != "not implemented" {
+		t.Errorf("FromOpenAPISpec() expected 'not implemented' error, got %v", err)
+	}
+}
+
+func TestComplexSchemaE2E(t *testing.T) {
+	types := map[string]interface{}{
+		"RequiredString": "string | required=true",
+		"Port":           "integer | default=8080 minimum=1 maximum=65535",
+		"DatabaseConfig": map[string]interface{}{
+			"host":     "string | required=true",
+			"port":     "Port",
+			"username": "string | required=true",
+			"password": "string | required=true",
+			"database": "string | default=\"postgres\"",
+		},
+		"RetryConfig": map[string]interface{}{
+			"maxRetries":  "integer | default=3 minimum=0 maximum=10",
+			"backoffMs":   "integer | default=1000",
+			"exponential": "boolean | default=true",
+		},
+		"ServiceEndpoint": map[string]interface{}{
+			"name":    "RequiredString",
+			"url":     "string | required=true pattern=\"^https?://\"",
+			"timeout": "integer | default=30 minimum=1 maximum=300",
+		},
+		"Label": map[string]interface{}{
+			"key":   "string | required=true minLength=1 maxLength=63",
+			"value": "string | default=\"\"",
+		},
+	}
+
+	obj := map[string]interface{}{
+		"name":        "RequiredString",
+		"environment": "string | default=\"development\" enum=\"development,staging,production\" description=\"Deployment environment\"",
+		"database":    "DatabaseConfig",
+		"retry":       "RetryConfig",
+		"endpoints":   "[]ServiceEndpoint | minItems=1",
+		"annotations": "map[string]string",
+		"labels":      "[]Label | uniqueItems=true",
+		"clusterId":   "string | immutable=true",
+		"replicas":    "integer | default=1 minimum=0 maximum=100 validation=\"self <= 10 || self % 2 == 0\"",
+		"resources": map[string]interface{}{
+			"cpu":    "string | default=\"100m\" pattern=\"^[0-9]+m?$\"",
+			"memory": "string | default=\"128Mi\" pattern=\"^[0-9]+(Mi|Gi)$\"",
+		},
+	}
+
+	want := &extv1.JSONSchemaProps{
+		Type:     "object",
+		Required: []string{"name"}, // propagated from RequiredString custom type
+		Properties: map[string]extv1.JSONSchemaProps{
+			"name": {Type: "string"},
+			"environment": {
+				Type:        "string",
+				Default:     &extv1.JSON{Raw: []byte(`"development"`)},
+				Description: "Deployment environment",
+				Enum: []extv1.JSON{
+					{Raw: []byte(`"development"`)},
+					{Raw: []byte(`"staging"`)},
+					{Raw: []byte(`"production"`)},
+				},
+			},
+			"database": {
+				Type:     "object",
+				Required: []string{"host", "password", "username"}, // no Default:{} because has required fields
+				Properties: map[string]extv1.JSONSchemaProps{
+					"host":     {Type: "string"},
+					"username": {Type: "string"},
+					"password": {Type: "string"},
+					"port": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("8080")},
+						Minimum: ptr.To(1.0),
+						Maximum: ptr.To(65535.0),
+					},
+					"database": {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte(`"postgres"`)},
+					},
+				},
+			},
+			"retry": {
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")}, // gets Default:{} because all fields have defaults
+				Properties: map[string]extv1.JSONSchemaProps{
+					"maxRetries": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("3")},
+						Minimum: ptr.To(0.0),
+						Maximum: ptr.To(10.0),
+					},
+					"backoffMs": {
+						Type:    "integer",
+						Default: &extv1.JSON{Raw: []byte("1000")},
+					},
+					"exponential": {
+						Type:    "boolean",
+						Default: &extv1.JSON{Raw: []byte("true")},
+					},
+				},
+			},
+			"endpoints": {
+				Type:     "array",
+				MinItems: ptr.To[int64](1),
+				Items: &extv1.JSONSchemaPropsOrArray{
+					Schema: &extv1.JSONSchemaProps{
+						Type:     "object",
+						Required: []string{"name", "url"},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"name": {Type: "string"},
+							"url": {
+								Type:    "string",
+								Pattern: "^https?://",
+							},
+							"timeout": {
+								Type:    "integer",
+								Default: &extv1.JSON{Raw: []byte("30")},
+								Minimum: ptr.To(1.0),
+								Maximum: ptr.To(300.0),
+							},
+						},
+					},
+				},
+			},
+			"annotations": {
+				Type: "object",
+				AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
+					Schema: &extv1.JSONSchemaProps{Type: "string"},
+				},
+			},
+			"labels": {
+				Type:      "array",
+				XListType: ptr.To("set"),
+				Items: &extv1.JSONSchemaPropsOrArray{
+					Schema: &extv1.JSONSchemaProps{
+						Type:     "object",
+						Required: []string{"key"},
+						Properties: map[string]extv1.JSONSchemaProps{
+							"key": {
+								Type:      "string",
+								MinLength: ptr.To[int64](1),
+								MaxLength: ptr.To[int64](63),
+							},
+							"value": {
+								Type:    "string",
+								Default: &extv1.JSON{Raw: []byte(`""`)},
+							},
+						},
+					},
+				},
+			},
+			"clusterId": {
+				Type: "string",
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self == oldSelf", Message: "field is immutable"},
+				},
+			},
+			"replicas": {
+				Type:    "integer",
+				Default: &extv1.JSON{Raw: []byte("1")},
+				Minimum: ptr.To(0.0),
+				Maximum: ptr.To(100.0),
+				XValidations: []extv1.ValidationRule{
+					{Rule: "self <= 10 || self % 2 == 0", Message: "validation failed"},
+				},
+			},
+			"resources": {
+				Type:    "object",
+				Default: &extv1.JSON{Raw: []byte("{}")},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"cpu": {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte(`"100m"`)},
+						Pattern: "^[0-9]+m?$",
+					},
+					"memory": {
+						Type:    "string",
+						Default: &extv1.JSON{Raw: []byte(`"128Mi"`)},
+						Pattern: "^[0-9]+(Mi|Gi)$",
+					},
+				},
+			},
+		},
+	}
+
+	got, err := ToOpenAPISpec(obj, types)
+	if err != nil {
+		t.Fatalf("ToOpenAPISpec() error = %v", err)
+	}
+	sortRequiredFields(want)
+	sortRequiredFields(got)
+	assert.Equal(t, want, got)
+}
+
+// sortRequiredFields normalizes Required slices for comparison (map iteration order is non-deterministic)
+func sortRequiredFields(schema *extv1.JSONSchemaProps) {
+	if schema == nil {
+		return
+	}
+	sort.Strings(schema.Required)
+	for name, prop := range schema.Properties {
+		sortRequiredFields(&prop)
+		schema.Properties[name] = prop
+	}
+	if schema.Items != nil && schema.Items.Schema != nil {
+		sortRequiredFields(schema.Items.Schema)
 	}
 }

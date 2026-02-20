@@ -2291,4 +2291,116 @@ var _ = Describe("ForEach Collections", func() {
 			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
+
+	// Test for https://github.com/kubernetes-sigs/kro/issues/17#issuecomment-3843929563
+	// Empty collections should allow dependents to resolve with empty list in CEL context.
+	It("should allow dependents to reference empty collections in CEL expressions", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-empty-collection-dep",
+			generator.WithSchema(
+				"EmptyCollectionDep", "v1alpha1",
+				map[string]interface{}{
+					"names": "[]string",
+				},
+				nil,
+			),
+			// Collection of ConfigMaps - will be empty when names=[]
+			generator.WithResourceCollection("entries", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.metadata.name}-entry-${name}",
+				},
+				"data": map[string]interface{}{
+					"name": "${name}",
+				},
+			},
+				[]krov1alpha1.ForEachDimension{
+					{"name": "${schema.spec.names}"},
+				},
+				nil, nil),
+			generator.WithResource("summary", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.metadata.name}-summary",
+				},
+				"data": map[string]interface{}{
+					// This expression references the 'entries' collection
+					// When entries is empty, CEL should evaluate size(entries) to 0
+					"itemCount": "${string(size(entries))}",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+		// Wait for RGD to become active
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Create instance with EMPTY names array - this triggers the bug
+		name := "test-empty-dep"
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "EmptyCollectionDep",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"names": []interface{}{},
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		// The instance should become ACTIVE even with empty collection
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			val, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(val).To(Equal("ACTIVE"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Verify the summary ConfigMap was created with itemCount=0
+		summaryCM := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("%s-summary", name),
+				Namespace: namespace,
+			}, summaryCM)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(summaryCM.Data).To(HaveKey("itemCount"))
+			g.Expect(summaryCM.Data["itemCount"]).To(Equal("0"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).To(MatchError(errors.IsNotFound, "instance should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name: rgd.Name,
+			}, &krov1alpha1.ResourceGraphDefinition{})
+			g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
 })

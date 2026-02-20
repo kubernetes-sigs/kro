@@ -11,14 +11,14 @@ aliases:
     - barney-s
     - bridgetkromhout
     - cheftako
+    - jakobmoellerdev
     - jlbutler
     - matthchr
-    - nicslatts
   kro-reviewers:
-    - jakobmoellerdev
     - michaelhtm
     - n3wscott
   emeritus-kro-maintainers:
     - eqe-aws
+    - nicslatts
     - rynowak
 

@@ -214,6 +214,37 @@ var _ = Describe("Validation", func() {
 		})
 	})
 
+	Context("RGD Status", func() {
+		It("should reject RGDs with plain fileds (no expression)", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-k8s-invalid-status",
+				generator.WithSchema(
+					"TestK8sInvalidStatus", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					// status field
+					map[string]interface{}{
+						"name": "string",
+					},
+				),
+				generator.WithResource("validResource", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			expectRGDInactiveWithError(ctx, rgd, "failed to build instance status schema: "+
+				"status fields without expressions are not supported")
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+	})
+
 	Context("Kind Names", func() {
 		It("should validate correct kind names", func(ctx SpecContext) {
 			validKinds := []string{

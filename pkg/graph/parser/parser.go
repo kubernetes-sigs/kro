@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -187,7 +188,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}
@@ -224,7 +225,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}
@@ -261,15 +262,13 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 
 	if ok {
 		// Standalone CEL expression: "${expr}"
-		// ExpectedType will be set by builder based on schema
 		// StandaloneExpression=true tells builder to derive type from schema
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions:          []string{expr},
-			ExpectedType:         nil, // Builder will set this based on schema
+			Expressions:          []*krocel.Expression{{Original: expr}},
 			Path:                 path,
-			StandaloneExpression: true, // Single expression - type from schema
+			StandaloneExpression: true,
 		}}, nil
 	}
 
@@ -283,13 +282,11 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 	}
 	if len(expressions) > 0 {
 		// String template: "foo-${expr1}-${expr2}"
-		// ExpectedType will be set by builder to cel.StringType
 		// StandaloneExpression=false tells builder this is string concatenation
 		return []variable.FieldDescriptor{{
-			Expressions:          expressions,
-			ExpectedType:         nil, // Builder will set this to cel.StringType
+			Expressions:          krocel.NewUncompiledSlice(expressions...),
 			Path:                 path,
-			StandaloneExpression: false, // Multiple expressions - always string
+			StandaloneExpression: false,
 		}}, nil
 	}
 	return nil, nil

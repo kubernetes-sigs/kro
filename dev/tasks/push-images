@@ -5,6 +5,8 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
+export GIT_VERSION=$(git describe --tags --always --dirty)
+
 if [[ -z ${IMAGE_PREFIX:-} ]]; then
   echo "IMAGE_PREFIX is not set"
   exit 1
@@ -29,10 +31,10 @@ echo "Using HELM_IMAGE=${HELM_IMAGE}"
 # build first, technically this is not needed as publish does a build too
 RELEASE_VERSION=${IMAGE_TAG} OCI_REPO=${IMAGE_PREFIX%/} make build-image
 
-# we are also pushing the helm chart, build it first
-RELEASE_VERSION=${IMAGE_TAG} HELM_IMAGE=${HELM_IMAGE} make package-helm
-
-
 # Do the actual publish
 RELEASE_VERSION=${IMAGE_TAG} OCI_REPO=${IMAGE_PREFIX%/} make publish-image
+
+# we are also pushing the helm chart, build it first
+RELEASE_VERSION=${IMAGE_TAG} HELM_IMAGE=${HELM_IMAGE} make package-helm
+# then publish it
 RELEASE_VERSION=${IMAGE_TAG} HELM_IMAGE=${HELM_IMAGE} make publish-helm

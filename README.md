@@ -78,13 +78,15 @@ Development and discussion is coordinated in the [Kubernetes Slack (invite link)
 [kro-channel]: https://kubernetes.slack.com/archives/C081TMY9D6Y
 
 Please join our community meeting.
-* Every other Wednesday at 9AM PT (Pacific Time). [Convert to local timezone][tz-help] 
+* Every other Wednesday at 9AM PT (Pacific Time). [Convert to local timezone][tz-help]
+* [Add to Google Calendar][gcal-add] 
 * Agenda: [Public doc][agenda]
 * Join us: [Zoom meeting][zoom]
 * Community meeting recordings:  [YouTube channel][youtube]
 
 
 [tz-help]: http://www.thetimezoneconverter.com/?t=9%3A00&tz=PT%20%28Pacific%20Time%29
+[gcal-add]: https://calendar.google.com/calendar/render?action=TEMPLATE&text=Kro+Community+Meeting&details=Join+us+for+the+Kro+community+meeting.%0A%0AZoom:+https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1%0AAgenda:+https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4&location=https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1&dates=20260204T090000/20260204T100000&recur=RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE&ctz=America/Los_Angeles
 [agenda]: https://docs.google.com/document/d/1GqeHcBlOw6ozo-qS4TLdXSi5qUn88QU6dwdq0GvxRz4/edit?tab=t.0
 [zoom]: https://us06web.zoom.us/j/85388697226?pwd=9Xxz1F0FcNUq8zFGrsRqkHMhFZTpuj.1
 [youtube]: https://www.youtube.com/channel/UCUlcI3NYq9ehl5wsdfbJzSA

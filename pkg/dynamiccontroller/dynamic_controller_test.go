@@ -463,6 +463,13 @@ func TestUpdateFunc_GenerationFiltering(t *testing.T) {
 
 	dc.updateFunc(parentGVR, oldObj, struct{}{})
 	assert.Equal(t, 0, dc.queue.Len(), "invalid new object should not enqueue")
+
+	oldObj.SetLabels(map[string]string{
+		metadata.InstanceSuspendReconciliationLabel: "disabled",
+	})
+
+	dc.updateFunc(parentGVR, oldObj, newObj)
+	assert.Equal(t, 1, dc.queue.Len(), "should enqueue if suspend label was removed")
 }
 
 func TestStart_AlreadyRunning(t *testing.T) {

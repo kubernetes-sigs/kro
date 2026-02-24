@@ -37,7 +37,7 @@ func TestMaps(t *testing.T) {
 	env := testMapsEnv(t)
 	for i, tc := range mapsTests {
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			var asts []*cel.Ast
+			asts := make([]*cel.Ast, 0, 2)
 			pAst, iss := env.Parse(tc.expr)
 			if iss.Err() != nil {
 				t.Fatalf("env.Parse(%v) failed: %v", tc.expr, iss.Err())

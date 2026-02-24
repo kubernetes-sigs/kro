@@ -40,11 +40,17 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource graph definition status and conditions")
 
+	oldState := o.Status.State
+
 	// Set status.state.
 	if rgdConditionTypes.For(o).IsRootReady() {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
+	}
+
+	if oldState != o.Status.State && oldState != "" {
+		stateTransitionsTotal.WithLabelValues(string(oldState), string(o.Status.State)).Inc()
 	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {

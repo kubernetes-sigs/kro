@@ -52,6 +52,7 @@
   max-width: 1200px;
   width: 100%;
   text-align: center;
+  font-size:24px;
 }
 
 .heroTitle {
@@ -63,6 +64,7 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  font-family: "Sans Serif";
 }
 
 [data-theme="dark"] .heroTitle {
@@ -88,6 +90,7 @@
   display: flex;
   gap: 0.75rem;
   justify-content: center;
+  background-color: antiquewhite;
 }
 
 .heroButtons a {
@@ -97,7 +100,7 @@
 
 .primaryButton {
   background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
-  border: none;
+  border: 2px solid transparent;
   color: white !important;
   font-weight: 550;
   transition: transform 0.2s ease, box-shadow 0.2s ease;

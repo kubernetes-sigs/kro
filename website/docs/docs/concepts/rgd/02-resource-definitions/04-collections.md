@@ -549,6 +549,16 @@ accidentally create a collection larger than the configured limit, manual cleanu
 be required.
 :::
 
+### Collection Dimension Limit
+
+Each resource is limited to **10 forEach dimensions** by default. If a resource
+defines more forEach iterators than this limit, validation fails at RGD
+processing time before any resources are created.
+
+This prevents combinatorial explosion from deeply nested cartesian products.
+This limit is configurable through the CLI flag `--rgd-max-collection-dimension-size`
+or the Helm value `config.rgd.maxCollectionDimensionSize`.
+
 ### includeWhen Is Collection-wide
 
 `includeWhen` applies to the entire collection. If it evaluates to `false`, the

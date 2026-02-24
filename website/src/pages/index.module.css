@@ -59,12 +59,13 @@
   font-size: 2.2rem;
   font-weight: 700;
   margin-bottom: 0.75rem;
-  line-height: 1.2;
+  line-height: 1.3;
+  letter-spacing: -0.5px;
   background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  font-family: "Sans Serif";
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
 }
 
 [data-theme="dark"] .heroTitle {
@@ -88,9 +89,9 @@
 
 .heroButtons {
   display: flex;
-  gap: 0.75rem;
+  gap: 1rem;
   justify-content: center;
-  background-color: antiquewhite;
+  flex-wrap: wrap;
 }
 
 .heroButtons a {
@@ -102,13 +103,14 @@
   background: linear-gradient(135deg, #5b7fc9 0%, #6a89c9 100%);
   border: 2px solid transparent;
   color: white !important;
-  font-weight: 550;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  font-weight: 600;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.3px;
 }
 
 .primaryButton:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 25px -5px rgba(91, 127, 201, 0.4);
+  transform: translateY(-3px);
+  box-shadow: 0 15px 35px -5px rgba(91, 127, 201, 0.5);
   color: white !important;
 }
 
@@ -117,13 +119,15 @@
   border: 2px solid var(--ifm-color-emphasis-300);
   color: var(--ifm-color-emphasis-900) !important;
   font-weight: 600;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.3px;
 }
 
 .secondaryButton:hover {
   border-color: #5b7fc9;
   color: #5b7fc9 !important;
-  transform: translateY(-1px);
+  transform: translateY(-3px);
+  background: rgba(91, 127, 201, 0.05);
 }
 
 [data-theme="dark"] .secondaryButton {
@@ -161,18 +165,19 @@
 }
 
 .featureCard {
-  padding: 1.25rem;
+  padding: 1.5rem;
   border-radius: 10px;
   border: 1px solid var(--ifm-color-emphasis-200);
   background: var(--ifm-background-color);
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
+  box-shadow: 0 2px 8px -1px rgba(0, 0, 0, 0.05);
 }
 
 .featureCard:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.1);
+  transform: translateY(-6px);
+  box-shadow: 0 15px 40px -5px rgba(0, 0, 0, 0.12);
   border-color: #5b7fc9;
 }
 
@@ -182,7 +187,7 @@
 
 [data-theme="dark"] .featureCard:hover {
   border-color: #8fa8d4;
-  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 15px 40px -5px rgba(0, 0, 0, 0.6);
 }
 
 .featureHeader h3 {
@@ -205,9 +210,10 @@
 .featureDescription {
   color: var(--ifm-color-emphasis-700);
   font-size: 0.875rem;
-  line-height: 1.5;
+  line-height: 1.6;
   margin-bottom: 1rem;
   flex: 1;
+  letter-spacing: 0.2px;
 }
 
 .featureCode {

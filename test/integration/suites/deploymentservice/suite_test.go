@@ -259,7 +259,11 @@ var _ = Describe("DeploymentService", func() {
 	})
 })
 
-func instanceIsReady(g Gomega, ctx SpecContext, env *environment.Environment, namespace string, instance *unstructured.Unstructured) {
+func instanceIsReady(g Gomega,
+	ctx SpecContext,
+	env *environment.Environment,
+	namespace string,
+	instance *unstructured.Unstructured) {
 	err := env.Client.Get(ctx, types.NamespacedName{
 		Name:      "test-instance",
 		Namespace: namespace,

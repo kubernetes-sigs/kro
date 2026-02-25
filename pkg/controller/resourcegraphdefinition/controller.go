@@ -36,7 +36,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
-	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
@@ -56,7 +55,7 @@ type ResourceGraphDefinitionReconciler struct {
 	rgBuilder               *graph.Builder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
-	rgdConfig               runtime.RGDConfig
+	rgdConfig               graph.RGDConfig
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -65,7 +64,7 @@ func NewResourceGraphDefinitionReconciler(
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
 	maxConcurrentReconciles int,
-	rgdConfig runtime.RGDConfig,
+	rgdConfig graph.RGDConfig,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 

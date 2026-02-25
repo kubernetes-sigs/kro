@@ -34,11 +34,6 @@ type Interface interface {
 	Instance() *Node
 }
 
-// RGDConfig holds RGD runtime configuration parameters.
-type RGDConfig struct {
-	MaxCollectionSize int
-}
-
 // Runtime is the execution context for a single reconciliation.
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
@@ -46,12 +41,12 @@ type Runtime struct {
 	order     []string
 	nodes     map[string]*Node
 	instance  *Node
-	rgdConfig RGDConfig
+	rgdConfig graph.RGDConfig
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig RGDConfig) (*Runtime, error) {
+func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig graph.RGDConfig) (*Runtime, error) {
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{

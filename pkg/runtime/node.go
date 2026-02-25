@@ -44,7 +44,7 @@ type Node struct {
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
 
-	rgdConfig RGDConfig
+	rgdConfig graph.RGDConfig
 }
 
 var identityPaths = []string{

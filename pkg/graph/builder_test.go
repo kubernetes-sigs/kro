@@ -32,6 +32,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
+var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
+
 func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -755,7 +757,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-group", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1311,7 +1313,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1647,7 +1649,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)
@@ -2116,7 +2118,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-cel-types", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2461,7 +2463,7 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 			if tt.wantErr {
 				if !assert.Error(t, err) {
 					t.Logf("Expected error but got nil")
@@ -2864,7 +2866,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errMsg != "" {
@@ -3081,7 +3083,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3373,7 +3375,7 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				require.Error(t, err)

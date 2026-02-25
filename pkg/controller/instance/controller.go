@@ -51,7 +51,7 @@ type ReconcileConfig struct {
 	// support.
 	DeletionPolicy string
 	// RGDConfig holds RGD runtime configuration parameters.
-	RGDConfig runtime.RGDConfig
+	RGDConfig graph.RGDConfig
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,

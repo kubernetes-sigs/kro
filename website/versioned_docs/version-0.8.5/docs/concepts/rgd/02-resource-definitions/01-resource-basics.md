@@ -92,6 +92,9 @@ CEL expressions in resource templates can reference three things:
 :::important
 When you reference another resource in a CEL expression, it automatically creates a dependency. This is an implicit way of declaring that one resource depends on another. kro uses these references to determine the correct creation order - ensuring the referenced resource exists before the one referencing it. Learn more about [Dependencies and Ordering](../dependencies-ordering).
 :::
+:::important
+If a resource references a field in `schema.spec`, it creates a hard dependency on the field being present in the instance. You are declaring that the field must exist. Any instance that does not specify that field will fail reconciliation.
+:::
 
 ## Reference Examples
 

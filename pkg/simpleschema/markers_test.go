@@ -391,6 +391,24 @@ func TestParseMarkers(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "should not skip markers without an '='",
+			input:   "optional",
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "should reject markers without an '='",
+			input:   "description=\"some description\" optional",
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "should reject markers without an '='",
+			input:   "optional description=\"some description\"",
+			want:    nil,
+			wantErr: true,
+		},
+		{
 			name:  "Simple markers",
 			input: "required=true description=\"This is a description\"",
 			want: []*Marker{

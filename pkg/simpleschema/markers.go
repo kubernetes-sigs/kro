@@ -164,6 +164,9 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 	if currentMarker != nil {
 		currentMarker.Value = processValue(buffer.String())
 		result = append(result, currentMarker)
+	} else {
+		// If we end with a nil currentMarker, that's an error because it means we had a marker key without a value(i.e. no "=")
+		return nil, fmt.Errorf("marker key '%s' without a value", buffer.String())
 	}
 
 	if inQuotes {
@@ -175,6 +178,7 @@ func ParseMarkers(markers string) ([]*Marker, error) {
 
 	return result, nil
 }
+
 func processValue(value string) string {
 	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
 		// remove surrounding quotes and unescape the string

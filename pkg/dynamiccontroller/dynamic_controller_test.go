@@ -465,7 +465,7 @@ func TestUpdateFunc_GenerationFiltering(t *testing.T) {
 	assert.Equal(t, 0, dc.queue.Len(), "invalid new object should not enqueue")
 
 	oldObj.SetLabels(map[string]string{
-		metadata.InstanceSuspendReconciliationLabel: "disabled",
+		metadata.InstanceReconcileLabel: "disabled",
 	})
 
 	dc.updateFunc(parentGVR, oldObj, newObj)

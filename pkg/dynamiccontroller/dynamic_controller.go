@@ -361,7 +361,7 @@ func (dc *DynamicController) updateFunc(parentGVR schema.GroupVersionResource, o
 		// normally skip, but we should enqueue if the oldMeta had the reconcile disabled label, and the newMeta doesn't
 		oldLbls := oldMeta.GetLabels()
 		newLbls := newMeta.GetLabels()
-		if !(oldLbls[metadata.InstanceSuspendReconciliationLabel] == "disabled" && newLbls[metadata.InstanceSuspendReconciliationLabel] != "disabled") {
+		if !(oldLbls[metadata.InstanceReconcileLabel] == "disabled" && newLbls[metadata.InstanceReconcileLabel] != "disabled") {
 			dc.log.V(2).Info("Skipping update due to unchanged generation",
 				"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
 			return

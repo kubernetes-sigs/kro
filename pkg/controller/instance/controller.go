@@ -174,7 +174,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
 	//--------------------------------------------------------------
 	labels := inst.GetLabels()
-	reconcileState, ok := labels[metadata.InstanceSuspendReconciliationLabel]
+	reconcileState, ok := labels[metadata.InstanceReconcileLabel]
 	if !ok || !strings.EqualFold(reconcileState, "disabled") {
 		rcx.Mark.ReconciliationActive()
 		if err := c.reconcileNodes(rcx); err != nil {
@@ -183,7 +183,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			return err
 		}
 	} else {
-		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceSuspendReconciliationLabel, reconcileState)
+		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceReconcileLabel, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,

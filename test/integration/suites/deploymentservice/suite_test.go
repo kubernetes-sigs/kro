@@ -176,7 +176,7 @@ var _ = Describe("DeploymentService", func() {
 
 		// // label instance with "kro.run/reconcile:disabled"
 		currentLabels := instance.GetLabels()
-		currentLabels[metadata.InstanceSuspendReconciliationLabel] = "disabled"
+		currentLabels[metadata.InstanceReconcileLabel] = "disabled"
 		instance.SetLabels(currentLabels)
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 

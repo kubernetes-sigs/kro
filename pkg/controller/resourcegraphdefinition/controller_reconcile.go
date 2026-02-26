@@ -51,15 +51,17 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	}
 	mark.ResourceGraphValid()
 
-	// Setup metadata labeling
-	graphExecLabeler, err := r.setupLabeler(rgd)
+	// Build instance labeler: kro metadata + RGD-specific labels.
+	// This is applied to CRDs and instances. Child resources only get r.metadataLabeler.
+	rgdLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
+	instanceLabeler, err := r.metadataLabeler.Merge(rgdLabeler)
 	if err != nil {
 		mark.FailedLabelerSetup(err.Error())
 		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
 	}
 
 	crd := processedRGD.CRD
-	graphExecLabeler.ApplyLabels(&crd.ObjectMeta)
+	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
@@ -77,7 +79,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// TODO: the context that is passed here is tied to the reconciliation of the rgd, we might need to make
 	// a new context with our own cancel function here to allow us to cleanly term the dynamic controller
 	// rather than have it ignore this context and use the background context.
-	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, processedRGD, graphExecLabeler); err != nil {
+	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, processedRGD, instanceLabeler); err != nil {
 		mark.ControllerFailedToStart(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
 	}
@@ -94,16 +96,10 @@ func (r *ResourceGraphDefinitionReconciler) getResourceGVRsToWatchForRGD(process
 	return slices.Collect(maps.Keys(resourceHandlers))
 }
 
-// setupLabeler creates and merges the required labelers for the resource graph definition
-func (r *ResourceGraphDefinitionReconciler) setupLabeler(rgd *v1alpha1.ResourceGraphDefinition) (metadata.Labeler, error) {
-	rgLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
-	return r.metadataLabeler.Merge(rgLabeler)
-}
-
 // setupMicroController creates a new controller instance with the required configuration
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
-	labeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
 ) *instancectrl.Controller {
 	gvr := processedRGD.Instance.Meta.GVR
 	instanceLogger := r.instanceLogger.WithName(fmt.Sprintf("%s-controller", gvr.Resource)).WithValues(
@@ -123,7 +119,8 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		gvr,
 		processedRGD,
 		r.clientSet,
-		labeler,
+		instanceLabeler,
+		r.metadataLabeler,
 	)
 }
 
@@ -170,14 +167,14 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(
 	ctx context.Context,
 	processedRGD *graph.Graph,
-	graphExecLabeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
 ) error {
 	// If we want to react to changes to resources, we need to watch for them
 	// and trigger reconciliations of the instances whenever these resources change.
 	resourceGVRsToWatch := r.getResourceGVRsToWatchForRGD(processedRGD)
 
 	// Setup and start microcontroller
-	controller := r.setupMicroController(processedRGD, graphExecLabeler)
+	controller := r.setupMicroController(processedRGD, instanceLabeler)
 
 	ctrl.LoggerFrom(ctx).V(1).Info("reconciling resource graph definition micro controller")
 	gvr := processedRGD.Instance.Meta.GVR

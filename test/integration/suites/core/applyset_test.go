@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,9 +37,7 @@ import (
 )
 
 var _ = Describe("ApplySet", func() {
-	var (
-		namespace string
-	)
+	var namespace string
 
 	BeforeEach(func(ctx SpecContext) {
 		namespace = fmt.Sprintf("test-%s", rand.String(5))
@@ -185,7 +184,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, cm)
 				g.Expect(err).ToNot(HaveOccurred())
-				verifyChildResourceLabelsWithNodeID(g, cm.GetLabels(), applySetID, instance, rgd, "configMap")
+				verifyChildResourceLabelsWithNodeID(g, cm.GetLabels(), applySetID, instance, "configMap")
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Check Secret with exact node ID
@@ -196,7 +195,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, secret)
 				g.Expect(err).ToNot(HaveOccurred())
-				verifyChildResourceLabelsWithNodeID(g, secret.GetLabels(), applySetID, instance, rgd, "secret")
+				verifyChildResourceLabelsWithNodeID(g, secret.GetLabels(), applySetID, instance, "secret")
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Check ServiceAccount with exact node ID
@@ -207,7 +206,7 @@ var _ = Describe("ApplySet", func() {
 					Namespace: namespace,
 				}, sa)
 				g.Expect(err).ToNot(HaveOccurred())
-				verifyChildResourceLabelsWithNodeID(g, sa.GetLabels(), applySetID, instance, rgd, "serviceAccount")
+				verifyChildResourceLabelsWithNodeID(g, sa.GetLabels(), applySetID, instance, "serviceAccount")
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
@@ -778,7 +777,7 @@ var _ = Describe("ApplySet", func() {
 					labels := cm.GetLabels()
 
 					// Verify all standard labels with exact values via helper
-					verifyChildResourceLabelsWithNodeID(g, labels, applySetID, instance, rgd, "configmaps")
+					verifyChildResourceLabelsWithNodeID(g, labels, applySetID, instance, "configmaps")
 
 					// Verify collection-specific labels with exact values
 					g.Expect(labels).To(HaveKeyWithValue(
@@ -790,7 +789,6 @@ var _ = Describe("ApplySet", func() {
 						metadata.CollectionSizeLabel,
 						"3",
 					), "collection item should have exact collection-size label")
-
 				}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 			}
 		})
@@ -904,7 +902,7 @@ var _ = Describe("ApplySet", func() {
 				labels := secret.GetLabels()
 
 				// Verify all standard labels with exact values via helper
-				verifyChildResourceLabelsWithNodeID(g, labels, applySetID, instance, rgd, "secrets")
+				verifyChildResourceLabelsWithNodeID(g, labels, applySetID, instance, "secrets")
 
 				// Verify collection-specific labels updated to reflect new collection size
 				g.Expect(labels).To(HaveKeyWithValue(metadata.CollectionIndexLabel, "0"),
@@ -1051,10 +1049,6 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID1,
 				), "RGD1's ConfigMap should belong to instance1's ApplySet")
-				g.Expect(cm1.GetLabels()).To(HaveKeyWithValue(
-					metadata.ResourceGraphDefinitionNameLabel,
-					rgd1.GetName(),
-				), "RGD1's ConfigMap should reference rgd1")
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			// Check RGD2's ConfigMap
@@ -1069,10 +1063,6 @@ var _ = Describe("ApplySet", func() {
 					applyset.ApplysetPartOfLabel,
 					applySetID2,
 				), "RGD2's ConfigMap should belong to instance2's ApplySet")
-				g.Expect(cm2.GetLabels()).To(HaveKeyWithValue(
-					metadata.ResourceGraphDefinitionNameLabel,
-					rgd2.GetName(),
-				), "RGD2's ConfigMap should reference rgd2")
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			By("triggering reconcile by updating instance1")
@@ -1468,7 +1458,6 @@ func verifyChildResourceLabels(
 	labels map[string]string,
 	applySetID string,
 	instance *unstructured.Unstructured,
-	rgd *krov1alpha1.ResourceGraphDefinition,
 ) {
 	// KEP ApplySet membership label (exact)
 	g.Expect(labels).To(HaveKeyWithValue(
@@ -1492,11 +1481,11 @@ func verifyChildResourceLabels(
 	g.Expect(labels).To(HaveKeyWithValue(metadata.InstanceNamespaceLabel, instance.GetNamespace()),
 		"child should have exact instance-namespace label")
 
-	// RGD tracking labels (exact)
-	g.Expect(labels).To(HaveKeyWithValue(metadata.ResourceGraphDefinitionIDLabel, string(rgd.GetUID())),
-		"child should have exact rgd-id label")
-	g.Expect(labels).To(HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.GetName()),
-		"child should have exact rgd-name label")
+	// RGD tracking labels should NOT be present on child resources (only on CRDs)
+	g.Expect(labels).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel),
+		"child should not have rgd-id label (RGD labels are only applied to CRDs)")
+	g.Expect(labels).ToNot(HaveKey(metadata.ResourceGraphDefinitionNameLabel),
+		"child should not have rgd-name label (RGD labels are only applied to CRDs)")
 
 	// Node ID label existence (value varies by resource)
 	g.Expect(labels).To(HaveKey(metadata.NodeIDLabel),
@@ -1509,10 +1498,9 @@ func verifyChildResourceLabelsWithNodeID(
 	labels map[string]string,
 	applySetID string,
 	instance *unstructured.Unstructured,
-	rgd *krov1alpha1.ResourceGraphDefinition,
 	nodeID string,
 ) {
-	verifyChildResourceLabels(g, labels, applySetID, instance, rgd)
+	verifyChildResourceLabels(g, labels, applySetID, instance)
 
 	// Verify exact node ID
 	g.Expect(labels).To(HaveKeyWithValue(metadata.NodeIDLabel, nodeID),

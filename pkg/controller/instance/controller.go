@@ -81,8 +81,9 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	labeler         metadata.Labeler
-	reconcileConfig ReconcileConfig
+	instanceLabeler      metadata.Labeler
+	childResourceLabeler metadata.Labeler
+	reconcileConfig      ReconcileConfig
 }
 
 // NewController constructs a new controller with static RGD.
@@ -92,15 +93,17 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
-	labeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
+	childResourceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		client:          client,
-		gvr:             gvr,
-		rgd:             rgd,
-		labeler:         labeler,
-		reconcileConfig: reconcileConfig,
+		log:                  log,
+		client:               client,
+		gvr:                  gvr,
+		rgd:                  rgd,
+		instanceLabeler:      instanceLabeler,
+		childResourceLabeler: childResourceLabeler,
+		reconcileConfig:      reconcileConfig,
 	}
 }
 
@@ -140,7 +143,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.labeler,
+		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,
@@ -221,7 +224,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
 
-	wantLabels := c.labeler.Labels()
+	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
 	needLabelPatch := false
 

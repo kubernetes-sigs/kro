@@ -224,6 +224,60 @@ func TestGenericLabeler(t *testing.T) {
 	})
 }
 
+func TestExclude(t *testing.T) {
+	cases := []struct {
+		name     string
+		labeler  GenericLabeler
+		keys     []string
+		expected map[string]string
+	}{
+		{
+			name:     "exclude existing keys",
+			labeler:  GenericLabeler{"a": "1", "b": "2", "c": "3"},
+			keys:     []string{"a", "c"},
+			expected: map[string]string{"b": "2"},
+		},
+		{
+			name:     "exclude non-existing keys",
+			labeler:  GenericLabeler{"a": "1", "b": "2"},
+			keys:     []string{"x", "y"},
+			expected: map[string]string{"a": "1", "b": "2"},
+		},
+		{
+			name:     "exclude all keys",
+			labeler:  GenericLabeler{"a": "1", "b": "2"},
+			keys:     []string{"a", "b"},
+			expected: map[string]string{},
+		},
+		{
+			name:     "exclude no keys",
+			labeler:  GenericLabeler{"a": "1", "b": "2"},
+			keys:     nil,
+			expected: map[string]string{"a": "1", "b": "2"},
+		},
+		{
+			name:     "exclude single key",
+			labeler:  GenericLabeler{"a": "1", "b": "2"},
+			keys:     []string{"a"},
+			expected: map[string]string{"b": "2"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := Exclude(tc.labeler, tc.keys...)
+			assert.Equal(t, tc.expected, result.Labels())
+		})
+	}
+
+	// Verify original is not mutated
+	t.Run("original not mutated", func(t *testing.T) {
+		original := GenericLabeler{"a": "1", "b": "2"}
+		_ = Exclude(original, "a")
+		assert.Equal(t, map[string]string{"a": "1", "b": "2"}, original.Labels())
+	})
+}
+
 func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 	t.Run("NewResourceGraphDefinitionLabeler", func(t *testing.T) {
 		name := "rgd-name"

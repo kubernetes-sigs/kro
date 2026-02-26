@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -43,6 +44,10 @@ type ReconcileContext struct {
 
 	Mark         *ConditionsMarker
 	StateManager *StateManager
+
+	// Watcher is the per-instance watch handle from the coordinator.
+	// May be nil if the coordinator is not configured.
+	Watcher dynamiccontroller.InstanceWatcher
 }
 
 // NewReconcileContext constructs a ReconcileContext for a single reconciliation cycle.

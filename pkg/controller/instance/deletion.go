@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -98,7 +99,7 @@ func (c *Controller) planNodesForDeletion(
 		// At this point, identity is resolvable and we can safely observe (GET/LIST)
 		// to find the next deletable node.
 		switch nodeMeta.Type {
-		case graph.NodeTypeExternal:
+		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
 			state.SetSkipped()
 			continue
 
@@ -198,6 +199,14 @@ func (c *Controller) deleteTarget(
 
 // removeFinalizer clears managed state on the instance after deletions complete.
 func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
+	// Clean up coordinator watch requests before removing the finalizer.
+	if c.coordinator != nil {
+		c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
+			Name:      rcx.Instance.GetName(),
+			Namespace: rcx.Instance.GetNamespace(),
+		})
+	}
+
 	patched, err := c.setUnmanaged(rcx, rcx.Instance)
 	if err != nil {
 		rcx.Mark.InstanceNotManaged("failed removing finalizer: %v", err)

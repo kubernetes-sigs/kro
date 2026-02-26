@@ -27,7 +27,13 @@ import (
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas.
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), rgSchema.AdditionalPrinterColumns, rgSchema.Metadata)
+	var printerColumns []extv1.CustomResourceColumnDefinition
+	var metadata *v1alpha1.CRDMetadata
+	if rgSchema != nil {
+		printerColumns = rgSchema.AdditionalPrinterColumns
+		metadata = rgSchema.Metadata
+	}
+	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), printerColumns, metadata)
 }
 
 func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, metadata *v1alpha1.CRDMetadata) *extv1.CustomResourceDefinition {

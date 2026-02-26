@@ -21,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -460,7 +459,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.field",
-				Expressions:          krocel.NewUncompiledSlice("notProvided"),
+				Expressions:          []string{"notProvided"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -481,7 +480,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.field",
-				Expressions:          krocel.NewUncompiledSlice("value"),
+				Expressions:          []string{"value"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -503,7 +502,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value1", "value2"),
+				Expressions: []string{"value1", "value2"},
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
@@ -525,7 +524,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.array[0]",
-				Expressions:          krocel.NewUncompiledSlice("value"),
+				Expressions:          []string{"value"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -544,7 +543,7 @@ func TestResolveField(t *testing.T) {
 			data: map[string]interface{}{},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.field",
-				Expressions:          krocel.NewUncompiledSlice("missing"),
+				Expressions:          []string{"missing"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -562,7 +561,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.nonexistent.field",
-				Expressions:          krocel.NewUncompiledSlice("value"),
+				Expressions:          []string{"value"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -582,7 +581,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Expressions: []string{"value"},
 			},
 			want: ResolutionResult{
 				Path:  "spec.field",
@@ -607,7 +606,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.nested.array[0].field",
-				Expressions:          krocel.NewUncompiledSlice("value"),
+				Expressions:          []string{"value"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -630,7 +629,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("count", "name", "active"),
+				Expressions: []string{"count", "name", "active"},
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
@@ -657,7 +656,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        `spec.containers[2].image`,
-				Expressions: krocel.NewUncompiledSlice("image.name", "image.tag"),
+				Expressions: []string{"image.name", "image.tag"},
 			},
 			want: ResolutionResult{
 				Path:     "spec.containers[2].image",
@@ -675,7 +674,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 ".field",
-				Expressions:          krocel.NewUncompiledSlice("value"),
+				Expressions:          []string{"value"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -697,7 +696,7 @@ func TestResolveField(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value1", "value2"),
+				Expressions: []string{"value1", "value2"},
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
@@ -748,7 +747,7 @@ func TestResolveDynamicArrayIndexes(t *testing.T) {
 
 	field := variable.FieldDescriptor{
 		Path:                 "spec.array[1]",
-		Expressions:          krocel.NewUncompiledSlice("value"),
+		Expressions:          []string{"value"},
 		StandaloneExpression: true,
 	}
 
@@ -783,7 +782,7 @@ func TestResolver(t *testing.T) {
 		summary := r.Resolve([]variable.FieldDescriptor{
 			{
 				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value", "suffix"),
+				Expressions: []string{"value", "suffix"},
 			},
 		})
 		assert.Equal(t, 1, summary.TotalExpressions)
@@ -808,12 +807,12 @@ func TestResolver(t *testing.T) {
 		summary := r.Resolve([]variable.FieldDescriptor{
 			{
 				Path:                 "spec.field1",
-				Expressions:          krocel.NewUncompiledSlice("value1"),
+				Expressions:          []string{"value1"},
 				StandaloneExpression: true,
 			},
 			{
 				Path:                 "spec.field2",
-				Expressions:          krocel.NewUncompiledSlice("value2"),
+				Expressions:          []string{"value2"},
 				StandaloneExpression: true,
 			},
 		})
@@ -858,6 +857,38 @@ func TestUpsertValueAtPath(t *testing.T) {
 	})
 }
 
+// TestResolveFieldWithEmptyArray verifies that when data contains an empty array,
+// the resolver sets the field to an empty array (not null).
+func TestResolveFieldWithEmptyArray(t *testing.T) {
+	resource := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"items": "${items}",
+		},
+	}
+	data := map[string]interface{}{
+		"items": []interface{}{},
+	}
+	field := variable.FieldDescriptor{
+		Path:                 "spec.items",
+		Expressions:          []string{"items"},
+		StandaloneExpression: true,
+	}
+
+	r := NewResolver(resource, data)
+	result := r.resolveField(field)
+
+	assert.True(t, result.Resolved)
+	assert.NoError(t, result.Error)
+	assert.Equal(t, []interface{}{}, result.Replaced)
+	assert.NotNil(t, result.Replaced, "empty array should not be nil")
+
+	// Verify the resource was updated correctly
+	value, err := r.getValueFromPath("spec.items")
+	assert.NoError(t, err)
+	assert.Equal(t, []interface{}{}, value)
+	assert.NotNil(t, value)
+}
+
 // TestResolveFieldWithEmptyBraces tests the regression where strings.Trim() was
 // incorrectly stripping {} from expressions. This affected ternary CEL expressions
 // that end with empty maps like: condition ? value : {}
@@ -881,7 +912,7 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "metadata.annotations",
-				Expressions:          krocel.NewUncompiledSlice("includeAnnotations ? annotations : {}"),
+				Expressions:          []string{"includeAnnotations ? annotations : {}"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -904,7 +935,7 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "spec.config",
-				Expressions:          krocel.NewUncompiledSlice("has(schema.config) && includeConfig ? schema.config : {}"),
+				Expressions:          []string{"has(schema.config) && includeConfig ? schema.config : {}"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -927,7 +958,7 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:                 "data.field",
-				Expressions:          krocel.NewUncompiledSlice("condition ? {} : {}"),
+				Expressions:          []string{"condition ? {} : {}"},
 				StandaloneExpression: true,
 			},
 			want: ResolutionResult{
@@ -948,7 +979,7 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			},
 			field: variable.FieldDescriptor{
 				Path:        "spec.value",
-				Expressions: krocel.NewUncompiledSlice("expr ? value : {}"),
+				Expressions: []string{"expr ? value : {}"},
 			},
 			want: ResolutionResult{
 				Path:     "spec.value",

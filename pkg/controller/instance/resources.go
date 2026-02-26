@@ -227,7 +227,7 @@ func (c *Controller) processNode(
 			return nil, "", err
 		}
 		return resources, "", nil
-	case graph.NodeTypeResource:
+	case graph.NodeTypeScalar:
 		resources, err := c.processRegularNode(rcx, node, state, desired)
 		if err != nil {
 			return nil, "", err
@@ -554,7 +554,7 @@ func (c *Controller) processApplyResults(
 			if err := c.updateCollectionFromApplyResults(rcx, node, state, byID); err != nil {
 				return err
 			}
-		case graph.NodeTypeResource:
+		case graph.NodeTypeScalar:
 			if item, ok := byID[nodeID]; ok {
 				if item.Error != nil {
 					state.SetError(item.Error)

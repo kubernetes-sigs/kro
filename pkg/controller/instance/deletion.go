@@ -124,7 +124,7 @@ func (c *Controller) planNodesForDeletion(
 			state.SetInProgress()
 			deletionNode = node
 
-		case graph.NodeTypeResource:
+		case graph.NodeTypeScalar:
 			// Single resources delete by identity; GET the object to mark observed and
 			// allow DeleteTargets to return the correct target.
 			obj := desired[0]
@@ -213,7 +213,7 @@ func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 // resourceClientFor returns a client scoped to the node's namespace rules.
 func resourceClientFor(
 	rcx *ReconcileContext,
-	desc graph.NodeMeta,
+	desc graph.CompiledNodeMeta,
 	namespace string,
 ) dynamic.ResourceInterface {
 	if desc.Namespaced {

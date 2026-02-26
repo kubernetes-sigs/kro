@@ -17,15 +17,12 @@ package parser
 import (
 	"fmt"
 	"strings"
-
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 // ParseConditionExpressions parses resource condition expressions (readyWhen, includeWhen).
-// These must be standalone expressions (${...}). Returns Expression objects with
-// Original set; References and Program are populated later by builder.
-func ParseConditionExpressions(conditions []string) ([]*krocel.Expression, error) {
-	expressions := make([]*krocel.Expression, 0, len(conditions))
+// These must be standalone expressions (${...}). Returns raw expression strings.
+func ParseConditionExpressions(conditions []string) ([]string, error) {
+	expressions := make([]string, 0, len(conditions))
 
 	for _, e := range conditions {
 		ok, err := isStandaloneExpression(e)
@@ -37,7 +34,7 @@ func ParseConditionExpressions(conditions []string) ([]*krocel.Expression, error
 		}
 		expr := strings.TrimPrefix(e, "${")
 		expr = strings.TrimSuffix(expr, "}")
-		expressions = append(expressions, &krocel.Expression{Original: expr})
+		expressions = append(expressions, expr)
 	}
 
 	return expressions, nil

@@ -191,9 +191,18 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(restConfig, set.HTTPClient())
+	rgdConfig := graph.RGDConfig{
+		MaxCollectionSize:          rgdMaxCollectionSize,
+		MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
+	}
+
+	resourceGraphDefinitionGraphCompiler, err := graph.NewCompiler(
+		restConfig,
+		set.HTTPClient(),
+		graph.WithRGDConfig(rgdConfig),
+	)
 	if err != nil {
-		setupLog.Error(err, "unable to create resource graph definition graph builder")
+		setupLog.Error(err, "unable to create resource graph definition graph compiler")
 		os.Exit(1)
 	}
 
@@ -201,12 +210,9 @@ func main() {
 		set,
 		allowCRDDeletion,
 		dc,
-		resourceGraphDefinitionGraphBuilder,
+		resourceGraphDefinitionGraphCompiler,
 		resourceGraphDefinitionConcurrentReconciles,
-		graph.RGDConfig{
-			MaxCollectionSize:          rgdMaxCollectionSize,
-			MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
-		},
+		rgdConfig,
 	)
 	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")

@@ -406,7 +406,7 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 					if continueOnPending {
 						continue
 					}
-					return nil, true, fmt.Errorf("failed to %w (%w)", err, ErrDataPending)
+					return nil, true, fmt.Errorf("failed to evaluate expression: %w (%w)", err, ErrDataPending)
 				}
 				return nil, false, err
 			}

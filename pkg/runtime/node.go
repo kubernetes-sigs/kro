@@ -19,6 +19,7 @@ import (
 	"maps"
 	"slices"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -139,6 +140,10 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 		// External refs resolve like resources (for name/namespace CEL),
 		// but the caller reads instead of applies.
 		result, err = n.hardResolveSingleResource(n.templateVars)
+	case graph.NodeTypeExternalCollection:
+		// External collections don't produce desired objects; the caller
+		// uses the selector to LIST resources. Return empty slice.
+		result = []*unstructured.Unstructured{}
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
 	}
@@ -182,6 +187,9 @@ func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
 			normalizeNamespaces(result, inst.observed[0].GetNamespace())
 		}
 		return result, nil
+	case graph.NodeTypeExternalCollection:
+		// External collections have no identity to resolve; they use selectors.
+		return nil, nil
 	case graph.NodeTypeInstance:
 		panic("GetDesiredIdentity called for instance node")
 	default:
@@ -220,7 +228,7 @@ func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 			return orderedIntersection(n.observed, desired), nil
 		}
 		return n.observed, nil
-	case graph.NodeTypeInstance, graph.NodeTypeExternal:
+	case graph.NodeTypeInstance, graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
 		panic(fmt.Sprintf("DeleteTargets called for node type %v", n.Spec.Meta.Type))
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
@@ -484,12 +492,16 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 
 // SetObserved stores the observed state(s) from the cluster.
 func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
-	if n.Spec.Meta.Type == graph.NodeTypeCollection {
+	switch n.Spec.Meta.Type {
+	case graph.NodeTypeCollection:
 		n.observed = orderedIntersection(observed, n.desired)
-		return
+	case graph.NodeTypeExternalCollection:
+		// External collections store all observed items directly; there is
+		// no desired set to intersect with.
+		n.observed = observed
+	default:
+		n.observed = observed
 	}
-
-	n.observed = observed
 }
 
 // IsReady evaluates readyWhen expressions using observed state.
@@ -504,10 +516,12 @@ func (n *Node) IsReady() (bool, error) {
 		return true, nil
 	}
 
-	if n.Spec.Meta.Type == graph.NodeTypeCollection {
+	switch n.Spec.Meta.Type {
+	case graph.NodeTypeCollection, graph.NodeTypeExternalCollection:
 		return n.isCollectionReady()
+	default:
+		return n.isSingleResourceReady()
 	}
-	return n.isSingleResourceReady()
 }
 
 func (n *Node) isSingleResourceReady() (bool, error) {
@@ -622,7 +636,7 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if len(only) > 0 && !slices.Contains(only, depID) {
 			continue
 		}
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
+		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
 				items[i] = obj.Object
@@ -658,7 +672,7 @@ func withStatusOmitted(obj map[string]any) map[string]any {
 // - iterators: forEach loop variable names from iterCtx (declared as list(dyn))
 func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collections, iterators []string) {
 	for depID, dep := range n.deps {
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
+		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
 			collections = append(collections, depID)
 		} else {
 			singles = append(singles, depID)
@@ -668,4 +682,10 @@ func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collection
 		iterators = append(iterators, name)
 	}
 	return
+}
+
+// GetResolvedSelector returns the label selector from the node's graph spec.
+// This is only valid for NodeTypeExternalCollection nodes.
+func (n *Node) GetResolvedSelector() *metav1.LabelSelector {
+	return n.Spec.Meta.Selector
 }

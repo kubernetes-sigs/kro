@@ -28,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -84,6 +85,7 @@ type Controller struct {
 	instanceLabeler      metadata.Labeler
 	childResourceLabeler metadata.Labeler
 	reconcileConfig      ReconcileConfig
+	coordinator          *dynamiccontroller.WatchCoordinator
 }
 
 // NewController constructs a new controller with static RGD.
@@ -95,6 +97,7 @@ func NewController(
 	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
+	coord *dynamiccontroller.WatchCoordinator,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -104,12 +107,24 @@ func NewController(
 		instanceLabeler:      instanceLabeler,
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
+		coordinator:          coord,
 	}
 }
 
 // Reconcile implements the controller-runtime Reconcile interface.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error) {
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
+
+	// Get per-instance watcher from the coordinator.
+	var watcher dynamiccontroller.InstanceWatcher
+	if c.coordinator != nil {
+		watcher = c.coordinator.ForInstance(c.gvr, req.NamespacedName)
+		defer func() {
+			if err == nil {
+				watcher.Done()
+			}
+		}()
+	}
 
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do
@@ -148,6 +163,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		c.reconcileConfig,
 		inst,
 	)
+	rcx.Watcher = watcher
 
 	//--------------------------------------------------------------
 	// 4. Handle deletion: clean up children and status

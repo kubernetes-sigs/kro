@@ -24,6 +24,7 @@ import (
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi"
@@ -313,8 +314,9 @@ func (b *Builder) buildExternalRefResource(
 	resourceObject := map[string]interface{}{}
 	resourceObject["apiVersion"] = externalRef.APIVersion
 	resourceObject["kind"] = externalRef.Kind
-	metadata := map[string]interface{}{
-		"name": externalRef.Metadata.Name,
+	metadata := map[string]interface{}{}
+	if externalRef.Metadata.Name != "" {
+		metadata["name"] = externalRef.Metadata.Name
 	}
 	if externalRef.Metadata.Namespace != "" {
 		metadata["namespace"] = externalRef.Metadata.Namespace
@@ -421,10 +423,16 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
-	// Determine node type
+	// Determine node type and optional selector for external collections.
 	nodeType := NodeTypeResource
+	var labelSelector *metav1.LabelSelector
 	if rgResource.ExternalRef != nil {
-		nodeType = NodeTypeExternal
+		if rgResource.ExternalRef.Metadata.Selector != nil {
+			nodeType = NodeTypeExternalCollection
+			labelSelector = rgResource.ExternalRef.Metadata.Selector
+		} else {
+			nodeType = NodeTypeExternal
+		}
 	} else if len(forEachDimensions) > 0 {
 		nodeType = NodeTypeCollection
 	}
@@ -437,6 +445,7 @@ func (b *Builder) buildRGResource(
 			Type:       nodeType,
 			GVR:        mapping.Resource,
 			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
+			Selector:   labelSelector,
 			// Dependencies will be set by buildDependencyGraph
 		},
 		Template:    &unstructured.Unstructured{Object: resourceObject},
@@ -1282,13 +1291,13 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 }
 
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
-// Collections (those with forEach) are wrapped as list types
-// so other nodes can reference them as arrays and use CEL list functions.
+// Collections (forEach) and external collections (selector) are wrapped as
+// list types so other nodes can reference them as arrays and use CEL list functions.
 func collectNodeSchemas(nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
-			if node.Meta.Type == NodeTypeCollection {
+			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
 				result[id] = schema.WrapSchemaAsList(sch)
 			} else {
 				result[id] = sch

@@ -17,6 +17,7 @@ package graph
 import (
 	"slices"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -56,6 +57,9 @@ const (
 	NodeTypeExternal
 	// NodeTypeInstance is the instance node (ID: "instance").
 	NodeTypeInstance
+	// NodeTypeExternalCollection is an external reference with a label selector
+	// that matches multiple resources (read-only collection, not applied).
+	NodeTypeExternalCollection
 )
 
 // String returns a human-readable string for the node type.
@@ -69,6 +73,8 @@ func (t NodeType) String() string {
 		return "External"
 	case NodeTypeInstance:
 		return "Instance"
+	case NodeTypeExternalCollection:
+		return "ExternalCollection"
 	default:
 		return "Unknown"
 	}
@@ -91,6 +97,9 @@ type NodeMeta struct {
 	Namespaced bool
 	// Dependencies lists the IDs of nodes this node depends on.
 	Dependencies []string
+	// Selector is the label selector for ExternalCollection nodes.
+	// nil for all other node types.
+	Selector *metav1.LabelSelector
 }
 
 // ForEachDimension represents a parsed forEach dimension from an RGD resource.
@@ -144,6 +153,7 @@ func (n *Node) DeepCopy() *Node {
 			GVR:          n.Meta.GVR,
 			Namespaced:   n.Meta.Namespaced,
 			Dependencies: slices.Clone(n.Meta.Dependencies),
+			Selector:     n.Meta.Selector.DeepCopy(),
 		},
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),

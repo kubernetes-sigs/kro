@@ -112,17 +112,25 @@ type CRDMetadata struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="(has(self.name) && size(self.name) > 0) || has(self.selector)",message="exactly one of name or selector must be provided"
+// +kubebuilder:validation:XValidation:rule="!((has(self.name) && size(self.name) > 0) && has(self.selector))",message="name and selector are mutually exclusive"
 type ExternalRefMetadata struct {
 	// Name is the name of the external resource to reference.
-	// This field is required.
+	// Mutually exclusive with Selector.
 	//
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
 	Name string `json:"name,omitempty"`
 	// Namespace is the namespace of the external resource.
 	// If empty, the instance's namespace will be used.
 	//
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
+	// Selector is a label selector for collection external references.
+	// When set, all resources matching the selector are included.
+	// Mutually exclusive with Name.
+	//
+	// +kubebuilder:validation:Optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
 // ExternalRef is a reference to an external resource that already exists in the cluster.

@@ -230,7 +230,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 	baseExprs, _ := n.exprSetsForVars(vars)
 	values, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
-		return nil, fmt.Errorf("node \"%s\": %w", n.Spec.Meta.ID, err)
+		return nil, fmt.Errorf("node %q: %w", n.Spec.Meta.ID, err)
 	}
 
 	desired := n.Spec.Template.DeepCopy()

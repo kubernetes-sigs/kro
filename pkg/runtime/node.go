@@ -118,12 +118,11 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 			if depID == graph.InstanceNodeID {
 				continue
 			}
-			ready, err := dep.IsReady()
-			if err != nil {
-				return nil, err
-			}
-			if !ready {
-				return nil, ErrDataPending
+			if err := dep.CheckReadiness(); err != nil {
+				if IsWaitingForReadiness(err) {
+					return nil, fmt.Errorf("node %q: dependent node %q not ready: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
+				}
+				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err, ErrDataPending)
 			}
 		}
 	}
@@ -231,7 +230,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 	baseExprs, _ := n.exprSetsForVars(vars)
 	values, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
-		return nil, fmt.Errorf("node id \"%s\": %w", n.Spec.Meta.ID, err)
+		return nil, fmt.Errorf("node \"%s\": %w", n.Spec.Meta.ID, err)
 	}
 
 	desired := n.Spec.Template.DeepCopy()
@@ -489,30 +488,30 @@ func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
 	n.observed = observed
 }
 
-// IsReady evaluates readyWhen expressions using observed state.
+// CheckReadiness evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
-func (n *Node) IsReady() (bool, error) {
+func (n *Node) CheckReadiness() error {
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
-		return false, err
+		return fmt.Errorf("is ignore check failed: %w", err)
 	}
 	if ignored {
-		return true, nil
+		return nil
 	}
 
 	if n.Spec.Meta.Type == graph.NodeTypeCollection {
-		return n.isCollectionReady()
+		return n.checkCollectionReadiness()
 	}
-	return n.isSingleResourceReady()
+	return n.checkSingleResourceReadiness()
 }
 
-func (n *Node) isSingleResourceReady() (bool, error) {
+func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return false, nil
+		return fmt.Errorf("no observed state for node %q", n.Spec.Meta.ID)
 	}
 	if len(n.readyWhenExprs) == 0 {
-		return true, nil
+		return nil
 	}
 
 	nodeID := n.Spec.Meta.ID
@@ -521,31 +520,28 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 	for _, expr := range n.readyWhenExprs {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			if isCELDataPending(err) {
-				return false, nil
-			}
-			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression.Original, err)
+			return fmt.Errorf("failed to evaluate expression: %w", err)
 		}
 		if !result {
-			return false, nil
+			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
 		}
 	}
-	return true, nil
+	return nil
 }
 
-func (n *Node) isCollectionReady() (bool, error) {
+func (n *Node) checkCollectionReadiness() error {
 	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 	if n.desired == nil {
-		return false, nil
+		return fmt.Errorf("collection not computed (%w)", ErrWaitingForReadiness)
 	}
 	if len(n.desired) == 0 {
-		return true, nil
+		return nil
 	}
 	if len(n.observed) < len(n.desired) {
-		return false, nil
+		return fmt.Errorf("collection not ready (%w)", ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
-		return true, nil
+		return nil
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
@@ -557,22 +553,19 @@ func (n *Node) isCollectionReady() (bool, error) {
 			// Use Expression.Eval directly instead of evalBoolExpr.
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
-				if isCELDataPending(err) {
-					return false, nil
-				}
-				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
+				return fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
 			}
 			if !result {
-				return false, nil
+				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
 			}
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 // evaluateForEach evaluates forEach dimensions and returns iterator contexts.

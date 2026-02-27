@@ -477,16 +477,16 @@ func (c *Controller) processExternalRefNode(
 
 	node.SetObserved([]*unstructured.Unstructured{actual})
 
-	ready, err := node.IsReady()
-	if err != nil {
+	if err := node.CheckReadiness(); err != nil {
+		if runtime.IsWaitingForReadiness(err) {
+			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
+			return nil
+		}
 		state.SetError(err)
 		return err
 	}
-	if ready {
-		state.SetReady()
-	} else {
-		state.SetWaitingForReadiness(nil)
-	}
+	state.SetReady()
+
 	return nil
 }
 
@@ -635,14 +635,14 @@ func (c *Controller) updateCollectionFromApplyResults(
 // setStateFromReadiness evaluates node readiness and updates the node state
 // to synced, waiting, or error.
 func setStateFromReadiness(node *runtime.Node, state *NodeState) {
-	ready, err := node.IsReady()
-	if err != nil {
+	if err := node.CheckReadiness(); err != nil {
+		if runtime.IsWaitingForReadiness(err) {
+			state.SetWaitingForReadiness(fmt.Errorf("waiting for node %q: %w", node.Spec.Meta.ID, err))
+			return
+		}
 		state.SetError(err)
 		return
 	}
-	if ready {
-		state.SetReady()
-		return
-	}
-	state.SetWaitingForReadiness(nil)
+	state.SetReady()
+	return
 }

@@ -78,20 +78,20 @@ func TestNode_IsReady(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "single resource without readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).build(),
-			wantReady: false,
+			name:    "single resource without readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).build(),
+			wantErr: true,
 		},
 		{
 			name: "single resource without readyWhen, observed - ready",
 			node: newTestNode("test", graph.NodeTypeResource).
 				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
-			wantReady: true,
+			wantErr: false,
 		},
 		{
-			name:      "single resource with readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
-			wantReady: false,
+			name:    "single resource with readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
+			wantErr: true,
 		},
 		{
 			name: "ignored nodes are always ready",
@@ -100,19 +100,19 @@ func TestNode_IsReady(t *testing.T) {
 					withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
 					withResolvedIncludeWhen("false", false).build()).
 				withReadyWhen("test.status.ready").build(),
-			wantReady: true, // ignored, so ready
+			wantErr: false, // ignored, so ready
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
+			err := tt.node.CheckReadiness()
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.wantReady, ready)
+				return
 			}
+			assert.NoError(t, err)
+
 		})
 	}
 }
@@ -357,13 +357,14 @@ func TestNode_IsReady_Collection(t *testing.T) {
 	tests := []struct {
 		name      string
 		node      *Node
+		wantErr   bool
 		wantReady bool
 	}{
 		{
 			name: "collection with nil desired is not ready",
 			node: newTestNode("buckets", graph.NodeTypeCollection).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "collection with resolved empty desired is ready",
@@ -373,7 +374,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "collection with fewer observed than desired is not ready",
@@ -384,12 +385,12 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "Pod", "ns", "bucket-1")).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: true,
 		},
 		{
-			name:      "collection without readyWhen, nil desired - not ready",
-			node:      newTestNode("items", graph.NodeTypeCollection).build(),
-			wantReady: false,
+			name:    "collection without readyWhen, nil desired - not ready",
+			node:    newTestNode("items", graph.NodeTypeCollection).build(),
+			wantErr: true,
 		},
 		{
 			name: "collection without readyWhen, empty desired - ready",
@@ -398,7 +399,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "collection without readyWhen, observed < desired - not ready",
@@ -409,7 +410,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "cm-1")).
 				build(),
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "collection without readyWhen, observed >= desired - ready",
@@ -423,15 +424,18 @@ func TestNode_IsReady_Collection(t *testing.T) {
 					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
 				).
 				build(),
-			wantReady: true,
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
+			err := tt.node.CheckReadiness()
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }
@@ -545,7 +549,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "readyWhen evaluates to false",
@@ -557,7 +561,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": false}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "multiple readyWhen - all must be true",
@@ -569,7 +573,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true, "state": "pending"}}).
 					withReadyWhen("vpc.status.ready == true", "vpc.status.state == 'available'").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -588,7 +592,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
+			err := tt.node().CheckReadiness()
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errContain != "" {
@@ -597,7 +601,6 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }
@@ -756,7 +759,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "all items ready",
@@ -775,7 +778,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "one item not ready",
@@ -794,7 +797,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "fewer observed than desired",
@@ -812,7 +815,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "CEL data pending returns false",
@@ -825,7 +828,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{}).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "multiple readyWhen - all must pass",
@@ -841,7 +844,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withReadyWhen("each.status.ready == true").
 					withReadyWhen("each.status.phase == 'Running'").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -866,7 +869,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
+			err := tt.node().CheckReadiness()
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errContain != "" {
@@ -875,7 +878,6 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }

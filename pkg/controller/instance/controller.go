@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -175,6 +176,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// 7. Reconcile nodes (SSA + prune) and update runtime state
 	//--------------------------------------------------------------
 	if err := c.reconcileNodes(rcx); err != nil {
+		if strings.Contains(err.Error(), "unresolved") {
+			rcx.Mark.ResourcesNotReady("waiting for unresolved resource: %v", err)
+			_ = c.updateStatus(rcx)
+			return err
+		}
 		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
 		_ = c.updateStatus(rcx)
 		return err

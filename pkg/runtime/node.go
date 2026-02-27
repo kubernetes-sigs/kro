@@ -405,7 +405,7 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 					if continueOnPending {
 						continue
 					}
-					return nil, true, fmt.Errorf("failed to evaluate expression: %w (%w)", err, ErrDataPending)
+					return nil, true, fmt.Errorf("failed to evaluate expression: %q (%w)", err.Error(), ErrDataPending)
 				}
 				return nil, false, err
 			}
@@ -508,7 +508,7 @@ func (n *Node) CheckReadiness() error {
 
 func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return fmt.Errorf("no observed state for node %q: %w", n.Spec.Meta.ID, ErrWaitingForReadiness)
+		return fmt.Errorf("unresolved node %q: no observed state for node %q: %w", n.Spec.Meta.ID, n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil
@@ -520,6 +520,9 @@ func (n *Node) checkSingleResourceReadiness() error {
 	for _, expr := range n.readyWhenExprs {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
+			if isCELDataPending(err) {
+				return fmt.Errorf("unresolved node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
+			}
 			return fmt.Errorf("failed to evaluate expression: %w", err)
 		}
 		if !result {
@@ -553,6 +556,9 @@ func (n *Node) checkCollectionReadiness() error {
 			// Use Expression.Eval directly instead of evalBoolExpr.
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
+				if isCELDataPending(err) {
+					return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+				}
 				return fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
 			}
 			result, ok := val.(bool)

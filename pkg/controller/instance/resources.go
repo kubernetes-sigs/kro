@@ -120,8 +120,8 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 // processNodes walks every runtime node, resolves desired objects, observes
 // current objects from the cluster where needed, and updates runtime observations
 // so subsequent nodes can become resolvable/ready/includable. It returns the
-// applyset.Resource list to be applied and reports the last unresolved node ID
-// (when desired data is pending) so callers can gate pruning.
+// applyset.Resource list to be applied and an aggregated error if any nodes are
+// pending resolution.
 func (c *Controller) processNodes(
 	rcx *ReconcileContext,
 ) ([]applyset.Resource, error) {
@@ -214,6 +214,7 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
+			//state.SetWaitingForReadiness(err)
 			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
 		}
 		state.SetError(err)
@@ -612,7 +613,7 @@ func (c *Controller) updateCollectionFromApplyResults(
 	// - Otherwise we expect item-level apply results and proceed to reconcile them.
 	desiredItems, err := node.GetDesired()
 	if err != nil {
-		if runtime.IsDataPending(err) || runtime.IsWaitingForReadiness(err) {
+		if runtime.IsDataPending(err) {
 			return nil
 		}
 		state.SetError(err)
@@ -655,5 +656,4 @@ func setStateFromReadiness(node *runtime.Node, state *NodeState) {
 		return
 	}
 	state.SetReady()
-	return
 }

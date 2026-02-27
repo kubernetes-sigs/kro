@@ -508,7 +508,7 @@ func (n *Node) CheckReadiness() error {
 
 func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return fmt.Errorf("unresolved node %q: no observed state for node %q: %w", n.Spec.Meta.ID, n.Spec.Meta.ID, ErrWaitingForReadiness)
+		return fmt.Errorf("node %q: no observed state for node %q: %w", n.Spec.Meta.ID, n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil
@@ -557,9 +557,9 @@ func (n *Node) checkCollectionReadiness() error {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.Original, i, ErrWaitingForReadiness)
 				}
-				return fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.Original, i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {

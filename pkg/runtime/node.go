@@ -120,9 +120,9 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 			}
 			if err := dep.CheckReadiness(); err != nil {
 				if IsWaitingForReadiness(err) {
-					return nil, fmt.Errorf("node %q: dependent node %q not ready: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
+					return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
 				}
-				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err, ErrDataPending)
+				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
 			}
 		}
 	}
@@ -508,7 +508,7 @@ func (n *Node) CheckReadiness() error {
 
 func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return fmt.Errorf("no observed state for node %q", n.Spec.Meta.ID)
+		return fmt.Errorf("no observed state for node %q: %w", n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil

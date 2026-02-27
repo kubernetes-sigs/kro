@@ -612,7 +612,7 @@ func (c *Controller) updateCollectionFromApplyResults(
 	// - Otherwise we expect item-level apply results and proceed to reconcile them.
 	desiredItems, err := node.GetDesired()
 	if err != nil {
-		if runtime.IsDataPending(err) {
+		if runtime.IsDataPending(err) || runtime.IsWaitingForReadiness(err) {
 			return nil
 		}
 		state.SetError(err)

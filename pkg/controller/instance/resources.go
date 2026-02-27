@@ -162,7 +162,7 @@ func (c *Controller) pruneOrphans(
 		return false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
 	}
 
-	// Prune succeeded (apierrors return directly), safe to shrink metadata
+	// Prune succeeded (errors return directly), safe to shrink metadata
 	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
 		rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
 	}
@@ -524,7 +524,7 @@ func (c *Controller) readExternalRefNode(
 
 // processApplyResults updates runtime observations and node states from apply results.
 // It maps per-item results back to nodes (including collections) and records
-// apierrors surfaced by apply.
+// errors surfaced by apply.
 func (c *Controller) processApplyResults(
 	rcx *ReconcileContext,
 	result *applyset.ApplyResult,
@@ -587,9 +587,9 @@ func (c *Controller) processApplyResults(
 	filter := func(err error) bool {
 		return !runtime.IsWaitingForReadiness(err)
 	}
-	// Aggregate all node apierrors
+	// Aggregate all node errors
 	if err := rcx.StateManager.NodeErrors(filter); err != nil {
-		return fmt.Errorf("apply results contain apierrors: %w", err)
+		return fmt.Errorf("apply results contain errors: %w", err)
 	}
 
 	return nil

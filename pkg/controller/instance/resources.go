@@ -209,7 +209,7 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
-			return nil, id, nil
+			return nil, id, err
 		}
 		state.SetError(err)
 		return nil, "", err

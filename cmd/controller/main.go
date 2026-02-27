@@ -17,6 +17,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -34,6 +35,7 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	// +kubebuilder:scaffold:imports
 )
@@ -71,8 +73,9 @@ func main() {
 		queueMaxRetries         int
 		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
-		qps   float64
-		burst int
+		qps              float64
+		burst            int
+		featureGatesFlag string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
@@ -119,6 +122,10 @@ func main() {
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,
 		"The number of requests that can be stored for processing before the server starts enforcing the QPS limit")
+	flag.StringVar(&featureGatesFlag, "feature-gates", "",
+		"A set of key=value pairs that describe feature gates for alpha/experimental features. "+
+			"For example: --feature-gates=ParallelDagWalking=true. "+
+			"Known features: "+strings.Join(features.FeatureGate.KnownFeatures(), ", "))
 
 	opts := zap.Options{
 		Development: true,
@@ -127,8 +134,17 @@ func main() {
 
 	flag.Parse()
 
+	if featureGatesFlag != "" {
+		if err := features.FeatureGate.Set(featureGatesFlag); err != nil {
+			setupLog.Error(err, "unable to parse --feature-gates flag")
+			os.Exit(1)
+		}
+	}
+
 	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
+
+	setupLog.Info("feature gates", "knownFeatures", features.FeatureGate.KnownFeatures())
 
 	set, err := kroclient.NewSet(kroclient.Config{
 		QPS:   float32(qps),

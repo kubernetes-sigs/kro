@@ -103,7 +103,7 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	rcx.StateManager.Update()
 
 	if lastUnresolved != "" {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", lastUnresolved))
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %s", lastUnresolved))
 	}
 	if clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
@@ -209,7 +209,7 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
-			return nil, id, err
+			return nil, fmt.Sprintf("gvr \"%s\": %s", node.Spec.Meta.GVR.String(), err.Error()), nil
 		}
 		state.SetError(err)
 		return nil, "", err

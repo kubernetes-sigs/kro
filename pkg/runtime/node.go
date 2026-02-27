@@ -231,7 +231,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 	baseExprs, _ := n.exprSetsForVars(vars)
 	values, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
-		return nil, fmt.Errorf("node %q: %w", n.Spec.Meta.ID, err)
+		return nil, fmt.Errorf("node id \"%s\": %w", n.Spec.Meta.ID, err)
 	}
 
 	desired := n.Spec.Template.DeepCopy()
@@ -406,7 +406,7 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 					if continueOnPending {
 						continue
 					}
-					return nil, true, fmt.Errorf("failed to evaluate expression ${%s}: %w", expr.Expression, ErrDataPending)
+					return nil, true, fmt.Errorf("failed to %w (%w)", err, ErrDataPending)
 				}
 				return nil, false, err
 			}

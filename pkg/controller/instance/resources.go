@@ -136,9 +136,9 @@ func (c *Controller) processNodes(
 			if !runtime.IsDataPending(err) {
 				return nil, err
 			}
-			resources = append(resources, resourcesToAdd...)
 			unresolvedErr = errors.Join(unresolvedErr, err)
 		}
+		resources = append(resources, resourcesToAdd...)
 	}
 
 	return resources, unresolvedErr

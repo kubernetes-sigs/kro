@@ -28,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -81,8 +82,10 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	labeler         metadata.Labeler
-	reconcileConfig ReconcileConfig
+	instanceLabeler      metadata.Labeler
+	childResourceLabeler metadata.Labeler
+	reconcileConfig      ReconcileConfig
+	coordinator          *dynamiccontroller.WatchCoordinator
 }
 
 // NewController constructs a new controller with static RGD.
@@ -92,21 +95,36 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
-	labeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
+	childResourceLabeler metadata.Labeler,
+	coord *dynamiccontroller.WatchCoordinator,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		client:          client,
-		gvr:             gvr,
-		rgd:             rgd,
-		labeler:         labeler,
-		reconcileConfig: reconcileConfig,
+		log:                  log,
+		client:               client,
+		gvr:                  gvr,
+		rgd:                  rgd,
+		instanceLabeler:      instanceLabeler,
+		childResourceLabeler: childResourceLabeler,
+		reconcileConfig:      reconcileConfig,
+		coordinator:          coord,
 	}
 }
 
 // Reconcile implements the controller-runtime Reconcile interface.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error) {
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
+
+	// Get per-instance watcher from the coordinator.
+	var watcher dynamiccontroller.InstanceWatcher
+	if c.coordinator != nil {
+		watcher = c.coordinator.ForInstance(c.gvr, req.NamespacedName)
+		defer func() {
+			if err == nil {
+				watcher.Done()
+			}
+		}()
+	}
 
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do
@@ -140,11 +158,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.labeler,
+		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,
 	)
+	rcx.Watcher = watcher
 
 	//--------------------------------------------------------------
 	// 4. Handle deletion: clean up children and status
@@ -221,7 +240,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
 
-	wantLabels := c.labeler.Labels()
+	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
 	needLabelPatch := false
 

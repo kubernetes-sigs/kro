@@ -206,6 +206,18 @@ func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
 	}
 }
 
+// Exclude returns a new Labeler with the specified keys removed.
+func Exclude(l Labeler, keys ...string) Labeler {
+	result := make(map[string]string, len(l.Labels()))
+	for k, v := range l.Labels() {
+		result[k] = v
+	}
+	for _, key := range keys {
+		delete(result, key)
+	}
+	return GenericLabeler(result)
+}
+
 func safeVersion(version string) string {
 	if validation.IsValidLabelValue(version) == nil {
 		return version

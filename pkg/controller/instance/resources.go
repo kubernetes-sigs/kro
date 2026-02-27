@@ -20,9 +20,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -221,6 +223,11 @@ func (c *Controller) processNode(
 			return nil, "", err
 		}
 		return nil, "", nil
+	case graph.NodeTypeExternalCollection:
+		if err := c.processExternalCollectionNode(rcx, node, state); err != nil {
+			return nil, "", err
+		}
+		return nil, "", nil
 	case graph.NodeTypeCollection:
 		resources, err := c.processCollectionNode(rcx, node, state, desired)
 		if err != nil {
@@ -255,6 +262,9 @@ func (c *Controller) processRegularNode(
 		return nil, nil
 	}
 	desired := desiredList[0]
+
+	// Register watch BEFORE operating on the resource to avoid event gaps.
+	requestWatch(rcx, id, nodeMeta.GVR, desired.GetName(), desired.GetNamespace())
 
 	ri := resourceClientFor(rcx, nodeMeta, desired.GetNamespace())
 	current, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
@@ -324,6 +334,9 @@ func (c *Controller) processCollectionNode(
 	// Build resources list for apply
 	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
+		// Register watch for each collection item.
+		requestWatch(rcx, id, gvr, expandedResource.GetName(), expandedResource.GetNamespace())
+
 		// Apply decorator labels with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
@@ -464,6 +477,9 @@ func (c *Controller) processExternalRefNode(
 	}
 	desired := desiredList[0]
 
+	// Register watch BEFORE reading the external resource.
+	requestWatch(rcx, id, node.Spec.Meta.GVR, desired.GetName(), desired.GetNamespace())
+
 	// External refs are read-only here: fetch and push into runtime for dependency/readiness.
 	actual, err := c.readExternalRefNode(rcx, node, desired)
 	if err != nil {
@@ -566,8 +582,8 @@ func (c *Controller) processApplyResults(
 				}
 				setStateFromReadiness(node, state)
 			}
-		case graph.NodeTypeExternal:
-			// External refs handled before applyset.
+		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
+			// External refs/collections handled before applyset.
 			continue
 		case graph.NodeTypeInstance:
 			panic("instance node should not be in apply results")
@@ -645,4 +661,99 @@ func setStateFromReadiness(node *runtime.Node, state *NodeState) {
 		return
 	}
 	state.SetWaitingForReadiness(nil)
+}
+
+// processExternalCollectionNode reads external resources matching a label selector
+// and updates node state.
+func (c *Controller) processExternalCollectionNode(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+	state *NodeState,
+) error {
+	id := node.Spec.Meta.ID
+	nodeMeta := node.Spec.Meta
+
+	labelSelector := node.GetResolvedSelector()
+	if labelSelector == nil {
+		state.SetSkipped()
+		return nil
+	}
+
+	// Convert metav1.LabelSelector to labels.Selector for LIST.
+	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
+	if err != nil {
+		state.SetError(fmt.Errorf("invalid label selector for %s: %w", id, err))
+		return state.Err
+	}
+
+	// Register collection watch with the coordinator.
+	requestCollectionWatch(rcx, id, nodeMeta.GVR, rcx.Instance.GetNamespace(), selector)
+
+	// Determine namespace for LIST.
+	ns := rcx.Instance.GetNamespace()
+
+	// LIST external resources matching the selector.
+	var ri = rcx.Client.Resource(nodeMeta.GVR)
+	list, err := ri.Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
+	if err != nil {
+		state.SetError(fmt.Errorf("failed to list external collection %s: %w", id, err))
+		return state.Err
+	}
+
+	items := make([]*unstructured.Unstructured, len(list.Items))
+	for i := range list.Items {
+		items[i] = &list.Items[i]
+	}
+
+	node.SetObserved(items)
+
+	ready, err := node.IsReady()
+	if err != nil {
+		state.SetError(err)
+		return err
+	}
+	if ready {
+		state.SetReady()
+	} else {
+		state.SetWaitingForReadiness(nil)
+	}
+
+	rcx.Log.V(2).Info("External collection resolved",
+		"id", id,
+		"gvr", nodeMeta.GVR.String(),
+		"count", len(items),
+	)
+	return nil
+}
+
+// requestWatch registers a scalar watch request with the coordinator if available.
+func requestWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, name, namespace string) {
+	if rcx.Watcher == nil {
+		return
+	}
+	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
+		NodeID:    nodeID,
+		GVR:       gvr,
+		Name:      name,
+		Namespace: namespace,
+	}); err != nil {
+		rcx.Log.Error(err, "failed to register watch", "nodeID", nodeID, "gvr", gvr)
+	}
+}
+
+// requestCollectionWatch registers a collection (selector-based) watch request.
+func requestCollectionWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, namespace string, selector labels.Selector) {
+	if rcx.Watcher == nil {
+		return
+	}
+	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
+		NodeID:    nodeID,
+		GVR:       gvr,
+		Namespace: namespace,
+		Selector:  selector,
+	}); err != nil {
+		rcx.Log.Error(err, "failed to register collection watch", "nodeID", nodeID, "gvr", gvr)
+	}
 }

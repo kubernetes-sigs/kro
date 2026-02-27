@@ -160,9 +160,11 @@ var _ = Describe("Labels and Annotations", func() {
 			HaveKeyWithValue(metadata.InstanceKindLabel, "TestApply"),
 			HaveKeyWithValue(metadata.KROVersionLabel, "devel"),
 			HaveKeyWithValue(metadata.OwnedLabel, "true"),
-			HaveKeyWithValue(metadata.ResourceGraphDefinitionIDLabel, string(rgd.GetUID())),
-			HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.GetName()),
 		), "config map should be created as part of apply set managed by instance created through rgd")
+		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel),
+			"child resource should not have RGD ID label (RGD labels are only applied to CRDs)")
+		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionNameLabel),
+			"child resource should not have RGD name label (RGD labels are only applied to CRDs)")
 	})
 
 })

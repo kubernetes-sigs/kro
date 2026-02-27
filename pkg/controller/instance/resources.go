@@ -214,7 +214,6 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
-			//state.SetWaitingForReadiness(err)
 			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
 		}
 		state.SetError(err)

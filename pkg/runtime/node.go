@@ -521,9 +521,9 @@ func (n *Node) checkSingleResourceReadiness() error {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return fmt.Errorf("unresolved node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
 			}
-			return fmt.Errorf("failed to evaluate expression: %w", err)
+			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, err)
 		}
 		if !result {
 			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)

@@ -576,8 +576,14 @@ func (c *Controller) processApplyResults(
 		}
 	}
 
+	// we don't want to keep reconciling with exponential backoff if the error
+	// is waiting for readiness
+	// we will notice the readiness through a watch event
+	filter := func(err error) bool {
+		return !runtime.IsWaitingForReadiness(err)
+	}
 	// Aggregate all node errors
-	if err := rcx.StateManager.NodeErrors(); err != nil {
+	if err := rcx.StateManager.NodeErrors(filter); err != nil {
 		return fmt.Errorf("apply results contain errors: %w", err)
 	}
 

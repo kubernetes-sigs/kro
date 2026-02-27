@@ -133,10 +133,10 @@ func (s *StateManager) NewNodeState(id string) *NodeState {
 }
 
 // NodeErrors aggregates errors across all node states.
-func (s *StateManager) NodeErrors() error {
+func (s *StateManager) NodeErrors(filter func(e error) bool) error {
 	var errs []error
 	for _, st := range s.NodeStates {
-		if st.Err != nil {
+		if st.Err != nil && filter(st.Err) {
 			errs = append(errs, st.Err)
 		}
 	}

@@ -43,6 +43,8 @@ type Node struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
+
+	rgdConfig graph.RGDConfig
 }
 
 var identityPaths = []string{
@@ -599,7 +601,12 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		dimensions[i] = evaluatedDimension{name: dim.Name, values: values}
 	}
 
-	return cartesianProduct(dimensions), nil
+	product, err := cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return product, nil
 }
 
 // buildContext builds the CEL activation context from node dependencies.

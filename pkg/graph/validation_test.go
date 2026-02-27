@@ -15,10 +15,12 @@
 package graph
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -257,47 +259,87 @@ func TestValidateKubernetesVersion(t *testing.T) {
 	}
 }
 
-func TestValidateResourceGraphDefinitionNamingConventions(t *testing.T) {
+func TestValidateResourceGraphDefinition(t *testing.T) {
+	defaultRGDConfig := RGDConfig{
+		MaxCollectionDimensionSize: 10,
+	}
 	tests := []struct {
-		name       string
-		resourceID string
-		kind       string
-		wantErr    bool
+		name      string
+		rgd       *v1alpha1.ResourceGraphDefinition
+		rgdConfig RGDConfig
+		wantErr   bool
 	}{
 		{
-			name:       "Valid naming conventions",
-			resourceID: "validResourceID",
-			kind:       "ValidKindName",
-			wantErr:    false,
+			name: "Valid naming conventions",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "validResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   false,
 		},
 		{
-			name:       "Invalid kind name",
-			resourceID: "validResourceID",
-			kind:       "invalidKindName",
-			wantErr:    true,
+			name: "Invalid kind name",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "validResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "invalidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
 		},
 		{
-			name:       "Invalid resource ID",
-			resourceID: "invalid_ResourceID",
-			kind:       "ValidKindName",
-			wantErr:    true,
+			name: "Invalid resource ID",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "invalid_ResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
+		},
+		{
+			name: "Invalid foreach iterator name",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "validResourceID",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"invalid_IteratorName": "b"},
+							},
+						},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rgd := &v1alpha1.ResourceGraphDefinition{
-				Spec: v1alpha1.ResourceGraphDefinitionSpec{
-					Resources: []*v1alpha1.Resource{
-						{ID: tt.resourceID},
-					},
-					Schema: &v1alpha1.Schema{
-						Kind: tt.kind,
-					},
-				},
-			}
-			if err := validateResourceGraphDefinitionNamingConventions(rgd); (err != nil) != tt.wantErr {
-				t.Errorf("validateResourceGraphDefinitionNamingConventions() error = %v, wantErr %v", err, tt.wantErr)
+			if err := validateResourceGraphDefinition(tt.rgd, tt.rgdConfig); (err != nil) != tt.wantErr {
+				t.Errorf("validateResourceGraphDefinition() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -366,9 +408,13 @@ func TestInferListElementType(t *testing.T) {
 }
 
 func TestValidateForEachDimensions(t *testing.T) {
+	defaultRGDConfig := RGDConfig{
+		MaxCollectionDimensionSize: 10,
+	}
 	tests := []struct {
 		name        string
 		rgd         *v1alpha1.ResourceGraphDefinition
+		rgdConfig   RGDConfig
 		expectError bool
 		errorMsg    string
 	}{
@@ -386,6 +432,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: false,
 		},
 		{
@@ -403,6 +450,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: false,
 		},
 		{
@@ -419,6 +467,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: true,
 			errorMsg:    "forEach iterator name",
 		},
@@ -436,6 +485,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: true,
 			errorMsg:    "reserved keyword",
 		},
@@ -453,6 +503,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: true,
 			errorMsg:    "reserved keyword",
 		},
@@ -471,6 +522,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: true,
 			errorMsg:    "conflicts with resource ID",
 		},
@@ -489,6 +541,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: true,
 			errorMsg:    "duplicate forEach iterator name",
 		},
@@ -512,6 +565,7 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: false,
 		},
 		{
@@ -523,13 +577,39 @@ func TestValidateForEachDimensions(t *testing.T) {
 					},
 				},
 			},
+			rgdConfig:   defaultRGDConfig,
 			expectError: false,
+		},
+		{
+			name: "Resource with more than max forEach dimensions",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "deployment",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"a": "b"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   RGDConfig{MaxCollectionDimensionSize: 0},
+			expectError: true,
+			errorMsg:    "forEach cannot have more than 0 dimensions",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateResourceIDs(tt.rgd)
+			resourceIDs := sets.NewString()
+			for _, res := range tt.rgd.Spec.Resources {
+				resourceIDs.Insert(res.ID)
+			}
+			var err error
+			for _, res := range tt.rgd.Spec.Resources {
+				err = errors.Join(err, validateForEachDimensions(res, resourceIDs, tt.rgdConfig))
+			}
 			if (err != nil) != tt.expectError {
 				t.Errorf("validateResourceIDs() error = %v, expectError %v", err, tt.expectError)
 			}

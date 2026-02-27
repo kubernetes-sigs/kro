@@ -50,6 +50,8 @@ type ReconcileConfig struct {
 	// TODO(a-hilaly): need to define think the different deletion policies we need to
 	// support.
 	DeletionPolicy string
+	// RGDConfig holds RGD runtime configuration parameters.
+	RGDConfig graph.RGDConfig
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -125,7 +127,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := runtime.FromGraph(c.rgd, inst)
+	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err

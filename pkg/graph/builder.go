@@ -95,11 +95,17 @@ type Builder struct {
 	restMapper     meta.RESTMapper
 }
 
+// RGDConfig holds RGD runtime configuration parameters.
+type RGDConfig struct {
+	MaxCollectionSize          int
+	MaxCollectionDimensionSize int
+}
+
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition) (*Graph, error) {
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) (*Graph, error) {
 	// Before anything else, let's copy the resource graph definition to avoid modifying the
 	// original object.
 	rgd := originalCR.DeepCopy()
@@ -111,7 +117,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    that the names of the resources are valid to be used in CEL expressions.
 	//    for example name-something-something is not a valid name for a resource,
 	//    because in CEL - is a subtraction operator.
-	err := validateResourceGraphDefinitionNamingConventions(rgd)
+	err := validateResourceGraphDefinition(rgd, rgdConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}

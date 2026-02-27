@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -26,6 +27,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
+
+const testMaxCollectionSize = 1000
 
 func TestNode_IsIgnored(t *testing.T) {
 	tests := []struct {
@@ -1182,6 +1185,30 @@ func TestNode_EvaluateForEach(t *testing.T) {
 			}(),
 			wantLen: 0,
 		},
+		{
+			name: "collection exceeds max size",
+			node: func() *Node {
+				var items []any
+				for i := 0; i < testMaxCollectionSize+1; i++ {
+					items = append(items, fmt.Sprintf("item-%d", i))
+				}
+
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"items": items,
+						},
+					}).build()
+				n := newTestNode("resources", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.items").build()
+				n.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				}
+				return n
+			}(),
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1484,6 +1511,9 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
+		rgdConfig: graph.RGDConfig{
+			MaxCollectionSize: testMaxCollectionSize,
+		},
 	}
 	return node
 }

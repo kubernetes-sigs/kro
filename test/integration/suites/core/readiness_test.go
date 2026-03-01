@@ -31,6 +31,7 @@ import (
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -225,7 +226,7 @@ var _ = Describe("Readiness", func() {
 			// Verify deployment specs
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(replicas)))
-			g.Expect(deployment.Annotations).To(HaveLen(0))
+			g.Expect(deployment.Annotations).To(HaveKeyWithValue(metadata.NodeIDAnnotation, "deployment"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify Service is not created yet
@@ -273,8 +274,8 @@ var _ = Describe("Readiness", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 
 			// validate service spec
-			g.Expect(service.Annotations).To(HaveLen(1))
-			g.Expect(service.Annotations["app"]).To(Equal("service"))
+			g.Expect(service.Annotations).To(HaveKeyWithValue("app", "service"))
+			g.Expect(service.Annotations).To(HaveKeyWithValue(metadata.NodeIDAnnotation, "service"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance

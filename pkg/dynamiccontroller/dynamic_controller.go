@@ -309,6 +309,20 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
+// isRequeueSignal returns true if err is a requeue control-flow error (RequeueNeeded
+// or RequeueNeededAfter). These are not failures and should not be counted as handler errors.
+func isRequeueSignal(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.(type) {
+	case *requeue.RequeueNeeded, *requeue.RequeueNeededAfter:
+		return true
+	default:
+		return false
+	}
+}
+
 func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers, handler Handler) error {
 	gvrKey := keyFromGVR(oi.GVR)
 	dc.log.V(1).Info("Syncing object", "gvr", gvrKey, "key", oi.NamespacedName)
@@ -323,7 +337,9 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 	}()
 
 	err := handler(ctx, ctrl.Request{NamespacedName: oi.NamespacedName})
-	if err != nil {
+	// Do not count expected outcomes as handler errors: instance deleted (NotFound)
+	// and requeue signals (RequeueNeeded/RequeueNeededAfter) are normal control flow.
+	if err != nil && !apierrors.IsNotFound(err) && !isRequeueSignal(err) {
 		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
 	return err

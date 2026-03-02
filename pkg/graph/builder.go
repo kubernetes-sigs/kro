@@ -734,6 +734,11 @@ func buildStatusSchema(
 		return nil, nil, nil, fmt.Errorf("status fields without expressions are not supported: %v", noExpressionFields)
 	}
 
+	// Reject reserved status field names.
+	if err := validateReservedStatusFields(fieldDescriptors); err != nil {
+		return nil, nil, nil, err
+	}
+
 	// Instance status expressions can ONLY reference resources, not schema.
 	// At runtime, status is populated after resources are created.
 
@@ -790,6 +795,21 @@ func buildStatusSchema(
 	}
 
 	return statusSchema, fieldDescriptors, unstructuredStatus, nil
+}
+
+// validateReservedStatusFields checks that no top-level status field uses a
+// path reserved by the instance controller (e.g. "state", "conditions").
+func validateReservedStatusFields(fieldDescriptors []variable.FieldDescriptor) error {
+	for _, fd := range fieldDescriptors {
+		if fd.Path == ReservedStatusFieldState || strings.HasPrefix(fd.Path, ReservedStatusFieldState+".") ||
+			fd.Path == ReservedStatusFieldConditions || strings.HasPrefix(fd.Path, ReservedStatusFieldConditions+".") {
+			return fmt.Errorf(
+				"status field at path %q uses a reserved status field managed by kro",
+				fd.Path,
+			)
+		}
+	}
+	return nil
 }
 
 // inspectExpressionRestricted uses the shared inspector to parse an expression,

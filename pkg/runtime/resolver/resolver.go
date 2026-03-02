@@ -203,7 +203,16 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 
 			if i == len(segments)-1 {
 				array := current.([]interface{})
-				array[segment.Index] = value
+				if value == nil {
+					// Nil array elements are removed rather than set to null. SSA's structured-merge-diff
+					// library sets omitted fields to null, but most CRDs don't define nullable:true.
+					// Removing the element avoids SSA conflicts and aligns with K8s API conventions.
+					// See: kubernetes-sigs/structured-merge-diff#171, kubernetes/kubernetes#103011
+					array = append(array[:segment.Index], array[segment.Index+1:]...)
+					updateParent(parent, parentKey, parentIndex, array)
+				} else {
+					array[segment.Index] = value
+				}
 				return nil
 			}
 			parent = current
@@ -217,7 +226,18 @@ func (r *Resolver) setValueAtPath(path string, value interface{}) error {
 			}
 
 			if i == len(segments)-1 {
-				currentMap[segment.Name] = value
+				// Nil values trigger field deletion instead of setting null. This works around an
+				// SSA limitation where structured-merge-diff sets omitted fields to null during Apply.
+				// Most CRD providers (ACK, ASO, KCC) don't mark optional fields as nullable:true,
+				// causing SSA conflicts when null is applied. Deleting the field releases ownership
+				// and follows K8s API conventions (field omission > null). kro will not re-manage
+				// this field until the expression evaluates to non-nil.
+				// See: kubernetes-sigs/structured-merge-diff#171, kubernetes/kubernetes#103011
+				if value == nil {
+					delete(currentMap, segment.Name)
+				} else {
+					currentMap[segment.Name] = value
+				}
 				return nil
 			}
 

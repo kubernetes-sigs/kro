@@ -536,13 +536,13 @@ func (n *Node) checkSingleResourceReadiness() error {
 func (n *Node) checkCollectionReadiness() error {
 	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 	if n.desired == nil {
-		return fmt.Errorf("collection not computed (%w)", ErrWaitingForReadiness)
+		return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.desired) == 0 {
 		return nil
 	}
 	if len(n.observed) < len(n.desired) {
-		return fmt.Errorf("collection not ready (%w)", ErrWaitingForReadiness)
+		return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil

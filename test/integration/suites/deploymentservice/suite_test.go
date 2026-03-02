@@ -131,6 +131,8 @@ var _ = Describe("DeploymentService", func() {
 			// Verify deployment specs
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(8080)))
+			g.Expect(deployment.Spec.Replicas).ToNot(BeNil())
+			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Patch the deployment to have available replicas in status
@@ -169,54 +171,41 @@ var _ = Describe("DeploymentService", func() {
 
 		// Verify instance status is updated
 		Eventually(func(g Gomega, ctx SpecContext) {
+			instanceIsReady(g, ctx, env, namespace, instance)
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// // label instance with "kro.run/reconcile:disabled"
+		currentLabels := instance.GetLabels()
+		currentLabels[metadata.InstanceReconcileLabel] = "disabled"
+		instance.SetLabels(currentLabels)
+		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+
+		// Instance should still be ready status
+		Eventually(func(g Gomega, ctx SpecContext) {
+			instanceIsReady(g, ctx, env, namespace, instance)
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// update instance spec to have replicas=2.
+		// this should be ignored since the instance has the reconcile:disabled label
+		err := unstructured.SetNestedField(instance.Object, int64(2), "spec", "replicas")
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+
+		// deployment should stay at 1 replica
+		Eventually(func(g Gomega, ctx SpecContext) {
 			err := env.Client.Get(ctx, types.NamespacedName{
 				Name:      "test-instance",
 				Namespace: namespace,
-			}, instance)
+			}, deployment)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			conditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "deploymentConditions")
-			g.Expect(found).To(BeTrue())
-			g.Expect(conditions).ToNot(BeEmpty())
-
-			availableReplicas, found, _ := unstructured.NestedInt64(instance.Object, "status", "availableReplicas")
-			g.Expect(found).To(BeTrue())
-			g.Expect(availableReplicas).To(Equal(int64(1)))
-
-			// now lets check for the optional field that should be available
-			status, found, _ := unstructured.NestedString(instance.Object, "status", "available")
-			g.Expect(found).To(BeTrue())
-			g.Expect(status).ToNot(BeEmpty())
-			g.Expect(status).To(Equal(string(metav1.ConditionTrue)))
-
-			// and also check for the unavailable field that should never be available
-			condition, found, _ := unstructured.NestedFieldNoCopy(instance.Object, "status", "unavailable")
-			g.Expect(found).To(BeFalse())
-			g.Expect(condition).To(BeNil())
-
-			// Validate Ready condition
-			statusConditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
-			g.Expect(found).To(BeTrue())
-			g.Expect(statusConditions).ToNot(BeEmpty())
-
-			// Find the Ready condition
-			var readyCondition map[string]interface{}
-			for _, condInterface := range statusConditions {
-				if cond, ok := condInterface.(map[string]interface{}); ok {
-					condType, _ := cond["type"].(string)
-					if condType == ctrlinstance.Ready {
-						readyCondition = cond
-						break
-					}
-				}
-			}
-
-			// Validate Ready condition
-			g.Expect(readyCondition).ToNot(BeNil(), "Ready condition should be present")
-			g.Expect(readyCondition["status"]).To(Equal("True"), "Ready condition should be True")
-			g.Expect(readyCondition["observedGeneration"]).To(Equal(instance.GetGeneration()),
-				"Ready observedGeneration should match instance generation")
-		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+			// Verify deployment specs
+			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+			g.Expect(deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(8080)))
+			g.Expect(deployment.Spec.Replicas).ToNot(BeNil())
+			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+		}, 20*time.Second, 5*time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -269,3 +258,57 @@ var _ = Describe("DeploymentService", func() {
 		}, 30*time.Second, time.Second).Should(BeTrue()) */
 	})
 })
+
+func instanceIsReady(g Gomega,
+	ctx SpecContext,
+	env *environment.Environment,
+	namespace string,
+	instance *unstructured.Unstructured) {
+	err := env.Client.Get(ctx, types.NamespacedName{
+		Name:      "test-instance",
+		Namespace: namespace,
+	}, instance)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	conditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "deploymentConditions")
+	g.Expect(found).To(BeTrue())
+	g.Expect(conditions).ToNot(BeEmpty())
+
+	availableReplicas, found, _ := unstructured.NestedInt64(instance.Object, "status", "availableReplicas")
+	g.Expect(found).To(BeTrue())
+	g.Expect(availableReplicas).To(Equal(int64(1)))
+
+	// now lets check for the optional field that should be available
+	status, found, _ := unstructured.NestedString(instance.Object, "status", "available")
+	g.Expect(found).To(BeTrue())
+	g.Expect(status).ToNot(BeEmpty())
+	g.Expect(status).To(Equal(string(metav1.ConditionTrue)))
+
+	// and also check for the unavailable field that should never be available
+	condition, found, _ := unstructured.NestedFieldNoCopy(instance.Object, "status", "unavailable")
+	g.Expect(found).To(BeFalse())
+	g.Expect(condition).To(BeNil())
+
+	// Validate Ready condition
+	statusConditions, found, _ := unstructured.NestedSlice(instance.Object, "status", "conditions")
+	g.Expect(found).To(BeTrue())
+	g.Expect(statusConditions).ToNot(BeEmpty())
+
+	// Find the Ready condition
+	var readyCondition map[string]interface{}
+	for _, condInterface := range statusConditions {
+		if cond, ok := condInterface.(map[string]interface{}); ok {
+			condType, _ := cond["type"].(string)
+			if condType == ctrlinstance.Ready {
+				readyCondition = cond
+				break
+			}
+		}
+	}
+
+	// Validate Ready condition
+	g.Expect(readyCondition).ToNot(BeNil(), "Ready condition should be present")
+	g.Expect(readyCondition["status"]).To(Equal("True"), "Ready condition should be True")
+	g.Expect(readyCondition["observedGeneration"]).To(Equal(instance.GetGeneration()),
+		"Ready observedGeneration should match instance generation")
+}

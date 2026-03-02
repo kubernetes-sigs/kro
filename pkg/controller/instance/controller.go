@@ -186,13 +186,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	case InstanceStateActive:
 		rcx.Mark.ResourcesReady()
 	case InstanceStateError:
-		if err := rcx.StateManager.NodeErrors(func(e error) bool { return true }); err != nil {
+		if err := rcx.StateManager.NodeErrors(); err != nil {
 			rcx.Mark.ResourcesNotReady("resource error: %v", err)
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")
 		}
 	case InstanceStateInProgress:
-		err := rcx.StateManager.NodeErrors(func(e error) bool { return true })
+		err := rcx.StateManager.NodeErrors()
 		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
 	default:
 		rcx.Mark.ResourcesNotReady("unknown instance state")

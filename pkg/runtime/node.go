@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -119,7 +120,7 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 				continue
 			}
 			if err := dep.CheckReadiness(); err != nil {
-				if IsWaitingForReadiness(err) {
+				if errors.Is(err, ErrWaitingForReadiness) {
 					return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
 				}
 				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)

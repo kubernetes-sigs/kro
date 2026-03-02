@@ -37,10 +37,6 @@ func IsDataPending(err error) bool {
 	return errors.Is(err, ErrDataPending)
 }
 
-func IsWaitingForReadiness(err error) bool {
-	return errors.Is(err, ErrWaitingForReadiness)
-}
-
 // celDataPendingPatterns are CEL error patterns that indicate data is not yet
 // available (retryable). Other CEL errors are considered expression bugs.
 //

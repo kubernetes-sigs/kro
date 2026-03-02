@@ -96,6 +96,19 @@ deployment:
   # Additional volume mount settings for Pods
   extraVolumeMounts: []
 
+# Debug configuration settings
+# WARNING: Debug mode enables pprof profiling endpoints which expose sensitive
+# performance data. Do not use in production environments.
+debug:
+  # Enable debug mode (uses -debug tagged image with pprof enabled)
+  enabled: false
+  # Port for pprof HTTP server
+  pprofPort: 6060
+  # Create a Service for pprof (useful for port-forwarding)
+  service:
+    enabled: false
+    type: ClusterIP
+
 # Application configuration settings
 config:
   # Allow kro to delete CRDs

@@ -34,6 +34,18 @@ metrics:
 | `dynamic_controller_informer_events_total` | Counter | Total number of events processed by informers per GVR and event type | ALPHA |
 | `dynamic_controller_informer_sync_duration_seconds` | Histogram | Duration of informer cache sync per GVR in seconds | ALPHA |
 
+## Instance Controller Metrics
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `instance_state_transitions_total` | Counter | Total number of instance state transitions per GVR and state | ALPHA |
+| `instance_reconcile_total` | Counter | Total number of instance reconciliations per GVR | ALPHA |
+| `instance_reconcile_errors_total` | Counter | Total number of instance reconciliation errors per GVR | ALPHA |
+| `instance_reconcile_duration_seconds` | Histogram | Duration of instance reconciliation in seconds per GVR | ALPHA |
+| `instance_apply_duration_seconds` | Histogram | Duration of apply operations in seconds per GVR | ALPHA |
+| `instance_resources_applied_total` | Counter | Total number of resources applied per GVR | ALPHA |
+| `instance_resources_pruned_total` | Counter | Total number of resources pruned per GVR | ALPHA |
+
 ## Schema Resolver Metrics
 
 | Metric | Type | Description | Stability |

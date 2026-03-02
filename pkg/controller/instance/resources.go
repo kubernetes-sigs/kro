@@ -16,6 +16,7 @@ package instance
 
 import (
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,10 +59,17 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 3. Apply desired resources
 	// ---------------------------------------------------------
+	start := time.Now()
 	result, batchMeta, err := applier.Apply(rcx.Ctx, resources, applyset.ApplyMode{})
+	instanceApplyDurationSeconds.WithLabelValues(
+		rcx.Instance.GroupVersionKind().String(),
+	).Observe(time.Since(start).Seconds())
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("apply failed: %w", err))
 	}
+	instanceResourcesAppliedTotal.WithLabelValues(
+		rcx.Instance.GroupVersionKind().String(),
+	).Add(float64(len(result.Applied)))
 
 	// clusterMutated tracks any cluster-side change from apply and/or prune.
 	// NOTE: it must start from apply results and only ever be OR-ed with
@@ -156,6 +164,10 @@ func (c *Controller) pruneOrphans(
 	if err != nil {
 		return false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
 	}
+
+	instanceResourcesPrunedTotal.WithLabelValues(
+		rcx.Instance.GroupVersionKind().String(),
+	).Add(float64(len(pruneResult.Pruned)))
 
 	// Prune succeeded (errors return directly), safe to shrink metadata
 	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {

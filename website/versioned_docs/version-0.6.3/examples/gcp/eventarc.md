@@ -114,7 +114,7 @@ metadata:
   name: gcsbucketwithfinalizertrigger.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: GCSBucketWithFinalizerTrigger
     spec:
       name: string

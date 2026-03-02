@@ -30,7 +30,7 @@ metadata:
   name: worker-pool
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: WorkerPool
     spec:
       workers: "[]string"
@@ -655,7 +655,7 @@ resource's status:
 ```kro
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: WorkerPool
     spec:
       workers: "[]string"

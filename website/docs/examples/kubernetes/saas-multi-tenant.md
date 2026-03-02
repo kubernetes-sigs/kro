@@ -142,14 +142,14 @@ kubectl delete -f tenant-environment-rgd.yaml
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+  ```yaml title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: tenantenvironment.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: TenantEnvironment
     spec:
       tenantId: string

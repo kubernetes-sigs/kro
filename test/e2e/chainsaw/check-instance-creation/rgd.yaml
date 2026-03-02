@@ -4,7 +4,7 @@ metadata:
   name: check-instance-creation
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: CheckInstanceCreationSimpleDeployment
     spec:
       replicas: integer | default=1

@@ -65,7 +65,7 @@ metadata:
   name: cloudsql.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: CloudSQL
     spec:
       name: string

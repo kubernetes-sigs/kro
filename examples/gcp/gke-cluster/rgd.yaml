@@ -4,7 +4,7 @@ metadata:
   name: gkecluster.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: GKECluster
     spec:
       name: string
@@ -125,7 +125,7 @@ spec:
         #workloadIdentityConfig:
         #  # Workload Identity supports only a single namespace based on your project name.
         #  # Replace ${PROJECT_ID?} below with your project ID.
-        #  workloadPool: ${PROJECT_ID?}.svc.id.goog      
+        #  workloadPool: ${PROJECT_ID?}.svc.id.goog
         notificationConfig:
           pubsub:
             enabled: true
@@ -159,4 +159,3 @@ spec:
             sysctls:
               net.core.somaxconn: "4096"
             cgroupMode: "CGROUP_MODE_UNSPECIFIED"
-      

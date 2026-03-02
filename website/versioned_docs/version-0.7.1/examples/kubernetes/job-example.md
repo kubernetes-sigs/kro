@@ -13,7 +13,7 @@ metadata:
   name: job-deployment.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: JobDeployment
     spec:
       replicas: integer | default=1

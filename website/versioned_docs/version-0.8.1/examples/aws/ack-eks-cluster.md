@@ -12,7 +12,7 @@ metadata:
 spec:
   # CRD Schema
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: EKSCluster
     spec:
       name: string

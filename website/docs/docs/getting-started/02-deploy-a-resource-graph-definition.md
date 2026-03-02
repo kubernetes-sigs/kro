@@ -45,7 +45,7 @@ spec:
   # kro uses this simple schema to create your CRD schema and apply it
   # The schema defines what users can provide when they instantiate the RGD (create an instance).
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: Application
     spec:
       # Spec fields that users can provide.
@@ -257,6 +257,7 @@ kro continuously reconciles your resources. Try these experiments:
    kubectl delete service my-app-svc
    ```
 2. Watch kro recreate it automatically:
+
    ```bash
    kubectl get service my-app-svc -w
    ```

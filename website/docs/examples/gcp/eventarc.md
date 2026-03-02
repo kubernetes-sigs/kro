@@ -1,5 +1,5 @@
 ---
-sidebar_position: 407
+sidebar_position: 405
 ---
 
 # GCSBucketWithFinalizerTrigger
@@ -62,7 +62,7 @@ paths {
 The administrator needs to install the RGD first.
 The end user creates a `GCSBucketWithFinalizerTrigger` resource something like this:
 
-```kro
+```yaml
 apiVersion: kro.run/v1alpha1
 kind: GCSBucketWithFinalizerTrigger
 metadata:
@@ -107,14 +107,14 @@ Once all user created instances are deleted, the administrator can choose to del
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+  ```yaml title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: gcsbucketwithfinalizertrigger.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: GCSBucketWithFinalizerTrigger
     spec:
       name: string
@@ -251,8 +251,8 @@ spec:
               name: ${topic.metadata.name}
               namespace: config-connector
         matchingCriteria:
-        - attribute: "type"
-          value: "google.cloud.pubsub.topic.v1.messagePublished"
+          - attribute: "type"
+            value: "google.cloud.pubsub.topic.v1.messagePublished"
         projectRef:
           external: "projects/${schema.spec.project}"
   - id: storageNotification
@@ -267,7 +267,7 @@ spec:
         topicRef:
           name: ${topic.metadata.name}
         eventTypes:
-        - "OBJECT_FINALIZE"
+          - "OBJECT_FINALIZE"
         payloadFormat: JSON_API_V1
   ```
 </details>

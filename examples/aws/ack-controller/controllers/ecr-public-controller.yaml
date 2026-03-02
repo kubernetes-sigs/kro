@@ -5,7 +5,7 @@ metadata:
   namespace: kro
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: ECRPublicController
     spec:
       name: string | default=ecrpublic-controller

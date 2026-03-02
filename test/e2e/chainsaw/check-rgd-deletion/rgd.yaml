@@ -4,7 +4,7 @@ metadata:
   name: simple-deployment-for-deletion-rgd
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: SimpleDeploymentForDeletion
     spec:
       replicas: integer | default=1

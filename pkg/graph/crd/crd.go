@@ -20,6 +20,7 @@ import (
 
 	"github.com/gobuffalo/flect"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -59,7 +60,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 			Scope: extv1.NamespaceScoped,
 			Versions: []extv1.CustomResourceDefinitionVersion{
 				{
-					Name:    apiVersion,
+					Name:    extractVersionFromAPIVersion(apiVersion),
 					Served:  true,
 					Storage: true,
 					Schema: &extv1.CustomResourceValidation{
@@ -115,6 +116,11 @@ func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResou
 	}
 
 	return additionalPrinterColumns
+}
+
+func extractVersionFromAPIVersion(apiVersion string) string {
+	_, version := metadata.ParseGroupVersion(apiVersion, "")
+	return version
 }
 
 // SetCRDStatus updates the status schema in a CRD.

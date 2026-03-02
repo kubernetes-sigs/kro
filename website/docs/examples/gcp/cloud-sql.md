@@ -11,7 +11,7 @@ This example show how you can use KRO to deploy GCP Cloud SQL instance in 2 regi
 The administrator needs to install the RGD first.
 The end user creates a `CloudSQL` resource that looks like this:
 
-```kro
+```yaml
 apiVersion: kro.run/v1alpha1
 kind: CloudSQL
 metadata:
@@ -58,14 +58,14 @@ Once all user created instances are deleted, the administrator can choose to del
 
 <details>
   <summary>ResourceGraphDefinition</summary>
-  ```kro title="rgd.yaml"
+  ```yaml title="rgd.yaml"
 apiVersion: kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: cloudsql.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: CloudSQL
     spec:
       name: string
@@ -200,7 +200,7 @@ spec:
         role: roles/cloudkms.cryptoKeyEncrypterDecrypter
         resourceRef:
           kind: KMSCryptoKey
-          name: ${kmskeyPrimary.metadata.name}-primary
+          name: ${kmskeyPrimary.metadata.name}
           #namespace: {{ cloudsqls.metadata.namespace }}
   - id: iampolicymemberReplica
     template:
@@ -215,7 +215,7 @@ spec:
         role: roles/cloudkms.cryptoKeyEncrypterDecrypter
         resourceRef:
           kind: KMSCryptoKey
-          name: ${kmskeyReplica.metadata.name}-replica
+          name: ${kmskeyReplica.metadata.name}
           #namespace: {{ cloudsqls.metadata.namespace }}
   - id: sqlPrimary
     template:
@@ -242,6 +242,7 @@ spec:
             location: us
           diskSize: 50
           diskType: PD_SSD
+          edition: ENTERPRISE
           maintenanceWindow:
             day: 7
             hour: 3
@@ -261,14 +262,16 @@ spec:
         databaseVersion: POSTGRES_13
         encryptionKMSCryptoKeyRef:
           external: projects/${schema.spec.project}/locations/${schema.spec.replicaRegion}/keyRings/${keyringReplica.metadata.name}/cryptoKeys/${kmskeyReplica.metadata.name}
+        instanceType: READ_REPLICA_INSTANCE
         masterInstanceRef:
           name: ${schema.spec.name}-primary
           #namespace: {{ cloudsqls.metadata.namespace }}
         region: ${schema.spec.replicaRegion}
         settings:
-          availabilityType: REGIONAL
+          availabilityType: ZONAL
           diskSize: 50
           diskType: PD_SSD
+          edition: ENTERPRISE
           tier: db-custom-8-30720
   ```
 </details>

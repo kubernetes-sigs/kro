@@ -16,6 +16,7 @@ package generator
 
 import (
 	"encoding/json"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,8 +45,6 @@ func NewResourceGraphDefinition(name string, opts ...ResourceGraphDefinitionOpti
 	return rgd
 }
 
-// WithSchema sets the definition and status of the ResourceGraphDefinition
-// and optionally applies schema options like WithTypes
 func WithSchema(kind, version string, spec, status map[string]interface{}, opts ...SchemaOption) ResourceGraphDefinitionOption {
 	rawSpec, err := json.Marshal(spec)
 	if err != nil {
@@ -57,7 +56,7 @@ func WithSchema(kind, version string, spec, status map[string]interface{}, opts 
 	}
 
 	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
-		rgd.Spec.Schema = &krov1alpha1.Schema{
+		schema := &krov1alpha1.Schema{
 			Kind:       kind,
 			APIVersion: version,
 			Spec: runtime.RawExtension{
@@ -69,6 +68,12 @@ func WithSchema(kind, version string, spec, status map[string]interface{}, opts 
 				Raw:    rawStatus,
 			},
 		}
+
+		if !strings.Contains(version, "/") {
+			schema.Group = "kro.run"
+		}
+
+		rgd.Spec.Schema = schema
 
 		// Apply schema options
 		for _, opt := range opts {

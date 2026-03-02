@@ -153,6 +153,9 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 			)
 		}
 
+		// Preserve old CRD versions not present in the desired spec
+		w.mergeVersions(&desired, existing)
+
 		// Check for breaking schema changes
 		report, err := crdcompat.CompareVersions(existing.Spec.Versions, desired.Spec.Versions)
 		if err != nil {
@@ -244,4 +247,21 @@ func (w *CRDWrapper) waitForReady(ctx context.Context, name string) error {
 
 			return false, nil
 		})
+}
+
+// mergeVersions preserves old CRD versions that are not in the new CRD spec,
+// preventing status.storedVersions validation errors during updates.
+func (w *CRDWrapper) mergeVersions(newCRD, oldCRD *v1.CustomResourceDefinition) {
+	newVersions := make(map[string]bool)
+	for _, v := range newCRD.Spec.Versions {
+		newVersions[v.Name] = true
+	}
+
+	for _, oldVer := range oldCRD.Spec.Versions {
+		if !newVersions[oldVer.Name] {
+			preservedVer := oldVer
+			preservedVer.Storage = false
+			newCRD.Spec.Versions = append(newCRD.Spec.Versions, preservedVer)
+		}
+	}
 }

@@ -231,13 +231,11 @@ spec:
                     description: |-
                       APIVersion is the version identifier for the generated CRD.
                       Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).
-                      This field is immutable after creation.
+                      When updating this field, kro will automatically add the new version to the underlying CRD
+                      while keeping old versions served. The new version becomes the storage version.
                       Example: "v1alpha1", "v1", "v2beta1"
                     pattern: ^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$
                     type: string
-                    x-kubernetes-validations:
-                    - message: apiVersion is immutable
-                      rule: self == oldSelf
                   group:
                     default: kro.run
                     description: |-

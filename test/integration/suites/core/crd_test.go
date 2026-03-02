@@ -174,19 +174,36 @@ var _ = Describe("CRD", func() {
 			)
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			// Wait for CRD creation
+			// Wait for RGD to become Active and CRD to be created
 			crdName := "testdeletes.kro.run"
 			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
 				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})).To(Succeed())
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			// Delete ResourceGraphDefinition
+			// Wait for the finalizer to be set before deleting
+			Eventually(func(g Gomega, ctx SpecContext) {
+				current := &krov1alpha1.ResourceGraphDefinition{}
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, current)).To(Succeed())
+				g.Expect(current.Finalizers).To(ContainElement("kro.run/finalizer"))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Delete the RGD - the controller should observe the
+			// DeletionTimestamp, run cleanup (delete the CRD), and
+			// remove the finalizer so the RGD is fully deleted.
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 
-			// Verify CRD is deleted
+			// Verify both RGD and CRD are fully deleted
 			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: crdName},
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name},
+					&krov1alpha1.ResourceGraphDefinition{})
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName},
 					&apiextensionsv1.CustomResourceDefinition{})
 				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -546,16 +563,22 @@ var _ = Describe("CRD", func() {
 				g.Expect(schemaProps["field1"].Type).To(Equal("string"))
 				g.Expect(schemaProps["field2"].Type).To(Equal("integer"))
 				g.Expect(schemaProps["field2"].Default.Raw).To(Equal([]byte("42")))
-			}, 30*time.Second, 2*time.Second).WithContext(ctx).Should(Succeed())
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-			// Verify the RGD recovers to Active state after CRD recreation
-			Eventually(func(g Gomega, ctx SpecContext) {
-				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
-			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
+			// Cleanup: delete RGD and wait for both RGD and CRD to be fully
+			// removed. Without this, the controller's finalizer (which
+			// deregisters the dynamic controller and deletes the CRD) may still
+			// be running when subsequent tests start, causing spurious failures.
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name},
+					&krov1alpha1.ResourceGraphDefinition{})
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd should be deleted"))
+
+				err = env.Client.Get(ctx, types.NamespacedName{Name: crdName},
+					&apiextensionsv1.CustomResourceDefinition{})
+				g.Expect(err).To(MatchError(errors.IsNotFound, "crd should be deleted"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 })

@@ -20,6 +20,8 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apiserver/pkg/cel/openapi"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -45,6 +47,10 @@ type Node struct {
 	templateVars     []*variable.ResourceField
 
 	rgdConfig graph.RGDConfig
+
+	// resourceSchema is the OpenAPI schema for this node's resource type.
+	// Used by buildContext to wrap observed resources with schema-aware CEL values.
+	resourceSchema *spec.Schema
 }
 
 var identityPaths = []string{
@@ -612,6 +618,10 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 // buildContext builds the CEL activation context from node dependencies.
 // If only is provided, only those dependency IDs are included in the context.
 // If only is empty/nil, all dependencies are included.
+//
+// When a dependency has a resourceSchema, its observed objects are wrapped using
+// Kubernetes' UnstructuredToVal for schema-aware type conversion. This ensures
+// CEL runtime values match their compile-time types (e.g., Secret data as bytes).
 func (n *Node) buildContext(only ...string) map[string]any {
 	ctx := make(map[string]any)
 	for depID, dep := range n.deps {
@@ -625,19 +635,32 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
-				items[i] = obj.Object
+				items[i] = wrapWithSchema(obj.Object, dep.resourceSchema)
 			}
 			ctx[depID] = items
 		} else {
 			obj := dep.observed[0].Object
 			// For schema (instance), strip status - users should only access spec/metadata.
+			// The instance's resourceSchema already excludes status (set by builder via
+			// getSchemaWithoutStatus), so the schema and data stay aligned.
 			if depID == graph.InstanceNodeID {
 				obj = withStatusOmitted(obj)
 			}
-			ctx[depID] = obj
+			ctx[depID] = wrapWithSchema(obj, dep.resourceSchema)
 		}
 	}
 	return ctx
+}
+
+// wrapWithSchema wraps an unstructured object with schema-aware CEL value
+// conversion. If the schema is nil, the raw object is returned. Otherwise,
+// returns a schemaMap that delegates to UnstructuredToVal for typed properties
+// and falls back to NativeToValue for preserve-unknown fields.
+func wrapWithSchema(obj map[string]interface{}, schema *spec.Schema) any {
+	if schema == nil {
+		return obj
+	}
+	return UnstructuredToVal(obj, &openapi.Schema{Schema: schema})
 }
 
 // withStatusOmitted returns a shallow copy of obj with the "status" key removed.

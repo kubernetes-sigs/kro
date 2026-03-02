@@ -296,6 +296,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to create instance node: %w", err)
 	}
 
+	// Build resource schemas map for runtime CEL value conversion.
+	// Include both resource schemas and the instance schema (without status).
+	resourceSchemas := make(map[string]*spec.Schema, len(schemas)+1)
+	for id, sch := range schemas {
+		resourceSchemas[id] = sch
+	}
+	resourceSchemas[InstanceNodeID] = schemaWithoutStatus
+
 	resourceGraphDefinition := &Graph{
 		DAG:              dag,
 		Instance:         instance,
@@ -303,6 +311,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Resources:        nodes,
 		TopologicalOrder: topologicalOrder,
 		CRD:              instanceCRD,
+		ResourceSchemas:  resourceSchemas,
 	}
 	return resourceGraphDefinition, nil
 }

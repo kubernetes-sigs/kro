@@ -26,13 +26,14 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 )
 
-var (
-	// ErrUnsupportedType is returned when the type is not supported.
-	ErrUnsupportedType = errors.New("unsupported type")
-)
+// ErrUnsupportedType is returned when the type is not supported.
+var ErrUnsupportedType = errors.New("unsupported type")
 
 // GoNativeType transforms CEL output into corresponding Go types
 func GoNativeType(v ref.Val) (interface{}, error) {
+	if v == nil {
+		return nil, nil
+	}
 	switch v.Type() {
 	case types.BoolType:
 		return v.Value().(bool), nil
@@ -47,12 +48,23 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.BytesType:
 		return v.Value().([]byte), nil
 	case types.DurationType:
-		return v.Value().(time.Duration), nil
+		// Convert to string for JSON-safe unstructured objects.
+		return v.Value().(time.Duration).String(), nil
 	case types.TimestampType:
-		return v.Value().(time.Time), nil
+		// Convert to RFC3339 string for JSON-safe unstructured objects.
+		// CEL timestamp arithmetic happens within evaluation; by the time
+		// GoNativeType is called, the result needs to be JSON-compatible.
+		return v.Value().(time.Time).Format(time.RFC3339), nil
 	case types.ListType:
 		return convertList(v)
 	case types.MapType:
+		// If the underlying value is already a JSON-safe string-keyed map
+		// (e.g., from schema-aware unstructuredMap wrapping Kubernetes data),
+		// use it directly. This avoids lossy reconstruction through Iterator/Get
+		// which can drop fields without schemas and introduce type mismatches.
+		if m, ok := v.Value().(map[string]interface{}); ok {
+			return m, nil
+		}
 		return convertMap(v)
 	case types.OptionalType:
 		opt := v.(*types.Optional)
@@ -60,6 +72,8 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 			return nil, nil
 		}
 		return GoNativeType(opt.GetValue())
+	case types.UnknownType:
+		return v.Value(), nil
 	case types.NullType:
 		return nil, nil
 	default:
@@ -95,6 +109,9 @@ func convertMap(v ref.Val) (interface{}, error) {
 	it := mapper.Iterator()
 	for it.HasNext() == types.True {
 		key := it.Next()
+		if key == nil {
+			continue
+		}
 		val := mapper.Get(key)
 
 		keyNative, err := GoNativeType(key)

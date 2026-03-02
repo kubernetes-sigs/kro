@@ -17,7 +17,6 @@ package conversion
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
@@ -150,10 +149,10 @@ func TestGoNativeType_Duration(t *testing.T) {
 	native, err := GoNativeType(val)
 	require.NoError(t, err)
 
-	// Check type and value
-	duration, ok := native.(time.Duration)
-	require.True(t, ok, "Expected time.Duration, got %T", native)
-	assert.Equal(t, time.Hour+30*time.Minute, duration)
+	// GoNativeType converts durations to strings for JSON-safe unstructured objects.
+	str, ok := native.(string)
+	require.True(t, ok, "Expected string, got %T", native)
+	assert.Equal(t, "1h30m0s", str)
 
 	// Check JSON marshalling
 	marshalled, err := json.Marshal(native)
@@ -178,13 +177,10 @@ func TestGoNativeType_Timestamp(t *testing.T) {
 	native, err := GoNativeType(val)
 	require.NoError(t, err)
 
-	// Check type
-	ts, ok := native.(time.Time)
-	require.True(t, ok, "Expected time.Time, got %T", native)
-
-	// Verify the timestamp is correct
-	expected, _ := time.Parse(time.RFC3339, "2024-01-15T10:30:00Z")
-	assert.Equal(t, expected, ts)
+	// GoNativeType converts timestamps to RFC3339 strings for JSON-safe unstructured objects.
+	str, ok := native.(string)
+	require.True(t, ok, "Expected string, got %T", native)
+	assert.Equal(t, "2024-01-15T10:30:00Z", str)
 
 	// Check JSON marshalling
 	marshalled, err := json.Marshal(native)

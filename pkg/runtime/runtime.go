@@ -86,17 +86,19 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	// Phase 1: Create all nodes first (without deps wired).
 	for _, id := range rt.order {
 		rt.nodes[id] = &Node{
-			Spec:      g.Nodes[id].DeepCopy(),
-			deps:      make(map[string]*Node),
-			rgdConfig: rgdConfig,
+			Spec:           g.Nodes[id].DeepCopy(),
+			deps:           make(map[string]*Node),
+			rgdConfig:      rgdConfig,
+			resourceSchema: g.ResourceSchemas[id],
 		}
 	}
 
 	// Create instance node.
 	instNode := &Node{
-		Spec:      g.Instance.DeepCopy(),
-		deps:      make(map[string]*Node),
-		rgdConfig: rgdConfig,
+		Spec:           g.Instance.DeepCopy(),
+		deps:           make(map[string]*Node),
+		rgdConfig:      rgdConfig,
+		resourceSchema: g.ResourceSchemas[graph.InstanceNodeID],
 	}
 	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
 	rt.instance = instNode

@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -242,6 +243,217 @@ func TestNode_BuildContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNode_BuildContext_SchemaAwareConversion(t *testing.T) {
+	// This test verifies that the schema-aware conversion correctly converts
+	// Secret data fields from base64 strings to bytes, matching CEL compile-time types.
+	// Before this fix, string(secret.data.clientId) would fail because CEL compiled
+	// it as string(bytes) but received a string at runtime.
+	secretSch := secretSchema()
+
+	// Create a typed CEL environment where "secret" has the proper Secret schema.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"secret": secretSch,
+	})
+	require.NoError(t, err)
+
+	// Compile: string(secret.data.clientId) — typed as string(bytes), the Kubernetes convention.
+	celAST, issues := typedEnv.Compile("string(secret.data.clientId)")
+	require.NoError(t, issues.Err())
+	program, err := typedEnv.Program(celAST)
+	require.NoError(t, err)
+
+	expr := &krocel.Expression{
+		Original:   "string(secret.data.clientId)",
+		Program:    program,
+		References: []string{"secret"},
+	}
+
+	// Build a secret dep node with the schema and base64-encoded observed data.
+	secretDep := newTestNode("secret", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata":   map[string]any{"name": "test-secret", "namespace": "default"},
+			"data": map[string]any{
+				"clientId":     "bWF4",             // base64("max")
+				"clientSecret": "bXVzdGVybWFubg==", // base64("mustermann")
+			},
+		}).
+		withResourceSchema(secretSch).
+		build()
+
+	// Build the node that depends on the secret.
+	node := newTestNode("deployment", graph.NodeTypeResource).
+		withDep(secretDep).
+		build()
+
+	// Build context — this should wrap the secret with UnstructuredToVal.
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "secret")
+
+	// Evaluate the expression — this is the key assertion.
+	// Before the fix, this would fail with "no such overload: string(string)".
+	result, err := expr.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "max", result, "string(secret.data.clientId) should decode base64 to 'max'")
+
+	// Also test the second field.
+	celAST2, issues2 := typedEnv.Compile("string(secret.data.clientSecret)")
+	require.NoError(t, issues2.Err())
+	program2, err := typedEnv.Program(celAST2)
+	require.NoError(t, err)
+
+	expr2 := &krocel.Expression{
+		Original:   "string(secret.data.clientSecret)",
+		Program:    program2,
+		References: []string{"secret"},
+	}
+
+	result2, err := expr2.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "mustermann", result2, "string(secret.data.clientSecret) should decode base64 to 'mustermann'")
+}
+
+func TestNode_BuildContext_PreserveUnknownFields(t *testing.T) {
+	// This test verifies that fields inside x-kubernetes-preserve-unknown-fields objects
+	// are accessible via CEL expressions. Before this fix, UnstructuredToVal would hide
+	// these fields behind an opaque wrapper that rejected all field access.
+
+	// Schema: spec.config is {type: "object", x-kubernetes-preserve-unknown-fields: true}
+	// with no properties — simulating a CRD that allows arbitrary nested data.
+	preserveUnknownSchema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"spec": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"config": {
+							VendorExtensible: spec.VendorExtensible{
+								Extensions: spec.Extensions{
+									"x-kubernetes-preserve-unknown-fields": true,
+								},
+							},
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+							},
+						},
+					},
+				}},
+				"status": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"additional": {SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Schema: &spec.Schema{
+									VendorExtensible: spec.VendorExtensible{
+										Extensions: spec.Extensions{
+											"x-kubernetes-preserve-unknown-fields": true,
+										},
+									},
+								},
+							},
+						}},
+					},
+				}},
+			},
+		},
+	}
+
+	// Create a typed CEL env where "external" is declared as dyn.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"external": preserveUnknownSchema,
+	})
+	require.NoError(t, err)
+
+	t.Run("preserve-unknown object field access", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.spec.config.foo")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.spec.config.foo",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"spec": map[string]any{
+					"config": map[string]any{
+						"foo": "bar",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "bar", result)
+	})
+
+	t.Run("additionalProperties with preserve-unknown values", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.status.additional.key")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.status.additional.key",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"status": map[string]any{
+					"additional": map[string]any{
+						"key": "value",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "value", result)
+	})
+}
+
+func TestNode_BuildContext_NilSchemaFallback(t *testing.T) {
+	// When no schema is provided, buildContext should pass raw objects (backward compatible).
+	dep := newTestNode("configmap", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"data": map[string]any{"key": "value"},
+		}).
+		build()
+
+	node := newTestNode("test", graph.NodeTypeResource).
+		withDep(dep).
+		build()
+
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "configmap")
+
+	// Without schema, the value should be a raw map.
+	_, isMap := ctx["configmap"].(map[string]any)
+	assert.True(t, isMap, "without schema, context value should be a raw map")
 }
 
 func TestNode_ContextDependencyIDs(t *testing.T) {
@@ -1384,6 +1596,7 @@ type testNodeBuilder struct {
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
 	template         *unstructured.Unstructured
+	resourceSchema   *spec.Schema
 }
 
 // newTestNode creates a new test node builder with the given ID and type.
@@ -1493,6 +1706,12 @@ func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	return b
 }
 
+// withResourceSchema sets the OpenAPI schema for this node's resource.
+func (b *testNodeBuilder) withResourceSchema(schema *spec.Schema) *testNodeBuilder {
+	b.resourceSchema = schema
+	return b
+}
+
 // build constructs the Node.
 func (b *testNodeBuilder) build() *Node {
 	node := &Node{
@@ -1514,6 +1733,38 @@ func (b *testNodeBuilder) build() *Node {
 		rgdConfig: graph.RGDConfig{
 			MaxCollectionSize: testMaxCollectionSize,
 		},
+		resourceSchema: b.resourceSchema,
 	}
 	return node
+}
+
+// secretSchema returns the OpenAPI schema for v1/Secret with format:byte data values.
+func secretSchema() *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name":      {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						"namespace": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				}},
+				"data": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type:   []string{"string"},
+								Format: "byte",
+							},
+						},
+					},
+				}},
+			},
+		},
+	}
 }

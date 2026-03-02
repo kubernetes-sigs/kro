@@ -17,9 +17,7 @@ package runtime
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // Compile-time check: Runtime must implement Interface.
@@ -57,21 +55,20 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 
 	// Expression cache for non-iteration expressions only.
 	// Iteration expressions are not cached because they're evaluated per-item
-	// with different iterator bindings each time. Cache key is the original string.
+	// with different iterator bindings each time. Cache key is the raw string.
 	expressionsCache := make(map[string]*expressionEvaluationState)
 
 	// Helper to get or create expression state. Only caches non-iteration expressions.
-	// The Expression contains the pre-compiled Program from build time.
-	getOrCreateExpr := func(expr *krocel.Expression, kind variable.ResourceVariableKind, deps []string) *expressionEvaluationState {
+	getOrCreateExpr := func(expr *graph.CompiledExpr, kind graph.FieldKind, deps []string) *expressionEvaluationState {
 		// Don't cache iteration expressions - they need fresh evaluation per iteration.
-		if kind.IsIteration() {
+		if kind == graph.FieldIteration {
 			return &expressionEvaluationState{
 				Expression:   expr,
 				Dependencies: deps,
 				Kind:         kind,
 			}
 		}
-		if cached, ok := expressionsCache[expr.Original]; ok {
+		if cached, ok := expressionsCache[expr.Raw]; ok {
 			return cached
 		}
 		state := &expressionEvaluationState{
@@ -79,7 +76,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 			Dependencies: deps,
 			Kind:         kind,
 		}
-		expressionsCache[expr.Original] = state
+		expressionsCache[expr.Raw] = state
 		return state
 	}
 
@@ -105,7 +102,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	// Inject instance node as "schema" dep for static expression evaluation.
 	for _, id := range rt.order {
 		node := rt.nodes[id]
-		node.deps[graph.InstanceNodeID] = instNode
+		node.deps[graph.SchemaVarName] = instNode
 		for _, depID := range node.Spec.Meta.Dependencies {
 			if dep, ok := rt.nodes[depID]; ok {
 				node.deps[depID] = dep
@@ -125,34 +122,34 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		node := rt.nodes[id]
 
 		for _, expr := range node.Spec.IncludeWhen {
-			state := getOrCreateExpr(expr, variable.ResourceVariableKindIncludeWhen, nil)
+			state := getOrCreateExpr(expr, graph.FieldStatic, nil)
 			node.includeWhenExprs = append(node.includeWhenExprs, state)
 		}
 
 		for _, expr := range node.Spec.ReadyWhen {
-			state := getOrCreateExpr(expr, variable.ResourceVariableKindReadyWhen, []string{id})
+			state := getOrCreateExpr(expr, graph.FieldDynamic, []string{id})
 			node.readyWhenExprs = append(node.readyWhenExprs, state)
 		}
 
 		for _, dim := range node.Spec.ForEach {
-			state := getOrCreateExpr(dim.Expression, variable.ResourceVariableKindIteration, node.Spec.Meta.Dependencies)
+			state := getOrCreateExpr(dim.Expr, graph.FieldIteration, node.Spec.Meta.Dependencies)
 			node.forEachExprs = append(node.forEachExprs, state)
 		}
 
-		for _, v := range node.Spec.Variables {
-			node.templateVars = append(node.templateVars, v)
-			for _, expr := range v.Expressions {
-				state := getOrCreateExpr(expr, v.Kind, expr.References)
+		for _, f := range node.Spec.Variables {
+			node.templateVars = append(node.templateVars, f)
+			for _, expr := range f.Exprs {
+				state := getOrCreateExpr(expr, f.Kind, expr.References)
 				node.templateExprs = append(node.templateExprs, state)
 			}
 		}
 	}
 
-	// Instance status variables (if any) use the same cache.
-	for _, v := range instNode.Spec.Variables {
-		instNode.templateVars = append(instNode.templateVars, v)
-		for _, expr := range v.Expressions {
-			state := getOrCreateExpr(expr, v.Kind, expr.References)
+	// Instance status fields (if any) use the same cache.
+	for _, f := range instNode.Spec.Variables {
+		instNode.templateVars = append(instNode.templateVars, f)
+		for _, expr := range f.Exprs {
+			state := getOrCreateExpr(expr, f.Kind, expr.References)
 			instNode.templateExprs = append(instNode.templateExprs, state)
 		}
 	}

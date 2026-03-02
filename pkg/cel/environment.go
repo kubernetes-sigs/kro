@@ -169,7 +169,7 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 
 // TypedEnvironment creates a CEL environment with type checking enabled.
 //
-// This should be used during RGD build time (pkg/graph.Builder) to validate
+// This should be used during RGD build time (pkg/graph.GraphCompiler) to validate
 // CEL expressions against OpenAPI schemas.
 func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))

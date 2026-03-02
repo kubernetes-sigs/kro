@@ -86,7 +86,7 @@ func TestNodeErrors(t *testing.T) {
 				NodeStates: tt.nodeStates,
 			}
 
-			err := state.NodeErrors()
+			err := state.NodeErrors(func(e error) bool { return true }) // no filter, include all errors
 
 			if tt.expectError {
 				if err == nil {

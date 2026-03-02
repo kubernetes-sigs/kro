@@ -24,6 +24,8 @@ import (
 // This is a retryable condition - the controller should requeue and try again.
 var ErrDataPending = errors.New("data pending")
 
+var ErrWaitingForReadiness = errors.New("waiting for readiness")
+
 // ErrDesiredNotResolved indicates that the desired state for a node has not
 // been resolved yet. This typically happens when GetDesired is called on a
 // node that is still in Pending or Error state.
@@ -33,6 +35,10 @@ var ErrDesiredNotResolved = errors.New("desired state not resolved")
 // evaluation should be retried later.
 func IsDataPending(err error) bool {
 	return errors.Is(err, ErrDataPending)
+}
+
+func IsWaitingForReadiness(err error) bool {
+	return errors.Is(err, ErrWaitingForReadiness)
 }
 
 // celDataPendingPatterns are CEL error patterns that indicate data is not yet

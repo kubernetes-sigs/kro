@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -354,9 +355,52 @@ func (a *ApplySet) applyResource(
 
 	// Conflict check using observed state (from controller GET), if provided.
 	var currentApplySetID string
-	if r.Current != nil {
-		currentApplySetID = r.Current.GetLabels()[ApplysetPartOfLabel]
+
+	// If controller did not provide Current, we must defensively check
+	// whether the resource already exists in the cluster to avoid
+	// silently overwriting resources owned by other KRO instances.
+	if r.Current == nil {
+		dynResource := a.resourceClient(mapping, r.Object.GetNamespace())
+
+		existing, err := dynResource.Get(ctx, r.Object.GetName(), metav1.GetOptions{})
+		if err == nil {
+			// Resource exists — treat it as Current so ownership
+			// checks and applyset conflict detection can work.
+			r.Current = existing
+		} else if !apierrors.IsNotFound(err) {
+			item.Error = fmt.Errorf(
+				"failed to check existing resource %s/%s: %w",
+				r.Object.GetNamespace(),
+				r.Object.GetName(),
+				err,
+			)
+			return item
+		}
 	}
+
+	if r.Current != nil {
+		existing := r.Current.GetLabels()
+		desired := r.Object.GetLabels()
+
+		currentApplySetID = existing[ApplysetPartOfLabel]
+
+		if metadata.IsKROOwned(r.Current) {
+
+			// True ownership = instance level, not just RGD level
+			if existing[metadata.InstanceIDLabel] != desired[metadata.InstanceIDLabel] ||
+				existing[metadata.ResourceGraphDefinitionIDLabel] != desired[metadata.ResourceGraphDefinitionIDLabel] ||
+				existing[metadata.NodeIDLabel] != desired[metadata.NodeIDLabel] || existing[metadata.CollectionIndexLabel] != desired[metadata.CollectionIndexLabel] {
+
+				item.Error = fmt.Errorf(
+					"kro ownership conflict for %s/%s: owned by different KRO instance",
+					r.Object.GetNamespace(),
+					r.Object.GetName(),
+				)
+				return item
+			}
+		}
+	}
+
 	if currentApplySetID != "" && currentApplySetID != a.applySetID {
 		item.Error = &ApplySetConflictError{
 			ResourceName:      r.Object.GetName(),

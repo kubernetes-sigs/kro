@@ -509,7 +509,7 @@ func (n *Node) CheckReadiness() error {
 
 func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return fmt.Errorf("node %q: no observed state for node %q: %w", n.Spec.Meta.ID, n.Spec.Meta.ID, ErrWaitingForReadiness)
+		return fmt.Errorf("node %q: no observed state: %w", n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
 		return nil

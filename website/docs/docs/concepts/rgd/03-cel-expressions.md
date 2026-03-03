@@ -144,9 +144,9 @@ readyWhen:
 - The `-` is what removes the final newline.
 :::
 
-### Escaping Bash `${VAR}` Syntax
+### Escaping `${VAR}` Syntax
 
-kro uses `${...}` as CEL expression delimiters, which conflicts with bash's `${VAR}` variable expansion syntax. To produce a literal `${VAR}` in the output, wrap the bash variable reference in a CEL string literal:
+kro uses `${...}` as CEL expression delimiters, which conflicts with shell `${VAR}` variable expansion syntax. To produce a literal `${VAR}` in the output, wrap the variable reference in a CEL string literal:
 
 **Pattern:** `${"${VAR}"}` produces the literal output `${VAR}`
 
@@ -162,16 +162,16 @@ containers:
       - echo "Hello ${"${USER}"}"
 ```
 
-This works for all bash parameter expansion forms:
+This works for all shell parameter expansion forms:
 
-| Bash syntax | Escaped for kro | CEL evaluates to |
+| Shell syntax | Escaped for kro | CEL evaluates to |
 |---|---|---|
 | `${VAR}` | `${"${VAR}"}` | `${VAR}` |
 | `${VAR:-default}` | `${"${VAR:-default}"}` | `${VAR:-default}` |
 | `${VAR:=value}` | `${"${VAR:=value}"}` | `${VAR:=value}` |
 
 :::note
-Bash syntax that does **not** use `${` doesn't need escaping:
+Shell syntax that does **not** use `${` doesn't need escaping:
 
 - `$VAR` — no braces, kro ignores it
 - `$(command)` — command substitution uses `$(`, not `${`

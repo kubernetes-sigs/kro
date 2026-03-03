@@ -275,3 +275,44 @@ kubectl describe <your-kind> <instance-name>
 
 - If `observedGeneration` is less than `metadata.generation`, the controller hasn't processed the latest changes yet
 - If they match, the conditions reflect the current state of your instance
+
+**5. Check that all fields in the instance are specified**
+
+If any of the resources in your ResourceGraphDefinition reference any fields in `schema.spec`, they must have a value. By referencing them, you are declaring a hard dependency that the fields must exist.
+
+For example:
+```
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: optional
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Optional
+    spec:
+      # Implicit optional field.
+      str: string
+  resources:
+    - id: testConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+          namespace: ${schema.metadata.namespace}
+        data:
+          str: ${schema.spec.str}
+---
+apiVersion: kro.run/v1alpha1
+kind: Optional
+metadata:
+  name: test-silent-failure
+  namespace: default
+spec:
+  # str unspecified
+```
+
+The `Optional` instance here *must* specify `str` in the Instance, otherwise reconciliation will fail.
+
+For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`

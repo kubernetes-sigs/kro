@@ -23,6 +23,7 @@ import (
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -274,8 +275,6 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		return []*unstructured.Unstructured{}, nil
 	}
 
-	baseCtx := n.buildContext()
-
 	// Build a map from expression string to expressionEvaluationState for iteration expressions.
 	iterExprStates := make(map[string]*expressionEvaluationState, len(n.templateExprs))
 	for _, expr := range n.templateExprs {
@@ -283,6 +282,17 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 			iterExprStates[expr.Expression.Original] = expr
 		}
 	}
+
+	// Only build context for dependencies referenced by iteration expressions.
+	iterNeeded := make(map[string]struct{})
+	for exprStr := range iterExprs {
+		if state, ok := iterExprStates[exprStr]; ok {
+			for _, ref := range state.Expression.References {
+				iterNeeded[ref] = struct{}{}
+			}
+		}
+	}
+	baseCtx := n.buildContext(slices.Collect(maps.Keys(iterNeeded))...)
 
 	expanded := make([]*unstructured.Unstructured, 0, len(items))
 	for idx, iterCtx := range items {
@@ -390,7 +400,10 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 		return map[string]any{}, false, nil
 	}
 
-	ctx := n.buildContext()
+	// Compute the union of referenced dependencies across all expressions to
+	// evaluate, so buildContext only wraps needed deps with schema-aware values.
+	needed := n.neededDeps(exprs)
+	ctx := n.buildContext(needed...)
 
 	capacity := len(n.templateExprs)
 	if exprs != nil {
@@ -590,7 +603,14 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		return nil, nil
 	}
 
-	ctx := n.buildContext()
+	// Only build context for dependencies referenced by forEach expressions.
+	needed := make(map[string]struct{})
+	for _, expr := range n.forEachExprs {
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+		}
+	}
+	ctx := n.buildContext(slices.Collect(maps.Keys(needed))...)
 
 	dimensions := make([]evaluatedDimension, len(n.Spec.ForEach))
 	for i, dim := range n.Spec.ForEach {
@@ -660,7 +680,7 @@ func wrapWithSchema(obj map[string]interface{}, schema *spec.Schema) any {
 	if schema == nil {
 		return obj
 	}
-	return UnstructuredToVal(obj, &openapi.Schema{Schema: schema})
+	return celunstructured.UnstructuredToVal(obj, &openapi.Schema{Schema: schema})
 }
 
 // withStatusOmitted returns a shallow copy of obj with the "status" key removed.
@@ -673,6 +693,27 @@ func withStatusOmitted(obj map[string]any) map[string]any {
 		}
 	}
 	return result
+}
+
+// neededDeps computes the union of referenced dependency IDs across the
+// expressions in the given set. If exprs is nil, all non-iteration template
+// expressions are included. This allows buildContext to only wrap needed deps.
+func (n *Node) neededDeps(exprs map[string]struct{}) []string {
+	needed := make(map[string]struct{})
+	for _, expr := range n.templateExprs {
+		if expr.Kind.IsIteration() {
+			continue
+		}
+		if exprs != nil {
+			if _, ok := exprs[expr.Expression.Original]; !ok {
+				continue
+			}
+		}
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+		}
+	}
+	return slices.Collect(maps.Keys(needed))
 }
 
 // contextDependencyIDs returns CEL variable names grouped by type.

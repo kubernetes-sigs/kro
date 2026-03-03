@@ -24,6 +24,8 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // ErrUnsupportedType is returned when the type is not supported.
@@ -48,23 +50,12 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.BytesType:
 		return v.Value().([]byte), nil
 	case types.DurationType:
-		// Convert to string for JSON-safe unstructured objects.
-		return v.Value().(time.Duration).String(), nil
+		return v1.Duration{Duration: v.Value().(time.Duration)}.ToUnstructured(), nil
 	case types.TimestampType:
-		// Convert to RFC3339 string for JSON-safe unstructured objects.
-		// CEL timestamp arithmetic happens within evaluation; by the time
-		// GoNativeType is called, the result needs to be JSON-compatible.
-		return v.Value().(time.Time).Format(time.RFC3339), nil
+		return v1.Time{Time: v.Value().(time.Time)}.ToUnstructured(), nil
 	case types.ListType:
 		return convertList(v)
 	case types.MapType:
-		// If the underlying value is already a JSON-safe string-keyed map
-		// (e.g., from schema-aware unstructuredMap wrapping Kubernetes data),
-		// use it directly. This avoids lossy reconstruction through Iterator/Get
-		// which can drop fields without schemas and introduce type mismatches.
-		if m, ok := v.Value().(map[string]interface{}); ok {
-			return m, nil
-		}
 		return convertMap(v)
 	case types.OptionalType:
 		opt := v.(*types.Optional)
@@ -103,8 +94,18 @@ func convertList(v ref.Val) (interface{}, error) {
 func convertMap(v ref.Val) (interface{}, error) {
 	mapper, ok := v.(traits.Mapper)
 	if !ok {
-		return v.ConvertToNative(reflect.TypeOf(map[string]interface{}{}))
+		return v.ConvertToNative(reflect.TypeOf(map[string]any{}))
 	}
+
+	// Fast path: if the underlying value is already a raw Go map, return it
+	// directly. This matches ConvertToNative behavior and avoids having to iterate
+	// over already correctly present maps.
+	// Raw map values (from Kubernetes unstructured data) are already in the
+	// correct Go form, so no recursive conversion is needed.
+	if rawMap, ok := v.Value().(map[string]interface{}); ok {
+		return runtime.DeepCopyJSON(rawMap), nil
+	}
+
 	result := make(map[string]interface{})
 	it := mapper.Iterator()
 	for it.HasNext() == types.True {

@@ -14,7 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package runtime
+// Package unstructured provides schema-aware conversion of Kubernetes
+// unstructured data to CEL ref.Val values. It is a port of the upstream
+// k8s.io/apiserver/pkg/cel/common.UnstructuredToVal with adjustments for kro.
+package unstructured
 
 import (
 	"fmt"
@@ -386,26 +389,39 @@ type unstructuredList struct {
 var _ = traits.Lister(&unstructuredList{})
 
 func (t *unstructuredList) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
-	switch typeDesc.Kind() {
-	case reflect.Slice:
-		switch t.itemsSchema.Type() {
-		// Workaround for https://github.com/kubernetes/kubernetes/issues/117590 until we
-		// resolve the desired behavior in cel-go via https://github.com/google/cel-go/issues/688
-		case "string":
-			var result []string
-			for _, e := range t.elements {
-				s, ok := e.(string)
-				if !ok {
-					return nil, fmt.Errorf("expected all elements to be of type string, but got %T", e)
-				}
-				result = append(result, s)
-			}
-			return result, nil
-		default:
-			return t.elements, nil
-		}
+	// If the underlying list value is assignable to the reflected type return it.
+	if reflect.TypeOf(t.elements).AssignableTo(typeDesc) {
+		return t.elements, nil
 	}
-	return nil, fmt.Errorf("type conversion error from '%s' to '%s'", t.Type(), typeDesc)
+	// If the list wrapper is assignable to the desired type return it.
+	if reflect.TypeOf(t).AssignableTo(typeDesc) {
+		return t, nil
+	}
+	// Non-list conversion.
+	if typeDesc.Kind() != reflect.Slice && typeDesc.Kind() != reflect.Array {
+		return nil, fmt.Errorf("type conversion error from list to '%v'", typeDesc)
+	}
+
+	// List conversion.
+	// Allow the element ConvertToNative() function to determine whether conversion is possible.
+	otherElemType := typeDesc.Elem()
+	elemCount := len(t.elements)
+	var nativeList reflect.Value
+	if typeDesc.Kind() == reflect.Array {
+		nativeList = reflect.New(reflect.ArrayOf(elemCount, typeDesc)).Elem().Index(0)
+	} else {
+		nativeList = reflect.MakeSlice(typeDesc, elemCount, elemCount)
+	}
+
+	for i := 0; i < elemCount; i++ {
+		elem := types.DefaultTypeAdapter.NativeToValue(t.elements[i])
+		nativeElemVal, err := elem.ConvertToNative(otherElemType)
+		if err != nil {
+			return nil, err
+		}
+		nativeList.Index(i).Set(reflect.ValueOf(nativeElemVal))
+	}
+	return nativeList.Interface(), nil
 }
 
 func (t *unstructuredList) ConvertToType(typeValue ref.Type) ref.Val {
@@ -533,11 +549,38 @@ type unstructuredMap struct {
 var _ = traits.Mapper(&unstructuredMap{})
 
 func (t *unstructuredMap) ConvertToNative(typeDesc reflect.Type) (interface{}, error) {
-	switch typeDesc.Kind() {
-	case reflect.Map:
+	// If the map is already assignable to the desired type return it, e.g. interfaces and
+	// maps with the same key value types.
+	if reflect.TypeOf(t.value).AssignableTo(typeDesc) {
 		return t.value, nil
 	}
-	return nil, fmt.Errorf("type conversion error from '%s' to '%s'", t.Type(), typeDesc)
+	if reflect.TypeOf(t).AssignableTo(typeDesc) {
+		return t, nil
+	}
+
+	switch typeDesc.Kind() {
+	// Map conversion.
+	case reflect.Map:
+		otherKey := typeDesc.Key()
+		otherElem := typeDesc.Elem()
+		nativeMap := reflect.MakeMapWithSize(typeDesc, len(t.value))
+		it := t.Iterator()
+		for it.HasNext() == types.True {
+			key := it.Next()
+			refKeyValue, err := key.ConvertToNative(otherKey)
+			if err != nil {
+				return nil, err
+			}
+			refElemValue, err := t.Get(key).ConvertToNative(otherElem)
+			if err != nil {
+				return nil, err
+			}
+			nativeMap.SetMapIndex(reflect.ValueOf(refKeyValue), reflect.ValueOf(refElemValue))
+		}
+		return nativeMap.Interface(), nil
+	default:
+		return nil, fmt.Errorf("type conversion error from map to '%v'", typeDesc)
+	}
 }
 
 func (t *unstructuredMap) ConvertToType(typeValue ref.Type) ref.Val {
@@ -620,15 +663,13 @@ func (t *unstructuredMap) Iterator() traits.Iterator {
 	isObject := t.schema.Properties() != nil
 	keys := make([]ref.Val, 0, len(t.value))
 	for k := range t.value {
-		if _, ok := t.propSchema(k); ok {
-			mapKey := k
-			if isObject {
-				if escaped, ok := cel.Escape(k); ok {
-					mapKey = escaped
-				}
+		mapKey := k
+		if isObject {
+			if escaped, ok := cel.Escape(k); ok {
+				mapKey = escaped
 			}
-			keys = append(keys, types.String(mapKey))
 		}
+		keys = append(keys, types.String(mapKey))
 	}
 	return &mapIterator{unstructuredMap: t, keys: keys}
 }
@@ -657,7 +698,10 @@ func (t *unstructuredMap) Find(key ref.Val) (ref.Val, bool) {
 	isObject := t.schema.Properties() != nil
 	keyStr, ok := key.(types.String)
 	if !ok {
-		return types.MaybeNoSuchOverloadErr(key), true
+		key = key.ConvertToType(types.StringType)
+		if keyStr, ok = key.(types.String); !ok {
+			return types.MaybeNoSuchOverloadErr(key), true
+		}
 	}
 	k := keyStr.Value().(string)
 	if isObject {
@@ -667,9 +711,15 @@ func (t *unstructuredMap) Find(key ref.Val) (ref.Val, bool) {
 		}
 	}
 	if v, ok := t.value[k]; ok {
+		// Null values on object properties are treated as absent, matching
+		// upstream k8s behavior.
+		if isObject && v == nil {
+			return nil, false
+		}
 		if propSchema, ok := t.propSchema(k); ok {
 			return UnstructuredToVal(v, propSchema), true
 		}
+		return types.DefaultTypeAdapter.NativeToValue(v), true
 	}
 
 	return nil, false

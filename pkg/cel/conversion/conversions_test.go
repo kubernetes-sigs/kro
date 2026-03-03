@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,6 +132,43 @@ func TestGoNativeType_Bytes(t *testing.T) {
 	marshalled, err := json.Marshal(native)
 	assert.NoError(t, err, "Should be JSON marshallable")
 	assert.NotEmpty(t, marshalled)
+}
+
+func TestConvertMap_DeepCopiesRawMap(t *testing.T) {
+	// When the underlying CEL value wraps a raw map[string]interface{},
+	// convertMap should return a deep copy so that mutations to the
+	// result do not affect the original.
+	original := map[string]interface{}{
+		"key": "value",
+		"nested": map[string]interface{}{
+			"inner": "data",
+		},
+		"list": []interface{}{"a", "b"},
+	}
+
+	// Wrap the raw map as a CEL ref.Val via the default type adapter.
+	reg := types.NewEmptyRegistry()
+	celVal := reg.NativeToValue(original)
+	require.Equal(t, types.MapType, celVal.Type())
+
+	result, err := GoNativeType(celVal)
+	require.NoError(t, err)
+
+	resultMap, ok := result.(map[string]interface{})
+	require.True(t, ok, "Expected map[string]interface{}, got %T", result)
+
+	// The values should be equal.
+	assert.Equal(t, original, resultMap)
+
+	// Mutate the result and verify the original is unchanged.
+	resultMap["key"] = "mutated"
+	assert.Equal(t, "value", original["key"], "Original should not be affected by mutation of result")
+
+	nestedResult, ok := resultMap["nested"].(map[string]interface{})
+	require.True(t, ok)
+	nestedResult["inner"] = "mutated"
+	nestedOriginal := original["nested"].(map[string]interface{})
+	assert.Equal(t, "data", nestedOriginal["inner"], "Original nested map should not be affected by mutation of result")
 }
 
 func TestGoNativeType_Duration(t *testing.T) {

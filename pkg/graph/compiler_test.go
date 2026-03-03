@@ -23,180 +23,23 @@ import (
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
-	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
-var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
-
-func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
-	tests := []struct {
-		name         string
-		schema       *spec.Schema
-		field        string
-		expectNil    bool
-		expectedType string
-	}{
-		{
-			name: "direct property lookup works",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"object"},
-					Properties: map[string]spec.Schema{
-						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
-					},
-				},
-			},
-			field:        "name",
-			expectNil:    false,
-			expectedType: "string",
-		},
-		{
-			name: "additionalProperties lookup should return value schema",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"object"},
-					AdditionalProperties: &spec.SchemaOrBool{
-						Allows: true,
-						Schema: &spec.Schema{
-							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-						},
-					},
-				},
-			},
-			field:        "anyDynamicKey",
-			expectNil:    false,
-			expectedType: "string",
-		},
-		{
-			name: "ConfigMap.data style schema",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"object"},
-					Properties: map[string]spec.Schema{
-						"data": {
-							SchemaProps: spec.SchemaProps{
-								Type: []string{"object"},
-								AdditionalProperties: &spec.SchemaOrBool{
-									Allows: true,
-									Schema: &spec.Schema{
-										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			field:        "data",
-			expectNil:    false,
-			expectedType: "object",
-		},
-		{
-			name: "labels style map[string]string",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"object"},
-					AdditionalProperties: &spec.SchemaOrBool{
-						Allows: true,
-						Schema: &spec.Schema{
-							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-						},
-					},
-				},
-			},
-			field:        "app",
-			expectNil:    false,
-			expectedType: "string",
-		},
-		{
-			name: "nested map - first level",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"object"},
-					AdditionalProperties: &spec.SchemaOrBool{
-						Allows: true,
-						Schema: &spec.Schema{
-							SchemaProps: spec.SchemaProps{
-								Type: []string{"object"},
-								AdditionalProperties: &spec.SchemaOrBool{
-									Allows: true,
-									Schema: &spec.Schema{
-										SchemaProps: spec.SchemaProps{Type: []string{"integer"}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			field:        "outerKey",
-			expectNil:    false,
-			expectedType: "object",
-		},
-		{
-			name: "array items with additionalProperties",
-			schema: &spec.Schema{
-				SchemaProps: spec.SchemaProps{
-					Type: []string{"array"},
-					Items: &spec.SchemaOrArray{
-						Schema: &spec.Schema{
-							SchemaProps: spec.SchemaProps{
-								Type: []string{"object"},
-								AdditionalProperties: &spec.SchemaOrBool{
-									Allows: true,
-									Schema: &spec.Schema{
-										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			field:        "dynamicKey",
-			expectNil:    false,
-			expectedType: "string",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := lookupSchemaAtField(tt.schema, tt.field)
-
-			if tt.expectNil {
-				assert.Nil(t, result, "expected nil schema")
-				return
-			}
-
-			require.NotNil(t, result, "expected non-nil schema but got nil (AdditionalProperties not handled?)")
-			if tt.expectedType != "" && len(result.Type) > 0 {
-				assert.Equal(t, tt.expectedType, result.Type[0], "unexpected schema type")
-			}
-		})
-	}
-}
-
-// exprOriginals extracts Original strings from expressions for test comparison.
-func exprOriginals(exprs []*krocel.Expression) []string {
-	result := make([]string, len(exprs))
-	for i, e := range exprs {
-		result[i] = e.Original
-	}
-	return result
-}
-
-func TestGraphBuilder_Validation(t *testing.T) {
+func TestGraphCompiler_Validation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -533,7 +376,54 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "references unknown identifiers: [nonexistent]",
+			errMsg:  "references unknown identifiers",
+		},
+		{
+			name: "invalid instance status field without resource reference",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"value": "${1 + 1}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "must reference at least one resource",
+		},
+		{
+			name: "invalid instance status field in mixed status map without resource reference",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"constant":     "${1 + 1}",
+						"fromResource": "${vpc.status.vpcID}",
+					},
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  `status "constant": must reference at least one resource`,
 		},
 		{
 			name: "invalid field type in resource spec",
@@ -752,15 +642,43 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "cannot use externalRef with forEach",
 		},
+		{
+			name: "invalid externalRef with template",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("configMap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+					},
+				}, nil, nil),
+				func(rgd *krov1alpha1.ResourceGraphDefinition) {
+					rgd.Spec.Resources[0].ExternalRef = &krov1alpha1.ExternalRef{
+						APIVersion: "v1",
+						Kind:       "ConfigMap",
+						Metadata:   krov1alpha1.ExternalRefMetadata{Name: "external-config"},
+					}
+				},
+			},
+			wantErr: true,
+			errMsg:  "cannot use externalRef with template",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-group", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			_, err := compiler.Compile(rgd)
 
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
 				return
 			}
@@ -769,12 +687,17 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	}
 }
 
-func TestGraphBuilder_DependencyValidation(t *testing.T) {
+func TestGraphCompiler_DependencyValidation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -870,14 +793,14 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil)},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Validate dependencies
-				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
-				assert.Empty(t, g.Resources["clusterpolicy"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["clusterpolicy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
-				assert.Equal(t, []string{"clusterpolicy"}, g.Resources["clusterrole"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"clusterpolicy"}, g.Nodes["clusterrole"].Meta.Dependencies)
 
-				clusterDeps := g.Resources["cluster"].Meta.Dependencies
+				clusterDeps := g.Nodes["cluster"].Meta.Dependencies
 				assert.Len(t, clusterDeps, 3)
 				assert.Contains(t, clusterDeps, "clusterrole")
 				assert.Contains(t, clusterDeps, "subnet1")
@@ -1020,11 +943,11 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil),
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
-				assert.Len(t, g.Resources, 4)
-				assert.Empty(t, g.Resources["pod1"].Meta.Dependencies)
-				assert.Empty(t, g.Resources["pod2"].Meta.Dependencies)
-				assert.Empty(t, g.Resources["pod3"].Meta.Dependencies)
-				assert.Empty(t, g.Resources["pod4"].Meta.Dependencies)
+				assert.Len(t, g.Nodes, 4)
+				assert.Empty(t, g.Nodes["pod1"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["pod2"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["pod3"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["pod4"].Meta.Dependencies)
 				// Order doesn't matter as they're all independent
 				assert.Len(t, g.TopologicalOrder, 4)
 			},
@@ -1273,24 +1196,24 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Base infrastructure dependencies
-				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
-				assert.Empty(t, g.Resources["policy"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Nodes["policy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet3"].Meta.Dependencies)
-				assert.Equal(t, []string{"vpc"}, g.Resources["secgroup"].Meta.Dependencies)
-				assert.Equal(t, []string{"policy"}, g.Resources["role"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["subnet3"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Nodes["secgroup"].Meta.Dependencies)
+				assert.Equal(t, []string{"policy"}, g.Nodes["role"].Meta.Dependencies)
 
 				// Cluster dependencies
 				clusterDeps := []string{"role", "subnet1", "subnet2", "subnet3"}
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster1"].Meta.Dependencies)
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster2"].Meta.Dependencies)
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster3"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Nodes["cluster1"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Nodes["cluster2"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Nodes["cluster3"].Meta.Dependencies)
 
 				// Monitor pod dependencies
 				monitorDeps := []string{"cluster1", "cluster2", "cluster3"}
-				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].Meta.Dependencies)
+				assert.ElementsMatch(t, monitorDeps, g.Nodes["monitor"].Meta.Dependencies)
 
 				// Validate topological order
 				assert.Equal(t, []string{
@@ -1313,7 +1236,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			g, err := compiler.Compile(rgd)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1329,12 +1252,17 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	}
 }
 
-func TestGraphBuilder_ExpressionParsing(t *testing.T) {
+func TestGraphCompiler_ExpressionParsing(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -1458,13 +1386,13 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			},
 			validateVars: func(t *testing.T, g *Graph) {
 				// Verify resource with no expressions
-				policy := g.Resources["policy"]
+				policy := g.Nodes["policy"]
 				assert.Empty(t, policy.Variables)
 				assert.Empty(t, policy.ReadyWhen)
 				assert.Empty(t, policy.IncludeWhen)
 
 				// Verify resource with only readyWhen
-				vpc := g.Resources["vpc"]
+				vpc := g.Nodes["vpc"]
 				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
@@ -1473,87 +1401,87 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
-				subnet := g.Resources["subnet"]
+				subnet := g.Nodes["subnet"]
 				assert.Len(t, subnet.Variables, 2)
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
 						path:                 "spec.vpcID",
 						expressions:          []string{"vpc.status.vpcID"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: true,
 					},
 					{
 						path:                 "spec.tags[0].value",
 						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
+						kind:                 FieldStatic,
 						standaloneExpression: true,
 					},
 				})
 
 				// Verify resource with multiple expressions in one field
-				cluster := g.Resources["cluster"]
+				cluster := g.Nodes["cluster"]
 				assert.Len(t, cluster.Variables, 2)
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
 						path:                 "metadata.name",
 						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: false,
 					},
 					{
 						path:                 "spec.resourcesVPCConfig.subnetIDs[0]",
 						expressions:          []string{"subnet.status.subnetID"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: true,
 					},
 				})
 				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
 
 				// Verify monitor pod with all types of expressions
-				monitor := g.Resources["monitor"]
+				monitor := g.Nodes["monitor"]
 				assert.Len(t, monitor.Variables, 7)
 				validateVariables(t, monitor.Variables, []expectedVar{
 					{
 						path:                 "metadata.labels.environment",
 						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
+						kind:                 FieldStatic,
 						standaloneExpression: true,
 					},
 					{
 						path:                 "metadata.labels.cluster",
 						expressions:          []string{"cluster.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: true,
 					},
 					{
 						path:                 "metadata.labels.combined",
 						expressions:          []string{"cluster.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: false,
 					},
 					{
 						path:                 "metadata.labels[\"two.statics\"]",
 						expressions:          []string{"schema.spec.environment", "schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
+						kind:                 FieldStatic,
 						standaloneExpression: false,
 					},
 					{
 						path:                 "metadata.labels[\"two.dynamics\"]",
 						expressions:          []string{"vpc.metadata.name", "cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: false,
 					},
 					{
 						path:                 "spec.containers[0].env[0].value",
 						expressions:          []string{"cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: true,
 					},
 					{
 						path:                 "spec.containers[0].env[1].value",
 						expressions:          []string{"schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
+						kind:                 FieldStatic,
 						standaloneExpression: true,
 					},
 				})
@@ -1615,13 +1543,13 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				}, nil, nil),
 			},
 			validateVars: func(t *testing.T, g *Graph) {
-				somecrd := g.Resources["somecrd"]
+				somecrd := g.Nodes["somecrd"]
 				assert.Empty(t, somecrd.Variables)
 				assert.Empty(t, somecrd.ReadyWhen)
 				assert.Empty(t, somecrd.IncludeWhen)
 
 				// Verify resource with only readyWhen
-				vpc := g.Resources["vpc"]
+				vpc := g.Nodes["vpc"]
 				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
@@ -1630,14 +1558,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
-				subnet := g.Resources["subnet1"]
+				subnet := g.Nodes["subnet1"]
 				assert.Len(t, subnet.Variables, 1)
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
 						path:                 "spec.vpcID",
 						expressions:          []string{"vpc.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
+						kind:                 FieldDynamic,
 						standaloneExpression: true,
 					},
 				})
@@ -1649,7 +1577,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			g, err := compiler.Compile(rgd)
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)
@@ -1658,40 +1586,53 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	}
 }
 
+// exprOriginals extracts Raw strings from compiled expressions for test comparison.
+func exprOriginals(exprs []*CompiledExpr) []string {
+	result := make([]string, len(exprs))
+	for i, e := range exprs {
+		result[i] = e.Raw
+	}
+	return result
+}
+
 type expectedVar struct {
 	path                 string
 	expressions          []string
-	kind                 variable.ResourceVariableKind
+	kind                 FieldKind
 	standaloneExpression bool
 }
 
-func validateVariables(t *testing.T, actual []*variable.ResourceField, expected []expectedVar) {
+func validateVariables(t *testing.T, actual []*CompiledVariable, expected []expectedVar) {
 	assert.Equal(t, len(expected), len(actual), "variable count mismatch")
 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
-		// Extract Original strings from expressions for comparison
-		exprs := make([]string, len(v.Expressions))
-		for j, e := range v.Expressions {
-			exprs[j] = e.Original
+		exprs := make([]string, len(v.Exprs))
+		for j, e := range v.Exprs {
+			exprs[j] = e.Raw
 		}
 		actualVars[i] = expectedVar{
 			path:                 v.Path,
 			expressions:          exprs,
 			kind:                 v.Kind,
-			standaloneExpression: v.StandaloneExpression,
+			standaloneExpression: v.Standalone,
 		}
 	}
 
 	assert.ElementsMatch(t, expected, actualVars)
 }
 
-func TestGraphBuilder_CELTypeChecking(t *testing.T) {
+func TestGraphCompiler_CELTypeChecking(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -2113,12 +2054,65 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			wantErr: true,
 			errMsg:  "type mismatch",
 		},
+		{
+			name: "indexed path type mismatch in pod container image",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"replicas": "integer",
+					},
+					nil,
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "test-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "main",
+								"image": "${schema.spec.replicas}",
+							},
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
+		},
+		{
+			name: "quoted map key path type mismatch in metadata labels",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"num": "integer",
+					},
+					nil,
+				),
+				generator.WithResource("configMap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+						"labels": map[string]interface{}{
+							"app.kubernetes.io/name": "${schema.spec.num}",
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-cel-types", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			_, err := compiler.Compile(rgd)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2130,18 +2124,33 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	}
 }
 
-func TestNewBuilder(t *testing.T) {
-	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
-	assert.Nil(t, err)
-	assert.NotNil(t, builder)
+func TestNewCompiler_BasicCases(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "creates compiler with default dependencies"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compiler, err := NewCompiler(&rest.Config{}, &http.Client{})
+			assert.NoError(t, err)
+			assert.NotNil(t, compiler)
+		})
+	}
 }
 
-func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
+func TestGraphCompiler_StructuralTypeCompatibility(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -2463,7 +2472,7 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			_, err := compiler.Compile(rgd)
 			if tt.wantErr {
 				if !assert.Error(t, err) {
 					t.Logf("Expected error but got nil")
@@ -2479,12 +2488,17 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	}
 }
 
-func TestGraphBuilder_ForEachParsing(t *testing.T) {
+func TestGraphCompiler_ForEachParsing(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -2526,12 +2540,12 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			},
 			wantErr: false,
 			validateGraph: func(t *testing.T, graph *Graph) {
-				resource := graph.Resources["workerPods"]
+				resource := graph.Nodes["workerPods"]
 				require.NotNil(t, resource)
 				iterators := resource.ForEach
 				require.Len(t, iterators, 1)
 				assert.Equal(t, "workerName", iterators[0].Name)
-				assert.Equal(t, "schema.spec.workers", iterators[0].Expression.Original)
+				assert.Equal(t, "schema.spec.workers", iterators[0].Expr.Raw)
 			},
 		},
 		{
@@ -2568,7 +2582,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			},
 			wantErr: false,
 			validateGraph: func(t *testing.T, graph *Graph) {
-				resource := graph.Resources["pods"]
+				resource := graph.Nodes["pods"]
 				require.NotNil(t, resource)
 				iterators := resource.ForEach
 				require.Len(t, iterators, 2)
@@ -2627,7 +2641,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			wantErr: false,
 			validateGraph: func(t *testing.T, graph *Graph) {
 				// monitorPod should depend on workerPods
-				monitorPod := graph.Resources["monitorPod"]
+				monitorPod := graph.Nodes["monitorPod"]
 				require.NotNil(t, monitorPod)
 				assert.Contains(t, monitorPod.Meta.Dependencies, "workerPods")
 			},
@@ -2729,7 +2743,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			},
 			wantErr: false,
 			validateGraph: func(t *testing.T, graph *Graph) {
-				resource := graph.Resources["pod"]
+				resource := graph.Nodes["pod"]
 				require.NotNil(t, resource)
 				assert.Empty(t, resource.ForEach)
 			},
@@ -2767,7 +2781,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					nil),
 			},
 			wantErr: true,
-			errMsg:  "resource \"pods\" readyWhen: references unknown identifiers: [pods]",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "collection readyWhen cannot reference other resources",
@@ -2819,7 +2833,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 					nil),
 			},
 			wantErr: true,
-			errMsg:  "resource \"workerPods\" readyWhen: references unknown identifiers: [mainPod]",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "collection with valid each-based readyWhen",
@@ -2855,7 +2869,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 			},
 			wantErr: false,
 			validateGraph: func(t *testing.T, graph *Graph) {
-				resource := graph.Resources["pods"]
+				resource := graph.Nodes["pods"]
 				require.NotNil(t, resource)
 				assert.True(t, resource.Meta.Type == NodeTypeCollection)
 				assert.Equal(t, []string{"each.status.phase == 'Running'"}, exprOriginals(resource.ReadyWhen))
@@ -2866,7 +2880,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			graph, err := compiler.Compile(rgd)
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errMsg != "" {
@@ -2882,12 +2896,17 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 	}
 }
 
-func TestGraphBuilder_CollectionChaining(t *testing.T) {
+func TestGraphCompiler_CollectionChaining(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -2941,7 +2960,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			wantErr: false,
 			checkGraph: func(t *testing.T, g *Graph) {
 				// Verify the collection resource depends on vpc
-				chainedResource := g.Resources["chainedSubnets"]
+				chainedResource := g.Nodes["chainedSubnets"]
 				assert.NotNil(t, chainedResource)
 				assert.True(t, chainedResource.Meta.Type == NodeTypeCollection)
 				assert.Contains(t, chainedResource.Meta.Dependencies, "vpc",
@@ -2997,12 +3016,12 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			wantErr: false,
 			checkGraph: func(t *testing.T, g *Graph) {
 				// Verify first collection exists
-				subnetsResource := g.Resources["subnets"]
+				subnetsResource := g.Nodes["subnets"]
 				assert.NotNil(t, subnetsResource)
 				assert.True(t, subnetsResource.Meta.Type == NodeTypeCollection)
 
 				// Verify second collection depends on first collection
-				sgResource := g.Resources["securityGroups"]
+				sgResource := g.Nodes["securityGroups"]
 				assert.NotNil(t, sgResource)
 				assert.True(t, sgResource.Meta.Type == NodeTypeCollection)
 				assert.Contains(t, sgResource.Meta.Dependencies, "subnets",
@@ -3071,7 +3090,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 			wantErr: false,
 			checkGraph: func(t *testing.T, g *Graph) {
 				// Verify second collection depends on first collection
-				filteredResource := g.Resources["filteredSecurityGroups"]
+				filteredResource := g.Nodes["filteredSecurityGroups"]
 				assert.NotNil(t, filteredResource)
 				assert.True(t, filteredResource.Meta.Type == NodeTypeCollection)
 				assert.Contains(t, filteredResource.Meta.Dependencies, "subnets",
@@ -3083,7 +3102,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			graph, err := compiler.Compile(rgd)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3103,12 +3122,17 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	}
 }
 
-func TestGraphBuilder_CollectionValidation(t *testing.T) {
+func TestGraphCompiler_CollectionValidation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
-	builder := &Builder{
-		schemaResolver: fakeResolver,
-		restMapper:     restMapper,
+	compiler := &GraphCompiler{
+		parser:           newParser(),
+		validator:        newValidator(),
+		resolver:         &resolver{schemas: fakeResolver, restMapper: restMapper},
+		linker:           newLinker(),
+		typechecker:      newTypeChecker(),
+		programGenerator: newProgramGenerator(),
+		assembler:        newAssembler(),
 	}
 
 	tests := []struct {
@@ -3375,7 +3399,7 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
-			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			graph, err := compiler.Compile(rgd)
 
 			if tt.wantErr {
 				require.Error(t, err)

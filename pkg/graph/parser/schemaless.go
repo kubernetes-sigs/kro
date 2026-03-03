@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"strings"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -64,7 +63,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			expr := strings.TrimPrefix(field, "${")
 			expr = strings.TrimSuffix(expr, "}")
 			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-				Expressions:          []*krocel.Expression{{Original: expr}},
+				Expressions:          []string{expr},
 				Path:                 path,
 				StandaloneExpression: true,
 			})
@@ -76,7 +75,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			if len(expressions) > 0 {
 				// String template in schemaless parsing - always produces string
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:          krocel.NewUncompiledSlice(expressions...),
+					Expressions:          expressions,
 					Path:                 path,
 					StandaloneExpression: false,
 				})

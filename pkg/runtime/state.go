@@ -15,8 +15,7 @@
 package runtime
 
 import (
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 )
 
 // expressionEvaluationState tracks per-expression evaluation state.
@@ -27,17 +26,17 @@ import (
 type expressionEvaluationState struct {
 	// Expression holds the CEL expression with its pre-compiled Program.
 	// The Program was compiled at graph build time and is reused here.
-	Expression *krocel.Expression
+	Expression *graph.CompiledExpr
 
 	// Dependencies is the list of resource IDs this expression depends on.
 	// All dependencies must be resolved/ready before evaluation.
 	Dependencies []string
 
 	// Kind indicates when this expression should be evaluated:
-	//   - Static: at init time (only depends on schema.*)
-	//   - Dynamic: when dependencies are ready
-	//   - Iteration: during collection expansion
-	Kind variable.ResourceVariableKind
+	//   - FieldStatic: at init time (only depends on schema.*)
+	//   - FieldDynamic: when dependencies are ready
+	//   - FieldIteration: during collection expansion
+	Kind graph.FieldKind
 
 	// Resolved indicates whether the expression has been evaluated.
 	Resolved bool

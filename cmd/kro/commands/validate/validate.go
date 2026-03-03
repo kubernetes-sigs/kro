@@ -72,12 +72,12 @@ func validateRGD(rgd *v1alpha1.ResourceGraphDefinition) error {
 		return fmt.Errorf("failed to create client set: %w", err)
 	}
 
-	builder, err := graph.NewBuilder(set.RESTConfig(), set.HTTPClient())
+	compiler, err := graph.NewCompiler(set.RESTConfig(), set.HTTPClient())
 	if err != nil {
-		return fmt.Errorf("failed to create graph builder: %w", err)
+		return fmt.Errorf("failed to create graph compiler: %w", err)
 	}
 
-	_, err = builder.NewResourceGraphDefinition(rgd)
+	_, err = compiler.Compile(rgd)
 	if err != nil {
 		return fmt.Errorf("failed to create ResourceGraphDefinition: %w", err)
 	}

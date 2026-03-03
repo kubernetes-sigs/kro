@@ -21,7 +21,6 @@ import (
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -266,7 +265,7 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions:          []*krocel.Expression{{Original: expr}},
+			Expressions:          []string{expr},
 			Path:                 path,
 			StandaloneExpression: true,
 		}}, nil
@@ -284,7 +283,7 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		// String template: "foo-${expr1}-${expr2}"
 		// StandaloneExpression=false tells builder this is string concatenation
 		return []variable.FieldDescriptor{{
-			Expressions:          krocel.NewUncompiledSlice(expressions...),
+			Expressions:          expressions,
 			Path:                 path,
 			StandaloneExpression: false,
 		}}, nil

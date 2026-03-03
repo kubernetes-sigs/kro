@@ -17,6 +17,7 @@ package runtime
 import (
 	"fmt"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -51,7 +52,7 @@ func evalBoolExpr(expr *expressionEvaluationState, ctx map[string]any) (bool, er
 	}
 	result, ok := val.(bool)
 	if !ok {
-		return false, fmt.Errorf("expression %q did not return bool", expr.Expression.Original)
+		return false, fmt.Errorf("expression %q did not return bool", expr.Expression.Raw)
 	}
 
 	expr.Resolved = true
@@ -70,11 +71,11 @@ func evalListExpr(expr *expressionEvaluationState, ctx map[string]any) ([]any, e
 		return nil, err
 	}
 	if val == nil {
-		return nil, fmt.Errorf("expression %q returned null, expected list", expr.Expression.Original)
+		return nil, fmt.Errorf("expression %q returned null, expected list", expr.Expression.Raw)
 	}
 	result, ok := val.([]any)
 	if !ok {
-		return nil, fmt.Errorf("expression %q did not return a list", expr.Expression.Original)
+		return nil, fmt.Errorf("expression %q did not return a list", expr.Expression.Raw)
 	}
 
 	expr.Resolved = true
@@ -95,14 +96,18 @@ func filterContext(ctx map[string]any, refs []string) map[string]any {
 	return filtered
 }
 
-// toFieldDescriptors converts ResourceFields to FieldDescriptors for the resolver.
-func toFieldDescriptors(vars []*variable.ResourceField) []variable.FieldDescriptor {
-	result := make([]variable.FieldDescriptor, len(vars))
-	for i, v := range vars {
+// toFieldDescriptors converts CompiledVariables to variable.FieldDescriptors.
+func toFieldDescriptors(fields []*graph.CompiledVariable) []variable.FieldDescriptor {
+	result := make([]variable.FieldDescriptor, len(fields))
+	for i, f := range fields {
+		exprs := make([]string, len(f.Exprs))
+		for j, e := range f.Exprs {
+			exprs[j] = e.Raw
+		}
 		result[i] = variable.FieldDescriptor{
-			Path:                 v.Path,
-			Expressions:          v.Expressions,
-			StandaloneExpression: v.StandaloneExpression,
+			Path:                 f.Path,
+			Expressions:          exprs,
+			StandaloneExpression: f.Standalone,
 		}
 	}
 	return result

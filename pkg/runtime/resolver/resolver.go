@@ -100,7 +100,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 	}
 
 	if field.StandaloneExpression {
-		expr := field.Expressions[0].Original
+		expr := field.Expressions[0]
 		resolvedValue, ok := r.data[expr]
 		if !ok {
 			result.Error = fmt.Errorf("no data provided for expression: %s", expr)
@@ -120,12 +120,12 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 
 		replaced := strValue
 		for _, expr := range field.Expressions {
-			replacement, ok := r.data[expr.Original]
+			replacement, ok := r.data[expr]
 			if !ok {
-				result.Error = fmt.Errorf("no data provided for expression: %s", expr.Original)
+				result.Error = fmt.Errorf("no data provided for expression: %s", expr)
 				return result
 			}
-			replaced = strings.ReplaceAll(replaced, "${"+expr.Original+"}", fmt.Sprintf("%v", replacement))
+			replaced = strings.ReplaceAll(replaced, "${"+expr+"}", fmt.Sprintf("%v", replacement))
 		}
 
 		// setValueAtPath cannot fail here: if getValueFromPath succeeded,

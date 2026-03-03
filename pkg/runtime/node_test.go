@@ -25,7 +25,6 @@ import (
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 const testMaxCollectionSize = 1000
@@ -39,18 +38,18 @@ func TestNode_IsIgnored(t *testing.T) {
 	}{
 		{
 			name:        "instance nodes are never ignored",
-			node:        newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).withIncludeWhen("false").build(),
+			node:        newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).withIncludeWhen("false").build(),
 			wantIgnored: false,
 		},
 		{
 			name:        "no includeWhen means not ignored",
-			node:        newTestNode("test", graph.NodeTypeResource).build(),
+			node:        newTestNode("test", graph.NodeTypeScalar).build(),
 			wantIgnored: false,
 		},
 		{
 			name: "ignored dependency is contagious",
-			node: newTestNode("child", graph.NodeTypeResource).
-				withDep(newTestNode("parent", graph.NodeTypeResource).
+			node: newTestNode("child", graph.NodeTypeScalar).
+				withDep(newTestNode("parent", graph.NodeTypeScalar).
 					withDep(newTestNode("grandparent", graph.NodeTypeInstance).build()).
 					withResolvedIncludeWhen("false", false).build()).build(),
 			wantIgnored: true,
@@ -79,24 +78,24 @@ func TestNode_IsReady(t *testing.T) {
 	}{
 		{
 			name:      "single resource without readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).build(),
+			node:      newTestNode("test", graph.NodeTypeScalar).build(),
 			wantReady: false,
 		},
 		{
 			name: "single resource without readyWhen, observed - ready",
-			node: newTestNode("test", graph.NodeTypeResource).
+			node: newTestNode("test", graph.NodeTypeScalar).
 				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
 			wantReady: true,
 		},
 		{
 			name:      "single resource with readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
+			node:      newTestNode("test", graph.NodeTypeScalar).withReadyWhen("test.status.ready").build(),
 			wantReady: false,
 		},
 		{
 			name: "ignored nodes are always ready",
-			node: newTestNode("child", graph.NodeTypeResource).
-				withDep(newTestNode("ignoredParent", graph.NodeTypeResource).
+			node: newTestNode("child", graph.NodeTypeScalar).
+				withDep(newTestNode("ignoredParent", graph.NodeTypeScalar).
 					withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
 					withResolvedIncludeWhen("false", false).build()).
 				withReadyWhen("test.status.ready").build(),
@@ -126,7 +125,7 @@ func TestNode_SetObserved(t *testing.T) {
 	}{
 		{
 			name: "non-collection stores directly",
-			node: newTestNode("test", graph.NodeTypeResource).build(),
+			node: newTestNode("test", graph.NodeTypeScalar).build(),
 			observed: []*unstructured.Unstructured{
 				newUnstructured("v1", "Pod", "ns", "pod-1"),
 			},
@@ -171,24 +170,24 @@ func TestNode_BuildContext(t *testing.T) {
 	}{
 		{
 			name: "builds context from observed deps",
-			node: newTestNode("subnet", graph.NodeTypeResource).
+			node: newTestNode("subnet", graph.NodeTypeScalar).
 				withDep(newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"name": "myapp"}}).build()).
-				withDep(newTestNode("vpc", graph.NodeTypeResource).
+				withDep(newTestNode("vpc", graph.NodeTypeScalar).
 					withObserved(map[string]any{"status": map[string]any{"vpcId": "vpc-123"}}).build()).
 				build(),
 			wantKeys: []string{"schema", "vpc"},
 		},
 		{
 			name: "skips deps without observed",
-			node: newTestNode("test", graph.NodeTypeResource).
-				withDep(newTestNode("missing", graph.NodeTypeResource).build()).
+			node: newTestNode("test", graph.NodeTypeScalar).
+				withDep(newTestNode("missing", graph.NodeTypeScalar).build()).
 				build(),
 			notWantKeys: []string{"missing"},
 		},
 		{
 			name: "collection deps return list",
-			node: newTestNode("policy", graph.NodeTypeResource).
+			node: newTestNode("policy", graph.NodeTypeScalar).
 				withDep(newTestNode("buckets", graph.NodeTypeCollection).
 					withObserved(
 						map[string]any{"metadata": map[string]any{"name": "bucket-1"}},
@@ -200,10 +199,10 @@ func TestNode_BuildContext(t *testing.T) {
 		},
 		{
 			name: "only filter limits context",
-			node: newTestNode("test", graph.NodeTypeResource).
-				withDep(newTestNode("a", graph.NodeTypeResource).
+			node: newTestNode("test", graph.NodeTypeScalar).
+				withDep(newTestNode("a", graph.NodeTypeScalar).
 					withObserved(map[string]any{"id": "a"}).build()).
-				withDep(newTestNode("b", graph.NodeTypeResource).
+				withDep(newTestNode("b", graph.NodeTypeScalar).
 					withObserved(map[string]any{"id": "b"}).build()).
 				build(),
 			onlyFilter:  []string{"a"},
@@ -216,7 +215,7 @@ func TestNode_BuildContext(t *testing.T) {
 				entries := newTestNode("entries", graph.NodeTypeCollection).build()
 				entries.desired = []*unstructured.Unstructured{}
 				entries.SetObserved([]*unstructured.Unstructured{})
-				return newTestNode("summary", graph.NodeTypeResource).
+				return newTestNode("summary", graph.NodeTypeScalar).
 					withDep(entries).
 					build()
 			}(),
@@ -255,9 +254,9 @@ func TestNode_ContextDependencyIDs(t *testing.T) {
 	}{
 		{
 			name: "categorizes deps by type",
-			node: newTestNode("test", graph.NodeTypeResource).
+			node: newTestNode("test", graph.NodeTypeScalar).
 				withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
-				withDep(newTestNode("vpc", graph.NodeTypeResource).build()).
+				withDep(newTestNode("vpc", graph.NodeTypeScalar).build()).
 				withDep(newTestNode("buckets", graph.NodeTypeCollection).build()).
 				withDep(newTestNode("external", graph.NodeTypeExternal).build()).
 				build(),
@@ -296,7 +295,7 @@ func TestNode_GetDesired_Caching(t *testing.T) {
 	cached := []*unstructured.Unstructured{
 		newUnstructured("v1", "Pod", "ns", "cached"),
 	}
-	node := newTestNode("test", graph.NodeTypeResource).
+	node := newTestNode("test", graph.NodeTypeScalar).
 		withDesired(cached...).build()
 
 	result, err := node.GetDesired()
@@ -314,8 +313,8 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 	}{
 		{
 			name: "returns ErrDataPending when dependency not ready",
-			node: newTestNode("subnet", graph.NodeTypeResource).
-				withDep(newTestNode("vpc", graph.NodeTypeResource).
+			node: newTestNode("subnet", graph.NodeTypeScalar).
+				withDep(newTestNode("vpc", graph.NodeTypeScalar).
 					withReadyWhen("vpc.status.ready == true").build()).
 				build(),
 			wantNil: true,
@@ -323,7 +322,7 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 		},
 		{
 			name: "schema dependency does not block GetDesired",
-			node: newTestNode("deployment", graph.NodeTypeResource).
+			node: newTestNode("deployment", graph.NodeTypeScalar).
 				withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
 				withTemplate(map[string]any{
 					"apiVersion": "v1",
@@ -451,7 +450,7 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"enabled": true}}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
 					withIncludeWhen("schema.spec.enabled").build()
 			},
@@ -462,7 +461,7 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"enabled": false}}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
 					withIncludeWhen("schema.spec.enabled").build()
 			},
@@ -473,7 +472,7 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"enabled": true, "ready": false}}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
 					withIncludeWhen("schema.spec.enabled", "schema.spec.ready").build()
 			},
@@ -484,7 +483,7 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"count": int64(10), "divisor": int64(0)}}).build()
-				return newTestNode("optional", graph.NodeTypeResource).
+				return newTestNode("optional", graph.NodeTypeScalar).
 					withDep(schema).
 					withIncludeWhen("schema.spec.count / schema.spec.divisor > 5").build()
 			},
@@ -496,7 +495,7 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"items": []any{}}}).build()
-				return newTestNode("optional", graph.NodeTypeResource).
+				return newTestNode("optional", graph.NodeTypeScalar).
 					withDep(schema).
 					withIncludeWhen("schema.spec.items[0].enabled").build()
 			},
@@ -540,7 +539,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				return newTestNode("vpc", graph.NodeTypeResource).
+				return newTestNode("vpc", graph.NodeTypeScalar).
 					withDep(schema).
 					withObserved(map[string]any{"status": map[string]any{"ready": true}}).
 					withReadyWhen("vpc.status.ready == true").build()
@@ -552,7 +551,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				return newTestNode("vpc", graph.NodeTypeResource).
+				return newTestNode("vpc", graph.NodeTypeScalar).
 					withDep(schema).
 					withObserved(map[string]any{"status": map[string]any{"ready": false}}).
 					withReadyWhen("vpc.status.ready == true").build()
@@ -564,7 +563,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				return newTestNode("vpc", graph.NodeTypeResource).
+				return newTestNode("vpc", graph.NodeTypeScalar).
 					withDep(schema).
 					withObserved(map[string]any{"status": map[string]any{"ready": true, "state": "pending"}}).
 					withReadyWhen("vpc.status.ready == true", "vpc.status.state == 'available'").build()
@@ -576,7 +575,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
 					withObserved(map[string]any{"status": map[string]any{"replicas": int64(3), "errorDivisor": int64(0)}}).
 					withReadyWhen("deployment.status.replicas / deployment.status.errorDivisor > 0").build()
@@ -616,10 +615,10 @@ func TestNode_EvaluateExprs(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"name": "myapp", "replicas": int64(3)}}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
-					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
-					withTemplateExpr("schema.spec.replicas", variable.ResourceVariableKindStatic).build()
+					withTemplateExpr("schema.spec.name", graph.FieldStatic).
+					withTemplateExpr("schema.spec.replicas", graph.FieldStatic).build()
 			},
 			wantValues: map[string]any{"schema.spec.name": "myapp", "schema.spec.replicas": int64(3)},
 		},
@@ -628,10 +627,10 @@ func TestNode_EvaluateExprs(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"name": "myapp"}}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
-					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
-					withTemplateExpr("iterator", variable.ResourceVariableKindIteration).build()
+					withTemplateExpr("schema.spec.name", graph.FieldStatic).
+					withTemplateExpr("iterator", graph.FieldIteration).build()
 			},
 			wantValues:  map[string]any{"schema.spec.name": "myapp"},
 			notWantKeys: []string{"iterator"},
@@ -641,12 +640,12 @@ func TestNode_EvaluateExprs(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				n := newTestNode("deployment", graph.NodeTypeResource).
+				n := newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).build()
 				n.templateExprs = []*expressionEvaluationState{
 					{
-						Expression:    krocel.NewUncompiled("schema.spec.name"),
-						Kind:          variable.ResourceVariableKindStatic,
+						Expression:    &graph.CompiledExpr{Raw: "schema.spec.name"},
+						Kind:          graph.FieldStatic,
 						Resolved:      true,
 						ResolvedValue: "cached-name",
 					},
@@ -660,9 +659,9 @@ func TestNode_EvaluateExprs(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"value": "not-a-number"}}).build()
-				return newTestNode("configmap", graph.NodeTypeResource).
+				return newTestNode("configmap", graph.NodeTypeScalar).
 					withDep(schema).
-					withTemplateExpr("schema.spec.value / 2", variable.ResourceVariableKindStatic).build()
+					withTemplateExpr("schema.spec.value / 2", graph.FieldStatic).build()
 			},
 			wantErr: true,
 		},
@@ -698,7 +697,7 @@ func TestNode_UpsertToTemplate(t *testing.T) {
 	}{
 		{
 			name: "upserts values to template",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
 				withTemplateVar("status.vpcId", "vpc.status.vpcId").build(),
 			base: &unstructured.Unstructured{
 				Object: map[string]any{
@@ -712,7 +711,7 @@ func TestNode_UpsertToTemplate(t *testing.T) {
 		},
 		{
 			name: "skips vars without expressions",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
 				withTemplateVar("status.vpcId").build(),
 			base: &unstructured.Unstructured{
 				Object: map[string]any{"metadata": map[string]any{"name": "test"}},
@@ -860,7 +859,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 			errContain: "division by zero",
 		},
 		// Note: The test case "schema is not available in readyWhen" was removed because
-		// this constraint is now enforced at compile time by the graph builder, not at runtime.
+		// this constraint is now enforced at compile time by the graph compiler, not at runtime.
 		// The builder validates that readyWhen expressions only reference self or "each".
 	}
 
@@ -892,7 +891,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 	}{
 		{
 			name: "template without expressions returns template copy",
-			node: newTestNode("test", graph.NodeTypeResource).
+			node: newTestNode("test", graph.NodeTypeScalar).
 				withTemplate(map[string]any{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
@@ -908,7 +907,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 					withObserved(map[string]any{
 						"spec": map[string]any{"name": "myapp"},
 					}).build()
-				return newTestNode("deployment", graph.NodeTypeResource).
+				return newTestNode("deployment", graph.NodeTypeScalar).
 					withDep(schema).
 					withTemplate(map[string]any{
 						"apiVersion": "apps/v1",
@@ -916,7 +915,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 						"metadata":   map[string]any{"name": "${schema.spec.name}"},
 					}).
 					withTemplateVar("metadata.name", "schema.spec.name").
-					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.name", graph.FieldStatic).
 					build()
 			}(),
 			wantLen:  1,
@@ -927,16 +926,16 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{}).build()
-				vpc := newTestNode("vpc", graph.NodeTypeResource).
+				vpc := newTestNode("vpc", graph.NodeTypeScalar).
 					withDep(schema).build() // no observed state
-				return newTestNode("subnet", graph.NodeTypeResource).
+				return newTestNode("subnet", graph.NodeTypeScalar).
 					withDep(schema).
 					withDep(vpc).
 					withTemplate(map[string]any{
 						"metadata": map[string]any{"name": "${vpc.status.vpcId}"},
 					}).
 					withTemplateVar("metadata.name", "vpc.status.vpcId").
-					withTemplateExpr("vpc.status.vpcId", variable.ResourceVariableKindDynamic).
+					withTemplateExpr("vpc.status.vpcId", graph.FieldDynamic).
 					build()
 			}(),
 			wantErr: true,
@@ -949,7 +948,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 					withObserved(map[string]any{
 						"spec": map[string]any{"total": int64(100), "divisor": int64(0)},
 					}).build()
-				return newTestNode("configmap", graph.NodeTypeResource).
+				return newTestNode("configmap", graph.NodeTypeScalar).
 					withDep(schema).
 					withTemplate(map[string]any{
 						"apiVersion": "v1", "kind": "ConfigMap",
@@ -957,7 +956,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 						"data":     map[string]any{"result": "${schema.spec.total / schema.spec.divisor}"},
 					}).
 					withTemplateVar("data.result", "schema.spec.total / schema.spec.divisor").
-					withTemplateExpr("schema.spec.total / schema.spec.divisor", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.total / schema.spec.divisor", graph.FieldStatic).
 					build()
 			}(),
 			wantErr:    true,
@@ -970,7 +969,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 					withObserved(map[string]any{
 						"spec": map[string]any{"value": int64(10), "modulo": int64(0)},
 					}).build()
-				return newTestNode("configmap", graph.NodeTypeResource).
+				return newTestNode("configmap", graph.NodeTypeScalar).
 					withDep(schema).
 					withTemplate(map[string]any{
 						"apiVersion": "v1", "kind": "ConfigMap",
@@ -978,7 +977,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 						"data":     map[string]any{"result": "${schema.spec.value % schema.spec.modulo}"},
 					}).
 					withTemplateVar("data.result", "schema.spec.value % schema.spec.modulo").
-					withTemplateExpr("schema.spec.value % schema.spec.modulo", variable.ResourceVariableKindStatic).
+					withTemplateExpr("schema.spec.value % schema.spec.modulo", graph.FieldStatic).
 					build()
 			}(),
 			wantErr:    true,
@@ -992,7 +991,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 					withObserved(map[string]any{
 						"spec": map[string]any{"total": int64(100), "divisor": int64(0)},
 					}).build()
-				return newTestNode("configmap", graph.NodeTypeResource).
+				return newTestNode("configmap", graph.NodeTypeScalar).
 					withDep(schema).
 					withTemplate(map[string]any{
 						"apiVersion": "v1", "kind": "ConfigMap",
@@ -1000,7 +999,7 @@ func TestNode_HardResolveSingleResource(t *testing.T) {
 						"data":     map[string]any{"result": "${" + expr + "}"},
 					}).
 					withTemplateVar("data.result", expr).
-					withTemplateExpr(expr, variable.ResourceVariableKindStatic).
+					withTemplateExpr(expr, graph.FieldStatic).
 					build()
 			}(),
 			wantLen: 1,
@@ -1044,48 +1043,48 @@ func TestNode_SoftResolve(t *testing.T) {
 	}{
 		{
 			name: "empty template returns template copy",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
 				withTemplate(map[string]any{"status": map[string]any{}}).build(),
 			wantNil: false,
 		},
 		{
 			name: "resolves values from template",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
-				withDep(newTestNode("vpc", graph.NodeTypeResource).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
+				withDep(newTestNode("vpc", graph.NodeTypeScalar).
 					withObserved(map[string]any{"status": map[string]any{"vpcId": "vpc-123"}}).build()).
 				withTemplate(map[string]any{"status": map[string]any{"vpcId": "${vpc.status.vpcId}"}}).
 				withTemplateVar("status.vpcId", "vpc.status.vpcId").
-				withTemplateExpr("vpc.status.vpcId", variable.ResourceVariableKindDynamic).
+				withTemplateExpr("vpc.status.vpcId", graph.FieldDynamic).
 				build(),
 			wantNil:   false,
 			wantVpcId: "vpc-123",
 		},
 		{
 			name: "skips fields with pending expressions",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
-				withDep(newTestNode("vpc", graph.NodeTypeResource).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
+				withDep(newTestNode("vpc", graph.NodeTypeScalar).
 												withObserved(map[string]any{"status": map[string]any{"vpcId": "vpc-123"}}).build()).
-				withDep(newTestNode("subnet", graph.NodeTypeResource).build()). // no observed - pending
+				withDep(newTestNode("subnet", graph.NodeTypeScalar).build()). // no observed - pending
 				withTemplate(map[string]any{"status": map[string]any{
 					"vpcId":    "${vpc.status.vpcId}",
 					"subnetId": "${subnet.status.subnetId}",
 				}}).
 				withTemplateVar("status.vpcId", "vpc.status.vpcId").
 				withTemplateVar("status.subnetId", "subnet.status.subnetId").
-				withTemplateExpr("vpc.status.vpcId", variable.ResourceVariableKindDynamic).
-				withTemplateExpr("subnet.status.subnetId", variable.ResourceVariableKindDynamic).
+				withTemplateExpr("vpc.status.vpcId", graph.FieldDynamic).
+				withTemplateExpr("subnet.status.subnetId", graph.FieldDynamic).
 				build(),
 			wantNil:   false,
 			wantVpcId: "vpc-123", // vpc resolved, subnet skipped (stays as template string but filtered out)
 		},
 		{
 			name: "fatal error still propagates",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			node: newTestNode(graph.SchemaVarName, graph.NodeTypeInstance).
 				withDep(newTestNode("schema", graph.NodeTypeInstance).
 					withObserved(map[string]any{"spec": map[string]any{"total": int64(10), "divisor": int64(0)}}).build()).
 				withTemplate(map[string]any{"status": map[string]any{"result": "${schema.spec.total / schema.spec.divisor}"}}).
 				withTemplateVar("status.result", "schema.spec.total / schema.spec.divisor").
-				withTemplateExpr("schema.spec.total / schema.spec.divisor", variable.ResourceVariableKindDynamic).
+				withTemplateExpr("schema.spec.total / schema.spec.divisor", graph.FieldDynamic).
 				build(),
 			wantErr:    true,
 			errContain: "division by zero",
@@ -1142,7 +1141,9 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("buckets", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.regions").build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
+				n.Spec.ForEach = []*graph.CompiledForEach{
+					{Name: "region", Expr: &graph.CompiledExpr{Raw: "schema.spec.regions"}},
+				}
 				return n
 			}(),
 			wantLen: 2,
@@ -1160,9 +1161,9 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("subnets", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.regions", "schema.spec.azs").build()
-				n.Spec.ForEach = []graph.ForEachDimension{
-					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
-					{Name: "az", Expression: krocel.NewUncompiled("schema.spec.azs")},
+				n.Spec.ForEach = []*graph.CompiledForEach{
+					{Name: "region", Expr: &graph.CompiledExpr{Raw: "schema.spec.regions"}},
+					{Name: "az", Expr: &graph.CompiledExpr{Raw: "schema.spec.azs"}},
 				}
 				return n
 			}(),
@@ -1180,7 +1181,7 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("buckets", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.regions").build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
+				n.Spec.ForEach = []*graph.CompiledForEach{{Name: "region", Expr: &graph.CompiledExpr{Raw: "schema.spec.regions"}}}
 				return n
 			}(),
 			wantLen: 0,
@@ -1202,8 +1203,8 @@ func TestNode_EvaluateForEach(t *testing.T) {
 				n := newTestNode("resources", graph.NodeTypeCollection).
 					withDep(schema).
 					withForEach("schema.spec.items").build()
-				n.Spec.ForEach = []graph.ForEachDimension{
-					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				n.Spec.ForEach = []*graph.CompiledForEach{
+					{Name: "item", Expr: &graph.CompiledExpr{Raw: "schema.spec.items"}},
 				}
 				return n
 			}(),
@@ -1255,7 +1256,7 @@ func TestNode_HardResolveCollection(t *testing.T) {
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "${region}"},
 					}).build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
+				n.Spec.ForEach = []*graph.CompiledForEach{{Name: "region", Expr: &graph.CompiledExpr{Raw: "schema.spec.regions"}}}
 				return n
 			}(),
 			wantLen: 0,
@@ -1274,14 +1275,14 @@ func TestNode_HardResolveCollection(t *testing.T) {
 					withDep(schema).
 					withForEach("schema.spec.regions").
 					withTemplateVar("metadata.name", "schema.spec.name + '-' + region").
-					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
-					withTemplateExpr("schema.spec.name + '-' + region", variable.ResourceVariableKindIteration).
+					withTemplateExpr("schema.spec.name", graph.FieldStatic).
+					withTemplateExpr("schema.spec.name + '-' + region", graph.FieldIteration).
 					withTemplate(map[string]any{
 						"apiVersion": "v1",
 						"kind":       "ConfigMap",
 						"metadata":   map[string]any{"name": "${schema.spec.name + '-' + region}"},
 					}).build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")}}
+				n.Spec.ForEach = []*graph.CompiledForEach{{Name: "region", Expr: &graph.CompiledExpr{Raw: "schema.spec.regions"}}}
 				return n
 			}(),
 			wantLen: 2,
@@ -1304,9 +1305,9 @@ func TestNode_HardResolveCollection(t *testing.T) {
 						"data":     map[string]any{"result": "${item.value / item.divisor}"},
 					}).
 					withTemplateVar("data.result", "item.value / item.divisor").
-					withTemplateExpr("item.value / item.divisor", variable.ResourceVariableKindIteration).
+					withTemplateExpr("item.value / item.divisor", graph.FieldIteration).
 					build()
-				n.Spec.ForEach = []graph.ForEachDimension{{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")}}
+				n.Spec.ForEach = []*graph.CompiledForEach{{Name: "item", Expr: &graph.CompiledExpr{Raw: "schema.spec.items"}}}
 				return n
 			}(),
 			wantErr:    true,
@@ -1356,7 +1357,7 @@ var testEnv = func() *cel.Env {
 	return env
 }()
 
-func mustCompileTestExpr(expr string) *krocel.Expression {
+func mustCompileTestExpr(expr string) *graph.CompiledExpr {
 	celAST, issues := testEnv.Compile(expr)
 	if issues != nil && issues.Err() != nil {
 		panic(issues.Err())
@@ -1365,9 +1366,9 @@ func mustCompileTestExpr(expr string) *krocel.Expression {
 	if err != nil {
 		panic(err)
 	}
-	return &krocel.Expression{
-		Original: expr,
-		Program:  program,
+	return &graph.CompiledExpr{
+		Raw:     expr,
+		Program: program,
 	}
 }
 
@@ -1382,7 +1383,7 @@ type testNodeBuilder struct {
 	readyWhenExprs   []*expressionEvaluationState
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
-	templateVars     []*variable.ResourceField
+	templateVars     []*graph.CompiledVariable
 	template         *unstructured.Unstructured
 }
 
@@ -1427,7 +1428,7 @@ func (b *testNodeBuilder) withIncludeWhen(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.includeWhenExprs = append(b.includeWhenExprs, &expressionEvaluationState{
 			Expression: mustCompileTestExpr(expr),
-			Kind:       variable.ResourceVariableKindIncludeWhen,
+			Kind:       graph.FieldStatic,
 		})
 	}
 	return b
@@ -1436,8 +1437,8 @@ func (b *testNodeBuilder) withIncludeWhen(exprs ...string) *testNodeBuilder {
 // withResolvedIncludeWhen adds a pre-resolved includeWhen expression.
 func (b *testNodeBuilder) withResolvedIncludeWhen(expr string, value bool) *testNodeBuilder {
 	b.includeWhenExprs = append(b.includeWhenExprs, &expressionEvaluationState{
-		Expression:    krocel.NewUncompiled(expr),
-		Kind:          variable.ResourceVariableKindIncludeWhen,
+		Expression:    &graph.CompiledExpr{Raw: expr},
+		Kind:          graph.FieldStatic,
 		Resolved:      true,
 		ResolvedValue: value,
 	})
@@ -1449,7 +1450,7 @@ func (b *testNodeBuilder) withReadyWhen(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.readyWhenExprs = append(b.readyWhenExprs, &expressionEvaluationState{
 			Expression: mustCompileTestExpr(expr),
-			Kind:       variable.ResourceVariableKindReadyWhen,
+			Kind:       graph.FieldDynamic,
 		})
 	}
 	return b
@@ -1460,14 +1461,14 @@ func (b *testNodeBuilder) withForEach(exprs ...string) *testNodeBuilder {
 	for _, expr := range exprs {
 		b.forEachExprs = append(b.forEachExprs, &expressionEvaluationState{
 			Expression: mustCompileTestExpr(expr),
-			Kind:       variable.ResourceVariableKindIteration,
+			Kind:       graph.FieldIteration,
 		})
 	}
 	return b
 }
 
 // withTemplateExpr adds template expressions.
-func (b *testNodeBuilder) withTemplateExpr(expr string, kind variable.ResourceVariableKind) *testNodeBuilder {
+func (b *testNodeBuilder) withTemplateExpr(expr string, kind graph.FieldKind) *testNodeBuilder {
 	b.templateExprs = append(b.templateExprs, &expressionEvaluationState{
 		Expression: mustCompileTestExpr(expr),
 		Kind:       kind,
@@ -1477,12 +1478,14 @@ func (b *testNodeBuilder) withTemplateExpr(expr string, kind variable.ResourceVa
 
 // withTemplateVar adds a template variable (always standalone).
 func (b *testNodeBuilder) withTemplateVar(path string, exprs ...string) *testNodeBuilder {
-	b.templateVars = append(b.templateVars, &variable.ResourceField{
-		FieldDescriptor: variable.FieldDescriptor{
-			Path:                 path,
-			Expressions:          krocel.NewUncompiledSlice(exprs...),
-			StandaloneExpression: true,
-		},
+	compiledExprs := make([]*graph.CompiledExpr, len(exprs))
+	for i, e := range exprs {
+		compiledExprs[i] = &graph.CompiledExpr{Raw: e}
+	}
+	b.templateVars = append(b.templateVars, &graph.CompiledVariable{
+		Path:       path,
+		Standalone: true,
+		Exprs:      compiledExprs,
 	})
 	return b
 }
@@ -1495,13 +1498,17 @@ func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 
 // build constructs the Node.
 func (b *testNodeBuilder) build() *Node {
+	var tmpl map[string]interface{}
+	if b.template != nil {
+		tmpl = b.template.Object
+	}
 	node := &Node{
-		Spec: &graph.Node{
-			Meta: graph.NodeMeta{
+		Spec: &graph.CompiledNode{
+			Meta: graph.CompiledNodeMeta{
 				ID:   b.id,
 				Type: b.nodeType,
 			},
-			Template: b.template,
+			Template: tmpl,
 		},
 		deps:             b.deps,
 		observed:         b.observed,

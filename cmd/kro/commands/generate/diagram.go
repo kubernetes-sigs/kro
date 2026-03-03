@@ -55,7 +55,7 @@ var generateDiagramCmd = &cobra.Command{
 }
 
 func generateDiagram(rgd *v1alpha1.ResourceGraphDefinition) error {
-	rgdGraph, err := createGraphBuilder(rgd)
+	rgdGraph, err := createGraphCompiler(rgd)
 	if err != nil {
 		return fmt.Errorf("failed to setup rgd graph: %w", err)
 	}

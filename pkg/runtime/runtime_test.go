@@ -21,9 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestFromGraph(t *testing.T) {
@@ -37,12 +35,12 @@ func TestFromGraph(t *testing.T) {
 			name: "nodes returned in topological order",
 			graph: &graph.Graph{
 				TopologicalOrder: []string{"a", "b", "c"},
-				Nodes: map[string]*graph.Node{
-					"a": {Meta: graph.NodeMeta{ID: "a", Type: graph.NodeTypeResource}},
-					"b": {Meta: graph.NodeMeta{ID: "b", Type: graph.NodeTypeResource}},
-					"c": {Meta: graph.NodeMeta{ID: "c", Type: graph.NodeTypeCollection}},
+				Nodes: map[string]*graph.CompiledNode{
+					"a": {Meta: graph.CompiledNodeMeta{ID: "a", Type: graph.NodeTypeScalar}},
+					"b": {Meta: graph.CompiledNodeMeta{ID: "b", Type: graph.NodeTypeScalar}},
+					"c": {Meta: graph.CompiledNodeMeta{ID: "c", Type: graph.NodeTypeCollection}},
 				},
-				Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+				Instance: &graph.CompiledNode{Meta: graph.CompiledNodeMeta{ID: graph.SchemaVarName, Type: graph.NodeTypeInstance}},
 			},
 			instance: testInstance("test"),
 			validate: func(t *testing.T, rt *Runtime) {
@@ -57,11 +55,11 @@ func TestFromGraph(t *testing.T) {
 			name: "dependencies wired correctly",
 			graph: &graph.Graph{
 				TopologicalOrder: []string{"vpc", "subnet"},
-				Nodes: map[string]*graph.Node{
-					"vpc":    {Meta: graph.NodeMeta{ID: "vpc", Type: graph.NodeTypeResource}},
-					"subnet": {Meta: graph.NodeMeta{ID: "subnet", Type: graph.NodeTypeResource, Dependencies: []string{"vpc"}}},
+				Nodes: map[string]*graph.CompiledNode{
+					"vpc":    {Meta: graph.CompiledNodeMeta{ID: "vpc", Type: graph.NodeTypeScalar}},
+					"subnet": {Meta: graph.CompiledNodeMeta{ID: "subnet", Type: graph.NodeTypeScalar, Dependencies: []string{"vpc"}}},
 				},
-				Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+				Instance: &graph.CompiledNode{Meta: graph.CompiledNodeMeta{ID: graph.SchemaVarName, Type: graph.NodeTypeInstance}},
 			},
 			instance: testInstance("test"),
 			validate: func(t *testing.T, rt *Runtime) {
@@ -69,19 +67,19 @@ func TestFromGraph(t *testing.T) {
 				subnet := nodes[1]
 
 				_, hasVPC := subnet.deps["vpc"]
-				_, hasSchema := subnet.deps[graph.InstanceNodeID]
+				_, hasSchema := subnet.deps[graph.SchemaVarName]
 				assert.True(t, hasVPC)
 				assert.True(t, hasSchema)
 				assert.Same(t, nodes[0], subnet.deps["vpc"])
-				assert.Same(t, rt.Instance(), subnet.deps[graph.InstanceNodeID])
+				assert.Same(t, rt.Instance(), subnet.deps[graph.SchemaVarName])
 			},
 		},
 		{
 			name: "instance node has observed set",
 			graph: &graph.Graph{
 				TopologicalOrder: []string{},
-				Nodes:            map[string]*graph.Node{},
-				Instance:         &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+				Nodes:            map[string]*graph.CompiledNode{},
+				Instance:         &graph.CompiledNode{Meta: graph.CompiledNodeMeta{ID: graph.SchemaVarName, Type: graph.NodeTypeInstance}},
 			},
 			instance: testInstance("my-instance"),
 			validate: func(t *testing.T, rt *Runtime) {
@@ -94,31 +92,27 @@ func TestFromGraph(t *testing.T) {
 			name: "expressions deduplicated across nodes",
 			graph: &graph.Graph{
 				TopologicalOrder: []string{"a", "b"},
-				Nodes: map[string]*graph.Node{
+				Nodes: map[string]*graph.CompiledNode{
 					"a": {
-						Meta: graph.NodeMeta{ID: "a", Type: graph.NodeTypeResource},
-						Variables: []*variable.ResourceField{
+						Meta: graph.CompiledNodeMeta{ID: "a", Type: graph.NodeTypeScalar},
+						Variables: []*graph.CompiledVariable{
 							{
-								Kind: variable.ResourceVariableKindStatic,
-								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
-								},
+								Kind:  graph.FieldStatic,
+								Exprs: []*graph.CompiledExpr{{Raw: "schema.spec.name"}},
 							},
 						},
 					},
 					"b": {
-						Meta: graph.NodeMeta{ID: "b", Type: graph.NodeTypeResource},
-						Variables: []*variable.ResourceField{
+						Meta: graph.CompiledNodeMeta{ID: "b", Type: graph.NodeTypeScalar},
+						Variables: []*graph.CompiledVariable{
 							{
-								Kind: variable.ResourceVariableKindStatic,
-								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
-								},
+								Kind:  graph.FieldStatic,
+								Exprs: []*graph.CompiledExpr{{Raw: "schema.spec.name"}},
 							},
 						},
 					},
 				},
-				Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+				Instance: &graph.CompiledNode{Meta: graph.CompiledNodeMeta{ID: graph.SchemaVarName, Type: graph.NodeTypeInstance}},
 			},
 			instance: testInstance("test"),
 			validate: func(t *testing.T, rt *Runtime) {
@@ -133,20 +127,20 @@ func TestFromGraph(t *testing.T) {
 			name: "original graph not mutated",
 			graph: &graph.Graph{
 				TopologicalOrder: []string{"node"},
-				Nodes: map[string]*graph.Node{
+				Nodes: map[string]*graph.CompiledNode{
 					"node": {
-						Meta:        graph.NodeMeta{ID: "node", Type: graph.NodeTypeResource, Dependencies: []string{"dep1"}},
-						IncludeWhen: krocel.NewUncompiledSlice("schema.spec.enabled"),
+						Meta:        graph.CompiledNodeMeta{ID: "node", Type: graph.NodeTypeScalar, Dependencies: []string{"dep1"}},
+						IncludeWhen: []*graph.CompiledExpr{{Raw: "schema.spec.enabled"}},
 					},
 				},
-				Instance: &graph.Node{Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance}},
+				Instance: &graph.CompiledNode{Meta: graph.CompiledNodeMeta{ID: graph.SchemaVarName, Type: graph.NodeTypeInstance}},
 			},
 			instance: testInstance("test"),
 			validate: func(t *testing.T, rt *Runtime) {
 				// Mutate runtime node
 				nodes := rt.Nodes()
 				nodes[0].Spec.Meta.Dependencies = append(nodes[0].Spec.Meta.Dependencies, "new")
-				nodes[0].Spec.IncludeWhen = append(nodes[0].Spec.IncludeWhen, krocel.NewUncompiled("new"))
+				nodes[0].Spec.IncludeWhen = append(nodes[0].Spec.IncludeWhen, &graph.CompiledExpr{Raw: "new"})
 			},
 		},
 	}
@@ -178,24 +172,22 @@ func TestFromGraph(t *testing.T) {
 func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 	g := &graph.Graph{
 		TopologicalOrder: []string{"deployment"},
-		Nodes: map[string]*graph.Node{
+		Nodes: map[string]*graph.CompiledNode{
 			"deployment": {
-				Meta: graph.NodeMeta{ID: "deployment", Type: graph.NodeTypeResource},
+				Meta: graph.CompiledNodeMeta{ID: "deployment", Type: graph.NodeTypeScalar},
 			},
 		},
-		Instance: &graph.Node{
-			Meta: graph.NodeMeta{
-				ID:           graph.InstanceNodeID,
+		Instance: &graph.CompiledNode{
+			Meta: graph.CompiledNodeMeta{
+				ID:           graph.SchemaVarName,
 				Type:         graph.NodeTypeInstance,
-				Dependencies: []string{"deployment"}, // instance depends on deployment for status
+				Dependencies: []string{"deployment"},
 			},
-			Variables: []*variable.ResourceField{
+			Variables: []*graph.CompiledVariable{
 				{
-					Kind: variable.ResourceVariableKindDynamic,
-					FieldDescriptor: variable.FieldDescriptor{
-						Path:        "status.deploymentReady",
-						Expressions: krocel.NewUncompiledSlice("deployment.status.ready"),
-					},
+					Kind:  graph.FieldDynamic,
+					Path:  "status.deploymentReady",
+					Exprs: []*graph.CompiledExpr{{Raw: "deployment.status.ready"}},
 				},
 			},
 		},

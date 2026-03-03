@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
+func createGraphCompiler(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, error) {
 	set, err := kroclient.NewSet(kroclient.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client set: %w", err)
@@ -33,12 +33,12 @@ func createGraphBuilder(rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, er
 
 	restConfig := set.RESTConfig()
 
-	builder, err := graph.NewBuilder(restConfig, set.HTTPClient())
+	compiler, err := graph.NewCompiler(restConfig, set.HTTPClient())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create graph builder: %w", err)
+		return nil, fmt.Errorf("failed to create graph compiler: %w", err)
 	}
 
-	rgdGraph, err := builder.NewResourceGraphDefinition(rgd)
+	rgdGraph, err := compiler.Compile(rgd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create resource graph definition: %w", err)
 	}

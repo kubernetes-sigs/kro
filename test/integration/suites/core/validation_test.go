@@ -238,8 +238,7 @@ var _ = Describe("Validation", func() {
 
 			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
 
-			expectRGDInactiveWithError(ctx, rgd, "failed to build instance status schema: "+
-				"status fields without expressions are not supported")
+			expectRGDInactiveWithError(ctx, rgd, "status fields without expressions are not supported")
 
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})

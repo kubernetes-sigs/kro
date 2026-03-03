@@ -49,7 +49,7 @@ type Environment struct {
 	CtrlManager      ctrl.Manager
 	ClientSet        *kroclient.Set
 	CRDManager       kroclient.CRDClient
-	GraphBuilder     *graph.Builder
+	GraphCompiler    graph.Compiler
 	ManagerResult    chan error
 }
 
@@ -131,9 +131,9 @@ func (e *Environment) initializeClients() error {
 	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	restConfig := e.ClientSet.RESTConfig()
-	e.GraphBuilder, err = graph.NewBuilder(restConfig, e.ClientSet.HTTPClient())
+	e.GraphCompiler, err = graph.NewCompiler(restConfig, e.ClientSet.HTTPClient())
 	if err != nil {
-		return fmt.Errorf("creating graph builder: %w", err)
+		return fmt.Errorf("creating graph compiler: %w", err)
 	}
 
 	return nil
@@ -171,7 +171,7 @@ func (e *Environment) setupController() error {
 		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
-		e.GraphBuilder,
+		e.GraphCompiler,
 		10,
 		graph.RGDConfig{
 			MaxCollectionSize:          1000,

@@ -20,16 +20,17 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
-// Node is the mutable runtime handle that wraps an immutable graph.Node.
+// Node is the mutable runtime handle that wraps an immutable CompiledNode.
 // Each reconciliation creates fresh Node instances.
 type Node struct {
-	Spec *graph.Node
+	Spec *graph.CompiledNode
 
 	// deps holds pointers to only the nodes this node depends on.
 	// Includes "schema" pointing to the instance node for schema.* expressions.
@@ -42,7 +43,7 @@ type Node struct {
 	readyWhenExprs   []*expressionEvaluationState
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
-	templateVars     []*variable.ResourceField
+	templateVars     []*graph.CompiledVariable
 
 	rgdConfig graph.RGDConfig
 }
@@ -50,6 +51,11 @@ type Node struct {
 var identityPaths = []string{
 	"metadata.name",
 	"metadata.namespace",
+}
+
+// isInstance reports whether this node is the instance (schema) node.
+func (n *Node) isInstance() bool {
+	return n.Spec.Meta.Type == graph.NodeTypeInstance
 }
 
 // IsIgnored reports whether this node should be skipped entirely.
@@ -61,7 +67,7 @@ var identityPaths = []string{
 // expression evaluates to false, it stays false for this runtime instance.
 func (n *Node) IsIgnored() (bool, error) {
 	// Instance nodes cannot be ignored - they represent the user's CR.
-	if n.Spec.Meta.Type == graph.NodeTypeInstance {
+	if n.isInstance() {
 		return false, nil
 	}
 
@@ -81,12 +87,12 @@ func (n *Node) IsIgnored() (bool, error) {
 	}
 
 	// includeWhen only allows schema references; restrict context to schema.
-	ctx := n.buildContext(graph.InstanceNodeID)
+	ctx := n.buildContext(graph.SchemaVarName)
 
 	for _, expr := range n.includeWhenExprs {
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
+			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Raw, err)
 		}
 		if !val {
 			return true, nil
@@ -99,7 +105,7 @@ func (n *Node) IsIgnored() (bool, error) {
 // GetDesired computes and returns the desired state(s) for this node.
 // Results are cached - subsequent calls return the cached value.
 // Behavior varies by node type:
-//   - Resource: strict evaluation, fails fast on any error
+//   - Scalar: strict evaluation, fails fast on any error
 //   - Collection: strict evaluation with forEach expansion
 //   - Instance: best-effort partial evaluation
 //   - External: resolves template (for name/namespace CEL), caller reads instead of applies
@@ -113,9 +119,9 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 
 	// For resource types, block until all dependencies are ready.
 	// This enforces readyWhen semantics: dependents wait for parents.
-	if n.Spec.Meta.Type != graph.NodeTypeInstance {
+	if !n.isInstance() {
 		for depID, dep := range n.deps {
-			if depID == graph.InstanceNodeID {
+			if depID == graph.SchemaVarName {
 				continue
 			}
 			ready, err := dep.IsReady()
@@ -130,22 +136,25 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 
 	var result []*unstructured.Unstructured
 	var err error
-	switch n.Spec.Meta.Type {
-	case graph.NodeTypeInstance:
+
+	if n.isInstance() {
 		result, err = n.softResolve()
-	case graph.NodeTypeCollection:
-		result, err = n.hardResolveCollection(n.templateVars, true)
-	case graph.NodeTypeResource, graph.NodeTypeExternal:
-		// External refs resolve like resources (for name/namespace CEL),
-		// but the caller reads instead of applies.
-		result, err = n.hardResolveSingleResource(n.templateVars)
-	default:
-		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
+	} else {
+		switch n.Spec.Meta.Type {
+		case graph.NodeTypeCollection:
+			result, err = n.hardResolveCollection(n.templateVars, true)
+		case graph.NodeTypeScalar, graph.NodeTypeExternal:
+			// External refs resolve like resources (for name/namespace CEL),
+			// but the caller reads instead of applies.
+			result, err = n.hardResolveSingleResource(n.templateVars)
+		default:
+			panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
+		}
 	}
 
 	if err == nil {
-		if n.Spec.Meta.Namespaced && n.Spec.Meta.Type != graph.NodeTypeInstance {
-			inst := n.deps[graph.InstanceNodeID]
+		if n.Spec.Meta.Namespaced && !n.isInstance() {
+			inst := n.deps[graph.SchemaVarName]
 			normalizeNamespaces(result, inst.observed[0].GetNamespace())
 		}
 		n.desired = result
@@ -168,30 +177,26 @@ func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
 			return nil, err
 		}
 		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
+			inst := n.deps[graph.SchemaVarName]
 			normalizeNamespaces(result, inst.observed[0].GetNamespace())
 		}
 		return result, nil
-	case graph.NodeTypeResource, graph.NodeTypeExternal:
+	case graph.NodeTypeScalar, graph.NodeTypeExternal:
 		result, err := n.hardResolveSingleResource(vars)
 		if err != nil {
 			return nil, err
 		}
 		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
+			inst := n.deps[graph.SchemaVarName]
 			normalizeNamespaces(result, inst.observed[0].GetNamespace())
 		}
 		return result, nil
-	case graph.NodeTypeInstance:
-		panic("GetDesiredIdentity called for instance node")
 	default:
-		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
+		panic(fmt.Sprintf("GetDesiredIdentity called for node type %v", n.Spec.Meta.Type))
 	}
 }
 
 func normalizeNamespaces(objs []*unstructured.Unstructured, namespace string) {
-	// TODO: When cluster-scoped instances are supported, either default to
-	// metav1.NamespaceDefault here or enforce namespace presence in graphbuilder.
 	for _, obj := range objs {
 		if obj.GetNamespace() != "" {
 			continue
@@ -201,17 +206,9 @@ func normalizeNamespaces(objs []*unstructured.Unstructured, namespace string) {
 }
 
 // DeleteTargets returns the ordered list of objects this node should delete now.
-//
-// This is intentionally narrow today: it only reasons about identity resolution
-// and currently observed objects, and returns the safe deletion targets. It is the
-// runtime's deletion gate so callers don't re-implement matching logic.
-//
-// Long-term, this should evolve into an ActionPlan where the runtime tells the
-// caller which resources to create, update, keep intact, or delete, and where
-// propagation/rollout gates are enforced in one place.
 func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 	switch n.Spec.Meta.Type {
-	case graph.NodeTypeCollection, graph.NodeTypeResource:
+	case graph.NodeTypeCollection, graph.NodeTypeScalar:
 		desired, err := n.GetDesiredIdentity()
 		if err != nil {
 			return nil, err
@@ -220,14 +217,18 @@ func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 			return orderedIntersection(n.observed, desired), nil
 		}
 		return n.observed, nil
-	case graph.NodeTypeInstance, graph.NodeTypeExternal:
-		panic(fmt.Sprintf("DeleteTargets called for node type %v", n.Spec.Meta.Type))
+	case graph.NodeTypeExternal:
+		panic("DeleteTargets called for external node")
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
 	}
 }
 
-func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*unstructured.Unstructured, error) {
+func (n *Node) copyTemplate() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: k8sruntime.DeepCopyJSON(n.Spec.Template)}
+}
+
+func (n *Node) hardResolveSingleResource(vars []*graph.CompiledVariable) ([]*unstructured.Unstructured, error) {
 	baseExprs, _ := n.exprSetsForVars(vars)
 	values, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
@@ -237,7 +238,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 		return nil, err
 	}
 
-	desired := n.Spec.Template.DeepCopy()
+	desired := n.copyTemplate()
 	res := resolver.NewResolver(desired.Object, values)
 	summary := res.Resolve(toFieldDescriptors(vars))
 	if len(summary.Errors) > 0 {
@@ -247,7 +248,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 	return []*unstructured.Unstructured{desired}, nil
 }
 
-func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLabel bool) ([]*unstructured.Unstructured, error) {
+func (n *Node) hardResolveCollection(vars []*graph.CompiledVariable, setIndexLabel bool) ([]*unstructured.Unstructured, error) {
 	baseExprs, iterExprs := n.exprSetsForVars(vars)
 	baseValues, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
@@ -263,8 +264,6 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 	}
 
 	if len(items) == 0 {
-		// Resolved empty collection: return non-nil empty slice to distinguish
-		// from unresolved (n.desired == nil).
 		return []*unstructured.Unstructured{}, nil
 	}
 
@@ -273,8 +272,8 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 	// Build a map from expression string to expressionEvaluationState for iteration expressions.
 	iterExprStates := make(map[string]*expressionEvaluationState, len(n.templateExprs))
 	for _, expr := range n.templateExprs {
-		if expr.Kind.IsIteration() {
-			iterExprStates[expr.Expression.Original] = expr
+		if expr.Kind == graph.FieldIteration {
+			iterExprStates[expr.Expression.Raw] = expr
 		}
 	}
 
@@ -301,7 +300,7 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 			values[exprStr] = val
 		}
 
-		desired := n.Spec.Template.DeepCopy()
+		desired := n.copyTemplate()
 		res := resolver.NewResolver(desired.Object, values)
 		summary := res.Resolve(toFieldDescriptors(vars))
 		if len(summary.Errors) > 0 {
@@ -332,23 +331,23 @@ func (n *Node) softResolve() ([]*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
-	// Filter to only fully-resolvable fields (all expressions available)
+	// Filter to only fully-resolvable variables (all expressions available)
 	var resolvable []variable.FieldDescriptor
 	for _, v := range n.templateVars {
 		complete := true
-		for _, expr := range v.Expressions {
-			if _, ok := values[expr.Original]; !ok {
+		for _, expr := range v.Exprs {
+			if _, ok := values[expr.Raw]; !ok {
 				complete = false
 				break
 			}
 		}
 		if complete {
-			resolvable = append(resolvable, v.FieldDescriptor)
+			resolvable = append(resolvable, toSingleFieldDescriptor(v))
 		}
 	}
 
 	// Resolve on template copy, then copy resolved values to empty desired
-	template := n.Spec.Template.DeepCopy()
+	template := n.copyTemplate()
 	templateRes := resolver.NewResolver(template.Object, values)
 	summary := templateRes.Resolve(resolvable)
 
@@ -393,11 +392,11 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 	values := make(map[string]any, capacity)
 	var hasPending bool
 	for _, expr := range n.templateExprs {
-		if expr.Kind.IsIteration() {
+		if expr.Kind == graph.FieldIteration {
 			continue
 		}
 		if exprs != nil {
-			if _, ok := exprs[expr.Expression.Original]; !ok {
+			if _, ok := exprs[expr.Expression.Raw]; !ok {
 				continue
 			}
 		}
@@ -416,12 +415,12 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 			expr.Resolved = true
 			expr.ResolvedValue = val
 		}
-		values[expr.Expression.Original] = expr.ResolvedValue
+		values[expr.Expression.Raw] = expr.ResolvedValue
 	}
 	return values, hasPending, nil
 }
 
-func (n *Node) templateVarsForPaths(paths []string) []*variable.ResourceField {
+func (n *Node) templateVarsForPaths(paths []string) []*graph.CompiledVariable {
 	if len(paths) == 0 {
 		return n.templateVars
 	}
@@ -431,7 +430,7 @@ func (n *Node) templateVarsForPaths(paths []string) []*variable.ResourceField {
 		pathSet[p] = struct{}{}
 	}
 
-	result := make([]*variable.ResourceField, 0, len(n.templateVars))
+	result := make([]*graph.CompiledVariable, 0, len(n.templateVars))
 	for _, v := range n.templateVars {
 		if _, ok := pathSet[v.Path]; ok {
 			result = append(result, v)
@@ -441,7 +440,7 @@ func (n *Node) templateVarsForPaths(paths []string) []*variable.ResourceField {
 }
 
 func (n *Node) exprSetsForVars(
-	vars []*variable.ResourceField,
+	vars []*graph.CompiledVariable,
 ) (map[string]struct{}, map[string]struct{}) {
 	baseExprs := make(map[string]struct{})
 	iterExprs := make(map[string]struct{})
@@ -449,17 +448,17 @@ func (n *Node) exprSetsForVars(
 		return baseExprs, iterExprs
 	}
 
-	exprKinds := make(map[string]variable.ResourceVariableKind, len(n.templateExprs))
+	exprKinds := make(map[string]graph.FieldKind, len(n.templateExprs))
 	for _, expr := range n.templateExprs {
-		exprKinds[expr.Expression.Original] = expr.Kind
+		exprKinds[expr.Expression.Raw] = expr.Kind
 	}
 
 	for _, v := range vars {
-		for _, expr := range v.Expressions {
-			if kind, ok := exprKinds[expr.Original]; ok && kind.IsIteration() {
-				iterExprs[expr.Original] = struct{}{}
+		for _, expr := range v.Exprs {
+			if kind, ok := exprKinds[expr.Raw]; ok && kind == graph.FieldIteration {
+				iterExprs[expr.Raw] = struct{}{}
 			} else {
-				baseExprs[expr.Original] = struct{}{}
+				baseExprs[expr.Raw] = struct{}{}
 			}
 		}
 	}
@@ -472,10 +471,10 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 	desired := base.DeepCopy()
 	res := resolver.NewResolver(desired.Object, values)
 	for _, v := range n.templateVars {
-		if len(v.Expressions) == 0 {
+		if len(v.Exprs) == 0 {
 			continue
 		}
-		if val, ok := values[v.Expressions[0].Original]; ok {
+		if val, ok := values[v.Exprs[0].Raw]; ok {
 			_ = res.UpsertValueAtPath(v.Path, val)
 		}
 	}
@@ -495,7 +494,6 @@ func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
 // IsReady evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
 func (n *Node) IsReady() (bool, error) {
-	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
 		return false, err
@@ -527,7 +525,7 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 			if isCELDataPending(err) {
 				return false, nil
 			}
-			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression.Original, err)
+			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression.Raw, err)
 		}
 		if !result {
 			return false, nil
@@ -537,7 +535,6 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 }
 
 func (n *Node) isCollectionReady() (bool, error) {
-	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 	if n.desired == nil {
 		return false, nil
 	}
@@ -551,23 +548,19 @@ func (n *Node) isCollectionReady() (bool, error) {
 		return true, nil
 	}
 
-	// Collection readyWhen uses "each" (single item) only.
-	// Each item has different context, so we evaluate directly (not cached).
 	for i, obj := range n.observed {
 		ctx := map[string]any{graph.EachVarName: obj.Object}
 		for _, expr := range n.readyWhenExprs {
-			// readyWhen for collections must NOT be cached - each item has different "each" context.
-			// Use Expression.Eval directly instead of evalBoolExpr.
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
 					return false, nil
 				}
-				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
+				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Raw, i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Raw)
 			}
 			if !result {
 				return false, nil
@@ -601,21 +594,13 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		dimensions[i] = evaluatedDimension{name: dim.Name, values: values}
 	}
 
-	product, err := cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
-	if err != nil {
-		return nil, err
-	}
-
-	return product, nil
+	return cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
 }
 
 // buildContext builds the CEL activation context from node dependencies.
-// If only is provided, only those dependency IDs are included in the context.
-// If only is empty/nil, all dependencies are included.
 func (n *Node) buildContext(only ...string) map[string]any {
 	ctx := make(map[string]any)
 	for depID, dep := range n.deps {
-		// Use nil check (not len==0) to include empty collections in context.
 		if dep.observed == nil {
 			continue
 		}
@@ -630,8 +615,7 @@ func (n *Node) buildContext(only ...string) map[string]any {
 			ctx[depID] = items
 		} else {
 			obj := dep.observed[0].Object
-			// For schema (instance), strip status - users should only access spec/metadata.
-			if depID == graph.InstanceNodeID {
+			if depID == graph.SchemaVarName {
 				obj = withStatusOmitted(obj)
 			}
 			ctx[depID] = obj
@@ -640,8 +624,6 @@ func (n *Node) buildContext(only ...string) map[string]any {
 	return ctx
 }
 
-// withStatusOmitted returns a shallow copy of obj with the "status" key removed.
-// This prevents CEL expressions from accessing instance status fields.
 func withStatusOmitted(obj map[string]any) map[string]any {
 	result := make(map[string]any, len(obj))
 	for k, v := range obj {
@@ -653,9 +635,6 @@ func withStatusOmitted(obj map[string]any) map[string]any {
 }
 
 // contextDependencyIDs returns CEL variable names grouped by type.
-// - singles: dependencies that are single resources (declared as dyn)
-// - collections: dependencies that are collections (declared as list(dyn))
-// - iterators: forEach loop variable names from iterCtx (declared as list(dyn))
 func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collections, iterators []string) {
 	for depID, dep := range n.deps {
 		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
@@ -668,4 +647,17 @@ func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collection
 		iterators = append(iterators, name)
 	}
 	return
+}
+
+// toSingleFieldDescriptor converts a single CompiledVariable to a resolver FieldDescriptor.
+func toSingleFieldDescriptor(v *graph.CompiledVariable) variable.FieldDescriptor {
+	exprs := make([]string, len(v.Exprs))
+	for i, e := range v.Exprs {
+		exprs[i] = e.Raw
+	}
+	return variable.FieldDescriptor{
+		Path:                 v.Path,
+		Expressions:          exprs,
+		StandaloneExpression: v.Standalone,
+	}
 }

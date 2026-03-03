@@ -78,6 +78,12 @@ When kro manages an instance, it applies these labels and annotations:
 | `app.kubernetes.io/managed-by` | Set to `"kro"` (standard Kubernetes recommended label) |
 | `applyset.kubernetes.io/id` | Unique ApplySet identifier (hash of name.namespace.kind.group) |
 
+**Debugging-specific labels:** 
+
+| Label| Description |
+|------|-------------|
+| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
+
 **Annotations:**
 
 | Annotation | Description |

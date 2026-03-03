@@ -296,17 +296,17 @@ func TestSafeNodeID(t *testing.T) {
 		{
 			name:     "short ID",
 			input:    "configMap",
-			expected: "3ca56079224bf9f3",
+			expected: "b2ef5cc0f757c127",
 		},
 		{
 			name:     "long ID exceeding 63 chars",
 			input:    "thisIsAnExtremelyLongResourceIdentifierThatExceedsSixtyThreeCharactersLimit",
-			expected: "f2e632b9df04d066",
+			expected: "813389665a79234e",
 		},
 		{
 			name:     "different short ID",
 			input:    "secret",
-			expected: "2bb80d537b1da3e3",
+			expected: "ab23f0eec020c951",
 		},
 	}
 

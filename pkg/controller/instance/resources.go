@@ -73,6 +73,7 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 4. Prune orphans (when desired is fully resolved)
 	// ---------------------------------------------------------
+	pruneNeedsRetry := false
 	//
 	// Prune is intentionally gated by two independent conditions:
 	//   1) prune == true  -> all desired objects were resolvable (no ErrDataPending)
@@ -83,11 +84,12 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// omitted from the apply set. Keeping both checks visible prevents  regressions
 	// where one gate gets removed and prune becomes unsafe.
 	if prune && result.Errors() == nil {
-		pruned, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
+		pruned, needsRetry, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
 		if err != nil {
 			return err
 		}
 		clusterMutated = clusterMutated || pruned
+		pruneNeedsRetry = pruneNeedsRetry || needsRetry
 	}
 
 	// ---------------------------------------------------------
@@ -104,6 +106,9 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 
 	if lastUnresolved != "" {
 		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", lastUnresolved))
+	}
+	if pruneNeedsRetry {
+		return rcx.delayedRequeue(fmt.Errorf("prune encountered UID conflicts; retrying"))
 	}
 	if clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
@@ -140,28 +145,37 @@ func (c *Controller) processNodes(
 }
 
 // pruneOrphans deletes previously managed resources that are not in the current
-// apply set and then shrinks parent applyset metadata.
+// apply set. It shrinks parent applyset metadata only when prune completes
+// without UID conflicts.
 func (c *Controller) pruneOrphans(
 	rcx *ReconcileContext,
 	applier *applyset.ApplySet,
 	result *applyset.ApplyResult,
 	supersetPatch applyset.Metadata,
 	batchMeta applyset.Metadata,
-) (bool, error) {
+) (bool, bool, error) {
 	pruneScope := supersetPatch.PruneScope()
 	pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    pruneScope,
 	})
 	if err != nil {
-		return false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+		return false, false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+	}
+
+	// Keep superset metadata and retry prune on UID conflicts.
+	if pruneResult.HasConflicts() {
+		rcx.Log.V(1).Info("prune skipped resources due to UID conflicts; keeping superset applyset metadata for retry",
+			"conflicts", pruneResult.Conflicts,
+		)
+		return pruneResult.HasPruned(), true, nil
 	}
 
 	// Prune succeeded (errors return directly), safe to shrink metadata
 	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
 		rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
 	}
-	return pruneResult.HasPruned(), nil
+	return pruneResult.HasPruned(), false, nil
 }
 
 // createApplySet constructs an applyset configured for the current instance.

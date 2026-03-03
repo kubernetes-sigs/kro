@@ -15,10 +15,9 @@
 package metadata
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 
@@ -222,11 +221,12 @@ func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
 	}
 }
 
-// SafeNodeID returns a deterministic fix length (16 chars) nodeId.
-// k8s label safe representation due to char limit
+// SafeNodeID returns a deterministic fixed-length (16 chars) nodeId
+// using FNV-64a, safe for K8s label values due to the 63-char limit.
 func SafeNodeID(nodeID string) string {
-	hash := sha256.Sum256([]byte(nodeID))
-	return hex.EncodeToString(hash[:])[:16]
+	h := fnv.New64a()
+	h.Write([]byte(nodeID))
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 func safeVersion(version string) string {

@@ -38,15 +38,15 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 1. Process nodes (build applyset inputs)
 	// ---------------------------------------------------------
-	var unresolvedErr error
+	var lastUnresolvedErr error
 	resources, err := c.processNodes(rcx)
 	if err != nil {
 		if !runtime.IsDataPending(err) {
 			return err
 		}
-		unresolvedErr = err
+		lastUnresolvedErr = err
 	}
-	prune := unresolvedErr == nil
+	prune := lastUnresolvedErr == nil
 
 	// ---------------------------------------------------------
 	// 2. Project applyset metadata and patch parent
@@ -107,8 +107,8 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// (including WaitingForReadiness) before the controller checks it.
 	rcx.StateManager.Update()
 
-	if unresolvedErr != nil {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", unresolvedErr))
+	if lastUnresolvedErr != nil {
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", lastUnresolvedErr))
 	}
 	if clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
@@ -129,19 +129,19 @@ func (c *Controller) processNodes(
 
 	var resources []applyset.Resource
 
-	var unresolvedErr error
+	var lastUnresolvedErr error
 	for _, node := range nodes {
 		resourcesToAdd, err := c.processNode(rcx, node)
 		if err != nil {
 			if !runtime.IsDataPending(err) {
 				return nil, err
 			}
-			unresolvedErr = errors.Join(unresolvedErr, err)
+			lastUnresolvedErr = err
 		}
 		resources = append(resources, resourcesToAdd...)
 	}
 
-	return resources, unresolvedErr
+	return resources, lastUnresolvedErr
 }
 
 // pruneOrphans deletes previously managed resources that are not in the current

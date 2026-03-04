@@ -144,6 +144,40 @@ readyWhen:
 - The `-` is what removes the final newline.
 :::
 
+### Escaping `${VAR}` Syntax
+
+kro uses `${...}` as CEL expression delimiters, which conflicts with shell `${VAR}` variable expansion syntax. To produce a literal `${VAR}` in the output, wrap the variable reference in a CEL string literal:
+
+**Pattern:** `${"${VAR}"}` produces the literal output `${VAR}`
+
+kro sees the outer `${...}` and evaluates the contents as CEL. The contents `"${VAR}"` is just a CEL string literal (text between double quotes), so it evaluates to the string `${VAR}`.
+
+**Example:**
+```kro
+containers:
+  - name: worker
+    command:
+      - bash
+      - -c
+      - echo "Hello ${"${USER}"}"
+```
+
+This works for all shell parameter expansion forms:
+
+| Shell syntax | Escaped for kro | CEL evaluates to |
+|---|---|---|
+| `${VAR}` | `${"${VAR}"}` | `${VAR}` |
+| `${VAR:-default}` | `${"${VAR:-default}"}` | `${VAR:-default}` |
+| `${VAR:=value}` | `${"${VAR:=value}"}` | `${VAR:=value}` |
+
+:::note
+Shell syntax that does **not** use `${` doesn't need escaping:
+
+- `$VAR` — no braces, kro ignores it
+- `$(command)` — command substitution uses `$(`, not `${`
+- `$@`, `$1`, `$?` — special variables without braces
+:::
+
 ## Referencing Data
 
 ### The `schema` Variable

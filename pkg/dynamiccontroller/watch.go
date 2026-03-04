@@ -41,6 +41,10 @@ type WatchManager struct {
 	// onEvent is the single callback invoked for every informer event.
 	// Set at construction time; never nil.
 	onEvent EventHandler
+
+	// createInformer builds a SharedIndexInformer for a GVR. Defaults to
+	// metadatainformer.NewFilteredMetadataInformer. Override in tests only.
+	createInformer func(schema.GroupVersionResource) cache.SharedIndexInformer
 }
 
 // gvrWatch wraps a single SharedIndexInformer for one GVR.
@@ -55,13 +59,15 @@ type gvrWatch struct {
 // NewWatchManager creates a new WatchManager. The onEvent callback is invoked
 // for every informer event across all GVRs.
 func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent EventHandler, log logr.Logger) *WatchManager {
-	return &WatchManager{
+	wm := &WatchManager{
 		watches: make(map[schema.GroupVersionResource]*gvrWatch),
 		client:  client,
 		resync:  resync,
 		onEvent: onEvent,
 		log:     log.WithName("watch-manager"),
 	}
+	wm.createInformer = wm.defaultCreateInformer
+	return wm
 }
 
 // EnsureWatch idempotently ensures an informer is running for the given GVR.
@@ -115,11 +121,6 @@ func (m *WatchManager) ActiveWatchCount() int {
 	return len(m.watches)
 }
 
-// WatchCount returns the number of active watches. Alias for metrics.
-func (m *WatchManager) WatchCount() int {
-	return m.ActiveWatchCount()
-}
-
 // Shutdown stops all informers and clears state.
 func (m *WatchManager) Shutdown() {
 	m.mu.Lock()
@@ -132,12 +133,16 @@ func (m *WatchManager) Shutdown() {
 	m.watches = make(map[schema.GroupVersionResource]*gvrWatch)
 }
 
-func (m *WatchManager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
-	inf := metadatainformer.NewFilteredMetadataInformer(
+func (m *WatchManager) defaultCreateInformer(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
+	return metadatainformer.NewFilteredMetadataInformer(
 		m.client, gvr, metav1.NamespaceAll, m.resync,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		nil,
 	).Informer()
+}
+
+func (m *WatchManager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
+	inf := m.createInformer(gvr)
 
 	_ = inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		m.log.V(1).Error(err, "Watch error", "gvr", gvr)
@@ -183,29 +188,27 @@ func (w *gvrWatch) eventHandlerFuncs(onEvent EventHandler) cache.ResourceEventHa
 				onEvent(*e)
 			}
 		},
-		UpdateFunc: func(_, newObj interface{}) {
-			if e := toEvent(newObj, EventUpdate); e != nil {
-				onEvent(*e)
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			e := toEvent(newObj, EventUpdate)
+			if e == nil {
+				return
 			}
+			// Capture old labels for collection watches to detect label-loss.
+			if oldMeta, err := meta.Accessor(oldObj); err == nil {
+				e.OldLabels = maps.Clone(oldMeta.GetLabels())
+			}
+			onEvent(*e)
 		},
 		DeleteFunc: func(obj interface{}) {
+			// Unwrap tombstones: when the informer's watch expires and
+			// re-lists, deleted objects may arrive wrapped in
+			// DeletedFinalStateUnknown.
+			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = d.Obj
+			}
 			if e := toEvent(obj, EventDelete); e != nil {
 				onEvent(*e)
 			}
 		},
 	}
-}
-
-// SetWatchForTesting replaces the internal watch for a GVR. Test only.
-func (m *WatchManager) SetWatchForTesting(gvr schema.GroupVersionResource, inf cache.SharedIndexInformer) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	w := &gvrWatch{
-		gvr:      gvr,
-		informer: inf,
-		stopCh:   make(chan struct{}),
-		log:      m.log.WithValues("gvr", gvr.String()),
-	}
-	m.watches[gvr] = w
 }

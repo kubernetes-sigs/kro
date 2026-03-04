@@ -101,6 +101,7 @@ spec:
                               description: |-
                                 Name is the name of the external resource to reference.
                                 Mutually exclusive with Selector.
+                              minLength: 1
                               type: string
                             namespace:
                               description: |-
@@ -159,9 +160,8 @@ spec:
                           type: object
                           x-kubernetes-validations:
                           - message: exactly one of name or selector must be provided
-                            rule: (has(self.name) && size(self.name) > 0) || has(self.selector)
-                          - message: name and selector are mutually exclusive
-                            rule: '!((has(self.name) && size(self.name) > 0) && has(self.selector))'
+                            rule: (has(self.name) && !has(self.selector)) || (!has(self.name)
+                              && has(self.selector))
                       required:
                       - apiVersion
                       - kind

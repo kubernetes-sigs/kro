@@ -494,6 +494,154 @@ func TestMixedScalarAndCollection_RemoveParentGVR(t *testing.T) {
 	assert.Equal(t, 0, coord.watches.ActiveWatchCount(), "expected 0 active watches after removing parent GVR")
 }
 
+func TestDuplicateCollectionRegistration_Idempotent(t *testing.T) {
+	coord, recorder := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	selector, _ := labels.Parse("app=my-app")
+
+	// Register the same collection watch twice in the same cycle.
+	watcher := coord.ForInstance(testParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selector,
+	}))
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selector,
+	}))
+	watcher.Done()
+
+	// Should only have 1 collection entry, not 2.
+	_, collection := coord.WatchRequestCount()
+	assert.Equal(t, 1, collection, "duplicate collection registration should be deduped")
+
+	// One matching event should trigger exactly one enqueue, not two.
+	coord.RouteEvent(Event{
+		Type:      EventAdd,
+		GVR:       testCmGVR,
+		Name:      "config-1",
+		Namespace: "default",
+		Labels:    map[string]string{"app": "my-app"},
+	})
+	assert.Equal(t, 1, recorder.count(), "should enqueue once, not twice")
+}
+
+func TestScalarAndCollectionDedup(t *testing.T) {
+	coord, recorder := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	// Instance watches a configmap both as a scalar and via a collection selector
+	// that would also match it.
+	watcher := coord.ForInstance(testParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "specific-cm",
+		GVR:       testCmGVR,
+		Name:      "config-1",
+		Namespace: "default",
+	}))
+	selector, _ := labels.Parse("app=my-app")
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "all-configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selector,
+	}))
+	watcher.Done()
+
+	// An event matching both scalar and collection should enqueue only once.
+	coord.RouteEvent(Event{
+		Type:      EventUpdate,
+		GVR:       testCmGVR,
+		Name:      "config-1",
+		Namespace: "default",
+		Labels:    map[string]string{"app": "my-app"},
+	})
+	assert.Equal(t, 1, recorder.count(), "instance matching both scalar and collection should be enqueued once")
+}
+
+func TestCollectionWatch_SelectorChange(t *testing.T) {
+	coord, recorder := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	// Cycle 1: collection watch with selector app=v1.
+	w1 := coord.ForInstance(testParentGVR, instance)
+	selectorV1, _ := labels.Parse("app=v1")
+	require.NoError(t, w1.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selectorV1,
+	}))
+	w1.Done()
+
+	// Cycle 2: same nodeID, different selector (app=v2).
+	w2 := coord.ForInstance(testParentGVR, instance)
+	selectorV2, _ := labels.Parse("app=v2")
+	require.NoError(t, w2.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selectorV2,
+	}))
+	w2.Done()
+
+	// Old selector should not match.
+	coord.RouteEvent(Event{
+		Type:      EventAdd,
+		GVR:       testCmGVR,
+		Name:      "config-1",
+		Namespace: "default",
+		Labels:    map[string]string{"app": "v1"},
+	})
+	assert.Equal(t, 0, recorder.count(), "old selector should not match after change")
+
+	// New selector should match.
+	coord.RouteEvent(Event{
+		Type:      EventAdd,
+		GVR:       testCmGVR,
+		Name:      "config-2",
+		Namespace: "default",
+		Labels:    map[string]string{"app": "v2"},
+	})
+	assert.Equal(t, 1, recorder.count(), "new selector should match")
+
+	// Only 1 collection entry should exist.
+	_, collection := coord.WatchRequestCount()
+	assert.Equal(t, 1, collection, "should have exactly 1 collection entry after selector change")
+}
+
+func TestRouteEvent_OldLabelsMatch(t *testing.T) {
+	coord, recorder := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	watcher := coord.ForInstance(testParentGVR, instance)
+	selector, _ := labels.Parse("team=alpha")
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selector,
+	}))
+	watcher.Done()
+
+	// Update event: new labels no longer match, but old labels did.
+	// Should still trigger re-reconciliation (label-loss detection).
+	coord.RouteEvent(Event{
+		Type:      EventUpdate,
+		GVR:       testCmGVR,
+		Name:      "config-1",
+		Namespace: "default",
+		Labels:    map[string]string{"team": "beta"},
+		OldLabels: map[string]string{"team": "alpha"},
+	})
+	assert.Equal(t, 1, recorder.count(), "should enqueue when old labels matched selector (label-loss)")
+}
+
 func TestWatchRequestCount(t *testing.T) {
 	coord, _ := newTestCoordinator(t)
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}

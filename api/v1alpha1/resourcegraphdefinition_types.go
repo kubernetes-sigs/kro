@@ -112,13 +112,13 @@ type CRDMetadata struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="(has(self.name) && size(self.name) > 0) || has(self.selector)",message="exactly one of name or selector must be provided"
-// +kubebuilder:validation:XValidation:rule="!((has(self.name) && size(self.name) > 0) && has(self.selector))",message="name and selector are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="(has(self.name) && !has(self.selector)) || (!has(self.name) && has(self.selector))",message="exactly one of name or selector must be provided"
 type ExternalRefMetadata struct {
 	// Name is the name of the external resource to reference.
 	// Mutually exclusive with Selector.
 	//
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name,omitempty"`
 	// Namespace is the namespace of the external resource.
 	// If empty, the instance's namespace will be used.

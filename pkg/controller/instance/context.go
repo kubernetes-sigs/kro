@@ -46,7 +46,7 @@ type ReconcileContext struct {
 	StateManager *StateManager
 
 	// Watcher is the per-instance watch handle from the coordinator.
-	// May be nil if the coordinator is not configured.
+	// nil only in unit tests; always set in production.
 	Watcher dynamiccontroller.InstanceWatcher
 }
 

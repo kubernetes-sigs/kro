@@ -130,9 +130,6 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(managedCM.Data).To(HaveKeyWithValue("replicas", "1"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		By("sleeping to let the watch settle")
-		time.Sleep(5 * time.Second)
-
 		By("updating external ConfigMap to replicas=3")
 		Expect(env.Client.Get(ctx, types.NamespacedName{
 			Name:      "ext-config",
@@ -154,6 +151,111 @@ var _ = Describe("ExternalRef Watch", func() {
 		}, 3*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed(),
 			"managed ConfigMap should update reactively via watch, not the 5s requeue timer",
 		)
+	})
+
+	It("external collection with matchExpressions CEL resolves dynamic values", func(ctx SpecContext) {
+		By("creating RGD with external collection ref using matchExpressions with CEL")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-matchexpr",
+			generator.WithSchema(
+				"TestExtCollMatchExpr", "v1alpha1",
+				map[string]interface{}{
+					"teamName": "string",
+				},
+				map[string]interface{}{
+					"configCount": "${string(size(extconfigs))}",
+				},
+			),
+			generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: &metav1.LabelSelector{
+						MatchExpressions: []metav1.LabelSelectorRequirement{
+							{
+								Key:      "team",
+								Operator: metav1.LabelSelectorOpIn,
+								Values:   []string{"${schema.spec.teamName}"},
+							},
+						},
+					},
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating ConfigMaps with label team=bravo")
+		cm1 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bravo-config-1",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "bravo"},
+			},
+			Data: map[string]string{"key": "value1"},
+		}
+		cm2 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bravo-config-2",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "bravo"},
+			},
+			Data: map[string]string{"key": "value2"},
+		}
+		Expect(env.Client.Create(ctx, cm1)).To(Succeed())
+		Expect(env.Client.Create(ctx, cm2)).To(Succeed())
+
+		By("creating a ConfigMap with different label to verify it's excluded")
+		cmOther := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "charlie-config-1",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "charlie"},
+			},
+			Data: map[string]string{"key": "other"},
+		}
+		Expect(env.Client.Create(ctx, cmOther)).To(Succeed())
+
+		By("creating the instance with teamName=bravo")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollMatchExpr",
+				"metadata": map[string]interface{}{
+					"name":      "test-matchexpr",
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"teamName": "bravo",
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("waiting for instance to become ACTIVE with configCount=2 (only team=bravo matched)")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("2"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
 	It("external collection watch reacts to new matching resources", func(ctx SpecContext) {
@@ -232,9 +334,6 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(found).To(BeTrue())
 			g.Expect(configCount).To(Equal("1"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
-
-		By("sleeping to let the watch settle")
-		time.Sleep(5 * time.Second)
 
 		By("creating a second ConfigMap with label team=alpha")
 		cm2 := &corev1.ConfigMap{

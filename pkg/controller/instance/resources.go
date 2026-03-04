@@ -696,7 +696,11 @@ func (c *Controller) processExternalCollectionNode(
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
 
-	labelSelector := node.GetResolvedSelector()
+	labelSelector, err := node.GetResolvedSelector()
+	if err != nil {
+		state.SetError(fmt.Errorf("failed to resolve selector for %s: %w", id, err))
+		return state.Err
+	}
 	if labelSelector == nil {
 		state.SetSkipped()
 		return nil
@@ -709,17 +713,28 @@ func (c *Controller) processExternalCollectionNode(
 		return state.Err
 	}
 
-	// Register collection watch with the coordinator.
-	requestCollectionWatch(rcx, id, nodeMeta.GVR, rcx.Instance.GetNamespace(), selector)
-
-	// Determine namespace for LIST.
+	// Determine namespace for LIST and watch.
+	// Cluster-scoped resources (e.g. Namespaces, ClusterRoles) use empty
+	// namespace so the LIST is not scoped to a single namespace.
 	ns := rcx.Instance.GetNamespace()
+	if !nodeMeta.Namespaced {
+		ns = ""
+	}
+
+	// Register collection watch with the coordinator.
+	requestCollectionWatch(rcx, id, nodeMeta.GVR, ns, selector)
 
 	// LIST external resources matching the selector.
-	var ri = rcx.Client.Resource(nodeMeta.GVR)
-	list, err := ri.Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
-		LabelSelector: selector.String(),
-	})
+	var list *unstructured.UnstructuredList
+	if ns != "" {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	} else {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	}
 	if err != nil {
 		state.SetError(fmt.Errorf("failed to list external collection %s: %w", id, err))
 		return state.Err

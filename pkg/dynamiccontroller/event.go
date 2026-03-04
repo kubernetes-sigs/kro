@@ -34,6 +34,10 @@ type Event struct {
 	Name      string
 	Namespace string
 	Labels    map[string]string
+	// OldLabels holds the labels from the previous version of the object
+	// (populated only for update events). Used by collection watches to detect
+	// label changes that cause an object to enter or leave a selector match.
+	OldLabels map[string]string
 }
 
 // EventHandler processes a single watch event.

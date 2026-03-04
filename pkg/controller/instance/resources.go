@@ -581,9 +581,6 @@ func (c *Controller) processApplyResults(
 		}
 	}
 
-	// we don't want to keep reconciling with exponential backoff if the error
-	// is waiting for readiness
-	// we will notice the readiness through a watch event
 	var errs []error
 	for _, state := range rcx.StateManager.NodeStates {
 		if state.Err != nil && !errors.Is(state.Err, runtime.ErrWaitingForReadiness) {

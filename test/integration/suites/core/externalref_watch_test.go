@@ -366,4 +366,104 @@ var _ = Describe("ExternalRef Watch", func() {
 			"instance status.configCount should update reactively via watch, not the 5s requeue timer",
 		)
 	})
+
+	It("external collection sortBy orders resources by a data field", func(ctx SpecContext) {
+		By("creating RGD with external collection ref and sortBy CEL expression")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-sortby",
+			generator.WithSchema(
+				"TestExtCollSortBy", "v1alpha1",
+				map[string]interface{}{},
+				map[string]interface{}{
+					"sortedNames": "${extconfigs.sortBy(c, c.data.priority).map(c, c.metadata.name).join(\",\")}",
+					"configCount": "${string(size(extconfigs))}",
+				},
+			),
+			generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"app": "sorttest",
+						},
+					},
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating 3 ConfigMaps out of alphabetical/priority order with label app=sorttest")
+		cmCharlie := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cm-charlie",
+				Namespace: namespace,
+				Labels:    map[string]string{"app": "sorttest"},
+			},
+			Data: map[string]string{"priority": "1"},
+		}
+		cmAlpha := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cm-alpha",
+				Namespace: namespace,
+				Labels:    map[string]string{"app": "sorttest"},
+			},
+			Data: map[string]string{"priority": "2"},
+		}
+		cmBravo := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cm-bravo",
+				Namespace: namespace,
+				Labels:    map[string]string{"app": "sorttest"},
+			},
+			Data: map[string]string{"priority": "3"},
+		}
+		Expect(env.Client.Create(ctx, cmCharlie)).To(Succeed())
+		Expect(env.Client.Create(ctx, cmAlpha)).To(Succeed())
+		Expect(env.Client.Create(ctx, cmBravo)).To(Succeed())
+
+		By("creating the instance")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollSortBy",
+				"metadata": map[string]interface{}{
+					"name":      "test-sortby",
+					"namespace": namespace,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("waiting for instance to become ACTIVE with sorted names and correct count")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("3"))
+
+			sortedNames, found, err := unstructured.NestedString(instance.Object, "status", "sortedNames")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(sortedNames).To(Equal("cm-charlie,cm-alpha,cm-bravo"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
 })

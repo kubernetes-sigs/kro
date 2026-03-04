@@ -315,10 +315,48 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 func (a *Inspector) inspectComprehension(ast *celast.AST, comp celast.ComprehensionExpr, path string) ExpressionInspection {
 	out := ExpressionInspection{}
 
-	iterVar := comp.IterVar()
-	a.loopVars[iterVar] = struct{}{}
-	defer delete(a.loopVars, iterVar)
+	// Track loop variables using a depth counter to handle nested
+	// comprehensions that reuse the same variable name (e.g. sortBy
+	// expands to nested comprehensions both using iterVar "c").
+	pushLoopVar := func(name string) {
+		a.loopVars[name] = struct{}{}
+	}
+	popLoopVar := func(name string) {
+		delete(a.loopVars, name)
+	}
 
+	// Save which variables were already in scope so we only remove
+	// the ones we introduced.
+	iterVar := comp.IterVar()
+	_, iterVarWasSet := a.loopVars[iterVar]
+	pushLoopVar(iterVar)
+	defer func() {
+		if !iterVarWasSet {
+			popLoopVar(iterVar)
+		}
+	}()
+
+	if comp.HasIterVar2() {
+		iterVar2 := comp.IterVar2()
+		_, iterVar2WasSet := a.loopVars[iterVar2]
+		pushLoopVar(iterVar2)
+		defer func() {
+			if !iterVar2WasSet {
+				popLoopVar(iterVar2)
+			}
+		}()
+	}
+
+	accuVar := comp.AccuVar()
+	_, accuVarWasSet := a.loopVars[accuVar]
+	pushLoopVar(accuVar)
+	defer func() {
+		if !accuVarWasSet {
+			popLoopVar(accuVar)
+		}
+	}()
+
+	out.merge(a.inspectExpr(ast, comp.AccuInit(), ""))
 	out.merge(a.inspectExpr(ast, comp.IterRange(), path))
 
 	if cond := comp.LoopCondition(); cond != nil {
@@ -461,5 +499,7 @@ func (a *Inspector) listExpressionToString(ast *celast.AST, expr celast.Expr) st
 }
 
 func isInternalIdentifier(name string) bool {
-	return name == "@result" || strings.HasPrefix(name, "$$")
+	return name == "@result" ||
+		strings.HasPrefix(name, "$$") ||
+		strings.HasPrefix(name, "@__")
 }

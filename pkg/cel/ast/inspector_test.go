@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
@@ -231,7 +232,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			wantFunctions: []FunctionCall{
 				{Name: "contains", Arguments: []string{"ng.labels", `"environment"`}},
 				{Name: "contains", Arguments: []string{"map(iamRole.policies, p, p.actions)", `"eks:*"`}},
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit for nodeGroups.filter
 				{Name: "createList", Arguments: []string{"[ng]"}},
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit for vpc.subnets.filter
 				{Name: "createList", Arguments: []string{"[s]"}},
 				{Name: "filter", Arguments: []string{
 					"nodeGroups",
@@ -285,6 +288,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "pods", Path: "pods"},
 			},
 			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit
 				{Name: "createList", Arguments: []string{"[p]"}},
 				{Name: "filter", Arguments: []string{
 					"pods",
@@ -599,6 +603,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
+				{Name: "createList"}, // AccuInit empty list
 				{Name: "filter"},
 			},
 		},
@@ -615,6 +620,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
+				{Name: "createList"}, // AccuInit empty list
 				{Name: "filter"},
 			},
 			wantUnknownRes: nil,
@@ -631,6 +637,30 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{Name: "processItems"},
 				{Name: "processItems(bucket).validate"},
 			},
+		},
+		{
+			name:      "sortBy macro internal identifiers are not flagged as unknown",
+			resources: []string{"configs"},
+			// sortBy expands into nested comprehensions with internal variables
+			// like @__sortBy_input__ and reused iterVar "c". The inspector must
+			// recognise all of these as internal/loop variables.
+			expression: `configs.sortBy(c, c.data.priority).map(c, c.metadata.name)`,
+			wantResources: []ResourceDependency{
+				{ID: "configs", Path: "configs"},
+			},
+			wantFunctions: []FunctionCall{
+				// macro expansion produces multiple comprehensions and internal calls
+				{Name: "@__sortBy_input__.@sortByAssociatedKeys"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "filter"},
+				{Name: "filter"},
+				{Name: "filter"},
+			},
+			wantUnknownRes: nil,
 		},
 		{
 			name:          "test unknown function with target",

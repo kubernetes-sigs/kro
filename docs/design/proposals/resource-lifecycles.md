@@ -120,7 +120,7 @@ lifecycle:
   # Update phase: How to handle spec changes
   # - Patch (default): Apply changes via server-side apply
   # - Recreate: Delete and recreate resource with new spec
-  # - Never: Don't update, error if spec changes (TODO is error here right)
+  # - Never: Don't update, error if spec changes
   update: Patch | Never
   
   # Delete phase: What to do when instance is deleted

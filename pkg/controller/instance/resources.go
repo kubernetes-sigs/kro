@@ -109,7 +109,7 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 
 	// Update state manager after processing apply results.
 	// This ensures StateManager.State reflects current node states
-	// (including WaitingForReadiness) before the controller checks it.
+	// before the controller checks it.
 	rcx.StateManager.Update()
 
 	if lastUnresolvedErr != nil {

@@ -174,10 +174,12 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 	gvr := req.GVR
 	c.mu.Unlock()
 
-	// Ensure an informer is running for this GVR (non-blocking).
+	// Ensure an informer is running for this GVR.
 	// Called outside the coordinator lock to avoid holding it while
 	// the WatchManager acquires its own lock.
-	c.watches.EnsureWatch(gvr)
+	if err := c.watches.EnsureWatch(gvr); err != nil {
+		c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
+	}
 
 	return nil
 }
@@ -199,6 +201,8 @@ func (c *WatchCoordinator) doneInstance(key instanceKey) {
 	for nodeID, oldReq := range state.previous {
 		if newReq, stillActive := state.current[nodeID]; stillActive {
 			if newReq.GVR == oldReq.GVR && newReq.Name == oldReq.Name && newReq.Namespace == oldReq.Namespace {
+				// Same target (selector changes are handled by addCollectionIndexLocked
+				// which replaces the entry by key+nodeID).
 				continue
 			}
 			// Target changed — remove old index entry.
@@ -445,6 +449,13 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 		c.collectionIndex[req.GVR] = filtered
 	}
 }
+
+// NoopInstanceWatcher is a no-op implementation of InstanceWatcher for use
+// in tests or when no coordinator is available.
+type NoopInstanceWatcher struct{}
+
+func (NoopInstanceWatcher) Watch(_ WatchRequest) error { return nil }
+func (NoopInstanceWatcher) Done()                      {}
 
 // instanceWatcher is the concrete implementation of InstanceWatcher.
 type instanceWatcher struct {

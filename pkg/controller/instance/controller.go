@@ -117,15 +117,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
 
 	// Get per-instance watcher from the coordinator.
-	var watcher dynamiccontroller.InstanceWatcher
-	if c.coordinator != nil {
-		watcher = c.coordinator.ForInstance(c.gvr, req.NamespacedName)
-		defer func() {
-			if err == nil {
-				watcher.Done()
-			}
-		}()
-	}
+	watcher := c.coordinator.ForInstance(c.gvr, req.NamespacedName)
+	defer func() {
+		if err == nil {
+			watcher.Done()
+		}
+	}()
 
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do

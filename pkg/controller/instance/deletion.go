@@ -200,12 +200,10 @@ func (c *Controller) deleteTarget(
 // removeFinalizer clears managed state on the instance after deletions complete.
 func (c *Controller) removeFinalizer(rcx *ReconcileContext) error {
 	// Clean up coordinator watch requests before removing the finalizer.
-	if c.coordinator != nil {
-		c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
-			Name:      rcx.Instance.GetName(),
-			Namespace: rcx.Instance.GetNamespace(),
-		})
-	}
+	c.coordinator.RemoveInstance(c.gvr, types.NamespacedName{
+		Name:      rcx.Instance.GetName(),
+		Namespace: rcx.Instance.GetNamespace(),
+	})
 
 	patched, err := c.setUnmanaged(rcx, rcx.Instance)
 	if err != nil {

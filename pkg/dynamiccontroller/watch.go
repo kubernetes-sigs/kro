@@ -15,6 +15,8 @@
 package dynamiccontroller
 
 import (
+	"context"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -41,6 +43,10 @@ type WatchManager struct {
 	// onEvent is the single callback invoked for every informer event.
 	// Set at construction time; never nil.
 	onEvent EventHandler
+
+	// SyncTimeout is the maximum time to wait for cache sync in EnsureWatch.
+	// Zero means use the default (30s).
+	SyncTimeout time.Duration
 
 	// createInformer builds a SharedIndexInformer for a GVR. Defaults to
 	// metadatainformer.NewFilteredMetadataInformer. Override in tests only.
@@ -71,14 +77,15 @@ func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent Ev
 }
 
 // EnsureWatch idempotently ensures an informer is running for the given GVR.
-// If the informer is already running, this is a no-op. The informer is started
-// in a background goroutine and does not block on cache sync.
-func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) {
+// If the informer is already running, this is a no-op. After starting the
+// informer it waits for the initial cache sync with a timeout and returns an
+// error if the sync does not complete.
+func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if _, ok := m.watches[gvr]; ok {
-		return
+		m.mu.Unlock()
+		return nil
 	}
 
 	w := m.newWatch(gvr)
@@ -86,6 +93,22 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) {
 
 	go w.informer.Run(w.stopCh)
 	m.log.V(1).Info("Informer started", "gvr", gvr)
+
+	// Release the lock before blocking on cache sync.
+	m.mu.Unlock()
+
+	// Wait for initial list/sync with a timeout so callers get a usable cache.
+	syncCtx, cancel := context.WithTimeout(context.Background(), m.syncTimeout())
+	defer cancel()
+
+	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
+		// Stop and remove the broken watch so a future EnsureWatch can retry
+		// with a fresh informer instead of returning early for a registered
+		// but non-functional watch.
+		m.StopWatch(gvr)
+		return fmt.Errorf("cache sync timeout for %s", gvr)
+	}
+	return nil
 }
 
 // StopWatch stops the informer for the given GVR and removes it from the
@@ -131,6 +154,15 @@ func (m *WatchManager) Shutdown() {
 		close(w.stopCh)
 	}
 	m.watches = make(map[schema.GroupVersionResource]*gvrWatch)
+}
+
+const defaultSyncTimeout = 30 * time.Second
+
+func (m *WatchManager) syncTimeout() time.Duration {
+	if m.SyncTimeout > 0 {
+		return m.SyncTimeout
+	}
+	return defaultSyncTimeout
 }
 
 func (m *WatchManager) defaultCreateInformer(gvr schema.GroupVersionResource) cache.SharedIndexInformer {

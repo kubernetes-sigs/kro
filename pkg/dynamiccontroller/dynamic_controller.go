@@ -188,6 +188,9 @@ func NewDynamicController(
 	// WatchManager routes all informer events through the coordinator.
 	dc.watches = NewWatchManager(kubeClient, config.ResyncPeriod, dc.routeChildEvent, logger)
 
+	// Initialize coordinator eagerly so it's never nil.
+	dc.coordinator = NewWatchCoordinator(dc.watches, dc.enqueueInstance, logger)
+
 	return dc
 }
 
@@ -196,9 +199,6 @@ func (dc *DynamicController) Start(ctx context.Context) error {
 	if !dc.ctx.CompareAndSwap(nil, &ctx) {
 		return fmt.Errorf("already running")
 	}
-
-	// Initialize the coordinator now that we have a context.
-	dc.coordinator = NewWatchCoordinator(dc.watches, dc.enqueueInstance, dc.log)
 
 	defer utilruntime.HandleCrash()
 
@@ -222,9 +222,7 @@ func (dc *DynamicController) Coordinator() *WatchCoordinator {
 // routeChildEvent is the EventHandler callback given to WatchManager.
 // It delegates to the coordinator for child/external resource event routing.
 func (dc *DynamicController) routeChildEvent(event Event) {
-	if dc.coordinator != nil {
-		dc.coordinator.RouteEvent(event)
-	}
+	dc.coordinator.RouteEvent(event)
 }
 
 func (dc *DynamicController) worker(ctx context.Context) {
@@ -356,19 +354,16 @@ func (dc *DynamicController) Register(
 
 	// Create parent watch if it doesn't exist.
 	if _, exists := dc.parentWatches[parent]; !exists {
-		// Ensure informer is running (non-blocking).
-		dc.watches.EnsureWatch(parent)
+		// Ensure informer is running and wait for cache sync.
+		if err := dc.watches.EnsureWatch(parent); err != nil {
+			dc.handlers.Delete(parent)
+			return fmt.Errorf("add parent handler %s: %w", parent, err)
+		}
 
 		inf := dc.watches.GetInformer(parent)
 		if inf == nil {
 			dc.handlers.Delete(parent)
 			return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
-		}
-
-		// Wait for the parent informer to sync so we can enumerate existing instances.
-		if !cache.WaitForCacheSync((*ctx).Done(), inf.HasSynced) {
-			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: cache sync failed", parent)
 		}
 
 		// Register event handler directly on the parent informer.
@@ -386,6 +381,7 @@ func (dc *DynamicController) Register(
 		reg, err := inf.AddEventHandler(parentHandler)
 		if err != nil {
 			dc.handlers.Delete(parent)
+			dc.watches.StopWatch(parent)
 			return fmt.Errorf("add parent handler %s: %w", parent, err)
 		}
 		dc.parentWatches[parent] = reg
@@ -440,9 +436,7 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 	gvrKey := keyFromGVR(parent)
 
 	// Clean up coordinator state for all instances of this parent.
-	if dc.coordinator != nil {
-		dc.coordinator.RemoveParentGVR(parent)
-	}
+	dc.coordinator.RemoveParentGVR(parent)
 
 	// Remove parent event handler registration from the informer.
 	if reg, exists := dc.parentWatches[parent]; exists {

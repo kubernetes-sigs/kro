@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/metadata/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/workqueue"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -494,26 +495,28 @@ func TestKeyFromGVR(t *testing.T) {
 	}
 }
 
-func TestRegister_AddHandlerError(t *testing.T) {
+func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1.AddMetaToScheme(scheme))
 
 	client := fake.NewSimpleMetadataClient(scheme)
+	// Fail all list calls so the informer cannot sync.
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
 	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	// Short sync timeout so test doesn't wait 30s.
+	dc.watches.SyncTimeout = 200 * time.Millisecond
 
-	ctx, cancel := context.WithCancel(t.Context())
-
+	ctx := t.Context()
 	go func() {
 		_ = dc.Start(ctx)
 	}()
 	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
-
-	cancel()
-	time.Sleep(50 * time.Millisecond)
 
 	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		return nil
@@ -521,5 +524,5 @@ func TestRegister_AddHandlerError(t *testing.T) {
 
 	err := dc.Register(ctx, gvr, handler)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "add parent handler")
+	assert.Contains(t, err.Error(), "cache sync timeout")
 }

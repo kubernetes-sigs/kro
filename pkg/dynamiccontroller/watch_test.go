@@ -16,6 +16,7 @@ package dynamiccontroller
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestStopWatch_Idempotent(t *testing.T) {
 	wm := newTestWatchManager(t)
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	wm.EnsureWatch(gvr)
+	assert.NoError(t, wm.EnsureWatch(gvr))
 	assert.Equal(t, 1, wm.ActiveWatchCount())
 
 	wm.StopWatch(gvr)
@@ -58,14 +59,14 @@ func TestStopWatch_ThenEnsureWatch_CreatesFresh(t *testing.T) {
 	wm := newTestWatchManager(t)
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	wm.EnsureWatch(gvr)
+	assert.NoError(t, wm.EnsureWatch(gvr))
 	inf1 := wm.GetInformer(gvr)
 	assert.NotNil(t, inf1)
 
 	wm.StopWatch(gvr)
 	assert.Nil(t, wm.GetInformer(gvr))
 
-	wm.EnsureWatch(gvr)
+	assert.NoError(t, wm.EnsureWatch(gvr))
 	inf2 := wm.GetInformer(gvr)
 	assert.NotNil(t, inf2)
 
@@ -114,13 +115,13 @@ func TestEnsureWatch_Idempotent(t *testing.T) {
 	wm := newTestWatchManager(t)
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	wm.EnsureWatch(gvr)
+	assert.NoError(t, wm.EnsureWatch(gvr))
 	inf1 := wm.GetInformer(gvr)
 	assert.NotNil(t, inf1)
 	assert.Equal(t, 1, wm.ActiveWatchCount())
 
 	// Second call is a no-op; same informer, same count.
-	wm.EnsureWatch(gvr)
+	assert.NoError(t, wm.EnsureWatch(gvr))
 	inf2 := wm.GetInformer(gvr)
 	assert.Same(t, inf1, inf2)
 	assert.Equal(t, 1, wm.ActiveWatchCount())
@@ -131,8 +132,8 @@ func TestShutdown(t *testing.T) {
 	gvr1 := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	gvr2 := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 
-	wm.EnsureWatch(gvr1)
-	wm.EnsureWatch(gvr2)
+	assert.NoError(t, wm.EnsureWatch(gvr1))
+	assert.NoError(t, wm.EnsureWatch(gvr2))
 	assert.Equal(t, 2, wm.ActiveWatchCount())
 
 	wm.Shutdown()
@@ -243,12 +244,11 @@ func TestNewWatch_WatchErrorHandler(t *testing.T) {
 	})
 
 	wm := NewWatchManager(failClient, 1*time.Hour, func(e Event) {}, noopLogger())
-	wm.EnsureWatch(gvr)
+	wm.SyncTimeout = 500 * time.Millisecond
+	_ = wm.EnsureWatch(gvr)
 
 	// Give the informer goroutine time to hit the error handler.
-	time.Sleep(500 * time.Millisecond)
-
-	wm.Shutdown()
+	time.Sleep(200 * time.Millisecond)
 }
 
 func TestNewWatch_AddEventHandlerError(t *testing.T) {
@@ -318,4 +318,124 @@ func TestUpdateFunc_OldLabels(t *testing.T) {
 	assert.Equal(t, EventUpdate, received[0].Type)
 	assert.Equal(t, map[string]string{"team": "beta"}, received[0].Labels)
 	assert.Equal(t, map[string]string{"team": "alpha"}, received[0].OldLabels)
+}
+
+func TestEnsureWatch_SyncTimeout(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddMetaToScheme(scheme)
+	client := fake.NewSimpleMetadataClient(scheme)
+	// Fail all list calls so the informer cannot sync.
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
+
+	wm := NewWatchManager(client, 1*time.Hour, func(Event) {}, noopLogger())
+	wm.SyncTimeout = 200 * time.Millisecond
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	err := wm.EnsureWatch(gvr)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cache sync timeout")
+
+	// Broken watch should be cleaned up so a future EnsureWatch can retry.
+	assert.Equal(t, 0, wm.ActiveWatchCount())
+}
+
+func TestEnsureWatch_SyncTimeout_RetrySucceeds(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddMetaToScheme(scheme)
+	client := fake.NewSimpleMetadataClient(scheme)
+
+	// First call: fail all lists → sync timeout.
+	var failList atomic.Bool
+	failList.Store(true)
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if failList.Load() {
+			return true, nil, fmt.Errorf("simulated list error")
+		}
+		return false, nil, nil
+	})
+
+	wm := NewWatchManager(client, 1*time.Hour, func(Event) {}, noopLogger())
+	wm.SyncTimeout = 200 * time.Millisecond
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	err := wm.EnsureWatch(gvr)
+	assert.Error(t, err)
+	assert.Equal(t, 0, wm.ActiveWatchCount(), "broken watch should be removed")
+
+	// Second call: lists succeed → should create fresh informer and sync.
+	failList.Store(false)
+	wm.SyncTimeout = 5 * time.Second
+	err = wm.EnsureWatch(gvr)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, wm.ActiveWatchCount(), "retry should succeed with fresh informer")
+	wm.Shutdown()
+}
+
+func TestEnsureWatch_SyncSuccess(t *testing.T) {
+	wm := newTestWatchManager(t)
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	wm.SyncTimeout = 5 * time.Second
+
+	err := wm.EnsureWatch(gvr)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, wm.ActiveWatchCount())
+	wm.Shutdown()
+}
+
+func TestEnsureWatch_ConcurrentCalls(t *testing.T) {
+	wm := newTestWatchManager(t)
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	// Launch multiple concurrent EnsureWatch calls.
+	errs := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			errs <- wm.EnsureWatch(gvr)
+		}()
+	}
+	for i := 0; i < 10; i++ {
+		assert.NoError(t, <-errs)
+	}
+
+	// Only one informer should exist.
+	assert.Equal(t, 1, wm.ActiveWatchCount())
+	wm.Shutdown()
+}
+
+func TestConcurrentEnsureWatch_StopWatch(t *testing.T) {
+	wm := newTestWatchManager(t)
+	wm.SyncTimeout = 500 * time.Millisecond
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	// Start and stop concurrently.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 20; i++ {
+			_ = wm.EnsureWatch(gvr)
+			wm.StopWatch(gvr)
+		}
+	}()
+
+	// Concurrent EnsureWatch calls.
+	for i := 0; i < 20; i++ {
+		_ = wm.EnsureWatch(gvr)
+	}
+	<-done
+
+	// Should not panic. Final state is deterministic: either 0 or 1 watches.
+	count := wm.ActiveWatchCount()
+	assert.True(t, count == 0 || count == 1)
+	wm.Shutdown()
+}
+
+func TestSyncTimeout_DefaultValue(t *testing.T) {
+	wm := newTestWatchManager(t)
+	assert.Equal(t, defaultSyncTimeout, wm.syncTimeout())
+
+	wm.SyncTimeout = 5 * time.Second
+	assert.Equal(t, 5*time.Second, wm.syncTimeout())
 }

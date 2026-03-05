@@ -15,6 +15,7 @@
 package dynamiccontroller
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/metadata/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -298,7 +300,7 @@ func TestStopOrphanedWatch_RemoveInstance(t *testing.T) {
 	assert.Equal(t, 0, coord.watches.ActiveWatchCount(), "expected 0 active watches after removing last requestor")
 
 	// EnsureWatch can re-create it.
-	coord.watches.EnsureWatch(testDeployGVR)
+	assert.NoError(t, coord.watches.EnsureWatch(testDeployGVR))
 	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after EnsureWatch")
 }
 
@@ -655,4 +657,94 @@ func TestWatchRequestCount(t *testing.T) {
 	scalar, collection := coord.WatchRequestCount()
 	assert.Equal(t, 1, scalar)
 	assert.Equal(t, 1, collection)
+}
+
+func TestNoopInstanceWatcher(t *testing.T) {
+	noop := NoopInstanceWatcher{}
+
+	// Watch should return nil.
+	err := noop.Watch(WatchRequest{
+		NodeID:    "test",
+		GVR:       testDeployGVR,
+		Name:      "d1",
+		Namespace: "default",
+	})
+	assert.NoError(t, err)
+
+	// Done should not panic.
+	noop.Done()
+}
+
+func TestRemoveInstance_NonExistent(t *testing.T) {
+	coord, _ := newTestCoordinator(t)
+
+	// Removing a non-existent instance should not panic.
+	coord.RemoveInstance(testParentGVR, types.NamespacedName{Name: "nonexistent", Namespace: "default"})
+	assert.Equal(t, 0, coord.InstanceWatchCount())
+}
+
+func TestDoneInstance_NoState(t *testing.T) {
+	coord, _ := newTestCoordinator(t)
+
+	// Calling Done on a watcher that never called Watch should not panic.
+	watcher := coord.ForInstance(testParentGVR, types.NamespacedName{Name: "empty", Namespace: "default"})
+	watcher.Done()
+	assert.Equal(t, 0, coord.InstanceWatchCount())
+}
+
+func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	// Fail all list calls.
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
+
+	recorder := &enqueueRecorder{}
+	wm := NewWatchManager(client, 1*time.Hour, func(event Event) {}, log)
+	wm.SyncTimeout = 100 * time.Millisecond
+
+	coord := NewWatchCoordinator(wm, recorder.enqueue, log)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	watcher := coord.ForInstance(testParentGVR, instance)
+
+	// EnsureWatch will fail sync but addWatch logs and returns nil.
+	err := watcher.Watch(WatchRequest{
+		NodeID:    "deploy",
+		GVR:       testDeployGVR,
+		Name:      "d1",
+		Namespace: "default",
+	})
+	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
+
+	wm.Shutdown()
+}
+
+func TestRemoveInstance_ScalarIndexCleanup(t *testing.T) {
+	coord, _ := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	// Watch, Done, then remove.
+	watcher := coord.ForInstance(testParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
+	// Don't call Done — tests that RemoveInstance cleans up current entries too.
+	coord.RemoveInstance(testParentGVR, instance)
+
+	assert.Equal(t, 0, coord.InstanceWatchCount())
+	scalar, collection := coord.WatchRequestCount()
+	assert.Equal(t, 0, scalar)
+	assert.Equal(t, 0, collection)
+}
+
+func TestRemoveParentGVR_NonExistent(t *testing.T) {
+	coord, _ := newTestCoordinator(t)
+	nonExistentGVR := schema.GroupVersionResource{Group: "fake", Version: "v1", Resource: "fakes"}
+
+	// Should not panic.
+	coord.RemoveParentGVR(nonExistentGVR)
+	assert.Equal(t, 0, coord.InstanceWatchCount())
 }

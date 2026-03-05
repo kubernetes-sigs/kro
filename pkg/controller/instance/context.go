@@ -46,7 +46,7 @@ type ReconcileContext struct {
 	StateManager *StateManager
 
 	// Watcher is the per-instance watch handle from the coordinator.
-	// nil only in unit tests; always set in production.
+	// Use dynamiccontroller.NoopInstanceWatcher{} in tests.
 	Watcher dynamiccontroller.InstanceWatcher
 }
 

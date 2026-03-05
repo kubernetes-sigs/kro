@@ -70,10 +70,10 @@ func TestRequestWatch_RegistersScalarWatch(t *testing.T) {
 	assert.Nil(t, reqs[0].Selector)
 }
 
-func TestRequestWatch_NilWatcher_NoOp(t *testing.T) {
+func TestRequestWatch_NoopWatcher(t *testing.T) {
 	rcx := &ReconcileContext{
 		Log:     zap.New(zap.UseDevMode(true)),
-		Watcher: nil,
+		Watcher: dynamiccontroller.NoopInstanceWatcher{},
 	}
 
 	// Should not panic.
@@ -103,10 +103,10 @@ func TestRequestCollectionWatch_RegistersSelectorWatch(t *testing.T) {
 	assert.Equal(t, "app=my-app", reqs[0].Selector.String())
 }
 
-func TestRequestCollectionWatch_NilWatcher_NoOp(t *testing.T) {
+func TestRequestCollectionWatch_NoopWatcher(t *testing.T) {
 	rcx := &ReconcileContext{
 		Log:     zap.New(zap.UseDevMode(true)),
-		Watcher: nil,
+		Watcher: dynamiccontroller.NoopInstanceWatcher{},
 	}
 
 	selector, err := labels.Parse("app=my-app")

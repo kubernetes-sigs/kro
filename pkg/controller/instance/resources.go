@@ -765,11 +765,8 @@ func (c *Controller) processExternalCollectionNode(
 	return nil
 }
 
-// requestWatch registers a scalar watch request with the coordinator if available.
+// requestWatch registers a scalar watch request with the coordinator.
 func requestWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, name, namespace string) {
-	if rcx.Watcher == nil {
-		return
-	}
 	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
 		NodeID:    nodeID,
 		GVR:       gvr,
@@ -782,9 +779,6 @@ func requestWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionR
 
 // requestCollectionWatch registers a collection (selector-based) watch request.
 func requestCollectionWatch(rcx *ReconcileContext, nodeID string, gvr schema.GroupVersionResource, namespace string, selector labels.Selector) {
-	if rcx.Watcher == nil {
-		return
-	}
 	if err := rcx.Watcher.Watch(dynamiccontroller.WatchRequest{
 		NodeID:    nodeID,
 		GVR:       gvr,

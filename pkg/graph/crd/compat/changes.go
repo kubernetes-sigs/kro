@@ -23,12 +23,13 @@ type ChangeType string
 
 const (
 	// Breaking change types
-	PropertyRemoved ChangeType = "PROPERTY_REMOVED"
-	TypeChanged     ChangeType = "TYPE_CHANGED"
-	RequiredAdded   ChangeType = "REQUIRED_ADDED"
-	EnumRestricted  ChangeType = "ENUM_RESTRICTED"
-	PatternChanged  ChangeType = "PATTERN_CHANGED"
-	PatternAdded    ChangeType = "PATTERN_ADDED"
+	PropertyRemoved        ChangeType = "PROPERTY_REMOVED"
+	TypeChanged            ChangeType = "TYPE_CHANGED"
+	RequiredAdded          ChangeType = "REQUIRED_ADDED"
+	EnumRestricted         ChangeType = "ENUM_RESTRICTED"
+	PatternChanged         ChangeType = "PATTERN_CHANGED"
+	PatternAdded           ChangeType = "PATTERN_ADDED"
+	RequiredDefaultRemoved ChangeType = "REQUIRED_DEFAULT_REMOVED"
 
 	// Non-breaking change types
 	PropertyAdded      ChangeType = "PROPERTY_ADDED"
@@ -156,10 +157,12 @@ func (c Change) Description() string {
 		return fmt.Sprintf("Validation pattern %s was added", c.NewValue)
 	case PatternRemoved:
 		return fmt.Sprintf("Validation pattern %s was removed", c.OldValue)
+	case RequiredDefaultRemoved:
+		return fmt.Sprintf("Default value removed from required field %s", c.OldValue)
 	case DescriptionChanged:
-		return "Description field was changed"
+		return fmt.Sprintf("Description field was changed from %s to %s", c.OldValue, c.NewValue)
 	case DefaultChanged:
-		return "Default value was changed"
+		return fmt.Sprintf("Default value was changed from %s to %s", c.OldValue, c.NewValue)
 	default:
 		return fmt.Sprintf("Unknown change to %s", c.Path)
 	}

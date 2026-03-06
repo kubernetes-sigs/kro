@@ -25,6 +25,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -320,45 +321,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 // The selector (if any) is embedded directly in the template so that ParseSchemalessResource
 // can extract CEL expressions from the entire resource in a single pass.
 func (b *Builder) buildExternalRefResource(
-	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
-	resourceObject := map[string]interface{}{}
-	resourceObject["apiVersion"] = externalRef.APIVersion
-	resourceObject["kind"] = externalRef.Kind
-	metadata := map[string]interface{}{}
-	if externalRef.Metadata.Name != "" {
-		metadata["name"] = externalRef.Metadata.Name
+	externalRef *v1alpha1.ExternalRef) (map[string]interface{}, error) {
+	result, err := runtime.DefaultUnstructuredConverter.ToUnstructured(externalRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert ExternalRef to unstructured: %w", err)
 	}
-	if externalRef.Metadata.Namespace != "" {
-		metadata["namespace"] = externalRef.Metadata.Namespace
-	}
-	if externalRef.Metadata.Selector != nil {
-		sel := map[string]interface{}{}
-		if len(externalRef.Metadata.Selector.MatchLabels) > 0 {
-			ml := map[string]interface{}{}
-			for k, v := range externalRef.Metadata.Selector.MatchLabels {
-				ml[k] = v
-			}
-			sel["matchLabels"] = ml
-		}
-		if len(externalRef.Metadata.Selector.MatchExpressions) > 0 {
-			exprs := make([]interface{}, len(externalRef.Metadata.Selector.MatchExpressions))
-			for i, req := range externalRef.Metadata.Selector.MatchExpressions {
-				vals := make([]interface{}, len(req.Values))
-				for j, v := range req.Values {
-					vals[j] = v
-				}
-				exprs[i] = map[string]interface{}{
-					"key":      req.Key,
-					"operator": string(req.Operator),
-					"values":   vals,
-				}
-			}
-			sel["matchExpressions"] = exprs
-		}
-		metadata["selector"] = sel
-	}
-	resourceObject["metadata"] = metadata
-	return resourceObject
+	return result, nil
 }
 
 // buildRGResource builds a node from the given resource definition.
@@ -383,7 +351,10 @@ func (b *Builder) buildRGResource(
 			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
 	} else {
-		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
+		var err error
+		if resourceObject, err = b.buildExternalRefResource(rgResource.ExternalRef); err != nil {
+			return nil, nil, fmt.Errorf("failed to build external ref resource %s: %w", rgResource.ID, err)
+		}
 	}
 
 	// 3. Check if it looks like a valid Kubernetes resource.

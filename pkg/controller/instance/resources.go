@@ -500,16 +500,25 @@ func (c *Controller) processExternalRefNode(
 	// Register watch BEFORE reading the external resource.
 	requestWatch(rcx, id, node.Spec.Meta.GVR, desired.GetName(), desired.GetNamespace())
 
-	// External refs are read-only here: fetch and push into runtime for dependency/readiness.
-	actual, err := c.readExternalRefNode(rcx, node, desired)
+	// External refs are read-only: fetch and push into runtime for dependency/readiness.
+	ri := resourceClientFor(rcx, node.Spec.Meta, desired.GetNamespace())
+	actual, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
 			return nil
 		}
-		state.SetError(err)
-		return err
+		state.SetError(fmt.Errorf("external ref get %s %s/%s: %w",
+			desired.GroupVersionKind().String(), desired.GetNamespace(), desired.GetName(), err))
+		return state.Err
 	}
+
+	rcx.Log.V(2).Info("External reference resolved",
+		"id", id,
+		"gvk", desired.GroupVersionKind().String(),
+		"namespace", actual.GetNamespace(),
+		"name", actual.GetName(),
+	)
 
 	node.SetObserved([]*unstructured.Unstructured{actual})
 
@@ -524,33 +533,6 @@ func (c *Controller) processExternalRefNode(
 	state.SetReady()
 
 	return nil
-}
-
-// readExternalRefNode fetches the referenced object for an external node.
-func (c *Controller) readExternalRefNode(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	desired *unstructured.Unstructured,
-) (*unstructured.Unstructured, error) {
-	nodeMeta := node.Spec.Meta
-	ri := resourceClientFor(rcx, nodeMeta, desired.GetNamespace())
-
-	name := desired.GetName()
-	obj, err := ri.Get(rcx.Ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("external ref get %s %s/%s: %w",
-			desired.GroupVersionKind().String(), desired.GetNamespace(), name, err,
-		)
-	}
-
-	rcx.Log.V(2).Info("External reference resolved",
-		"id", node.Spec.Meta.ID,
-		"gvk", desired.GroupVersionKind().String(),
-		"namespace", obj.GetNamespace(),
-		"name", obj.GetName(),
-	)
-
-	return obj, nil
 }
 
 // processApplyResults updates runtime observations and node states from apply results.

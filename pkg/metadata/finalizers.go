@@ -31,13 +31,30 @@ func SetResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	}
 }
 
+// SetGraphRevisionFinalizer adds the kro finalizer to the object if it's not already present.
+func SetGraphRevisionFinalizer(obj metav1.Object) {
+	if !HasGraphRevisionFinalizer(obj) {
+		obj.SetFinalizers(append(obj.GetFinalizers(), kroFinalizer))
+	}
+}
+
 // RemoveResourceGraphDefinitionFinalizer removes the kro finalizer from the object.
 func RemoveResourceGraphDefinitionFinalizer(obj metav1.Object) {
 	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
 }
 
+// RemoveGraphRevisionFinalizer removes the kro finalizer from the object.
+func RemoveGraphRevisionFinalizer(obj metav1.Object) {
+	obj.SetFinalizers(removeString(obj.GetFinalizers(), kroFinalizer))
+}
+
 // HasResourceGraphDefinitionFinalizer checks if the object has the kro finalizer.
 func HasResourceGraphDefinitionFinalizer(obj metav1.Object) bool {
+	return containsString(obj.GetFinalizers(), kroFinalizer)
+}
+
+// HasGraphRevisionFinalizer checks if the object has the kro finalizer.
+func HasGraphRevisionFinalizer(obj metav1.Object) bool {
 	return containsString(obj.GetFinalizers(), kroFinalizer)
 }
 

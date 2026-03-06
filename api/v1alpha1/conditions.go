@@ -38,6 +38,13 @@ const (
 	// reconciler for that resource. This condition indicates the state of the
 	// reconciler.
 	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
+
+	// GraphRevisionConditionTypeGraphVerified indicates the graph snapshot has
+	// been compiled and validated successfully.
+	GraphRevisionConditionTypeGraphVerified ConditionType = "GraphVerified"
+	// GraphRevisionConditionTypeReady indicates the GraphRevision is ready to be
+	// consumed.
+	GraphRevisionConditionTypeReady ConditionType = "Ready"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service

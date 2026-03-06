@@ -31,7 +31,9 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
@@ -54,6 +56,12 @@ type ReconcileConfig struct {
 	DeletionPolicy string
 	// RGDConfig holds RGD runtime configuration parameters.
 	RGDConfig graph.RGDConfig
+}
+
+// GraphRevisionResolver resolves the newest issued graph revision for an RGD.
+type GraphRevisionResolver interface {
+	GetLatestRevision() (revisions.Entry, bool)
+	GetGraphRevision(revision int64) (revisions.Entry, bool)
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -81,7 +89,8 @@ type Controller struct {
 	log    logr.Logger
 	client kroclient.SetInterface
 	gvr    schema.GroupVersionResource
-	rgd    *graph.Graph
+
+	graphResolver GraphRevisionResolver
 
 	instanceLabeler      metadata.Labeler
 	childResourceLabeler metadata.Labeler
@@ -89,12 +98,13 @@ type Controller struct {
 	coordinator          *dynamiccontroller.WatchCoordinator
 }
 
-// NewController constructs a new controller with static RGD.
+// NewController constructs a new controller that resolves the newest issued
+// graph revision for the RGD from a GraphRevisionResolver.
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	rgd *graph.Graph,
+	graphResolver GraphRevisionResolver,
 	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
@@ -104,7 +114,7 @@ func NewController(
 		log:                  log,
 		client:               client,
 		gvr:                  gvr,
-		rgd:                  rgd,
+		graphResolver:        graphResolver,
 		instanceLabeler:      instanceLabeler,
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
@@ -143,7 +153,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)
+	compiledGraph, err := c.resolveCompiledGraph()
+	if err != nil {
+		log.Error(err, "failed to resolve graph revision")
+		return err
+	}
+	runtimeObj, err := runtime.FromGraph(compiledGraph, inst, c.reconcileConfig.RGDConfig)
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err
@@ -240,6 +255,33 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 	}
 	rcx.Mark.InstanceManaged()
 	return nil
+}
+
+func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
+	latest, ok := c.graphResolver.GetLatestRevision()
+	if !ok {
+		return nil, requeue.NeededAfter(fmt.Errorf("latest issued graph revision not available"), c.reconcileConfig.DefaultRequeueDuration)
+	}
+
+	switch latest.State {
+	case revisions.RevisionStateActive:
+		// Active implies the newest issued revision compiled successfully and its
+		// graph is present; this is guaranteed by the GV reconciler and registry
+		// invariant.
+		return latest.CompiledGraph, nil
+	case revisions.RevisionStatePending:
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d is pending", latest.Revision),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	case revisions.RevisionStateFailed:
+		return nil, requeue.None(fmt.Errorf("latest issued graph revision %d failed", latest.Revision))
+	default:
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d has unknown state %q", latest.Revision, latest.State),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	}
 }
 
 func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*unstructured.Unstructured, error) {

@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    # Keep Go PR noise limited to grouped security fixes unless version updates
+    # are explicitly enabled later.
+    open-pull-requests-limit: 0
+    groups:
+      go-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
+    directories:
+      - "/tools/lsp/client"
+      - "/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      npm-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+

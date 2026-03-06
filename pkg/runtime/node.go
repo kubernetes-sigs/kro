@@ -15,12 +15,16 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apiserver/pkg/cel/openapi"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	celunstructured "github.com/kubernetes-sigs/kro/pkg/cel/unstructured"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -43,6 +47,12 @@ type Node struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
+
+	rgdConfig graph.RGDConfig
+
+	// resourceSchema is the OpenAPI schema for this node's resource type.
+	// Used by buildContext to wrap observed resources with schema-aware CEL values.
+	resourceSchema *spec.Schema
 }
 
 var identityPaths = []string{
@@ -116,12 +126,11 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 			if depID == graph.InstanceNodeID {
 				continue
 			}
-			ready, err := dep.IsReady()
-			if err != nil {
-				return nil, err
-			}
-			if !ready {
-				return nil, ErrDataPending
+			if err := dep.CheckReadiness(); err != nil {
+				if errors.Is(err, ErrWaitingForReadiness) {
+					return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
+				}
+				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
 			}
 		}
 	}
@@ -229,10 +238,7 @@ func (n *Node) hardResolveSingleResource(vars []*variable.ResourceField) ([]*uns
 	baseExprs, _ := n.exprSetsForVars(vars)
 	values, _, err := n.evaluateExprsFiltered(baseExprs, false)
 	if err != nil {
-		if !IsDataPending(err) {
-			err = fmt.Errorf("node %q: %w", n.Spec.Meta.ID, err)
-		}
-		return nil, err
+		return nil, fmt.Errorf("node %q: %w", n.Spec.Meta.ID, err)
 	}
 
 	desired := n.Spec.Template.DeepCopy()
@@ -266,8 +272,6 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		return []*unstructured.Unstructured{}, nil
 	}
 
-	baseCtx := n.buildContext()
-
 	// Build a map from expression string to expressionEvaluationState for iteration expressions.
 	iterExprStates := make(map[string]*expressionEvaluationState, len(n.templateExprs))
 	for _, expr := range n.templateExprs {
@@ -275,6 +279,17 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 			iterExprStates[expr.Expression.Original] = expr
 		}
 	}
+
+	// Only build context for dependencies referenced by iteration expressions.
+	iterNeeded := make(map[string]struct{})
+	for exprStr := range iterExprs {
+		if state, ok := iterExprStates[exprStr]; ok {
+			for _, ref := range state.Expression.References {
+				iterNeeded[ref] = struct{}{}
+			}
+		}
+	}
+	baseCtx := n.buildContext(slices.Collect(maps.Keys(iterNeeded))...)
 
 	expanded := make([]*unstructured.Unstructured, 0, len(items))
 	for idx, iterCtx := range items {
@@ -382,7 +397,10 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 		return map[string]any{}, false, nil
 	}
 
-	ctx := n.buildContext()
+	// Compute the union of referenced dependencies across all expressions to
+	// evaluate, so buildContext only wraps needed deps with schema-aware values.
+	needed := n.neededDeps(exprs)
+	ctx := n.buildContext(needed...)
 
 	capacity := len(n.templateExprs)
 	if exprs != nil {
@@ -407,7 +425,7 @@ func (n *Node) evaluateExprsFiltered(exprs map[string]struct{}, continueOnPendin
 					if continueOnPending {
 						continue
 					}
-					return nil, true, ErrDataPending
+					return nil, true, fmt.Errorf("failed to evaluate expression: %w (%w)", err, ErrDataPending)
 				}
 				return nil, false, err
 			}
@@ -490,30 +508,30 @@ func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
 	n.observed = observed
 }
 
-// IsReady evaluates readyWhen expressions using observed state.
+// CheckReadiness evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
-func (n *Node) IsReady() (bool, error) {
+func (n *Node) CheckReadiness() error {
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
-		return false, err
+		return fmt.Errorf("is ignore check failed: %w", err)
 	}
 	if ignored {
-		return true, nil
+		return nil
 	}
 
 	if n.Spec.Meta.Type == graph.NodeTypeCollection {
-		return n.isCollectionReady()
+		return n.checkCollectionReadiness()
 	}
-	return n.isSingleResourceReady()
+	return n.checkSingleResourceReadiness()
 }
 
-func (n *Node) isSingleResourceReady() (bool, error) {
+func (n *Node) checkSingleResourceReadiness() error {
 	if len(n.observed) == 0 {
-		return false, nil
+		return fmt.Errorf("node %q: no observed state: %w", n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
-		return true, nil
+		return nil
 	}
 
 	nodeID := n.Spec.Meta.ID
@@ -523,30 +541,30 @@ func (n *Node) isSingleResourceReady() (bool, error) {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return false, nil
+				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
 			}
-			return false, fmt.Errorf("readyWhen %q: %w", expr.Expression.Original, err)
+			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, err)
 		}
 		if !result {
-			return false, nil
+			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
 		}
 	}
-	return true, nil
+	return nil
 }
 
-func (n *Node) isCollectionReady() (bool, error) {
+func (n *Node) checkCollectionReadiness() error {
 	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
 	if n.desired == nil {
-		return false, nil
+		return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
 	}
 	if len(n.desired) == 0 {
-		return true, nil
+		return nil
 	}
 	if len(n.observed) < len(n.desired) {
-		return false, nil
+		return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
 	}
 	if len(n.readyWhenExprs) == 0 {
-		return true, nil
+		return nil
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
@@ -559,21 +577,21 @@ func (n *Node) isCollectionReady() (bool, error) {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return false, nil
+					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.Original, i, ErrWaitingForReadiness)
 				}
-				return false, fmt.Errorf("readyWhen %q (item %d): %w", expr.Expression.Original, i, err)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.Original, i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return false, fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
 			}
 			if !result {
-				return false, nil
+				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
 			}
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 // evaluateForEach evaluates forEach dimensions and returns iterator contexts.
@@ -582,7 +600,14 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		return nil, nil
 	}
 
-	ctx := n.buildContext()
+	// Only build context for dependencies referenced by forEach expressions.
+	needed := make(map[string]struct{})
+	for _, expr := range n.forEachExprs {
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+		}
+	}
+	ctx := n.buildContext(slices.Collect(maps.Keys(needed))...)
 
 	dimensions := make([]evaluatedDimension, len(n.Spec.ForEach))
 	for i, dim := range n.Spec.ForEach {
@@ -599,12 +624,21 @@ func (n *Node) evaluateForEach() ([]map[string]any, error) {
 		dimensions[i] = evaluatedDimension{name: dim.Name, values: values}
 	}
 
-	return cartesianProduct(dimensions), nil
+	product, err := cartesianProduct(dimensions, n.rgdConfig.MaxCollectionSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return product, nil
 }
 
 // buildContext builds the CEL activation context from node dependencies.
 // If only is provided, only those dependency IDs are included in the context.
 // If only is empty/nil, all dependencies are included.
+//
+// When a dependency has a resourceSchema, its observed objects are wrapped using
+// Kubernetes' UnstructuredToVal for schema-aware type conversion. This ensures
+// CEL runtime values match their compile-time types (e.g., Secret data as bytes).
 func (n *Node) buildContext(only ...string) map[string]any {
 	ctx := make(map[string]any)
 	for depID, dep := range n.deps {
@@ -618,19 +652,32 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
-				items[i] = obj.Object
+				items[i] = wrapWithSchema(obj.Object, dep.resourceSchema)
 			}
 			ctx[depID] = items
 		} else {
 			obj := dep.observed[0].Object
 			// For schema (instance), strip status - users should only access spec/metadata.
+			// The instance's resourceSchema already excludes status (set by builder via
+			// getSchemaWithoutStatus), so the schema and data stay aligned.
 			if depID == graph.InstanceNodeID {
 				obj = withStatusOmitted(obj)
 			}
-			ctx[depID] = obj
+			ctx[depID] = wrapWithSchema(obj, dep.resourceSchema)
 		}
 	}
 	return ctx
+}
+
+// wrapWithSchema wraps an unstructured object with schema-aware CEL value
+// conversion. If the schema is nil, the raw object is returned. Otherwise,
+// returns a schemaMap that delegates to UnstructuredToVal for typed properties
+// and falls back to NativeToValue for preserve-unknown fields.
+func wrapWithSchema(obj map[string]interface{}, schema *spec.Schema) any {
+	if schema == nil {
+		return obj
+	}
+	return celunstructured.UnstructuredToVal(obj, &openapi.Schema{Schema: schema})
 }
 
 // withStatusOmitted returns a shallow copy of obj with the "status" key removed.
@@ -643,6 +690,27 @@ func withStatusOmitted(obj map[string]any) map[string]any {
 		}
 	}
 	return result
+}
+
+// neededDeps computes the union of referenced dependency IDs across the
+// expressions in the given set. If exprs is nil, all non-iteration template
+// expressions are included. This allows buildContext to only wrap needed deps.
+func (n *Node) neededDeps(exprs map[string]struct{}) []string {
+	needed := make(map[string]struct{})
+	for _, expr := range n.templateExprs {
+		if expr.Kind.IsIteration() {
+			continue
+		}
+		if exprs != nil {
+			if _, ok := exprs[expr.Expression.Original]; !ok {
+				continue
+			}
+		}
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+		}
+	}
+	return slices.Collect(maps.Keys(needed))
 }
 
 // contextDependencyIDs returns CEL variable names grouped by type.

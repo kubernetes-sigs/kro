@@ -173,6 +173,10 @@ func (e *Environment) setupController() error {
 		dc,
 		e.GraphBuilder,
 		10,
+		graph.RGDConfig{
+			MaxCollectionSize:          1000,
+			MaxCollectionDimensionSize: 10,
+		},
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {

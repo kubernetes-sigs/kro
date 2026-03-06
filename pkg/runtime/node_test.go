@@ -15,17 +15,21 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
+
+const testMaxCollectionSize = 1000
 
 func TestNode_IsIgnored(t *testing.T) {
 	tests := []struct {
@@ -68,27 +72,29 @@ func TestNode_IsIgnored(t *testing.T) {
 }
 
 func TestNode_IsReady(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
 	tests := []struct {
-		name      string
-		node      *Node
-		wantReady bool
-		wantErr   bool
+		name    string
+		node    *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
-			name:      "single resource without readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).build(),
-			wantReady: false,
+			name:    "single resource without readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "single resource without readyWhen, observed - ready",
 			node: newTestNode("test", graph.NodeTypeResource).
 				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
-			name:      "single resource with readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
-			wantReady: false,
+			name:    "single resource with readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "ignored nodes are always ready",
@@ -97,19 +103,13 @@ func TestNode_IsReady(t *testing.T) {
 					withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
 					withResolvedIncludeWhen("false", false).build()).
 				withReadyWhen("test.status.ready").build(),
-			wantReady: true, // ignored, so ready
+			wantErr: assert.NoError, // ignored, so ready
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.wantReady, ready)
-			}
+			tt.wantErr(t, tt.node.CheckReadiness())
 		})
 	}
 }
@@ -241,6 +241,217 @@ func TestNode_BuildContext(t *testing.T) {
 	}
 }
 
+func TestNode_BuildContext_SchemaAwareConversion(t *testing.T) {
+	// This test verifies that the schema-aware conversion correctly converts
+	// Secret data fields from base64 strings to bytes, matching CEL compile-time types.
+	// Before this fix, string(secret.data.clientId) would fail because CEL compiled
+	// it as string(bytes) but received a string at runtime.
+	secretSch := secretSchema()
+
+	// Create a typed CEL environment where "secret" has the proper Secret schema.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"secret": secretSch,
+	})
+	require.NoError(t, err)
+
+	// Compile: string(secret.data.clientId) — typed as string(bytes), the Kubernetes convention.
+	celAST, issues := typedEnv.Compile("string(secret.data.clientId)")
+	require.NoError(t, issues.Err())
+	program, err := typedEnv.Program(celAST)
+	require.NoError(t, err)
+
+	expr := &krocel.Expression{
+		Original:   "string(secret.data.clientId)",
+		Program:    program,
+		References: []string{"secret"},
+	}
+
+	// Build a secret dep node with the schema and base64-encoded observed data.
+	secretDep := newTestNode("secret", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata":   map[string]any{"name": "test-secret", "namespace": "default"},
+			"data": map[string]any{
+				"clientId":     "bWF4",             // base64("max")
+				"clientSecret": "bXVzdGVybWFubg==", // base64("mustermann")
+			},
+		}).
+		withResourceSchema(secretSch).
+		build()
+
+	// Build the node that depends on the secret.
+	node := newTestNode("deployment", graph.NodeTypeResource).
+		withDep(secretDep).
+		build()
+
+	// Build context — this should wrap the secret with UnstructuredToVal.
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "secret")
+
+	// Evaluate the expression — this is the key assertion.
+	// Before the fix, this would fail with "no such overload: string(string)".
+	result, err := expr.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "max", result, "string(secret.data.clientId) should decode base64 to 'max'")
+
+	// Also test the second field.
+	celAST2, issues2 := typedEnv.Compile("string(secret.data.clientSecret)")
+	require.NoError(t, issues2.Err())
+	program2, err := typedEnv.Program(celAST2)
+	require.NoError(t, err)
+
+	expr2 := &krocel.Expression{
+		Original:   "string(secret.data.clientSecret)",
+		Program:    program2,
+		References: []string{"secret"},
+	}
+
+	result2, err := expr2.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "mustermann", result2, "string(secret.data.clientSecret) should decode base64 to 'mustermann'")
+}
+
+func TestNode_BuildContext_PreserveUnknownFields(t *testing.T) {
+	// This test verifies that fields inside x-kubernetes-preserve-unknown-fields objects
+	// are accessible via CEL expressions. Before this fix, UnstructuredToVal would hide
+	// these fields behind an opaque wrapper that rejected all field access.
+
+	// Schema: spec.config is {type: "object", x-kubernetes-preserve-unknown-fields: true}
+	// with no properties — simulating a CRD that allows arbitrary nested data.
+	preserveUnknownSchema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"spec": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"config": {
+							VendorExtensible: spec.VendorExtensible{
+								Extensions: spec.Extensions{
+									"x-kubernetes-preserve-unknown-fields": true,
+								},
+							},
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+							},
+						},
+					},
+				}},
+				"status": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"additional": {SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Schema: &spec.Schema{
+									VendorExtensible: spec.VendorExtensible{
+										Extensions: spec.Extensions{
+											"x-kubernetes-preserve-unknown-fields": true,
+										},
+									},
+								},
+							},
+						}},
+					},
+				}},
+			},
+		},
+	}
+
+	// Create a typed CEL env where "external" is declared as dyn.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"external": preserveUnknownSchema,
+	})
+	require.NoError(t, err)
+
+	t.Run("preserve-unknown object field access", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.spec.config.foo")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.spec.config.foo",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"spec": map[string]any{
+					"config": map[string]any{
+						"foo": "bar",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "bar", result)
+	})
+
+	t.Run("additionalProperties with preserve-unknown values", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.status.additional.key")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.status.additional.key",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"status": map[string]any{
+					"additional": map[string]any{
+						"key": "value",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "value", result)
+	})
+}
+
+func TestNode_BuildContext_NilSchemaFallback(t *testing.T) {
+	// When no schema is provided, buildContext should pass raw objects (backward compatible).
+	dep := newTestNode("configmap", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"data": map[string]any{"key": "value"},
+		}).
+		build()
+
+	node := newTestNode("test", graph.NodeTypeResource).
+		withDep(dep).
+		build()
+
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "configmap")
+
+	// Without schema, the value should be a raw map.
+	_, isMap := ctx["configmap"].(map[string]any)
+	assert.True(t, isMap, "without schema, context value should be a raw map")
+}
+
 func TestNode_ContextDependencyIDs(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -351,16 +562,20 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 }
 
 func TestNode_IsReady_Collection(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
+
 	tests := []struct {
-		name      string
-		node      *Node
-		wantReady bool
+		name    string
+		node    *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
 			name: "collection with nil desired is not ready",
 			node: newTestNode("buckets", graph.NodeTypeCollection).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection with resolved empty desired is ready",
@@ -370,7 +585,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "collection with fewer observed than desired is not ready",
@@ -381,12 +596,12 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "Pod", "ns", "bucket-1")).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
-			name:      "collection without readyWhen, nil desired - not ready",
-			node:      newTestNode("items", graph.NodeTypeCollection).build(),
-			wantReady: false,
+			name:    "collection without readyWhen, nil desired - not ready",
+			node:    newTestNode("items", graph.NodeTypeCollection).build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection without readyWhen, empty desired - ready",
@@ -395,7 +610,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "collection without readyWhen, observed < desired - not ready",
@@ -406,7 +621,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "cm-1")).
 				build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection without readyWhen, observed >= desired - ready",
@@ -420,15 +635,13 @@ func TestNode_IsReady_Collection(t *testing.T) {
 					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
 				).
 				build(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
+			tt.wantErr(t, tt.node.CheckReadiness())
 		})
 	}
 }
@@ -525,12 +738,13 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 }
 
 func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
 	tests := []struct {
-		name       string
-		node       func() *Node
-		wantReady  bool
-		wantErr    bool
-		errContain string
+		name    string
+		node    func() *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
 			name: "readyWhen evaluates to true",
@@ -542,7 +756,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "readyWhen evaluates to false",
@@ -554,7 +768,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": false}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "multiple readyWhen - all must be true",
@@ -566,7 +780,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true, "state": "pending"}}).
 					withReadyWhen("vpc.status.ready == true", "vpc.status.state == 'available'").build()
 			},
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -578,23 +792,15 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"replicas": int64(3), "errorDivisor": int64(0)}}).
 					withReadyWhen("deployment.status.replicas / deployment.status.errorDivisor > 0").build()
 			},
-			wantErr:    true,
-			errContain: "division by zero",
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				return assert.ErrorContains(t, err, "division by zero")
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
-			if tt.wantErr {
-				assert.Error(t, err)
-				if tt.errContain != "" {
-					assert.Contains(t, err.Error(), tt.errContain)
-				}
-				return
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
+			tt.wantErr(t, tt.node().CheckReadiness())
 		})
 	}
 }
@@ -753,7 +959,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "all items ready",
@@ -772,7 +978,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "one item not ready",
@@ -791,7 +997,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "fewer observed than desired",
@@ -809,7 +1015,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "CEL data pending returns false",
@@ -822,7 +1028,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{}).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "multiple readyWhen - all must pass",
@@ -838,7 +1044,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withReadyWhen("each.status.ready == true").
 					withReadyWhen("each.status.phase == 'Running'").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -863,7 +1069,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
+			err := tt.node().CheckReadiness()
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errContain != "" {
@@ -872,7 +1078,6 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }
@@ -1182,6 +1387,30 @@ func TestNode_EvaluateForEach(t *testing.T) {
 			}(),
 			wantLen: 0,
 		},
+		{
+			name: "collection exceeds max size",
+			node: func() *Node {
+				var items []any
+				for i := 0; i < testMaxCollectionSize+1; i++ {
+					items = append(items, fmt.Sprintf("item-%d", i))
+				}
+
+				schema := newTestNode("schema", graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"items": items,
+						},
+					}).build()
+				n := newTestNode("resources", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.items").build()
+				n.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				}
+				return n
+			}(),
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1357,6 +1586,7 @@ type testNodeBuilder struct {
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
 	template         *unstructured.Unstructured
+	resourceSchema   *spec.Schema
 }
 
 // newTestNode creates a new test node builder with the given ID and type.
@@ -1466,6 +1696,12 @@ func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	return b
 }
 
+// withResourceSchema sets the OpenAPI schema for this node's resource.
+func (b *testNodeBuilder) withResourceSchema(schema *spec.Schema) *testNodeBuilder {
+	b.resourceSchema = schema
+	return b
+}
+
 // build constructs the Node.
 func (b *testNodeBuilder) build() *Node {
 	node := &Node{
@@ -1484,6 +1720,41 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
+		rgdConfig: graph.RGDConfig{
+			MaxCollectionSize: testMaxCollectionSize,
+		},
+		resourceSchema: b.resourceSchema,
 	}
 	return node
+}
+
+// secretSchema returns the OpenAPI schema for v1/Secret with format:byte data values.
+func secretSchema() *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name":      {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						"namespace": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				}},
+				"data": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type:   []string{"string"},
+								Format: "byte",
+							},
+						},
+					},
+				}},
+			},
+		},
+	}
 }

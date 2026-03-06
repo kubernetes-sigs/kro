@@ -15,9 +15,10 @@
 package instance
 
 import (
+	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,11 +38,15 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 1. Process nodes (build applyset inputs)
 	// ---------------------------------------------------------
-	resources, lastUnresolved, err := c.processNodes(rcx)
+	var lastUnresolvedErr error
+	resources, err := c.processNodes(rcx)
 	if err != nil {
-		return err
+		if !runtime.IsDataPending(err) {
+			return err
+		}
+		lastUnresolvedErr = err
 	}
-	prune := lastUnresolved == ""
+	prune := lastUnresolvedErr == nil
 
 	// ---------------------------------------------------------
 	// 2. Project applyset metadata and patch parent
@@ -73,6 +78,7 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 4. Prune orphans (when desired is fully resolved)
 	// ---------------------------------------------------------
+	pruneNeedsRetry := false
 	//
 	// Prune is intentionally gated by two independent conditions:
 	//   1) prune == true  -> all desired objects were resolvable (no ErrDataPending)
@@ -83,11 +89,12 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// omitted from the apply set. Keeping both checks visible prevents  regressions
 	// where one gate gets removed and prune becomes unsafe.
 	if prune && result.Errors() == nil {
-		pruned, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
+		pruned, needsRetry, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
 		if err != nil {
 			return err
 		}
 		clusterMutated = clusterMutated || pruned
+		pruneNeedsRetry = pruneNeedsRetry || needsRetry
 	}
 
 	// ---------------------------------------------------------
@@ -102,8 +109,11 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// (including WaitingForReadiness) before the controller checks it.
 	rcx.StateManager.Update()
 
-	if lastUnresolved != "" {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource %q", lastUnresolved))
+	if lastUnresolvedErr != nil {
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", lastUnresolvedErr))
+	}
+	if pruneNeedsRetry {
+		return rcx.delayedRequeue(fmt.Errorf("prune encountered UID conflicts; retrying"))
 	}
 	if clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
@@ -115,53 +125,62 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 // processNodes walks every runtime node, resolves desired objects, observes
 // current objects from the cluster where needed, and updates runtime observations
 // so subsequent nodes can become resolvable/ready/includable. It returns the
-// applyset.Resource list to be applied and reports the last unresolved node ID
-// (when desired data is pending) so callers can gate pruning.
+// applyset.Resource list to be applied and an aggregated error if any nodes are
+// pending resolution.
 func (c *Controller) processNodes(
 	rcx *ReconcileContext,
-) ([]applyset.Resource, string, error) {
+) ([]applyset.Resource, error) {
 	nodes := rcx.Runtime.Nodes()
 
 	var resources []applyset.Resource
-	var lastUnresolved string
 
+	var lastUnresolvedErr error
 	for _, node := range nodes {
-		resourcesToAdd, unresolvedID, err := c.processNode(rcx, node)
+		resourcesToAdd, err := c.processNode(rcx, node)
 		if err != nil {
-			return nil, "", err
+			if !runtime.IsDataPending(err) {
+				return nil, err
+			}
+			lastUnresolvedErr = err
 		}
 		resources = append(resources, resourcesToAdd...)
-		if unresolvedID != "" {
-			lastUnresolved = unresolvedID
-		}
 	}
 
-	return resources, lastUnresolved, nil
+	return resources, lastUnresolvedErr
 }
 
 // pruneOrphans deletes previously managed resources that are not in the current
-// apply set and then shrinks parent applyset metadata.
+// apply set. It shrinks parent applyset metadata only when prune completes
+// without UID conflicts.
 func (c *Controller) pruneOrphans(
 	rcx *ReconcileContext,
 	applier *applyset.ApplySet,
 	result *applyset.ApplyResult,
 	supersetPatch applyset.Metadata,
 	batchMeta applyset.Metadata,
-) (bool, error) {
+) (bool, bool, error) {
 	pruneScope := supersetPatch.PruneScope()
 	pruneResult, err := applier.Prune(rcx.Ctx, applyset.PruneOptions{
 		KeepUIDs: result.ObservedUIDs(),
 		Scope:    pruneScope,
 	})
 	if err != nil {
-		return false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+		return false, false, rcx.delayedRequeue(fmt.Errorf("prune failed: %w", err))
+	}
+
+	// Keep superset metadata and retry prune on UID conflicts.
+	if pruneResult.HasConflicts() {
+		rcx.Log.V(1).Info("prune skipped resources due to UID conflicts; keeping superset applyset metadata for retry",
+			"conflicts", pruneResult.Conflicts,
+		)
+		return pruneResult.HasPruned(), true, nil
 	}
 
 	// Prune succeeded (errors return directly), safe to shrink metadata
 	if err := c.patchInstanceWithApplySetMetadata(rcx, batchMeta); err != nil {
 		rcx.Log.V(1).Info("failed to shrink instance annotations", "error", err)
 	}
-	return pruneResult.HasPruned(), nil
+	return pruneResult.HasPruned(), false, nil
 }
 
 // createApplySet constructs an applyset configured for the current instance.
@@ -183,7 +202,7 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 func (c *Controller) processNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
-) ([]applyset.Resource, string, error) {
+) ([]applyset.Resource, error) {
 	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
 
@@ -192,7 +211,7 @@ func (c *Controller) processNode(
 	ignored, err := node.IsIgnored()
 	if err != nil {
 		state.SetError(err)
-		return nil, "", err
+		return nil, err
 	}
 	if ignored {
 		state.SetSkipped()
@@ -200,7 +219,7 @@ func (c *Controller) processNode(
 		return []applyset.Resource{{
 			ID:        id,
 			SkipApply: true,
-		}}, "", nil
+		}}, nil
 	}
 
 	desired, err := node.GetDesired()
@@ -209,30 +228,30 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
-			return nil, id, nil
+			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
 		}
 		state.SetError(err)
-		return nil, "", err
+		return nil, err
 	}
 
 	switch node.Spec.Meta.Type {
 	case graph.NodeTypeExternal:
 		if err := c.processExternalRefNode(rcx, node, state, desired); err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		return nil, "", nil
+		return nil, nil
 	case graph.NodeTypeCollection:
 		resources, err := c.processCollectionNode(rcx, node, state, desired)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		return resources, "", nil
+		return resources, nil
 	case graph.NodeTypeResource:
 		resources, err := c.processRegularNode(rcx, node, state, desired)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		return resources, "", nil
+		return resources, nil
 	case graph.NodeTypeInstance:
 		panic("instance node should not be processed for apply")
 	default:
@@ -258,7 +277,7 @@ func (c *Controller) processRegularNode(
 
 	ri := resourceClientFor(rcx, nodeMeta, desired.GetNamespace())
 	current, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		current = nil
 		err = nil
 	}
@@ -467,7 +486,7 @@ func (c *Controller) processExternalRefNode(
 	// External refs are read-only here: fetch and push into runtime for dependency/readiness.
 	actual, err := c.readExternalRefNode(rcx, node, desired)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
 			return nil
 		}
@@ -477,16 +496,16 @@ func (c *Controller) processExternalRefNode(
 
 	node.SetObserved([]*unstructured.Unstructured{actual})
 
-	ready, err := node.IsReady()
-	if err != nil {
+	if err := node.CheckReadiness(); err != nil {
+		if errors.Is(err, runtime.ErrWaitingForReadiness) {
+			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
+			return nil
+		}
 		state.SetError(err)
 		return err
 	}
-	if ready {
-		state.SetReady()
-	} else {
-		state.SetWaitingForReadiness(nil)
-	}
+	state.SetReady()
+
 	return nil
 }
 
@@ -576,8 +595,13 @@ func (c *Controller) processApplyResults(
 		}
 	}
 
-	// Aggregate all node errors
-	if err := rcx.StateManager.NodeErrors(); err != nil {
+	var errs []error
+	for _, state := range rcx.StateManager.NodeStates {
+		if state.Err != nil && !errors.Is(state.Err, runtime.ErrWaitingForReadiness) {
+			errs = append(errs, state.Err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("apply results contain errors: %w", err)
 	}
 
@@ -635,14 +659,13 @@ func (c *Controller) updateCollectionFromApplyResults(
 // setStateFromReadiness evaluates node readiness and updates the node state
 // to synced, waiting, or error.
 func setStateFromReadiness(node *runtime.Node, state *NodeState) {
-	ready, err := node.IsReady()
-	if err != nil {
+	if err := node.CheckReadiness(); err != nil {
+		if errors.Is(err, runtime.ErrWaitingForReadiness) {
+			state.SetWaitingForReadiness(fmt.Errorf("waiting for node %q: %w", node.Spec.Meta.ID, err))
+			return
+		}
 		state.SetError(err)
 		return
 	}
-	if ready {
-		state.SetReady()
-		return
-	}
-	state.SetWaitingForReadiness(nil)
+	state.SetReady()
 }

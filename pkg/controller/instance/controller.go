@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -50,6 +51,8 @@ type ReconcileConfig struct {
 	// TODO(a-hilaly): need to define think the different deletion policies we need to
 	// support.
 	DeletionPolicy string
+	// RGDConfig holds RGD runtime configuration parameters.
+	RGDConfig graph.RGDConfig
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -79,8 +82,9 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	labeler         metadata.Labeler
-	reconcileConfig ReconcileConfig
+	instanceLabeler      metadata.Labeler
+	childResourceLabeler metadata.Labeler
+	reconcileConfig      ReconcileConfig
 }
 
 // NewController constructs a new controller with static RGD.
@@ -90,15 +94,17 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
-	labeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
+	childResourceLabeler metadata.Labeler,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		client:          client,
-		gvr:             gvr,
-		rgd:             rgd,
-		labeler:         labeler,
-		reconcileConfig: reconcileConfig,
+		log:                  log,
+		client:               client,
+		gvr:                  gvr,
+		rgd:                  rgd,
+		instanceLabeler:      instanceLabeler,
+		childResourceLabeler: childResourceLabeler,
+		reconcileConfig:      reconcileConfig,
 	}
 }
 
@@ -125,7 +131,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := runtime.FromGraph(c.rgd, inst)
+	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err
@@ -138,7 +144,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.labeler,
+		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,
@@ -170,12 +176,19 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile nodes (SSA + prune) and update runtime state
+	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
 	//--------------------------------------------------------------
-	if err := c.reconcileNodes(rcx); err != nil {
-		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
-		_ = c.updateStatus(rcx)
-		return err
+	labels := inst.GetLabels()
+	reconcileState, ok := labels[metadata.InstanceReconcileLabel]
+	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+		rcx.Mark.ReconciliationActive()
+		if err := c.reconcileNodes(rcx); err != nil {
+			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+			_ = c.updateStatus(rcx)
+			return err
+		}
+	} else {
+		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceReconcileLabel, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
@@ -189,8 +202,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")
 		}
+	case InstanceStateInProgress:
+		err := rcx.StateManager.NodeErrors()
+		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
 	default:
-		rcx.Mark.ResourcesNotReady("awaiting resource readiness")
+		rcx.Mark.ResourcesNotReady("unknown instance state")
 	}
 
 	//--------------------------------------------------------------
@@ -219,7 +235,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
 
-	wantLabels := c.labeler.Labels()
+	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
 	needLabelPatch := false
 

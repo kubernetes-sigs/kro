@@ -465,6 +465,32 @@ func TestUpdateFunc_GenerationFiltering(t *testing.T) {
 	assert.Equal(t, 0, dc.queue.Len(), "invalid new object should not enqueue")
 }
 
+func TestUpdateFunc_ReconcileLabelChange(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	oldObj := &v1.PartialObjectMetadata{}
+	oldObj.SetName("test-obj")
+	oldObj.SetNamespace("default")
+	oldObj.SetGeneration(1)
+
+	newObj := oldObj.DeepCopy()
+	newObj.SetGeneration(1)
+
+	oldObj.SetLabels(map[string]string{
+		metadata.InstanceReconcileLabel: "disabled",
+	})
+
+	dc.updateFunc(parentGVR, oldObj, newObj)
+	assert.Equal(t, 1, dc.queue.Len(), "Expect that removal of the reconcile label will trigger requeue")
+}
+
 func TestStart_AlreadyRunning(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1.AddMetaToScheme(scheme))

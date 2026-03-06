@@ -30,16 +30,20 @@ func NewInstanceSelector(instance metav1.Object) metav1.LabelSelector {
 	}
 }
 
+// NewResourceGraphDefinitionSelector returns a selector matching resources that
+// carry RGD labels (CRDs and instances). Child resources managed by an instance
+// do NOT carry RGD labels; use NewInstanceSelector to find child resources.
 func NewResourceGraphDefinitionSelector(resourceGraphDefinition metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
 			ResourceGraphDefinitionIDLabel: string(resourceGraphDefinition.GetUID()),
-			// ResourceGraphDefinitionNameLabel: resourceGraphDefinition.GetName(),
-			// ResourceGraphDefinitionNamespaceLabel: resourceGraphDefinition.GetNamespace(),
 		},
 	}
 }
 
+// NewInstanceAndResourceGraphDefinitionSelector returns a selector combining
+// instance and RGD labels. Only matches resources that carry both — typically
+// instances themselves, not child resources (which do not carry RGD labels).
 func NewInstanceAndResourceGraphDefinitionSelector(instance metav1.Object, resourceGraphDefinition metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{
@@ -49,6 +53,10 @@ func NewInstanceAndResourceGraphDefinitionSelector(instance metav1.Object, resou
 	}
 }
 
+// NewNodeAndInstanceAndResourceGraphDefinitionSelector returns a selector
+// combining node, instance, and RGD labels. Only matches resources that carry
+// all three — child resources do not carry RGD labels, so this selector will
+// not match them. Use NewInstanceSelector for child resource lookups.
 func NewNodeAndInstanceAndResourceGraphDefinitionSelector(node metav1.Object, instance metav1.Object, resourceGraphDefinition metav1.Object) metav1.LabelSelector {
 	return metav1.LabelSelector{
 		MatchLabels: map[string]string{

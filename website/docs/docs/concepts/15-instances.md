@@ -45,6 +45,10 @@ This continuous loop ensures your resources stay in sync with your desired state
 - Consistent state management
 - Rich status tracking
 
+:::tip
+To suspend active reconciliation of an instance for debugging purposes, apply a label with the key `kro.run/reconcile` and the value `disabled`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
+:::
+
 ### Reactive Reconciliation
 
 kro automatically watches all resources managed by an instance and triggers reconciliation when any of them change:
@@ -75,8 +79,13 @@ When kro manages an instance, it applies these labels and annotations:
 | `kro.run/kro-version` | Version of kro managing the instance |
 | `kro.run/resource-graph-definition-id` | UID of the ResourceGraphDefinition |
 | `kro.run/resource-graph-definition-name` | Name of the ResourceGraphDefinition |
-| `app.kubernetes.io/managed-by` | Set to `"kro"` (standard Kubernetes recommended label) |
 | `applyset.kubernetes.io/id` | Unique ApplySet identifier (hash of name.namespace.kind.group) |
+
+**Debugging-specific labels:** 
+
+| Label| Description |
+|------|-------------|
+| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
 
 **Annotations:**
 
@@ -89,16 +98,22 @@ When kro manages an instance, it applies these labels and annotations:
 </TabItem>
 <TabItem value="managed" label="Managed Resource Metadata">
 
-Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive all the instance labels, plus additional labels to trace back to the specific instance:
+Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive labels for ownership tracking and resource discovery. These labels are distinct from the instance's own labels — notably, child resources do **not** carry `resource-graph-definition-*` labels since ownership is tracked via the [ApplySet specification](https://git.k8s.io/enhancements/keps/sig-cli/3659-kubectl-apply-prune).
 
-**Labels (in addition to instance labels):**
+**Labels:**
 
 | Label | Description |
 |-------|-------------|
+| `kro.run/owned` | Set to `"true"` to indicate kro manages this resource |
+| `kro.run/kro-version` | Version of kro managing the resource |
 | `kro.run/instance-id` | UID of the instance that created this resource |
 | `kro.run/instance-name` | Name of the instance |
 | `kro.run/instance-namespace` | Namespace of the instance |
-| `kro.run/node-id` | The resource ID from the RGD (e.g., `workerPods`) |
+| `kro.run/instance-group` | API group of the instance |
+| `kro.run/instance-version` | API version of the instance |
+| `kro.run/instance-kind` | Kind of the instance |
+| `app.kubernetes.io/managed-by` | Set to `"kro"` |
+| `kro.run/node-id` | Resource ID from the RGD |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
 **Collection-specific labels** (only on resources created via `forEach`):
@@ -212,7 +227,7 @@ High-level status showing what the instance is doing:
 
 ### 2. Conditions
 
-Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by three sub-conditions that track different phases:
+Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by four sub-conditions that track different phases:
 
 - **`InstanceManaged`** - Instance finalizers and labels are properly set
   - Ensures the instance is under kro's management
@@ -229,14 +244,19 @@ Detailed status information structured hierarchically. kro provides a top-level 
   - Monitors the health of resources in topological order
   - Reports when all resources have reached their ready state
 
+- **`ReconciliationSuspended`** - Instance Reconciliation is Suspended
+  - Set to True when the label `kro.run/reconcile: "disabled"` label key and value are present. Otherwise set to false
+  - Explicitly shows if kro is actively reconciling an instance or not
+
 - **`Ready`** - Instance is fully operational (top-level condition)
   - Aggregates the state of all sub-conditions
   - Only becomes True when all sub-conditions are True
   - **The primary condition to monitor for instance health**
   - Use this condition in automation, CI/CD, and health checks
 
+
 :::tip
-Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
+Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`, `ReconciliationSuspended`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
 :::
 
 Each condition includes:

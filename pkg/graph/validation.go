@@ -105,15 +105,27 @@ func isKROReservedWord(word string) bool {
 	return reservedKeyWords.Has(word)
 }
 
-// validateResourceGraphDefinitionNamingConventions validates the naming conventions of
-// the given resource graph definition.
-func validateResourceGraphDefinitionNamingConventions(rgd *v1alpha1.ResourceGraphDefinition) error {
+// validateResourceGraphDefinition validates the naming conventions of
+// the given resource graph definition, the resources defined in them, and the constraints
+// defined in rgdConfig for resource collections.
+func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) error {
 	if !isValidKindName(rgd.Spec.Schema.Kind) {
 		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind)
 	}
 	err := validateResourceIDs(rgd)
 	if err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
+	}
+
+	// Validate forEach iterators after collecting all resource IDs
+	resourceIDs := sets.NewString()
+	for _, res := range rgd.Spec.Resources {
+		resourceIDs.Insert(res.ID)
+	}
+	for _, res := range rgd.Spec.Resources {
+		if err := validateForEachDimensions(res, resourceIDs, rgdConfig); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -143,17 +155,6 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 		seen[res.ID] = struct{}{}
 	}
 
-	// Validate forEach iterators after collecting all resource IDs
-	resourceIDs := sets.NewString()
-	for _, res := range rgd.Spec.Resources {
-		resourceIDs.Insert(res.ID)
-	}
-	for _, res := range rgd.Spec.Resources {
-		if err := validateForEachDimensions(res, resourceIDs); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -163,8 +164,11 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 // - Iterator names are not reserved keywords
 // - Iterator names do not conflict with resource IDs
 // - Iterator names are unique within the same resource
-func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String) error {
-	//TODO: Validate a maximum number dimensions
+func validateForEachDimensions(res *v1alpha1.Resource, resourceIDs sets.String, rgdConfig RGDConfig) error {
+	if len(res.ForEach) > rgdConfig.MaxCollectionDimensionSize {
+		return fmt.Errorf("resource %q: forEach cannot have more "+
+			"than %d dimensions, got %d", res.ID, rgdConfig.MaxCollectionDimensionSize, len(res.ForEach))
+	}
 
 	if len(res.ForEach) == 0 {
 		return nil

@@ -105,6 +105,8 @@ func BaseDeclarations() []cel.EnvOption {
 		k8scellib.URLs(),
 		k8scellib.Regex(),
 		library.Random(),
+		library.Maps(),
+		library.JSON(),
 	}
 }
 

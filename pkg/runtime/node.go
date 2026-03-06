@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -49,11 +47,6 @@ type Node struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
-
-	// selectorExprs holds expression states for dynamic selector matchLabels
-	// (ExternalCollection nodes only). Empty when the selector is static.
-	selectorExprs []*expressionEvaluationState
-	selectorVars  []*variable.ResourceField
 
 	rgdConfig graph.RGDConfig
 
@@ -154,9 +147,10 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 		// but the caller reads instead of applies.
 		result, err = n.hardResolveSingleResource(n.templateVars)
 	case graph.NodeTypeExternalCollection:
-		// External collections don't produce desired objects; the caller
-		// uses the selector to LIST resources. Return empty slice.
-		result = []*unstructured.Unstructured{}
+		// Resolve the template to evaluate CEL expressions in
+		// metadata (name, namespace, selector). The caller extracts
+		// the resolved selector for LIST operations.
+		result, err = n.hardResolveSingleResource(n.templateVars)
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
 	}
@@ -571,18 +565,26 @@ func (n *Node) checkSingleResourceReadiness() error {
 }
 
 func (n *Node) checkCollectionReadiness() error {
-	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
-	if n.desired == nil {
-		return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
-	}
-	if len(n.desired) == 0 {
-		return nil
-	}
-	if len(n.observed) < len(n.desired) {
-		return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
-	}
-	if len(n.readyWhenExprs) == 0 {
-		return nil
+	if n.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		// External collections: desired carries the selector template, not actual
+		// desired resources. Skip count-based readiness checks.
+		if len(n.readyWhenExprs) == 0 || len(n.observed) == 0 {
+			return nil
+		}
+	} else {
+		// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
+		if n.desired == nil {
+			return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
+		}
+		if len(n.desired) == 0 {
+			return nil
+		}
+		if len(n.observed) < len(n.desired) {
+			return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
+		}
+		if len(n.readyWhenExprs) == 0 {
+			return nil
+		}
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
@@ -747,114 +749,4 @@ func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collection
 		iterators = append(iterators, name)
 	}
 	return
-}
-
-// GetResolvedSelector returns the resolved label selector for this
-// ExternalCollection node. If the selector contains CEL expressions,
-// they are evaluated against the node's dependencies. Returns nil if
-// the node has no selector. Returns an error if evaluation fails.
-func (n *Node) GetResolvedSelector() (*metav1.LabelSelector, error) {
-	if n.Spec.Meta.Selector == nil {
-		return nil, nil
-	}
-	// Fast path: no CEL expressions in selector — return as-is.
-	if len(n.selectorExprs) == 0 {
-		return n.Spec.Meta.Selector, nil
-	}
-
-	// Evaluate selector expressions.
-	ctx := n.buildContext()
-	resolved := n.Spec.Meta.Selector.DeepCopy()
-
-	for _, sv := range n.selectorVars {
-		for _, expr := range sv.Expressions {
-			// Find the matching expression state.
-			var exprState *expressionEvaluationState
-			for _, s := range n.selectorExprs {
-				if s.Expression.Original == expr.Original {
-					exprState = s
-					break
-				}
-			}
-			if exprState == nil {
-				return nil, fmt.Errorf("selector expression %q: no compiled state", expr.Original)
-			}
-
-			if !exprState.Resolved {
-				val, err := evalExprAny(exprState, ctx)
-				if err != nil {
-					if isCELDataPending(err) {
-						return nil, ErrDataPending
-					}
-					return nil, fmt.Errorf("selector expression %q: %w", expr.Original, err)
-				}
-				exprState.Resolved = true
-				exprState.ResolvedValue = val
-			}
-		}
-
-		if strings.HasPrefix(sv.Path, "selector.matchLabels.") {
-			// Reconstruct the label value from the resolved expression(s).
-			// Path format: "selector.matchLabels.<key>"
-			key := sv.Path[len("selector.matchLabels."):]
-
-			if sv.StandaloneExpression && len(sv.Expressions) == 1 {
-				// Standalone: value is the direct expression result (must be string).
-				for _, s := range n.selectorExprs {
-					if s.Expression.Original == sv.Expressions[0].Original {
-						strVal, ok := s.ResolvedValue.(string)
-						if !ok {
-							return nil, fmt.Errorf("selector expression %q: expected string, got %T", sv.Expressions[0].Original, s.ResolvedValue)
-						}
-						resolved.MatchLabels[key] = strVal
-						break
-					}
-				}
-			} else {
-				// String template: interpolate all expressions into the original template string.
-				value := resolved.MatchLabels[key]
-				for _, expr := range sv.Expressions {
-					for _, s := range n.selectorExprs {
-						if s.Expression.Original == expr.Original {
-							value = strings.Replace(value, "${"+expr.Original+"}", fmt.Sprintf("%v", s.ResolvedValue), 1)
-							break
-						}
-					}
-				}
-				resolved.MatchLabels[key] = value
-			}
-		} else if strings.HasPrefix(sv.Path, "selector.matchExpressions[") {
-			// Path format: "selector.matchExpressions[i].values[j]"
-			var exprIdx, valIdx int
-			if _, err := fmt.Sscanf(sv.Path, "selector.matchExpressions[%d].values[%d]", &exprIdx, &valIdx); err != nil {
-				return nil, fmt.Errorf("selector path %q: failed to parse indices: %w", sv.Path, err)
-			}
-
-			if sv.StandaloneExpression && len(sv.Expressions) == 1 {
-				for _, s := range n.selectorExprs {
-					if s.Expression.Original == sv.Expressions[0].Original {
-						strVal, ok := s.ResolvedValue.(string)
-						if !ok {
-							return nil, fmt.Errorf("selector expression %q: expected string, got %T", sv.Expressions[0].Original, s.ResolvedValue)
-						}
-						resolved.MatchExpressions[exprIdx].Values[valIdx] = strVal
-						break
-					}
-				}
-			} else {
-				value := resolved.MatchExpressions[exprIdx].Values[valIdx]
-				for _, expr := range sv.Expressions {
-					for _, s := range n.selectorExprs {
-						if s.Expression.Original == expr.Original {
-							value = strings.Replace(value, "${"+expr.Original+"}", fmt.Sprintf("%v", s.ResolvedValue), 1)
-							break
-						}
-					}
-				}
-				resolved.MatchExpressions[exprIdx].Values[valIdx] = value
-			}
-		}
-	}
-
-	return resolved, nil
 }

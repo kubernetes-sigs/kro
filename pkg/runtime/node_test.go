@@ -21,7 +21,6 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
@@ -1586,9 +1585,6 @@ type testNodeBuilder struct {
 	forEachExprs     []*expressionEvaluationState
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
-	selectorExprs    []*expressionEvaluationState
-	selectorVars     []*variable.ResourceField
-	selector         *metav1.LabelSelector
 	template         *unstructured.Unstructured
 	resourceSchema   *spec.Schema
 }
@@ -1694,34 +1690,6 @@ func (b *testNodeBuilder) withTemplateVar(path string, exprs ...string) *testNod
 	return b
 }
 
-// withSelector sets the label selector.
-func (b *testNodeBuilder) withSelector(sel *metav1.LabelSelector) *testNodeBuilder {
-	b.selector = sel
-	return b
-}
-
-// withSelectorExpr adds a selector expression state.
-// nolint:unparam // currently only uses dynamic variables
-func (b *testNodeBuilder) withSelectorExpr(expr string, kind variable.ResourceVariableKind) *testNodeBuilder {
-	b.selectorExprs = append(b.selectorExprs, &expressionEvaluationState{
-		Expression: mustCompileTestExpr(expr),
-		Kind:       kind,
-	})
-	return b
-}
-
-// withSelectorVar adds a selector variable.
-func (b *testNodeBuilder) withSelectorVar(path string, standalone bool, exprs ...string) *testNodeBuilder {
-	b.selectorVars = append(b.selectorVars, &variable.ResourceField{
-		FieldDescriptor: variable.FieldDescriptor{
-			Path:                 path,
-			Expressions:          krocel.NewUncompiledSlice(exprs...),
-			StandaloneExpression: standalone,
-		},
-	})
-	return b
-}
-
 // withTemplate sets the template.
 func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	b.template = &unstructured.Unstructured{Object: obj}
@@ -1739,9 +1707,8 @@ func (b *testNodeBuilder) build() *Node {
 	node := &Node{
 		Spec: &graph.Node{
 			Meta: graph.NodeMeta{
-				ID:       b.id,
-				Type:     b.nodeType,
-				Selector: b.selector,
+				ID:   b.id,
+				Type: b.nodeType,
 			},
 			Template: b.template,
 		},
@@ -1753,8 +1720,6 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
-		selectorExprs:    b.selectorExprs,
-		selectorVars:     b.selectorVars,
 		rgdConfig: graph.RGDConfig{
 			MaxCollectionSize: testMaxCollectionSize,
 		},
@@ -1791,258 +1756,5 @@ func secretSchema() *spec.Schema {
 				}},
 			},
 		},
-	}
-}
-
-func TestGetResolvedSelector(t *testing.T) {
-	tests := []struct {
-		name                 string
-		node                 func() *Node
-		wantNil              bool
-		wantLabels           map[string]string
-		wantMatchExpressions []metav1.LabelSelectorRequirement
-		wantErr              bool
-		errContain           string
-	}{
-		{
-			name: "nil selector",
-			node: func() *Node {
-				return newTestNode("external", graph.NodeTypeExternalCollection).build()
-			},
-			wantNil: true,
-		},
-		{
-			name: "static selector (no CEL)",
-			node: func() *Node {
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "nginx"},
-					}).
-					build()
-			},
-			wantLabels: map[string]string{"app": "nginx"},
-		},
-		{
-			name: "standalone CEL expression",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"appLabel": "frontend"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "${schema.spec.appLabel}"},
-					}).
-					withSelectorVar("selector.matchLabels.app", true, "schema.spec.appLabel").
-					withSelectorExpr("schema.spec.appLabel", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantLabels: map[string]string{"app": "frontend"},
-		},
-		{
-			name: "string template interpolation",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"name": "myapp"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "prefix-${schema.spec.name}"},
-					}).
-					withSelectorVar("selector.matchLabels.app", false, "schema.spec.name").
-					withSelectorExpr("schema.spec.name", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantLabels: map[string]string{"app": "prefix-myapp"},
-		},
-		{
-			name: "multiple label keys",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{
-						"spec": map[string]any{"appLabel": "frontend", "env": "prod"},
-					}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"app": "${schema.spec.appLabel}",
-							"env": "${schema.spec.env}",
-						},
-					}).
-					withSelectorVar("selector.matchLabels.app", true, "schema.spec.appLabel").
-					withSelectorVar("selector.matchLabels.env", true, "schema.spec.env").
-					withSelectorExpr("schema.spec.appLabel", variable.ResourceVariableKindDynamic).
-					withSelectorExpr("schema.spec.env", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantLabels: map[string]string{"app": "frontend", "env": "prod"},
-		},
-		{
-			name: "non-string result errors",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"count": int64(42)}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "${schema.spec.count}"},
-					}).
-					withSelectorVar("selector.matchLabels.app", true, "schema.spec.count").
-					withSelectorExpr("schema.spec.count", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantErr:    true,
-			errContain: "expected string",
-		},
-		// matchExpressions tests
-		{
-			name: "static matchExpressions (no CEL)",
-			node: func() *Node {
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withSelector(&metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"prod", "staging"}},
-						},
-					}).
-					build()
-			},
-			wantMatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"prod", "staging"}},
-			},
-		},
-		{
-			name: "standalone CEL in matchExpressions values",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"env": "production"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env}"}},
-						},
-					}).
-					withSelectorVar("selector.matchExpressions[0].values[0]", true, "schema.spec.env").
-					withSelectorExpr("schema.spec.env", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantMatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"production"}},
-			},
-		},
-		{
-			name: "template interpolation in matchExpressions values",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"name": "myapp"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{"env-${schema.spec.name}"}},
-						},
-					}).
-					withSelectorVar("selector.matchExpressions[0].values[0]", false, "schema.spec.name").
-					withSelectorExpr("schema.spec.name", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantMatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{"env-myapp"}},
-			},
-		},
-		{
-			name: "multiple values with CEL in matchExpressions",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"env1": "prod", "env2": "staging"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env1}", "${schema.spec.env2}"}},
-						},
-					}).
-					withSelectorVar("selector.matchExpressions[0].values[0]", true, "schema.spec.env1").
-					withSelectorVar("selector.matchExpressions[0].values[1]", true, "schema.spec.env2").
-					withSelectorExpr("schema.spec.env1", variable.ResourceVariableKindDynamic).
-					withSelectorExpr("schema.spec.env2", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantMatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"prod", "staging"}},
-			},
-		},
-		{
-			name: "mixed matchLabels and matchExpressions",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"app": "nginx", "env": "prod"}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": "${schema.spec.app}"},
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env}"}},
-						},
-					}).
-					withSelectorVar("selector.matchLabels.app", true, "schema.spec.app").
-					withSelectorVar("selector.matchExpressions[0].values[0]", true, "schema.spec.env").
-					withSelectorExpr("schema.spec.app", variable.ResourceVariableKindDynamic).
-					withSelectorExpr("schema.spec.env", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantLabels: map[string]string{"app": "nginx"},
-			wantMatchExpressions: []metav1.LabelSelectorRequirement{
-				{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"prod"}},
-			},
-		},
-		{
-			name: "non-string result in matchExpressions errors",
-			node: func() *Node {
-				schema := newTestNode("schema", graph.NodeTypeInstance).
-					withObserved(map[string]any{"spec": map[string]any{"count": int64(42)}}).build()
-				return newTestNode("external", graph.NodeTypeExternalCollection).
-					withDep(schema).
-					withSelector(&metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.count}"}},
-						},
-					}).
-					withSelectorVar("selector.matchExpressions[0].values[0]", true, "schema.spec.count").
-					withSelectorExpr("schema.spec.count", variable.ResourceVariableKindDynamic).
-					build()
-			},
-			wantErr:    true,
-			errContain: "expected string",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			node := tt.node()
-			sel, err := node.GetResolvedSelector()
-
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errContain != "" {
-					assert.Contains(t, err.Error(), tt.errContain)
-				}
-				return
-			}
-			require.NoError(t, err)
-
-			if tt.wantNil {
-				assert.Nil(t, sel)
-				return
-			}
-
-			require.NotNil(t, sel)
-			if tt.wantLabels != nil {
-				assert.Equal(t, tt.wantLabels, sel.MatchLabels)
-			}
-			if tt.wantMatchExpressions != nil {
-				assert.Equal(t, tt.wantMatchExpressions, sel.MatchExpressions)
-			}
-		})
 	}
 }

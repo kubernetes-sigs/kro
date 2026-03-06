@@ -148,15 +148,6 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 				node.templateExprs = append(node.templateExprs, state)
 			}
 		}
-
-		// Wire up selector CEL expressions (ExternalCollection only).
-		for _, v := range node.Spec.SelectorVars {
-			node.selectorVars = append(node.selectorVars, v)
-			for _, expr := range v.Expressions {
-				state := getOrCreateExpr(expr, v.Kind, expr.References)
-				node.selectorExprs = append(node.selectorExprs, state)
-			}
-		}
 	}
 
 	// Instance status variables (if any) use the same cache.

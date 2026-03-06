@@ -17,7 +17,6 @@ package graph
 import (
 	"slices"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -97,9 +96,6 @@ type NodeMeta struct {
 	Namespaced bool
 	// Dependencies lists the IDs of nodes this node depends on.
 	Dependencies []string
-	// Selector is the label selector for ExternalCollection nodes.
-	// nil for all other node types.
-	Selector *metav1.LabelSelector
 }
 
 // ForEachDimension represents a parsed forEach dimension from an RGD resource.
@@ -124,11 +120,6 @@ type Node struct {
 
 	// Variables holds the CEL expression fields found in the template.
 	Variables []*variable.ResourceField
-
-	// SelectorVars holds CEL expression fields extracted from
-	// Selector.MatchLabels values (ExternalCollection nodes only).
-	// When non-empty, the selector must be evaluated at runtime.
-	SelectorVars []*variable.ResourceField
 
 	// IncludeWhen are compiled CEL expressions that must all evaluate to true
 	// for this resource to be included. Empty means always include.
@@ -158,7 +149,6 @@ func (n *Node) DeepCopy() *Node {
 			GVR:          n.Meta.GVR,
 			Namespaced:   n.Meta.Namespaced,
 			Dependencies: slices.Clone(n.Meta.Dependencies),
-			Selector:     n.Meta.Selector.DeepCopy(),
 		},
 		IncludeWhen: slices.Clone(n.IncludeWhen),
 		ReadyWhen:   slices.Clone(n.ReadyWhen),
@@ -175,15 +165,6 @@ func (n *Node) DeepCopy() *Node {
 			copyVar := *v
 			copyVar.Expressions = slices.Clone(v.Expressions)
 			cp.Variables[i] = &copyVar
-		}
-	}
-
-	if n.SelectorVars != nil {
-		cp.SelectorVars = make([]*variable.ResourceField, len(n.SelectorVars))
-		for i, v := range n.SelectorVars {
-			copyVar := *v
-			copyVar.Expressions = slices.Clone(v.Expressions)
-			cp.SelectorVars[i] = &copyVar
 		}
 	}
 

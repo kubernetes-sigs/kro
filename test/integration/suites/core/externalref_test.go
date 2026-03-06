@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -349,6 +350,108 @@ var _ = Describe("ExternalRef", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Cleanup
+		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+	})
+
+	It("should list all resources when external collection has empty selector", func(ctx SpecContext) {
+		namespace := fmt.Sprintf("test-%s", rand.String(5))
+
+		// Create namespace
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		}
+		Expect(env.Client.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, ns)).To(Succeed())
+		})
+
+		By("creating ConfigMaps in the namespace")
+		cm1 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "config-alpha",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "alpha"},
+			},
+			Data: map[string]string{"key": "value1"},
+		}
+		cm2 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "config-beta",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "beta"},
+			},
+			Data: map[string]string{"key": "value2"},
+		}
+		Expect(env.Client.Create(ctx, cm1)).To(Succeed())
+		Expect(env.Client.Create(ctx, cm2)).To(Succeed())
+
+		By("creating RGD with external collection ref using empty selector (match all)")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-empty-sel",
+			generator.WithSchema(
+				"TestExtCollEmptySel", "v1alpha1",
+				map[string]interface{}{},
+				map[string]interface{}{
+					"configCount": "${string(size(allconfigs))}",
+				},
+			),
+			generator.WithExternalRef("allconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: &metav1.LabelSelector{},
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating the instance")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollEmptySel",
+				"metadata": map[string]interface{}{
+					"name":      "test-empty-selector",
+					"namespace": namespace,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("waiting for instance to become ACTIVE with configCount >= 2 (all ConfigMaps matched)")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			// At least our 2 ConfigMaps should be matched (there may be
+			// additional ones like kube-root-ca.crt in the namespace).
+			count := 0
+			_, err = fmt.Sscanf(configCount, "%d", &count)
+			g.Expect(err).To(Succeed())
+			g.Expect(count).To(BeNumerically(">=", 2))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Cleanup

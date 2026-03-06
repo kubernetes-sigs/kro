@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
@@ -3388,113 +3387,6 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.NotNil(t, graph)
-		})
-	}
-}
-
-func TestParseSelectorExpressions(t *testing.T) {
-	tests := []struct {
-		name      string
-		selector  *metav1.LabelSelector
-		wantPaths []string
-		wantErr   bool
-	}{
-		{
-			name:      "nil selector",
-			selector:  nil,
-			wantPaths: nil,
-		},
-		{
-			name: "static matchLabels only",
-			selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": "nginx"},
-			},
-			wantPaths: nil,
-		},
-		{
-			name: "CEL in matchLabels",
-			selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": "${schema.spec.app}"},
-			},
-			wantPaths: []string{"selector.matchLabels.app"},
-		},
-		{
-			name: "static matchExpressions only",
-			selector: &metav1.LabelSelector{
-				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"prod"}},
-				},
-			},
-			wantPaths: nil,
-		},
-		{
-			name: "CEL in matchExpressions values",
-			selector: &metav1.LabelSelector{
-				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env}"}},
-				},
-			},
-			wantPaths: []string{"selector.matchExpressions[0].values[0]"},
-		},
-		{
-			name: "multiple CEL values in matchExpressions",
-			selector: &metav1.LabelSelector{
-				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env1}", "${schema.spec.env2}"}},
-				},
-			},
-			wantPaths: []string{
-				"selector.matchExpressions[0].values[0]",
-				"selector.matchExpressions[0].values[1]",
-			},
-		},
-		{
-			name: "mixed matchLabels and matchExpressions with CEL",
-			selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": "${schema.spec.app}"},
-				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env}"}},
-				},
-			},
-			wantPaths: []string{
-				"selector.matchLabels.app",
-				"selector.matchExpressions[0].values[0]",
-			},
-		},
-		{
-			name: "multiple matchExpressions entries",
-			selector: &metav1.LabelSelector{
-				MatchExpressions: []metav1.LabelSelectorRequirement{
-					{Key: "env", Operator: metav1.LabelSelectorOpIn, Values: []string{"${schema.spec.env}"}},
-					{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"static", "${schema.spec.tier}"}},
-				},
-			},
-			wantPaths: []string{
-				"selector.matchExpressions[0].values[0]",
-				"selector.matchExpressions[1].values[1]",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			vars, err := parseSelectorExpressions(tt.selector)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-
-			if tt.wantPaths == nil {
-				assert.Empty(t, vars)
-				return
-			}
-
-			var gotPaths []string
-			for _, v := range vars {
-				gotPaths = append(gotPaths, v.Path)
-			}
-			assert.Equal(t, tt.wantPaths, gotPaths)
 		})
 	}
 }

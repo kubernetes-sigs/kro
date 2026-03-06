@@ -24,7 +24,6 @@ import (
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi"
@@ -318,6 +317,8 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
+// The selector (if any) is embedded directly in the template so that ParseSchemalessResource
+// can extract CEL expressions from the entire resource in a single pass.
 func (b *Builder) buildExternalRefResource(
 	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
 	resourceObject := map[string]interface{}{}
@@ -329,6 +330,32 @@ func (b *Builder) buildExternalRefResource(
 	}
 	if externalRef.Metadata.Namespace != "" {
 		metadata["namespace"] = externalRef.Metadata.Namespace
+	}
+	if externalRef.Metadata.Selector != nil {
+		sel := map[string]interface{}{}
+		if len(externalRef.Metadata.Selector.MatchLabels) > 0 {
+			ml := map[string]interface{}{}
+			for k, v := range externalRef.Metadata.Selector.MatchLabels {
+				ml[k] = v
+			}
+			sel["matchLabels"] = ml
+		}
+		if len(externalRef.Metadata.Selector.MatchExpressions) > 0 {
+			exprs := make([]interface{}, len(externalRef.Metadata.Selector.MatchExpressions))
+			for i, req := range externalRef.Metadata.Selector.MatchExpressions {
+				vals := make([]interface{}, len(req.Values))
+				for j, v := range req.Values {
+					vals[j] = v
+				}
+				exprs[i] = map[string]interface{}{
+					"key":      req.Key,
+					"operator": string(req.Operator),
+					"values":   vals,
+				}
+			}
+			sel["matchExpressions"] = exprs
+		}
+		metadata["selector"] = sel
 	}
 	resourceObject["metadata"] = metadata
 	return resourceObject
@@ -387,7 +414,14 @@ func (b *Builder) buildRGResource(
 
 	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
-	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+	if rgResource.ExternalRef != nil {
+		// External ref templates are synthetic (not user YAML), so use the
+		// schemaless parser for the entire resource uniformly.
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rgResource.ID, err)
+		}
+	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
@@ -432,21 +466,11 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
-	// Determine node type and optional selector for external collections.
+	// Determine node type.
 	nodeType := NodeTypeResource
-	var labelSelector *metav1.LabelSelector
-	var selectorVars []*variable.ResourceField
 	if rgResource.ExternalRef != nil {
 		if rgResource.ExternalRef.Metadata.Selector != nil {
 			nodeType = NodeTypeExternalCollection
-			labelSelector = rgResource.ExternalRef.Metadata.Selector
-
-			// Parse selector matchLabels values for CEL expressions.
-			var err error
-			selectorVars, err = parseSelectorExpressions(labelSelector)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse selector expressions for resource %s: %w", rgResource.ID, err)
-			}
 		} else {
 			nodeType = NodeTypeExternal
 		}
@@ -462,68 +486,15 @@ func (b *Builder) buildRGResource(
 			Type:       nodeType,
 			GVR:        mapping.Resource,
 			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
-			Selector:   labelSelector,
 			// Dependencies will be set by buildDependencyGraph
 		},
-		Template:     &unstructured.Unstructured{Object: resourceObject},
-		Variables:    templateVariables,
-		SelectorVars: selectorVars,
-		IncludeWhen:  includeWhen,
-		ReadyWhen:    readyWhen,
-		ForEach:      forEachDimensions,
+		Template:    &unstructured.Unstructured{Object: resourceObject},
+		Variables:   templateVariables,
+		IncludeWhen: includeWhen,
+		ReadyWhen:   readyWhen,
+		ForEach:     forEachDimensions,
 	}
 	return node, resourceSchema, nil
-}
-
-// parseSelectorExpressions extracts CEL expressions from matchLabels values.
-// Static values (no ${...}) are skipped. Returns nil if all values are static.
-func parseSelectorExpressions(sel *metav1.LabelSelector) ([]*variable.ResourceField, error) {
-	if sel == nil || (len(sel.MatchLabels) == 0 && len(sel.MatchExpressions) == 0) {
-		return nil, nil
-	}
-
-	var vars []*variable.ResourceField
-	for key, value := range sel.MatchLabels {
-		expressions, err := parser.ExtractExpressions(value)
-		if err != nil {
-			return nil, fmt.Errorf("selector matchLabels[%q]: %w", key, err)
-		}
-		if len(expressions) == 0 {
-			continue
-		}
-
-		// Selector labels are always string-typed (string interpolation).
-		vars = append(vars, &variable.ResourceField{
-			Kind: variable.ResourceVariableKindStatic, // promoted later in buildDependencyGraph
-			FieldDescriptor: variable.FieldDescriptor{
-				Path:                 fmt.Sprintf("selector.matchLabels.%s", key),
-				Expressions:          krocel.NewUncompiledSlice(expressions...),
-				StandaloneExpression: len(expressions) == 1 && value == "${"+expressions[0]+"}",
-			},
-		})
-	}
-
-	for i, req := range sel.MatchExpressions {
-		for j, value := range req.Values {
-			expressions, err := parser.ExtractExpressions(value)
-			if err != nil {
-				return nil, fmt.Errorf("selector matchExpressions[%d].values[%d]: %w", i, j, err)
-			}
-			if len(expressions) == 0 {
-				continue
-			}
-			vars = append(vars, &variable.ResourceField{
-				Kind: variable.ResourceVariableKindStatic,
-				FieldDescriptor: variable.FieldDescriptor{
-					Path:                 fmt.Sprintf("selector.matchExpressions[%d].values[%d]", i, j),
-					Expressions:          krocel.NewUncompiledSlice(expressions...),
-					StandaloneExpression: len(expressions) == 1 && value == "${"+expressions[0]+"}",
-				},
-			})
-		}
-	}
-
-	return vars, nil
 }
 
 // buildDependencyGraph builds the dependency graph between the nodes in the
@@ -574,17 +545,10 @@ func (b *Builder) buildDependencyGraph(
 			return nil, err
 		}
 
-		// Extract dependencies from selector CEL expressions (ExternalCollection only).
-		selectorDeps, err := extractSelectorDependencies(inspector, node)
-		if err != nil {
-			return nil, err
-		}
-
 		// Add all dependencies to node and DAG
-		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps)+len(selectorDeps))
+		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps))
 		allDeps = append(allDeps, templateDeps...)
 		allDeps = append(allDeps, forEachDeps...)
-		allDeps = append(allDeps, selectorDeps...)
 		node.Meta.Dependencies = append(node.Meta.Dependencies, allDeps...)
 		if err := directedAcyclicGraph.AddDependencies(node.Meta.ID, allDeps); err != nil {
 			return nil, err
@@ -690,35 +654,6 @@ func extractForEachDependencies(
 		allDeps = append(allDeps, nodeDeps...)
 	}
 
-	return allDeps, nil
-}
-
-// extractSelectorDependencies extracts dependencies from CEL expressions
-// in SelectorVars (matchLabels values containing ${...}).
-func extractSelectorDependencies(
-	inspector *ast.Inspector,
-	node *Node,
-) ([]string, error) {
-	if len(node.SelectorVars) == 0 {
-		return nil, nil
-	}
-
-	var allDeps []string
-	for _, sv := range node.SelectorVars {
-		for _, expression := range sv.Expressions {
-			nodeDeps, _, err := extractDependencies(inspector, expression, nil)
-			if err != nil {
-				return nil, fmt.Errorf("node %q selector expression %q: %w", node.Meta.ID, expression.Original, err)
-			}
-
-			// Selector variables that reference other nodes are dynamic.
-			if len(nodeDeps) > 0 && sv.Kind == variable.ResourceVariableKindStatic {
-				sv.Kind = variable.ResourceVariableKindDynamic
-			}
-
-			allDeps = append(allDeps, nodeDeps...)
-		}
-	}
 	return allDeps, nil
 }
 
@@ -1143,11 +1078,6 @@ func validateAndCompileNode(node *Node, inspector *ast.Inspector, env *cel.Env, 
 		return err
 	}
 
-	// Validate and compile selector CEL expressions (ExternalCollection only).
-	if err := validateAndCompileSelectorVars(env, node); err != nil {
-		return err
-	}
-
 	// Validate and compile includeWhen expressions if present
 	if len(node.IncludeWhen) > 0 {
 		// includeWhen expressions can ONLY reference the schema (instance spec).
@@ -1235,29 +1165,6 @@ func validateAndCompileTemplates(
 			outputType := checkedAST.OutputType()
 			if err := validateExpressionType(outputType, expectedType, expression.Original, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
 				return err
-			}
-		}
-	}
-	return nil
-}
-
-// validateAndCompileSelectorVars compiles CEL expressions in SelectorVars.
-// Selector label values must evaluate to strings.
-func validateAndCompileSelectorVars(env *cel.Env, node *Node) error {
-	for _, sv := range node.SelectorVars {
-		for _, expression := range sv.Expressions {
-			checkedAST, err := parseCheckAndCompile(env, expression)
-			if err != nil {
-				return fmt.Errorf("failed to compile selector expression %q at path %q: %w",
-					expression.Original, sv.Path, err)
-			}
-
-			outputType := checkedAST.OutputType()
-			if !cel.StringType.IsAssignableType(outputType) {
-				return fmt.Errorf(
-					"selector expression %q at path %q must return string, got %q",
-					expression.Original, sv.Path, outputType.String(),
-				)
 			}
 		}
 	}

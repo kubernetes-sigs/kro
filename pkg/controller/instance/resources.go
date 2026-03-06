@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
@@ -243,7 +244,7 @@ func (c *Controller) processNode(
 		}
 		return nil, nil
 	case graph.NodeTypeExternalCollection:
-		if err := c.processExternalCollectionNode(rcx, node, state); err != nil {
+		if err := c.processExternalCollectionNode(rcx, node, state, desired); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -687,38 +688,49 @@ func setStateFromReadiness(node *runtime.Node, state *NodeState) {
 }
 
 // processExternalCollectionNode reads external resources matching a label selector
-// and updates node state.
+// and updates node state. The selector is extracted from the resolved template
+// (desired), which was resolved by the standard template pipeline.
 func (c *Controller) processExternalCollectionNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
 	state *NodeState,
+	desired []*unstructured.Unstructured,
 ) error {
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
 
-	labelSelector, err := node.GetResolvedSelector()
-	if err != nil {
-		state.SetError(fmt.Errorf("failed to resolve selector for %s: %w", id, err))
-		return state.Err
-	}
-	if labelSelector == nil {
+	if len(desired) == 0 {
 		state.SetSkipped()
 		return nil
 	}
 
-	// Convert metav1.LabelSelector to labels.Selector for LIST.
-	selector, err := metav1.LabelSelectorAsSelector(labelSelector)
-	if err != nil {
-		state.SetError(fmt.Errorf("invalid label selector for %s: %w", id, err))
-		return state.Err
+	// Extract the resolved selector from the template and convert to labels.Selector.
+	// A missing selector means "select everything" (unfiltered list).
+	var selector labels.Selector
+	selectorRaw, found, err := unstructured.NestedMap(desired[0].Object, "metadata", "selector")
+	if err != nil || !found {
+		selector = labels.Everything()
+	} else {
+		ls := &metav1.LabelSelector{}
+		if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
+			state.SetError(fmt.Errorf("failed to convert selector for %s: %w", id, err))
+			return state.Err
+		}
+		selector, err = metav1.LabelSelectorAsSelector(ls)
+		if err != nil {
+			state.SetError(fmt.Errorf("invalid label selector for %s: %w", id, err))
+			return state.Err
+		}
 	}
 
-	// Determine namespace for LIST and watch.
-	// Cluster-scoped resources (e.g. Namespaces, ClusterRoles) use empty
-	// namespace so the LIST is not scoped to a single namespace.
-	ns := rcx.Instance.GetNamespace()
+	// Get namespace from the resolved template. For cluster-scoped resources,
+	// use empty namespace so the LIST is not scoped to a single namespace.
+	ns := desired[0].GetNamespace()
 	if !nodeMeta.Namespaced {
 		ns = ""
+	} else if ns == "" {
+		// if no namespace is specified, use the namespace of the instance.
+		ns = rcx.Instance.GetNamespace()
 	}
 
 	// Register collection watch with the coordinator.

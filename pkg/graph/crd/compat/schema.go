@@ -14,6 +14,8 @@
 package compat
 
 import (
+	"bytes"
+
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
@@ -50,6 +52,19 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 		result.AddNonBreakingChange(
 			path+".description",
 			DescriptionChanged,
+			"",
+			"",
+		)
+	}
+
+	// default value changes are non-breaking
+	//
+	// TODO: Should removing a default from a required field be a breaking
+	// change?
+	if !defaultsEqual(oldSchema.Default, newSchema.Default) {
+		result.AddNonBreakingChange(
+			path+".default",
+			DefaultChanged,
 			"",
 			"",
 		)
@@ -225,6 +240,19 @@ func compareArrayItems(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 			result.AddNonBreakingChange(path+".items", PropertyAdded, "", "")
 		}
 	}
+}
+
+// defaultsEqual compares two JSON default values for equality.
+// Two defaults are equal if they are both nil, or both non-nil with
+// identical Raw byte content.
+func defaultsEqual(a, b *v1.JSON) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return bytes.Equal(a.Raw, b.Raw)
 }
 
 // toStringSet converts a string slice to a map for O(1) lookups

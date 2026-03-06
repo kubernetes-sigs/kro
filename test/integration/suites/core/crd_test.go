@@ -398,6 +398,40 @@ var _ = Describe("CRD", func() {
 				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
 			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+			// Update RGD with non-breaking change: change the default value
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Add field2 - this is a non-breaking change
+				rgd.Spec.Schema.Spec = toRawExtension(map[string]interface{}{
+					"field1": "string",
+					"field2": "integer | default=52",
+				})
+
+				err = env.Client.Update(ctx, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify RGD stays active and CRD is updated
+			crd = &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name: "nonbreakingtests.kro.run",
+				}, crd)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				// Verify new field exists in CRD
+				props := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties
+				g.Expect(props["spec"].Properties).To(HaveKey("field2"))
+				g.Expect(props["spec"].Properties["field2"].Type).To(Equal("integer"))
+				g.Expect(props["spec"].Properties["field2"].Default.Raw).To(Equal([]byte("52")))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})

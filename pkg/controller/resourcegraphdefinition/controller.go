@@ -104,8 +104,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
-		For(&v1alpha1.ResourceGraphDefinition{}).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		For(&v1alpha1.ResourceGraphDefinition{}, builder.WithPredicates(resourceGraphDefinitionPrimaryWatchPredicate())).
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
@@ -128,6 +127,40 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+}
+
+// resourceGraphDefinitionPrimaryWatchPredicate returns a predicate that decides
+// which ResourceGraphDefinition events trigger a reconcile.
+//
+// The default GenerationChangedPredicate is insufficient here because Kubernetes
+// does NOT bump .metadata.generation when .metadata.deletionTimestamp is set.
+// That means a plain generation check silently drops the update that kicks off
+// finalizer-driven cleanup, and the controller never runs its delete path until
+// the final delete event — by which point the object is already gone from the API
+// server.
+//
+// This predicate reconciles when:
+//   - spec changes  (generation changed), or
+//   - deletion begins (deletionTimestamp transitions from zero to non-zero).
+//
+// It skips:
+//   - status-only updates (generation and deletion state unchanged),
+//   - delete events (object is already removed; nothing left to reconcile).
+func resourceGraphDefinitionPrimaryWatchPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+
+			oldDeleting := !e.ObjectOld.GetDeletionTimestamp().IsZero()
+			newDeleting := !e.ObjectNew.GetDeletionTimestamp().IsZero()
+			return e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() || oldDeleting != newDeleting
+		},
+		DeleteFunc: func(event.DeleteEvent) bool {
+			return false
+		},
+	}
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition

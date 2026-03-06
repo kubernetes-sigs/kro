@@ -40,7 +40,9 @@ import (
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -811,5 +813,88 @@ func TestReconcile(t *testing.T) {
 			result, err := reconciler.Reconcile(context.Background(), rgd)
 			tt.check(t, result, err, c, rgd, manager)
 		})
+	}
+}
+
+func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
+	t.Parallel()
+
+	pred := resourceGraphDefinitionPrimaryWatchPredicate()
+	deletionTime := metav1.NewTime(time.Unix(123, 0))
+	testCases := []struct {
+		name string
+		run  func(predicate.Predicate) bool
+		want bool
+	}{
+		{
+			name: "accepts generation changes",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestRGD(1, nil),
+					ObjectNew: newPredicateTestRGD(2, nil),
+				})
+			},
+			want: true,
+		},
+		{
+			name: "accepts deletion timestamp transitions",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestRGD(1, nil),
+					ObjectNew: newPredicateTestRGD(1, &deletionTime),
+				})
+			},
+			want: true,
+		},
+		{
+			name: "ignores status only updates",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestRGD(1, nil),
+					ObjectNew: newPredicateTestRGD(1, nil),
+				})
+			},
+			want: false,
+		},
+		{
+			name: "ignores updates after deletion already started",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestRGD(1, &deletionTime),
+					ObjectNew: newPredicateTestRGD(1, &deletionTime),
+				})
+			},
+			want: false,
+		},
+		{
+			name: "keeps create events enabled",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Create(event.CreateEvent{Object: newPredicateTestRGD(1, nil)})
+			},
+			want: true,
+		},
+		{
+			name: "ignores delete events",
+			run: func(pred predicate.Predicate) bool {
+				return pred.Delete(event.DeleteEvent{Object: newPredicateTestRGD(1, nil)})
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		if got := tc.run(pred); got != tc.want {
+			t.Errorf("%s: got %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
+func newPredicateTestRGD(generation int64, deletionTimestamp *metav1.Time) *v1alpha1.ResourceGraphDefinition {
+	return &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-rgd",
+			Generation:        generation,
+			DeletionTimestamp: deletionTimestamp,
+		},
 	}
 }

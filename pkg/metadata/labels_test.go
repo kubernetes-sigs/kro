@@ -42,8 +42,23 @@ func TestIsKROOwned(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "owned by kro",
+			name:     "owned by kro (deprecated label)",
 			labels:   map[string]string{OwnedLabel: "true"},
+			expected: true,
+		},
+		{
+			name:     "owned by kro (internal label)",
+			labels:   map[string]string{InternalOwnedLabel: "true"},
+			expected: true,
+		},
+		{
+			name:     "owned by kro (both labels)",
+			labels:   map[string]string{OwnedLabel: "true", InternalOwnedLabel: "true"},
+			expected: true,
+		},
+		{
+			name:     "internal label takes precedence",
+			labels:   map[string]string{OwnedLabel: "false", InternalOwnedLabel: "true"},
 			expected: true,
 		},
 		{
@@ -139,6 +154,44 @@ func TestCompareRGDOwnership(t *testing.T) {
 			expectedNameMatch: true,
 			expectedIDMatch:   false,
 		},
+		{
+			name: "same RGD - internal labels only",
+			existingLabels: map[string]string{
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
+		},
+		{
+			name: "same RGD - both label sets (dual-write)",
+			existingLabels: map[string]string{
+				OwnedLabel:                               "true",
+				ResourceGraphDefinitionNameLabel:         "test-rgd",
+				ResourceGraphDefinitionIDLabel:           "test-id",
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                               "true",
+				ResourceGraphDefinitionNameLabel:         "test-rgd",
+				ResourceGraphDefinitionIDLabel:           "test-id",
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -231,8 +284,10 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
 		labeler := NewResourceGraphDefinitionLabeler(obj)
 		assert.Equal(t, GenericLabeler{
-			ResourceGraphDefinitionNameLabel: name,
-			ResourceGraphDefinitionIDLabel:   string(uid),
+			ResourceGraphDefinitionNameLabel:         name,
+			ResourceGraphDefinitionIDLabel:           string(uid),
+			InternalResourceGraphDefinitionNameLabel: name,
+			InternalResourceGraphDefinitionIDLabel:   string(uid),
 		}, labeler)
 	})
 }
@@ -264,6 +319,13 @@ func TestNewInstanceLabeler(t *testing.T) {
 			InstanceGroupLabel:     group,
 			InstanceVersionLabel:   version,
 			InstanceKindLabel:      kind,
+
+			InternalInstanceLabel:          name,
+			InternalInstanceNamespaceLabel: namespace,
+			InternalInstanceIDLabel:        string(uid),
+			InternalInstanceGroupLabel:     group,
+			InternalInstanceVersionLabel:   version,
+			InternalInstanceKindLabel:      kind,
 		}, labeler)
 	})
 }
@@ -274,6 +336,9 @@ func TestNewKROMetaLabeler(t *testing.T) {
 		assert.Equal(t, GenericLabeler{
 			OwnedLabel:      "true",
 			KROVersionLabel: version.GetVersionInfo().GitVersion,
+
+			InternalOwnedLabel:      "true",
+			InternalKROVersionLabel: version.GetVersionInfo().GitVersion,
 		}, labeler)
 	})
 }
@@ -285,4 +350,56 @@ func TestNewNodeLabeler(t *testing.T) {
 			ManagedByLabelKey: ManagedByKROValue,
 		}, labeler)
 	})
+}
+
+func TestLabelWithFallback(t *testing.T) {
+	cases := []struct {
+		name          string
+		labels        map[string]string
+		internalKey   string
+		deprecatedKey string
+		expectedVal   string
+		expectedOK    bool
+	}{
+		{
+			name:          "internal label present",
+			labels:        map[string]string{InternalOwnedLabel: "true", OwnedLabel: "false"},
+			internalKey:   InternalOwnedLabel,
+			deprecatedKey: OwnedLabel,
+			expectedVal:   "true",
+			expectedOK:    true,
+		},
+		{
+			name:          "only deprecated label present",
+			labels:        map[string]string{OwnedLabel: "true"},
+			internalKey:   InternalOwnedLabel,
+			deprecatedKey: OwnedLabel,
+			expectedVal:   "true",
+			expectedOK:    true,
+		},
+		{
+			name:          "neither label present",
+			labels:        map[string]string{},
+			internalKey:   InternalOwnedLabel,
+			deprecatedKey: OwnedLabel,
+			expectedVal:   "",
+			expectedOK:    false,
+		},
+		{
+			name:          "nil labels map",
+			labels:        nil,
+			internalKey:   InternalOwnedLabel,
+			deprecatedKey: OwnedLabel,
+			expectedVal:   "",
+			expectedOK:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val, ok := LabelWithFallback(tc.labels, tc.internalKey, tc.deprecatedKey)
+			assert.Equal(t, tc.expectedVal, val)
+			assert.Equal(t, tc.expectedOK, ok)
+		})
+	}
 }

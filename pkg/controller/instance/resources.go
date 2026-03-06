@@ -443,11 +443,16 @@ func (c *Controller) applyDecoratorLabels(
 
 	// Add node ID label
 	labels[metadata.NodeIDLabel] = nodeID
+	labels[metadata.InternalNodeIDLabel] = nodeID
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {
-		labels[metadata.CollectionIndexLabel] = fmt.Sprintf("%d", collectionInfo.Index)
-		labels[metadata.CollectionSizeLabel] = fmt.Sprintf("%d", collectionInfo.Size)
+		idx := fmt.Sprintf("%d", collectionInfo.Index)
+		sz := fmt.Sprintf("%d", collectionInfo.Size)
+		labels[metadata.CollectionIndexLabel] = idx
+		labels[metadata.CollectionSizeLabel] = sz
+		labels[metadata.InternalCollectionIndexLabel] = idx
+		labels[metadata.InternalCollectionSizeLabel] = sz
 	}
 
 	obj.SetLabels(labels)

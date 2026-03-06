@@ -17,7 +17,6 @@ package metadata
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,45 +28,136 @@ import (
 )
 
 const (
+	// Deprecated: v0.9.0
+	// Use InternalLabelKROPrefix instead.
+	// This label will be removed in v0.10.0
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+
+	// InternalLabelKROPrefix is the label key prefix used to identify KRO owned resources.
+	InternalLabelKROPrefix = "internal." + v1alpha1.KRODomainName + "/"
 )
 
 const (
+	// Deprecated: v0.9.0
+	// Use InternalNodeIDLabel instead.
+	// This label will be removed in v0.10.0
 	NodeIDLabel = LabelKROPrefix + "node-id"
 
+	// Deprecated: v0.9.0
+	// Use InternalCollectionIndexLabel instead.
+	// This label will be removed in v0.10.0
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.
 	CollectionIndexLabel = LabelKROPrefix + "collection-index"
-	CollectionSizeLabel  = LabelKROPrefix + "collection-size"
+	// Deprecated: v0.9.0
+	// Use InternalCollectionSizeLabel instead.
+	// This label will be removed in v0.10.0
+	CollectionSizeLabel = LabelKROPrefix + "collection-size"
 
-	OwnedLabel      = LabelKROPrefix + "owned"
+	// Deprecated: v0.9.0
+	// Use InternalOwnedLabel instead.
+	// This label will be removed in v0.10.0
+	OwnedLabel = LabelKROPrefix + "owned"
+	// Deprecated: v0.9.0
+	// Use InternalKROVersionLabel instead.
+	// This label will be removed in v0.10.0
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
+	// Deprecated: v0.9.0
+	// Use InternalManagedByLabelKey instead.
+	// This label will be removed in v0.10.0
 	ManagedByLabelKey = "app.kubernetes.io/managed-by"
+	// Deprecated: v0.9.0
+	// Use InternalManagedByKROValue instead.
+	// This label will be removed in v0.10.0
 	ManagedByKROValue = "kro"
 
-	InstanceIDLabel        = LabelKROPrefix + "instance-id"
-	InstanceLabel          = LabelKROPrefix + "instance-name"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceIDLabel instead.
+	// This label will be removed in v0.10.0
+	InstanceIDLabel = LabelKROPrefix + "instance-id"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceLabel instead.
+	// This label will be removed in v0.10.0
+	InstanceLabel = LabelKROPrefix + "instance-name"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceNamespaceLabel instead.
+	// This label will be removed in v0.10.0
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
-	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
-	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
-	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceGroupLabel instead.
+	// This label will be removed in v0.10.0
+	InstanceGroupLabel = LabelKROPrefix + "instance-group"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceVersionLabel instead.
+	// This label will be removed in v0.10.0
+	InstanceVersionLabel = LabelKROPrefix + "instance-version"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceKindLabel instead.
+	// This label will be removed in v0.10.0
+	InstanceKindLabel = LabelKROPrefix + "instance-kind"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceReconcileLabel instead.
+	// This label will be removed in v0.10.0
 	InstanceReconcileLabel = LabelKROPrefix + "reconcile"
 
-	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
-	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionIDLabel instead.
+	// This label will be removed in v0.10.0
+	ResourceGraphDefinitionIDLabel = LabelKROPrefix + "resource-graph-definition-id"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionNameLabel instead.
+	// This label will be removed in v0.10.0
+	ResourceGraphDefinitionNameLabel = LabelKROPrefix + "resource-graph-definition-name"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionNamespaceLabel instead.
+	// This label will be removed in v0.10.0
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
-	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionVersionLabel instead.
+	// This label will be removed in v0.10.0
+	ResourceGraphDefinitionVersionLabel = LabelKROPrefix + "resource-graph-definition-version"
+)
+
+// Internal labels
+const (
+	InternalNodeIDLabel = InternalLabelKROPrefix + "node-id"
+
+	// Collection labels for tracking collection membership and position.
+	// These enable querying collection resources and understanding their position.
+	InternalCollectionIndexLabel = InternalLabelKROPrefix + "collection-index"
+	InternalCollectionSizeLabel  = InternalLabelKROPrefix + "collection-size"
+
+	InternalOwnedLabel      = InternalLabelKROPrefix + "owned"
+	InternalKROVersionLabel = InternalLabelKROPrefix + "kro-version"
+
+	InternalManagedByLabelKey = "app.kubernetes.io/managed-by"
+	InternalManagedByKROValue = "kro"
+
+	InternalInstanceIDLabel        = InternalLabelKROPrefix + "instance-id"
+	InternalInstanceLabel          = InternalLabelKROPrefix + "instance-name"
+	InternalInstanceNamespaceLabel = InternalLabelKROPrefix + "instance-namespace"
+	InternalInstanceGroupLabel     = InternalLabelKROPrefix + "instance-group"
+	InternalInstanceVersionLabel   = InternalLabelKROPrefix + "instance-version"
+	InternalInstanceKindLabel      = InternalLabelKROPrefix + "instance-kind"
+	InternalInstanceReconcileLabel = InternalLabelKROPrefix + "reconcile"
+
+	InternalResourceGraphDefinitionIDLabel        = InternalLabelKROPrefix + "resource-graph-definition-id"
+	InternalResourceGraphDefinitionNameLabel      = InternalLabelKROPrefix + "resource-graph-definition-name"
+	InternalResourceGraphDefinitionNamespaceLabel = InternalLabelKROPrefix + "resource-graph-definition-namespace"
+	InternalResourceGraphDefinitionVersionLabel   = InternalLabelKROPrefix + "resource-graph-definition-version"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
+// Checks Internal label first, falling back to the deprecated label.
 func IsKROOwned(meta metav1.Object) bool {
-	v, ok := meta.GetLabels()[OwnedLabel]
+	labels := meta.GetLabels()
+	v, ok := LabelWithFallback(labels, InternalOwnedLabel, OwnedLabel)
 	if !ok {
-		return meta.GetLabels()[ManagedByLabelKey] == ManagedByKROValue
+		return labels[ManagedByLabelKey] == ManagedByKROValue
 	}
-	return ok && booleanFromString(v)
+	return booleanFromString(v)
 }
 
 // CompareRGDOwnership compares RGD ownership labels between two resources.
@@ -87,11 +177,11 @@ func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMat
 		return false, false, false
 	}
 
-	existingOwnerName := existing.Labels[ResourceGraphDefinitionNameLabel]
-	existingOwnerID := existing.Labels[ResourceGraphDefinitionIDLabel]
+	existingOwnerName, _ := LabelWithFallback(existing.Labels, InternalResourceGraphDefinitionNameLabel, ResourceGraphDefinitionNameLabel)
+	existingOwnerID, _ := LabelWithFallback(existing.Labels, InternalResourceGraphDefinitionIDLabel, ResourceGraphDefinitionIDLabel)
 
-	desiredOwnerName := desired.Labels[ResourceGraphDefinitionNameLabel]
-	desiredOwnerID := desired.Labels[ResourceGraphDefinitionIDLabel]
+	desiredOwnerName, _ := LabelWithFallback(desired.Labels, InternalResourceGraphDefinitionNameLabel, ResourceGraphDefinitionNameLabel)
+	desiredOwnerID, _ := LabelWithFallback(desired.Labels, InternalResourceGraphDefinitionIDLabel, ResourceGraphDefinitionIDLabel)
 
 	nameMatch = existingOwnerName == desiredOwnerName
 	idMatch = existingOwnerID == desiredOwnerID
@@ -155,8 +245,10 @@ func (gl GenericLabeler) Copy() map[string]string {
 // ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
 func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
-		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
-		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
+		ResourceGraphDefinitionIDLabel:           string(rgMeta.GetUID()),
+		ResourceGraphDefinitionNameLabel:         rgMeta.GetName(),
+		InternalResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
+		InternalResourceGraphDefinitionNameLabel: rgMeta.GetName(),
 	}
 }
 
@@ -174,6 +266,13 @@ func NewInstanceLabeler(instance *unstructured.Unstructured) GenericLabeler {
 		InstanceGroupLabel:     gvk.Group,
 		InstanceVersionLabel:   gvk.Version,
 		InstanceKindLabel:      gvk.Kind,
+
+		InternalInstanceIDLabel:        string(instance.GetUID()),
+		InternalInstanceLabel:          instance.GetName(),
+		InternalInstanceNamespaceLabel: instance.GetNamespace(),
+		InternalInstanceGroupLabel:     gvk.Group,
+		InternalInstanceVersionLabel:   gvk.Version,
+		InternalInstanceKindLabel:      gvk.Kind,
 	}
 }
 
@@ -188,22 +287,13 @@ func NewNodeLabeler() GenericLabeler {
 // NewKROMetaLabeler returns a new labeler that sets the OwnedLabel, and
 // KROVersion labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
+	v := safeVersion(version.GetVersionInfo().GitVersion)
 	return map[string]string{
 		OwnedLabel:      "true",
-		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
-	}
-}
+		KROVersionLabel: v,
 
-// NewCollectionItemLabeler returns a new labeler that sets collection-specific
-// labels on a resource that is part of a collection (forEach expansion).
-// - node-id: the resource ID from the RGD (e.g "workerPods")
-// - collection-index: the position in the collection (e.g "0", "1", "2")
-// - collection-size: the total number of items in the collection (e.g "3")
-func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
-	return map[string]string{
-		NodeIDLabel:          nodeID,
-		CollectionIndexLabel: strconv.Itoa(index),
-		CollectionSizeLabel:  strconv.Itoa(size),
+		InternalOwnedLabel:      "true",
+		InternalKROVersionLabel: v,
 	}
 }
 
@@ -214,6 +304,17 @@ func safeVersion(version string) string {
 	// The script we use might add '+dirty' to development branches,
 	// so let's try replacing '+' with '-'.
 	return strings.ReplaceAll(version, "+", "-")
+}
+
+// LabelWithFallback looks up a label by its Internal key first, falling back
+// to the deprecated key. This makes reads resilient during the migration period
+// where resources may carry only old labels (pre-migration) or both (post-migration).
+func LabelWithFallback(labels map[string]string, internalKey, deprecatedKey string) (string, bool) {
+	if v, ok := labels[internalKey]; ok {
+		return v, true
+	}
+	v, ok := labels[deprecatedKey]
+	return v, ok
 }
 
 func booleanFromString(s string) bool {

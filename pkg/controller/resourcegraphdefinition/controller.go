@@ -139,7 +139,7 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 		return nil
 	}
 
-	rgdName, ok := mobj.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
+	rgdName, ok := metadata.LabelWithFallback(mobj.GetLabels(), metadata.InternalResourceGraphDefinitionNameLabel, metadata.ResourceGraphDefinitionNameLabel)
 	if !ok {
 		return nil
 	}

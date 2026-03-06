@@ -137,7 +137,7 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		if !nameMatch {
-			existingRGDName := existing.Labels[metadata.ResourceGraphDefinitionNameLabel]
+			existingRGDName, _ := metadata.LabelWithFallback(existing.Labels, metadata.InternalResourceGraphDefinitionNameLabel, metadata.ResourceGraphDefinitionNameLabel)
 			return fmt.Errorf(
 				"failed to update CRD %s: CRD is owned by another ResourceGraphDefinition %s",
 				desired.Name, existingRGDName,
@@ -145,11 +145,13 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		if nameMatch && !idMatch {
+			existingRGDID, _ := metadata.LabelWithFallback(existing.Labels, metadata.InternalResourceGraphDefinitionIDLabel, metadata.ResourceGraphDefinitionIDLabel)
+			newRGDID, _ := metadata.LabelWithFallback(desired.Labels, metadata.InternalResourceGraphDefinitionIDLabel, metadata.ResourceGraphDefinitionIDLabel)
 			log.Info(
 				"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
 				"crd", desired.Name,
-				"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
-				"newRGDID", desired.Labels[metadata.ResourceGraphDefinitionIDLabel],
+				"existingRGDID", existingRGDID,
+				"newRGDID", newRGDID,
 			)
 		}
 

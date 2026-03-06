@@ -517,8 +517,11 @@ looks surprising.
 
 ### External References
 
-Collections are only supported for templated resources. A resource cannot use
-both `forEach` and `externalRef`.
+A resource cannot use both `forEach` and `externalRef` — they are mutually
+exclusive fields. However, external refs can act as collections on their own
+by using `selector` instead of `name`. See
+**[External Collections](./05-external-references.md#external-collections)**
+for details on label-selector-based external collections.
 
 ### Dimension Explosion
 

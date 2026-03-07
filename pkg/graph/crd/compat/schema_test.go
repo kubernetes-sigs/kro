@@ -168,6 +168,73 @@ func TestCompareSchemas(t *testing.T) {
 			oldSchema: nil,
 			newSchema: nil,
 		},
+		{
+			name: "default value added - non-breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type: "string",
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type:    "string",
+				Default: &v1.JSON{Raw: []byte(`"hello"`)},
+			},
+			nonBreakingCount: 1,
+		},
+		{
+			name: "default value removed - non-breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type:    "string",
+				Default: &v1.JSON{Raw: []byte(`"hello"`)},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "string",
+			},
+			nonBreakingCount: 1,
+		},
+		{
+			name: "default value changed - non-breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type:    "integer",
+				Default: &v1.JSON{Raw: []byte("42")},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type:    "integer",
+				Default: &v1.JSON{Raw: []byte("100")},
+			},
+			nonBreakingCount: 1,
+		},
+		{
+			name: "same default value - no changes",
+			oldSchema: &v1.JSONSchemaProps{
+				Type:    "string",
+				Default: &v1.JSON{Raw: []byte(`"hello"`)},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type:    "string",
+				Default: &v1.JSON{Raw: []byte(`"hello"`)},
+			},
+		},
+		{
+			name: "default value changed in nested property - non-breaking",
+			oldSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"timeout": {
+						Type:    "string",
+						Default: &v1.JSON{Raw: []byte(`"1m30s"`)},
+					},
+				},
+			},
+			newSchema: &v1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]v1.JSONSchemaProps{
+					"timeout": {
+						Type:    "string",
+						Default: &v1.JSON{Raw: []byte(`"2m"`)},
+					},
+				},
+			},
+			nonBreakingCount: 1,
+		},
 	}
 
 	for _, tt := range tests {

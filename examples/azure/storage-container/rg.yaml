@@ -4,7 +4,7 @@ metadata:
   name: azurecontainer.kro.run
 spec:
   schema:
-    apiVersion: v1alpha1
+    apiVersion: kro.run/v1alpha1
     kind: AzureContainerDeployment
     spec:
       name: string | default=mystorage

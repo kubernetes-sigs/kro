@@ -52,14 +52,15 @@ type Schema struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kind is immutable"
 	Kind string `json:"kind,omitempty"`
 	// APIVersion is the version identifier for the generated CRD.
-	// Must follow Kubernetes versioning conventions (v1, v1alpha1, v1beta1, etc.).
+	// Must follow Kubernetes versioning conventions (kro.run/v1, kro.run/v1alpha1, kro.run/v1beta1, etc.).
 	// This field is immutable after creation.
-	// Example: "v1alpha1", "v1", "v2beta1"
+	// Example: "kro.run/v1alpha1", "kro.run/v1", "kro.run/v2beta1"
 	//
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\/)?v[0-9]+(alpha[0-9]+|beta[0-9]+)?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="apiVersion is immutable"
 	APIVersion string `json:"apiVersion,omitempty"`
+	// Deprecated: Use apiVersion in "group/version" format instead.
 	// Group is the API group for the generated CRD. Together with APIVersion and Kind,
 	// it forms the complete GVK (Group-Version-Kind) identifier.
 	// If omitted, defaults to "kro.run". This field is immutable after creation.

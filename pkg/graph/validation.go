@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -112,6 +113,11 @@ func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdC
 	if !isValidKindName(rgd.Spec.Schema.Kind) {
 		return fmt.Errorf("%s: kind '%s' is not a valid KRO kind name: must be UpperCamelCase", ErrNamingConvention, rgd.Spec.Schema.Kind)
 	}
+
+	if err := validateAPIVersionFormat(rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Group); err != nil {
+		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
+	}
+
 	err := validateResourceIDs(rgd)
 	if err != nil {
 		return fmt.Errorf("%s: %w", ErrNamingConvention, err)
@@ -127,6 +133,50 @@ func validateResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, rgdC
 			return err
 		}
 	}
+	return nil
+}
+
+const (
+	defaultKROGroup = "kro.run"
+)
+
+func validateAPIVersionFormat(apiVersion, group string) error {
+	if apiVersion == "" {
+		return fmt.Errorf("apiVersion cannot be empty")
+	}
+
+	if strings.Contains(apiVersion, "/") {
+		return validateGroupVersionFormat(apiVersion, group)
+	}
+
+	return validateLegacyVersionFormat(apiVersion, group)
+}
+
+func validateGroupVersionFormat(apiVersion, groupField string) error {
+	groupPart, versionPart := metadata.ParseGroupVersion(apiVersion, "")
+
+	if errs := validation.IsDNS1123Subdomain(groupPart); len(errs) > 0 {
+		return fmt.Errorf("invalid group %q in apiVersion %q: %s (must be a valid DNS-1123 subdomain)",
+			groupPart, apiVersion, strings.Join(errs, ", "))
+	}
+
+	if err := validateKubernetesVersion(versionPart); err != nil {
+		return fmt.Errorf("invalid version %q in apiVersion %q: %w", versionPart, apiVersion, err)
+	}
+
+	return nil
+}
+
+func validateLegacyVersionFormat(apiVersion, groupField string) error {
+	if groupField == "" {
+		return fmt.Errorf("apiVersion %q must be in 'group/version' format (e.g., 'mycompany.io/v1alpha1') "+
+			"or the group field must be explicitly set", apiVersion)
+	}
+
+	if err := validateKubernetesVersion(apiVersion); err != nil {
+		return fmt.Errorf("invalid version in apiVersion %q: %w", apiVersion, err)
+	}
+
 	return nil
 }
 

@@ -100,8 +100,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
-		For(&v1alpha1.ResourceGraphDefinition{}).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		For(&v1alpha1.ResourceGraphDefinition{}, builder.WithPredicates(resourceGraphDefinitionPrimaryPredicate())).
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
@@ -124,6 +123,23 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+}
+
+func resourceGraphDefinitionPrimaryPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				if e.ObjectOld == nil || e.ObjectNew == nil {
+					return false
+				}
+
+				oldDeleting := !e.ObjectOld.GetDeletionTimestamp().IsZero()
+				newDeleting := !e.ObjectNew.GetDeletionTimestamp().IsZero()
+				return oldDeleting != newDeleting
+			},
+		},
+	)
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition

@@ -286,3 +286,39 @@ func TestNewNodeLabeler(t *testing.T) {
 		}, labeler)
 	})
 }
+
+func TestSafeNodeID(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "short ID",
+			input:    "configMap",
+			expected: "b2ef5cc0f757c127",
+		},
+		{
+			name:     "long ID exceeding 63 chars",
+			input:    "thisIsAnExtremelyLongResourceIdentifierThatExceedsSixtyThreeCharactersLimit",
+			expected: "813389665a79234e",
+		},
+		{
+			name:     "different short ID",
+			input:    "secret",
+			expected: "ab23f0eec020c951",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := SafeNodeID(tc.input)
+			assert.Equal(t, tc.expected, result)
+			assert.Len(t, result, 16)
+		})
+	}
+
+	t.Run("deterministic", func(t *testing.T) {
+		assert.Equal(t, SafeNodeID("configMap"), SafeNodeID("configMap"))
+	})
+}

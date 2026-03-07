@@ -74,7 +74,7 @@ func TestNewNodeAndInstanceAndResourceGraphDefinitionSelector(t *testing.T) {
 	selector := NewNodeAndInstanceAndResourceGraphDefinitionSelector(node, instance, rgd)
 
 	assert.Equal(t, map[string]string{
-		NodeIDLabel:                    "test-node",
+		NodeIDLabel:                    SafeNodeID("test-node"),
 		InstanceIDLabel:                "instance-123",
 		ResourceGraphDefinitionIDLabel: "rgd-123",
 	}, selector.MatchLabels)

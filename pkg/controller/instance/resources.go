@@ -387,7 +387,7 @@ func (c *Controller) listCollectionItems(
 	instanceUID := string(rcx.Instance.GetUID())
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		metadata.InstanceIDLabel, instanceUID,
-		metadata.NodeIDLabel, nodeID,
+		metadata.NodeIDLabel, metadata.SafeNodeID(nodeID),
 	)
 
 	// List across all namespaces - collection items may span namespaces
@@ -441,8 +441,8 @@ func (c *Controller) applyDecoratorLabels(
 		labels[k] = v
 	}
 
-	// Add node ID label
-	labels[metadata.NodeIDLabel] = nodeID
+	// Add node ID label (used hashed value to workaround k8s 63 char label value limit)
+	labels[metadata.NodeIDLabel] = metadata.SafeNodeID(nodeID)
 
 	// Add collection labels if applicable
 	if collectionInfo != nil {
@@ -451,6 +451,14 @@ func (c *Controller) applyDecoratorLabels(
 	}
 
 	obj.SetLabels(labels)
+
+	// Store the original node ID as annotation for traceability
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[metadata.NodeIDAnnotation] = nodeID
+	obj.SetAnnotations(annotations)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

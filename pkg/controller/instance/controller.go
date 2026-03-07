@@ -215,9 +215,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")
 		}
-	case InstanceStateInProgress:
-		err := rcx.StateManager.NodeErrors()
-		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
 	default:
 		rcx.Mark.ResourcesNotReady("unknown instance state")
 	}

@@ -239,6 +239,13 @@ type ResourceGraphDefinitionStatus struct {
 	// Resources provides detailed information about each resource in the graph,
 	// including their dependencies.
 	Resources []ResourceInformation `json:"resources,omitempty"`
+	// LatestObservedGV points to the newest GraphRevision observed from the current RGD spec.
+	LatestObservedGV *GraphRevisionReference `json:"latestObservedGV,omitempty"`
+	// LatestActiveGV points to the newest GraphRevision currently considered active.
+	LatestActiveGV *GraphRevisionReference `json:"latestActiveGV,omitempty"`
+	// LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.
+	// It is a persisted high-water mark used to keep revision allocation monotonic across GC.
+	LastIssuedRevision int64 `json:"lastIssuedRevision,omitempty"`
 }
 
 // ResourceInformation provides detailed information about a specific resource
@@ -258,6 +265,16 @@ type ResourceInformation struct {
 type Dependency struct {
 	// ID is the unique identifier of the resource that this resource depends on.
 	ID string `json:"id,omitempty"`
+}
+
+// GraphRevisionReference points to a GraphRevision object and its immutable identity values.
+type GraphRevisionReference struct {
+	// Name is the name of the GraphRevision object.
+	Name string `json:"name,omitempty"`
+	// Revision is the monotonic revision number of the referenced GraphRevision.
+	Revision int64 `json:"revision,omitempty"`
+	// SpecHash is the canonical hash of the source ResourceGraphDefinition spec.
+	SpecHash string `json:"specHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true

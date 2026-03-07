@@ -40,8 +40,23 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	log, _ := logr.FromContext(ctx)
 	log.V(1).Info("calculating resource graph definition status and conditions")
 
-	// Set status.state.
-	if rgdConditionTypes.For(o).IsRootReady() {
+	conditions := rgdConditionTypes.For(o)
+	kindReady := isConditionTrueForObservedGeneration(conditions.Get(KindReady), o.GetGeneration())
+	controllerReady := isConditionTrueForObservedGeneration(conditions.Get(ControllerReady), o.GetGeneration())
+
+	// ResourceGraphAccepted indicates whether the current spec compiles,
+	// while RGD serving state is about whether traffic can flow through the
+	// infra path (CRD established + dynamic controller running). We keep these
+	// concerns separate so graph validity and serving availability can evolve
+	// independently.
+	//
+	// An RGD can be Active while only a subset of revisions are valid, and that
+	// is expected.
+	//
+	// This can happen after restarts: older GraphRevisions may be re-evaluated
+	// against a different cluster shape (for example, a referenced CRD was
+	// deleted or changed).
+	if kindReady && controllerReady {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
@@ -60,6 +75,9 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		dc.Status.State = o.Status.State
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
+		dc.Status.LatestObservedGV = o.Status.LatestObservedGV
+		dc.Status.LatestActiveGV = o.Status.LatestActiveGV
+		dc.Status.LastIssuedRevision = o.Status.LastIssuedRevision
 
 		log.V(1).Info("updating resource graph definition status",
 			"state", dc.Status.State,
@@ -67,12 +85,19 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		)
 
 		// If there's nothing to update, just return.
-		if equality.Semantic.DeepEqual(current.Status, o.Status) {
+		if equality.Semantic.DeepEqual(current.Status, dc.Status) {
 			return nil
 		}
 
 		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
 	})
+}
+
+func isConditionTrueForObservedGeneration(cond *v1alpha1.Condition, generation int64) bool {
+	if cond == nil {
+		return false
+	}
+	return cond.IsTrue() && cond.ObservedGeneration == generation
 }
 
 // setManaged sets the resourcegraphdefinition as managed, by adding the

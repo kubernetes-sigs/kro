@@ -33,10 +33,12 @@ import (
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	ctrlgraphrevision "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 )
 
 type Environment struct {
@@ -141,6 +143,11 @@ func (e *Environment) initializeClients() error {
 
 func (e *Environment) setupController() error {
 	var err error
+	rgdConfig := graph.RGDConfig{
+		MaxCollectionSize:          1000,
+		MaxCollectionDimensionSize: 10,
+	}
+
 	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
 		Metrics: server.Options{
@@ -167,16 +174,22 @@ func (e *Environment) setupController() error {
 		},
 		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
 
+	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
+		graphRevisionRegistry,
 		10,
-		graph.RGDConfig{
-			MaxCollectionSize:          1000,
-			MaxCollectionDimensionSize: 10,
-		},
+		20,
+		rgdConfig,
+	)
+	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(
+		e.GraphBuilder,
+		graphRevisionRegistry,
+		10,
+		rgdConfig,
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {
@@ -185,6 +198,9 @@ func (e *Environment) setupController() error {
 
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
+	}
+	if err = gvReconciler.SetupWithManager(e.CtrlManager); err != nil {
+		return fmt.Errorf("setting up graph revision reconciler: %w", err)
 	}
 
 	e.ManagerResult = make(chan error, 1)

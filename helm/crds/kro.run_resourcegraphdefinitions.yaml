@@ -403,6 +403,46 @@ spec:
                   - type
                   type: object
                 type: array
+              lastIssuedRevision:
+                description: |-
+                  LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.
+                  It is a persisted high-water mark used to keep revision allocation monotonic across GC.
+                format: int64
+                type: integer
+              latestActiveGV:
+                description: LatestActiveGV points to the newest GraphRevision currently
+                  considered active.
+                properties:
+                  name:
+                    description: Name is the name of the GraphRevision object.
+                    type: string
+                  revision:
+                    description: Revision is the monotonic revision number of the
+                      referenced GraphRevision.
+                    format: int64
+                    type: integer
+                  specHash:
+                    description: SpecHash is the canonical hash of the source ResourceGraphDefinition
+                      spec.
+                    type: string
+                type: object
+              latestObservedGV:
+                description: LatestObservedGV points to the newest GraphRevision observed
+                  from the current RGD spec.
+                properties:
+                  name:
+                    description: Name is the name of the GraphRevision object.
+                    type: string
+                  revision:
+                    description: Revision is the monotonic revision number of the
+                      referenced GraphRevision.
+                    format: int64
+                    type: integer
+                  specHash:
+                    description: SpecHash is the canonical hash of the source ResourceGraphDefinition
+                      spec.
+                    type: string
+                type: object
               resources:
                 description: |-
                   Resources provides detailed information about each resource in the graph,

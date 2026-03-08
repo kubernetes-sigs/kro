@@ -123,7 +123,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGrap
 	}
 
 	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRGD.Nodes))
-	for name, node := range processedRGD.Nodes {
+	for _, name := range processedRGD.TopologicalOrder {
+		node := processedRGD.Nodes[name]
 		deps := node.Meta.Dependencies
 		if len(deps) > 0 {
 			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))

@@ -38,6 +38,10 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
+type resourceGraphBuilder interface {
+	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
+}
+
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
 	allowCRDDeletion bool
@@ -52,7 +56,7 @@ type ResourceGraphDefinitionReconciler struct {
 	crdManager kroclient.CRDClient
 
 	metadataLabeler         metadata.Labeler
-	rgBuilder               *graph.Builder
+	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
 	rgdConfig               graph.RGDConfig

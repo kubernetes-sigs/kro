@@ -36,9 +36,15 @@ import (
 type WatchManager struct {
 	mu      sync.Mutex
 	watches map[schema.GroupVersionResource]*gvrWatch
-	client  metadata.Interface
-	resync  time.Duration
-	log     logr.Logger
+	// parentRefs keeps parent informers alive while a registered parent GVR
+	// still depends on the shared watch.
+	// TODO: If watch ownership gets more complex, replace the split
+	// parent-retention + coordinator-index model with a unified owner set in
+	// WatchManager so informer lifetime is derived from one source of truth.
+	parentRefs map[schema.GroupVersionResource]int
+	client     metadata.Interface
+	resync     time.Duration
+	log        logr.Logger
 
 	// onEvent is the single callback invoked for every informer event.
 	// Set at construction time; never nil.
@@ -66,14 +72,43 @@ type gvrWatch struct {
 // for every informer event across all GVRs.
 func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent EventHandler, log logr.Logger) *WatchManager {
 	wm := &WatchManager{
-		watches: make(map[schema.GroupVersionResource]*gvrWatch),
-		client:  client,
-		resync:  resync,
-		onEvent: onEvent,
-		log:     log.WithName("watch-manager"),
+		watches:    make(map[schema.GroupVersionResource]*gvrWatch),
+		parentRefs: make(map[schema.GroupVersionResource]int),
+		client:     client,
+		resync:     resync,
+		onEvent:    onEvent,
+		log:        log.WithName("watch-manager"),
 	}
 	wm.createInformer = wm.defaultCreateInformer
 	return wm
+}
+
+// EnsureParentWatch retains the watch for a registered parent GVR and ensures
+// the underlying informer is running.
+func (m *WatchManager) EnsureParentWatch(gvr schema.GroupVersionResource) error {
+	m.mu.Lock()
+	m.parentRefs[gvr]++
+	m.mu.Unlock()
+
+	if err := m.EnsureWatch(gvr); err != nil {
+		m.ReleaseParentWatch(gvr)
+		return err
+	}
+	return nil
+}
+
+// ReleaseParentWatch drops one parent retention for the given GVR.
+func (m *WatchManager) ReleaseParentWatch(gvr schema.GroupVersionResource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	refs := m.parentRefs[gvr]
+	switch {
+	case refs <= 1:
+		delete(m.parentRefs, gvr)
+	default:
+		m.parentRefs[gvr] = refs - 1
+	}
 }
 
 // EnsureWatch idempotently ensures an informer is running for the given GVR.
@@ -105,7 +140,7 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
 		// Stop and remove the broken watch so a future EnsureWatch can retry
 		// with a fresh informer instead of returning early for a registered
 		// but non-functional watch.
-		m.StopWatch(gvr)
+		m.forceStopWatch(gvr)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
 	return nil
@@ -117,13 +152,7 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
 func (m *WatchManager) StopWatch(gvr schema.GroupVersionResource) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	w, ok := m.watches[gvr]
-	if !ok {
-		return
-	}
-	close(w.stopCh)
-	delete(m.watches, gvr)
-	m.log.V(1).Info("Watch stopped", "gvr", gvr)
+	m.stopWatchLocked(gvr, false)
 }
 
 // GetInformer returns the SharedIndexInformer for the given GVR, or nil
@@ -154,6 +183,7 @@ func (m *WatchManager) Shutdown() {
 		close(w.stopCh)
 	}
 	m.watches = make(map[schema.GroupVersionResource]*gvrWatch)
+	m.parentRefs = make(map[schema.GroupVersionResource]int)
 }
 
 const defaultSyncTimeout = 30 * time.Second
@@ -194,6 +224,28 @@ func (m *WatchManager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
 	}
 
 	return w
+}
+
+func (m *WatchManager) forceStopWatch(gvr schema.GroupVersionResource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopWatchLocked(gvr, true)
+}
+
+func (m *WatchManager) stopWatchLocked(gvr schema.GroupVersionResource, force bool) {
+	w, ok := m.watches[gvr]
+	if !ok {
+		return
+	}
+	if !force {
+		if refs := m.parentRefs[gvr]; refs > 0 {
+			m.log.V(1).Info("Watch retained by registered parent", "gvr", gvr, "parentRefs", refs)
+			return
+		}
+	}
+	close(w.stopCh)
+	delete(m.watches, gvr)
+	m.log.V(1).Info("Watch stopped", "gvr", gvr)
 }
 
 // eventHandlerFuncs returns cache.ResourceEventHandlerFuncs that convert

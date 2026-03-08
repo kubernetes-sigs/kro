@@ -74,6 +74,22 @@ func TestStopWatch_ThenEnsureWatch_CreatesFresh(t *testing.T) {
 	assert.NotSame(t, inf1, inf2, "expected fresh informer after StopWatch + EnsureWatch")
 }
 
+func TestStopWatch_RetainedByParent(t *testing.T) {
+	wm := newTestWatchManager(t)
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	assert.NoError(t, wm.EnsureParentWatch(gvr))
+	assert.NotNil(t, wm.GetInformer(gvr))
+
+	// Child/orphan cleanup should not stop a parent-retained watch.
+	wm.StopWatch(gvr)
+	assert.NotNil(t, wm.GetInformer(gvr), "parent-retained informer should stay running")
+
+	wm.ReleaseParentWatch(gvr)
+	wm.StopWatch(gvr)
+	assert.Nil(t, wm.GetInformer(gvr), "watch should stop after the parent releases it")
+}
+
 func TestDeleteFunc_Tombstone(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 

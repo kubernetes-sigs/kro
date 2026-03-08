@@ -40,7 +40,7 @@ func (m *mockWatcher) Watch(req dynamiccontroller.WatchRequest) error {
 	return nil
 }
 
-func (m *mockWatcher) Done() {}
+func (m *mockWatcher) Done(bool) {}
 
 func (m *mockWatcher) getRequests() []dynamiccontroller.WatchRequest {
 	m.mu.Lock()

@@ -127,7 +127,7 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 		node := rt.nodes[id]
 
 		for _, expr := range node.Spec.IncludeWhen {
-			state := getOrCreateExpr(expr, variable.ResourceVariableKindIncludeWhen, nil)
+			state := getOrCreateExpr(expr, variable.ResourceVariableKindIncludeWhen, expr.References)
 			node.includeWhenExprs = append(node.includeWhenExprs, state)
 		}
 

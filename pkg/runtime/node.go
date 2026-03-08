@@ -88,12 +88,50 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	// includeWhen only allows schema references; restrict context to schema.
-	ctx := n.buildContext(graph.InstanceNodeID)
+	needed := make(map[string]struct{})
+	resourceRefs := make(map[string]struct{})
+	for _, expr := range n.includeWhenExprs {
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+			if ref != graph.InstanceNodeID {
+				resourceRefs[ref] = struct{}{}
+			}
+		}
+	}
+
+	// Resource-backed includeWhen conditions evaluate against observed upstream
+	// state, so they must wait until those dependencies are ready.
+	for depID := range resourceRefs {
+		dep, ok := n.deps[depID]
+		if !ok {
+			return false, fmt.Errorf("includeWhen dependency %q not wired into runtime", depID)
+		}
+		if err := dep.CheckReadiness(); err != nil {
+			if errors.Is(err, ErrWaitingForReadiness) {
+				return false, fmt.Errorf("includeWhen dependency %q not ready: %s (%w)", depID, err.Error(), ErrDataPending)
+			}
+			return false, fmt.Errorf("includeWhen dependency %q: %w", depID, err)
+		}
+	}
+
+	ctx := n.buildContext(slices.Collect(maps.Keys(needed))...)
+	if len(needed) == 0 {
+		ctx = n.buildContext()
+	}
 
 	for _, expr := range n.includeWhenExprs {
+		hasResourceRef := false
+		for _, ref := range expr.Expression.References {
+			if ref != graph.InstanceNodeID {
+				hasResourceRef = true
+				break
+			}
+		}
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
+			if hasResourceRef && isCELDataPending(err) {
+				return false, fmt.Errorf("includeWhen %q: %w (%w)", expr.Expression.Original, err, ErrDataPending)
+			}
 			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
 		}
 		if !val {

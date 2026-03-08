@@ -119,9 +119,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Get per-instance watcher from the coordinator.
 	watcher := c.coordinator.ForInstance(c.gvr, req.NamespacedName)
 	defer func() {
-		if err == nil {
-			watcher.Done()
-		}
+		watcher.Done(err == nil)
 	}()
 
 	//--------------------------------------------------------------

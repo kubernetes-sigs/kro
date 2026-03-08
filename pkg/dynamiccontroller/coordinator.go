@@ -39,10 +39,10 @@ type InstanceWatcher interface {
 
 	// Done signals that all Watch() calls for this reconciliation cycle
 	// are complete. Any watch requests from the previous cycle that were
-	// NOT re-requested are automatically cleaned up.
-	//
-	// If reconciliation fails before Done(), previous requests stay active.
-	Done()
+	// NOT re-requested are automatically cleaned up. If commit is false,
+	// the current cycle is discarded and the previously committed watch
+	// set stays active.
+	Done(commit bool)
 }
 
 // WatchRequest describes a resource the instance reconciler wants to watch.
@@ -77,12 +77,28 @@ type instanceKey struct {
 	instance  types.NamespacedName
 }
 
+// indexEntry records a single index addition made during a reconciliation
+// cycle. Used as a shadow list so that abortInstance can undo provisional
+// index entries without changing the index data structures themselves.
+type indexEntry struct {
+	gvr          schema.GroupVersionResource
+	nn           types.NamespacedName // for scalar watches
+	nodeID       string
+	isCollection bool
+}
+
 // instanceState tracks watch requests for a single instance across
 // reconciliation cycles. The coordinator uses current vs previous to
 // detect and clean up stale requests.
 type instanceState struct {
 	current  map[string]*WatchRequest // keyed by nodeID
 	previous map[string]*WatchRequest // from last Done() cycle
+
+	// provisional tracks index entries added during the current cycle that
+	// are NOT already covered by a matching entry in previous. On abort
+	// these entries are removed from the live indexes; on commit the list
+	// is discarded.
+	provisional []indexEntry
 }
 
 // collectionEntry is a single collection watch in the reverse index.
@@ -151,24 +167,33 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 
 	// Fix reverse index orphaning on nodeID reuse: if an existing entry
 	// for this nodeID has a different target, remove it from indexes first.
+	// However, skip removal if the old entry matches the committed set —
+	// the committed entry must stay in the index so abort can preserve it.
 	if old, exists := state.current[req.NodeID]; exists {
-		changed := old.GVR != req.GVR || old.Name != req.Name || old.Namespace != req.Namespace
-		if !changed && old.isCollection() && req.isCollection() {
-			changed = old.Selector.String() != req.Selector.String()
-		}
-		if changed {
-			c.removeRequestFromIndexesLocked(key, old)
+		if !sameWatchTarget(old, &req) {
+			if prev, ok := state.previous[req.NodeID]; !ok || !sameWatchTarget(prev, old) {
+				c.removeRequestFromIndexesLocked(key, old)
+			}
 		}
 	}
 
 	// Add to current cycle.
 	state.current[req.NodeID] = &req
 
-	// Add to reverse index.
+	// Add to reverse index and track provisional entries for rollback.
 	if req.isCollection() {
 		c.addCollectionIndexLocked(key, req)
 	} else {
 		c.addScalarIndexLocked(key, req)
+	}
+	// Record as provisional unless already covered by the committed set.
+	if prev, ok := state.previous[req.NodeID]; !ok || !sameWatchTarget(prev, &req) {
+		state.provisional = append(state.provisional, indexEntry{
+			gvr:          req.GVR,
+			nn:           types.NamespacedName{Name: req.Name, Namespace: req.Namespace},
+			nodeID:       req.NodeID,
+			isCollection: req.isCollection(),
+		})
 	}
 
 	gvr := req.GVR
@@ -182,6 +207,37 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 	}
 
 	return nil
+}
+
+// abortInstance discards the current reconciliation cycle for an instance,
+// removing any provisional index entries that were added during this cycle.
+func (c *WatchCoordinator) abortInstance(key instanceKey) {
+	c.mu.Lock()
+
+	state, ok := c.instances[key]
+	if !ok {
+		c.mu.Unlock()
+		return
+	}
+
+	// Remove only the provisional entries from live indexes.
+	var affectedGVRs []schema.GroupVersionResource
+	for _, entry := range state.provisional {
+		req := state.current[entry.nodeID]
+		if req == nil {
+			continue
+		}
+		c.removeRequestFromIndexesLocked(key, req)
+		affectedGVRs = append(affectedGVRs, entry.gvr)
+	}
+
+	state.current = make(map[string]*WatchRequest)
+	state.provisional = nil
+
+	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
+	c.mu.Unlock()
+
+	c.stopWatches(orphanedGVRs)
 }
 
 // doneInstance finalizes the reconciliation cycle for an instance.
@@ -199,13 +255,8 @@ func (c *WatchCoordinator) doneInstance(key instanceKey) {
 	// Collect affected GVRs for orphan cleanup.
 	var affectedGVRs []schema.GroupVersionResource
 	for nodeID, oldReq := range state.previous {
-		if newReq, stillActive := state.current[nodeID]; stillActive {
-			if newReq.GVR == oldReq.GVR && newReq.Name == oldReq.Name && newReq.Namespace == oldReq.Namespace {
-				// Same target (selector changes are handled by addCollectionIndexLocked
-				// which replaces the entry by key+nodeID).
-				continue
-			}
-			// Target changed — remove old index entry.
+		if newReq, stillActive := state.current[nodeID]; stillActive && sameWatchTarget(newReq, oldReq) {
+			continue
 		}
 		c.removeRequestFromIndexesLocked(key, oldReq)
 		affectedGVRs = append(affectedGVRs, oldReq.GVR)
@@ -214,6 +265,7 @@ func (c *WatchCoordinator) doneInstance(key instanceKey) {
 	// Swap: previous = current, current = new empty map.
 	state.previous = state.current
 	state.current = make(map[string]*WatchRequest)
+	state.provisional = nil
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -368,13 +420,14 @@ func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchReques
 }
 
 func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRequest) {
-	// Remove any existing entry for the same (key, nodeID) to avoid duplicates
-	// on re-registration (e.g. selector changed between reconciliation cycles).
+	// Deduplicate: skip if an identical entry already exists.
 	entries := c.collectionIndex[req.GVR]
-	for i, e := range entries {
-		if e.key == key && e.nodeID == req.NodeID {
-			entries = append(entries[:i], entries[i+1:]...)
-			break
+	for _, e := range entries {
+		if e.key == key &&
+			e.nodeID == req.NodeID &&
+			e.namespace == req.Namespace &&
+			e.selector.String() == req.Selector.String() {
+			return
 		}
 	}
 	c.collectionIndex[req.GVR] = append(entries, collectionEntry{
@@ -438,7 +491,10 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 	entries := c.collectionIndex[req.GVR]
 	filtered := entries[:0]
 	for _, e := range entries {
-		if e.key == key && e.nodeID == req.NodeID {
+		if e.key == key &&
+			e.nodeID == req.NodeID &&
+			e.namespace == req.Namespace &&
+			e.selector.String() == req.Selector.String() {
 			continue
 		}
 		filtered = append(filtered, e)
@@ -455,7 +511,7 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 type NoopInstanceWatcher struct{}
 
 func (NoopInstanceWatcher) Watch(_ WatchRequest) error { return nil }
-func (NoopInstanceWatcher) Done()                      {}
+func (NoopInstanceWatcher) Done(bool)                  {}
 
 // instanceWatcher is the concrete implementation of InstanceWatcher.
 type instanceWatcher struct {
@@ -472,10 +528,32 @@ func (w *instanceWatcher) Watch(req WatchRequest) error {
 	}, req)
 }
 
-// Done finalizes the current reconciliation cycle, cleaning up stale requests.
-func (w *instanceWatcher) Done() {
-	w.coordinator.doneInstance(instanceKey{
+// Done finalizes the current reconciliation cycle. If commit is false, the
+// provisional watch set is discarded and the previous one stays active.
+func (w *instanceWatcher) Done(commit bool) {
+	key := instanceKey{
 		parentGVR: w.parentGVR,
 		instance:  w.instance,
-	})
+	}
+	if !commit {
+		w.coordinator.abortInstance(key)
+		return
+	}
+	w.coordinator.doneInstance(key)
+}
+
+func sameWatchTarget(a, b *WatchRequest) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.GVR != b.GVR || a.Name != b.Name || a.Namespace != b.Namespace {
+		return false
+	}
+	if a.isCollection() != b.isCollection() {
+		return false
+	}
+	if !a.isCollection() {
+		return true
+	}
+	return a.Selector.String() == b.Selector.String()
 }

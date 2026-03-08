@@ -17,6 +17,7 @@ package cel
 import (
 	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -90,24 +91,49 @@ func WithListVariables(names []string) EnvOption {
 	}
 }
 
+var (
+	baseDeclarationsOnce   sync.Once
+	cachedBaseDeclarations []cel.EnvOption
+)
+
 // BaseDeclarations returns the base CEL environment options shared by all kro
 // CEL environments. Includes list/string extensions, optional types, encoders,
 // and Kubernetes CEL libraries (URLs, Regex, Random).
+// The result is cached via sync.Once since these options are stateless.
 func BaseDeclarations() []cel.EnvOption {
-	return []cel.EnvOption{
-		ext.Lists(),
-		ext.Strings(),
-		cel.OptionalTypes(),
-		ext.Encoders(),
-		// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
-		// See https://kubernetes.io/docs/reference/using-api/cel/ and
-		// https://github.com/kubernetes-sigs/kro/issues/880.
-		k8scellib.URLs(),
-		k8scellib.Regex(),
-		library.Random(),
-		library.Maps(),
-		library.JSON(),
-	}
+	baseDeclarationsOnce.Do(func() {
+		cachedBaseDeclarations = []cel.EnvOption{
+			ext.Lists(),
+			ext.Strings(),
+			cel.OptionalTypes(),
+			ext.Encoders(),
+			// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
+			// See https://kubernetes.io/docs/reference/using-api/cel/ and
+			// https://github.com/kubernetes-sigs/kro/issues/880.
+			k8scellib.URLs(),
+			k8scellib.Regex(),
+			library.Random(),
+			library.Maps(),
+			library.JSON(),
+		}
+	})
+	return cachedBaseDeclarations
+}
+
+var (
+	baseEnvOnce   sync.Once
+	cachedBaseEnv *cel.Env
+	baseEnvErr    error
+)
+
+// baseEnv returns a cached base CEL environment containing only the base
+// declarations. Use env.Extend() on the result to add custom declarations,
+// which is cheaper than building a full environment from scratch.
+func baseEnv() (*cel.Env, error) {
+	baseEnvOnce.Do(func() {
+		cachedBaseEnv, baseEnvErr = cel.NewEnv(BaseDeclarations()...)
+	})
+	return cachedBaseEnv, baseEnvErr
 }
 
 // DefaultEnvironment returns the default CEL environment.
@@ -120,13 +146,18 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 // and returns both the environment and the DeclTypeProvider (if typed resources
 // were configured).
 func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
-	declarations := BaseDeclarations()
+	base, err := baseEnv()
+	if err != nil {
+		return nil, nil, fmt.Errorf("base environment: %w", err)
+	}
 
 	opts := &envOptions{}
 	for _, opt := range options {
 		opt(opts)
 	}
 
+	// Only non-base declarations go here; base declarations are in the cached base env.
+	var declarations []cel.EnvOption
 	declarations = append(declarations, opts.customDeclarations...)
 
 	var provider *DeclTypeProvider
@@ -174,7 +205,7 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
 
-	env, err := cel.NewEnv(declarations...)
+	env, err := base.Extend(declarations...)
 	return env, provider, err
 }
 

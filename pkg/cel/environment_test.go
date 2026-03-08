@@ -157,6 +157,59 @@ func TestDefaultEnvironment_KubernetesLibraries(t *testing.T) {
 	require.NoError(t, issues.Err(), "expected URL expression to compile without errors")
 }
 
+func TestBaseDeclarations_ReturnsSameSlice(t *testing.T) {
+	a := BaseDeclarations()
+	b := BaseDeclarations()
+	assert.Equal(t, len(a), len(b))
+	// Both calls should return the same backing array (cached via sync.Once)
+	if len(a) > 0 && len(b) > 0 {
+		assert.Same(t, &a[0], &b[0], "expected same backing array from cached BaseDeclarations")
+	}
+}
+
+func TestBaseEnv_Extend_PreservesLibraries(t *testing.T) {
+	// Verify that extending the cached base env still has all libraries available
+	env, err := DefaultEnvironment(
+		WithResourceIDs([]string{"myResource"}),
+	)
+	require.NoError(t, err)
+
+	// Libraries from BaseDeclarations should be available
+	expr := `url("https://example.com").getHost()`
+	_, issues := env.Compile(expr)
+	assert.NoError(t, issues.Err(), "URL library should be available via base.Extend()")
+
+	// Custom variable should also work
+	expr2 := `myResource`
+	_, issues2 := env.Compile(expr2)
+	assert.NoError(t, issues2.Err(), "extended variable should be available")
+}
+
+func TestBaseEnv_Extend_MultipleEnvironments(t *testing.T) {
+	// Create two environments with different options from the same base
+	env1, err := DefaultEnvironment(WithResourceIDs([]string{"alpha"}))
+	require.NoError(t, err)
+
+	env2, err := DefaultEnvironment(WithResourceIDs([]string{"beta"}))
+	require.NoError(t, err)
+
+	// Each should have its own variable, not the other's
+	_, issues := env1.Compile("alpha")
+	assert.NoError(t, issues.Err())
+
+	_, issues = env2.Compile("beta")
+	assert.NoError(t, issues.Err())
+}
+
+func BenchmarkDefaultEnvironment(b *testing.B) {
+	for b.Loop() {
+		_, err := DefaultEnvironment(WithResourceIDs([]string{"a", "b", "c"}))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func Test_CELEnvHasFunction(t *testing.T) {
 	env, err := DefaultEnvironment()
 	require.NoError(t, err, "failed to create CEL env")

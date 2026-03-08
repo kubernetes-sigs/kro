@@ -107,6 +107,67 @@ var _ = Describe("CRD", func() {
 			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
 		})
 
+		It("should generate printer columns for nested custom types with kubectlPrint", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-crd-kubectl-print",
+				generator.WithSchema(
+					"KubectlPrintTest", "v1alpha1",
+					map[string]interface{}{
+						"image": `string | kubectlPrint="CONTAINERIMAGE"`,
+						"platform": map[string]interface{}{
+							"networking": map[string]interface{}{
+								"ingress": "IngressSettings",
+							},
+						},
+						"release": map[string]interface{}{
+							"channel": `ReleaseChannel | kubectlPrint="RELEASE"`,
+						},
+					},
+					nil,
+					generator.WithTypes(map[string]interface{}{
+						"IngressSettings": map[string]interface{}{
+							"className": `string | kubectlPrint="CLASSNAME"`,
+							"enabled":   `boolean | kubectlPrint="ENABLED"`,
+						},
+						"ReleaseChannel": `string | kubectlPrint="CHANNEL"`,
+					}),
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				g.Expect(env.Client.Get(ctx, types.NamespacedName{
+					Name: "kubectlprinttests.kro.run",
+				}, crd)).To(Succeed())
+
+				cols := crd.Spec.Versions[0].AdditionalPrinterColumns
+				columnsByJSONPath := make(map[string]apiextensionsv1.CustomResourceColumnDefinition, len(cols))
+				for _, column := range cols {
+					columnsByJSONPath[column.JSONPath] = column
+				}
+
+				g.Expect(columnsByJSONPath).To(HaveKey(".spec.image"))
+				g.Expect(columnsByJSONPath[".spec.image"].Name).To(Equal("CONTAINERIMAGE"))
+				g.Expect(columnsByJSONPath[".spec.image"].Type).To(Equal("string"))
+
+				g.Expect(columnsByJSONPath).To(HaveKey(".spec.platform.networking.ingress.className"))
+				g.Expect(columnsByJSONPath[".spec.platform.networking.ingress.className"].Name).To(Equal("CLASSNAME"))
+				g.Expect(columnsByJSONPath[".spec.platform.networking.ingress.className"].Type).To(Equal("string"))
+
+				g.Expect(columnsByJSONPath).To(HaveKey(".spec.platform.networking.ingress.enabled"))
+				g.Expect(columnsByJSONPath[".spec.platform.networking.ingress.enabled"].Name).To(Equal("ENABLED"))
+				g.Expect(columnsByJSONPath[".spec.platform.networking.ingress.enabled"].Type).To(Equal("boolean"))
+
+				g.Expect(columnsByJSONPath).To(HaveKey(".spec.release.channel"))
+				g.Expect(columnsByJSONPath[".spec.release.channel"].Name).To(Equal("RELEASE"))
+				g.Expect(columnsByJSONPath[".spec.release.channel"].Type).To(Equal("string"))
+
+				g.Expect(crd.Spec.Versions[0].AdditionalPrinterColumns).To(HaveLen(7))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
 		It("should update CRD when ResourceGraphDefinition is updated", func(ctx SpecContext) {
 			// Create initial ResourceGraphDefinition
 			rgd := generator.NewResourceGraphDefinition("test-crd-update",

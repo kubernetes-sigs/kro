@@ -8,9 +8,9 @@ spec:
     kind: Application
     spec:
       name: string
-      image: string | default="nginx"
+      image: string | default="nginx" kubectlPrint="IMAGE"
       ingress:
-        enabled: boolean | default=false
+        enabled: boolean | default=false kubectlPrint="ENABLED"
     status:
       deploymentConditions: ${deployment.status.conditions}
       availableReplicas: ${deployment.status.availableReplicas}
@@ -18,12 +18,6 @@ spec:
       - jsonPath: .status.availableReplicas
         name: Available replicas
         type: integer
-      - jsonPath: .spec.image
-        name: Image
-        type: string
-      - jsonPath: .spec.ingress.enabled
-        name: Enabled Ingress
-        type: boolean
 
   resources:
     - id: deployment

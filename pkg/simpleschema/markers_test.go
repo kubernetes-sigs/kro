@@ -79,6 +79,18 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    `description="A helpful description"`,
 			want:       &extv1.JSONSchemaProps{Type: "string", Description: "A helpful description"},
 		},
+		{
+			name:       "kubectlPrint marker is schema no-op",
+			schemaType: "string",
+			markers:    `kubectlPrint="IMAGE"`,
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+		},
+		{
+			name:       "kubectlPrint title marker is schema no-op",
+			schemaType: "string",
+			markers:    `kubectlPrint="CONTAINERIMAGE"`,
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+		},
 		// Minimum/Maximum markers
 		{
 			name:       "minimum",
@@ -431,6 +443,22 @@ func TestParseMarkers(t *testing.T) {
 				{MarkerType: MarkerTypeDefault, Key: "default", Value: "5"},
 				{MarkerType: MarkerTypeDescription, Key: "description", Value: "This is a description"},
 			},
+		},
+		{
+			name:  "kubectlPrint marker",
+			input: `kubectlPrint="IMAGE"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeKubectlPrint, Key: "kubectlPrint", Value: "IMAGE"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "kubectlPrint marker with title",
+			input: `kubectlPrint="CONTAINERIMAGE"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypeKubectlPrint, Key: "kubectlPrint", Value: "CONTAINERIMAGE"},
+			},
+			wantErr: false,
 		},
 		{
 			name:  "complex markers with array as default value",

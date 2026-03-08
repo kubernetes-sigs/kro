@@ -27,10 +27,36 @@ import (
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas.
 func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), rgSchema.AdditionalPrinterColumns, rgSchema.Metadata)
+	return SynthesizeCRDWithPrinterColumns(group, apiVersion, kind, spec, status, statusFieldsOverride, rgSchema, nil)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, metadata *v1alpha1.CRDMetadata) *extv1.CustomResourceDefinition {
+// SynthesizeCRDWithPrinterColumns generates a CRD and appends generated printer columns
+// after the configured CRD-level columns.
+func SynthesizeCRDWithPrinterColumns(
+	group, apiVersion, kind string,
+	spec, status extv1.JSONSchemaProps,
+	statusFieldsOverride bool,
+	rgSchema *v1alpha1.Schema,
+	generatedPrinterColumns []extv1.CustomResourceColumnDefinition,
+) *extv1.CustomResourceDefinition {
+	return newCRD(
+		group,
+		apiVersion,
+		kind,
+		newCRDSchema(spec, status, statusFieldsOverride),
+		rgSchema.AdditionalPrinterColumns,
+		generatedPrinterColumns,
+		rgSchema.Metadata,
+	)
+}
+
+func newCRD(
+	group, apiVersion, kind string,
+	schema *extv1.JSONSchemaProps,
+	additionalPrinterColumns []extv1.CustomResourceColumnDefinition,
+	generatedPrinterColumns []extv1.CustomResourceColumnDefinition,
+	metadata *v1alpha1.CRDMetadata,
+) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
 
 	objectMeta := metav1.ObjectMeta{
@@ -68,7 +94,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 					Subresources: &extv1.CustomResourceSubresources{
 						Status: &extv1.CustomResourceSubresourceStatus{},
 					},
-					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns),
+					AdditionalPrinterColumns: newCRDAdditionalPrinterColumns(additionalPrinterColumns, generatedPrinterColumns),
 				},
 			},
 		},
@@ -109,12 +135,31 @@ func newCRDSchema(spec, status extv1.JSONSchemaProps, statusFieldsOverride bool)
 	}
 }
 
-func newCRDAdditionalPrinterColumns(additionalPrinterColumns []extv1.CustomResourceColumnDefinition) []extv1.CustomResourceColumnDefinition {
-	if len(additionalPrinterColumns) == 0 {
-		return defaultAdditionalPrinterColumns
+func newCRDAdditionalPrinterColumns(
+	additionalPrinterColumns []extv1.CustomResourceColumnDefinition,
+	generatedPrinterColumns []extv1.CustomResourceColumnDefinition,
+) []extv1.CustomResourceColumnDefinition {
+	baseColumns := additionalPrinterColumns
+	if len(baseColumns) == 0 {
+		baseColumns = defaultAdditionalPrinterColumns
 	}
 
-	return additionalPrinterColumns
+	mergedColumns := make([]extv1.CustomResourceColumnDefinition, 0, len(baseColumns)+len(generatedPrinterColumns))
+	mergedColumns = append(mergedColumns, baseColumns...)
+
+	seenJSONPaths := make(map[string]struct{}, len(baseColumns))
+	for _, column := range baseColumns {
+		seenJSONPaths[column.JSONPath] = struct{}{}
+	}
+	for _, column := range generatedPrinterColumns {
+		if _, ok := seenJSONPaths[column.JSONPath]; ok {
+			continue
+		}
+		seenJSONPaths[column.JSONPath] = struct{}{}
+		mergedColumns = append(mergedColumns, column)
+	}
+
+	return mergedColumns
 }
 
 // SetCRDStatus updates the status schema in a CRD.

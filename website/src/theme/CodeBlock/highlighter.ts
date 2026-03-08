@@ -9,7 +9,8 @@
 export const MARKER_KEYWORDS = new Set([
   'required', 'default', 'optional', 'description', 'enum',
   'minimum', 'maximum', 'immutable', 'pattern',
-  'minLength', 'maxLength', 'uniqueItems', 'minItems', 'maxItems'
+  'minLength', 'maxLength', 'uniqueItems', 'minItems', 'maxItems',
+  'kubectlPrint'
 ]);
 
 // kro-specific keywords

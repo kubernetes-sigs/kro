@@ -252,13 +252,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	celSchemas[SchemaVarName] = schemaWithoutStatus
 
 	// Create a single typed CEL environment with all schemas for compilation.
-	// Following Kubernetes best practice: create one env, extend once at init,
-	// compile all expressions against it. AST inspection handles scope validation.
-	typedEnv, err := krocel.TypedEnvironment(celSchemas)
+	// TypedEnvironmentWithProvider returns both the env and the DeclTypeProvider it
+	// creates internally, avoiding duplicate schema-to-DeclType conversions.
+	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
-	typeProvider := krocel.CreateDeclTypeProvider(celSchemas)
 
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
@@ -965,7 +964,7 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 // getExpectedTypeForField computes the expected CEL type for a field descriptor.
 // For standalone expressions, the type is derived from the OpenAPI schema at the path.
 // For string templates, the expected type is always string.
-func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
+func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
 	if !descriptor.StandaloneExpression {
 		return cel.StringType
 	}
@@ -980,20 +979,27 @@ func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *s
 		return cel.DynType
 	}
 
-	return getCelTypeFromSchema(schema, typeName)
+	return getCelTypeFromSchema(schema, typeName, typeProvider)
 }
 
-// getCelTypeFromSchema converts an OpenAPI schema to a CEL type with the given type name
-func getCelTypeFromSchema(schema *spec.Schema, typeName string) *cel.Type {
+// getCelTypeFromSchema looks up a pre-registered CEL type by name from the
+// provider (O(1) hash lookup). Falls back to converting the schema directly
+// for nested types that aren't registered at the top level.
+func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+	if typeProvider != nil {
+		if declType, found := typeProvider.FindDeclType(typeName); found {
+			return declType.CelType()
+		}
+	}
+
+	// Fallback: convert schema directly for nested/leaf types not in the provider
 	if schema == nil {
 		return cel.DynType
 	}
-
 	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 	if declType == nil {
 		return cel.DynType
 	}
-
 	declType = declType.MaybeAssignTypeName(typeName)
 	return declType.CelType()
 }
@@ -1124,7 +1130,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
+		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
 		for _, expression := range templateVariable.Expressions {
 			// Parse, type-check, and compile

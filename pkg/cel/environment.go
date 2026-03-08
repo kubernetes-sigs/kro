@@ -112,6 +112,14 @@ func BaseDeclarations() []cel.EnvOption {
 
 // DefaultEnvironment returns the default CEL environment.
 func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
+	env, _, err := defaultEnvironment(options...)
+	return env, err
+}
+
+// defaultEnvironment is the shared implementation that builds the CEL environment
+// and returns both the environment and the DeclTypeProvider (if typed resources
+// were configured).
+func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
 	declarations := BaseDeclarations()
 
 	opts := &envOptions{}
@@ -120,6 +128,8 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 	}
 
 	declarations = append(declarations, opts.customDeclarations...)
+
+	var provider *DeclTypeProvider
 
 	if len(opts.typedResources) > 0 {
 		// We need both a TypeProvider (for field resolution) and variable declarations.
@@ -146,14 +156,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		}
 
 		if len(declTypes) > 0 {
-			baseProvider := NewDeclTypeProvider(declTypes...)
+			provider = NewDeclTypeProvider(declTypes...)
 			// Enable recognition of CEL reserved keywords as field names
-			baseProvider.SetRecognizeKeywordAsFieldName(true)
+			provider.SetRecognizeKeywordAsFieldName(true)
 
 			registry := types.NewEmptyRegistry()
-			wrappedProvider, err := baseProvider.WithTypeProvider(registry)
+			wrappedProvider, err := provider.WithTypeProvider(registry)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			declarations = append(declarations, cel.CustomTypeProvider(wrappedProvider))
@@ -164,7 +174,8 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
 
-	return cel.NewEnv(declarations...)
+	env, err := cel.NewEnv(declarations...)
+	return env, provider, err
 }
 
 // TypedEnvironment creates a CEL environment with type checking enabled.
@@ -173,6 +184,13 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 // CEL expressions against OpenAPI schemas.
 func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))
+}
+
+// TypedEnvironmentWithProvider creates a typed CEL environment and also returns
+// the DeclTypeProvider that was created internally. This avoids the need to
+// create a separate provider via CreateDeclTypeProvider for the same schemas.
+func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error) {
+	return defaultEnvironment(WithTypedResources(schemas))
 }
 
 // UntypedEnvironment creates a CEL environment without type declarations.

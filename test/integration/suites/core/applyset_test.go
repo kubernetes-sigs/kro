@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/util/retry"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
@@ -397,6 +398,251 @@ var _ = Describe("ApplySet", func() {
 					expectedApplySetID,
 				), "applyset parent ID should remain exact")
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		})
+
+		It("should resolve includeWhen from upstream resources and prune when they flip", func(ctx SpecContext) {
+			By("creating RGD with includeWhen referencing another resource")
+			rgd := generator.NewResourceGraphDefinition("test-applyset-upstream-includewhen",
+				generator.WithSchema(
+					"ApplySetUpstreamIncludeWhen", "v1alpha1",
+					map[string]interface{}{
+						"name":            "string",
+						"enableDependent": "boolean",
+					},
+					nil,
+				),
+				generator.WithResource("source", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-source",
+					},
+					"data": map[string]interface{}{
+						"enabled": "${schema.spec.enableDependent ? 'true' : 'false'}",
+					},
+				}, nil, nil),
+				generator.WithResource("dependent", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-dependent",
+					},
+					"data": map[string]interface{}{
+						"key": "created-from-upstream-condition",
+					},
+				}, nil, []string{"${source.data.enabled == 'true'}"}),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			instance := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "ApplySetUpstreamIncludeWhen",
+					"metadata": map[string]interface{}{
+						"name":      "test-upstream-condition",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"name":            "upstream",
+						"enableDependent": true,
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				_ = env.Client.Delete(ctx, instance)
+			})
+
+			By("waiting for both source and dependent resources to appear")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				source := &corev1.ConfigMap{}
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "upstream-source",
+					Namespace: namespace,
+				}, source)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(source.Data).To(HaveKeyWithValue("enabled", "true"))
+
+				dependent := &corev1.ConfigMap{}
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name:      "upstream-dependent",
+					Namespace: namespace,
+				}, dependent)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("updating the upstream-driving field to false")
+			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				current := &unstructured.Unstructured{}
+				current.SetAPIVersion(instance.GetAPIVersion())
+				current.SetKind(instance.GetKind())
+				if err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      instance.GetName(),
+					Namespace: namespace,
+				}, current); err != nil {
+					return err
+				}
+				if err := unstructured.SetNestedField(current.Object, false, "spec", "enableDependent"); err != nil {
+					return err
+				}
+				return env.Client.Update(ctx, current)
+			})).To(Succeed())
+
+			By("waiting for the source to update and the dependent to be pruned")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				source := &corev1.ConfigMap{}
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "upstream-source",
+					Namespace: namespace,
+				}, source)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(source.Data).To(HaveKeyWithValue("enabled", "false"))
+
+				dependent := &corev1.ConfigMap{}
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name:      "upstream-dependent",
+					Namespace: namespace,
+				}, dependent)
+				g.Expect(errors.IsNotFound(err)).To(BeTrue(), "dependent should be pruned once upstream condition flips")
+			}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		})
+
+		It("should prune downstream dependents when a resource-backed includeWhen flips false", func(ctx SpecContext) {
+			rgd := generator.NewResourceGraphDefinition("test-applyset-upstream-contagious-prune",
+				generator.WithSchema(
+					"ApplySetUpstreamContagiousPrune", "v1alpha1",
+					map[string]interface{}{
+						"name":         "string",
+						"enableMiddle": "boolean",
+					},
+					nil,
+				),
+				generator.WithResource("source", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-source",
+					},
+					"data": map[string]interface{}{
+						"enabled": "${schema.spec.enableMiddle ? 'true' : 'false'}",
+					},
+				}, nil, nil),
+				generator.WithResource("middle", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-middle",
+					},
+					"data": map[string]interface{}{
+						"value": "middle",
+					},
+				}, nil, []string{"${source.data.enabled == 'true'}"}),
+				generator.WithResource("child", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${middle.metadata.name}-child",
+					},
+					"data": map[string]interface{}{
+						"fromMiddle": "${middle.data.value}",
+					},
+				}, nil, nil),
+			)
+
+			Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			instance := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "ApplySetUpstreamContagiousPrune",
+					"metadata": map[string]interface{}{
+						"name":      "test-upstream-contagious-prune",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"name":         "upstream-contagious",
+						"enableMiddle": true,
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				_ = env.Client.Delete(ctx, instance)
+			})
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				for _, resourceName := range []string{
+					"upstream-contagious-source",
+					"upstream-contagious-middle",
+					"upstream-contagious-middle-child",
+				} {
+					err := env.Client.Get(ctx, types.NamespacedName{
+						Name:      resourceName,
+						Namespace: namespace,
+					}, &corev1.ConfigMap{})
+					g.Expect(err).ToNot(HaveOccurred())
+				}
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				current := &unstructured.Unstructured{}
+				current.SetAPIVersion(instance.GetAPIVersion())
+				current.SetKind(instance.GetKind())
+				if err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      instance.GetName(),
+					Namespace: namespace,
+				}, current); err != nil {
+					return err
+				}
+				if err := unstructured.SetNestedField(current.Object, false, "spec", "enableMiddle"); err != nil {
+					return err
+				}
+				return env.Client.Update(ctx, current)
+			})).To(Succeed())
+
+			Eventually(func(g Gomega, ctx SpecContext) {
+				source := &corev1.ConfigMap{}
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "upstream-contagious-source",
+					Namespace: namespace,
+				}, source)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(source.Data).To(HaveKeyWithValue("enabled", "false"))
+
+				for _, prunedName := range []string{
+					"upstream-contagious-middle",
+					"upstream-contagious-middle-child",
+				} {
+					err = env.Client.Get(ctx, types.NamespacedName{
+						Name:      prunedName,
+						Namespace: namespace,
+					}, &corev1.ConfigMap{})
+					g.Expect(errors.IsNotFound(err)).To(
+						BeTrue(),
+						"%s should be pruned after resource-backed includeWhen flips false",
+						prunedName,
+					)
+				}
+			}, 40*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		})
 	})
 

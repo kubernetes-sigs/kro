@@ -51,7 +51,8 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 
 ## What You Can Reference
 
-Currently, `includeWhen` expressions can only reference `schema.spec` fields:
+`includeWhen` expressions can reference `schema.spec` fields and upstream
+resources:
 
 ```kro
 # ✓ Valid - references schema.spec and returns boolean
@@ -59,6 +60,12 @@ includeWhen:
   - ${schema.spec.ingress.enabled}
   - ${schema.spec.environment == "production"}
   - ${schema.spec.replicas > 3}
+```
+
+```kro
+# ✓ Valid - references an upstream resource
+includeWhen:
+  - ${deployment.status.availableReplicas > 0}
 ```
 
 ```kro
@@ -70,7 +77,9 @@ includeWhen:
 kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring they reference valid fields and return boolean values.
 
 :::note
-Currently, `includeWhen` can only reference `schema.spec` because conditions are evaluated before any resources are created. Support for conditional inclusion based on other resources' states is planned for future releases.
+When `includeWhen` references other resources, kro treats them as dependencies.
+The condition is evaluated against the observed upstream state, and reconciliation
+waits until the referenced resources have enough data to evaluate safely.
 :::
 
 ## Dependencies and Skipped Resources

@@ -6,6 +6,14 @@ sidebar_position: 4
 
 kro exposes Prometheus metrics for monitoring controller health and performance. These metrics are available at the metrics endpoint (default `:8078/metrics`), configurable via Helm values.
 
+:::warning Metrics Stability
+
+kro-specific metrics (Dynamic Controller, Schema Resolver) are in **ALPHA** and subject to change or removal without notice. Metric names, labels, and types may change between releases with no backwards-compatibility guarantees.
+
+Only **controller-runtime** and **workqueue** metrics are considered **STABLE**.
+
+:::
+
 ## Enabling Metrics
 
 ```yaml

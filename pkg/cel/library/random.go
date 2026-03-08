@@ -27,23 +27,24 @@ const (
 	alphanumericChars = "0123456789abcdefghijklmnopqrstuvwxyz"
 )
 
-// Random returns a CEL library that provides functions to generate random text
+// Random returns a CEL library that provides deterministic random generation
+// functions.
 //
 // Library functions:
 //
-// random.seededString() returns a CEL function that generates deterministic random
-// strings based on a seed.
+// random.seededString(length: int, seed: string) → string
 //
-// The function takes two arguments:
-// - length: an integer specifying the length of the random string to generate
-// - seed: a string used as the seed for the random string generation
-//
-// Example usage:
+// Generates a deterministic random alphanumeric string of the given length
+// using the seed. Same length and seed always produce the same string.
 //
 //	random.seededString(10, schema.metadata.uid)
 //
-// This will generate a random string of length 10 using the seed schema.metadata.uid.
-// The same length and seed will always produce the same random string.
+// random.seededInt(min: int, max: int, seed: string) → int
+//
+// Generates a deterministic random integer in [min, max) using the seed.
+// Same min, max, and seed always produce the same integer.
+//
+//	random.seededInt(30000, 32768, schema.metadata.uid)
 func Random() cel.EnvOption {
 	return cel.Lib(&randomLibrary{})
 }
@@ -63,11 +64,53 @@ func (l *randomLibrary) CompileOptions() []cel.EnvOption {
 				cel.BinaryBinding(generateDeterministicString),
 			),
 		),
+		cel.Function("random.seededInt",
+			cel.Overload("random.seededInt_int_int_string",
+				[]*cel.Type{cel.IntType, cel.IntType, cel.StringType},
+				cel.IntType,
+				cel.FunctionBinding(generateDeterministicInt),
+			),
+		),
 	}
 }
 
 func (l *randomLibrary) ProgramOptions() []cel.ProgramOption {
 	return nil
+}
+
+func generateDeterministicInt(args ...ref.Val) ref.Val {
+	if len(args) != 3 {
+		return types.NewErr("random.seededInt requires exactly 3 arguments")
+	}
+	minVal, maxVal, seed := args[0], args[1], args[2]
+
+	if minVal.Type() != types.IntType {
+		return types.NewErr("random.seededInt min must be an integer")
+	}
+	if maxVal.Type() != types.IntType {
+		return types.NewErr("random.seededInt max must be an integer")
+	}
+	if seed.Type() != types.StringType {
+		return types.NewErr("random.seededInt seed must be a string")
+	}
+
+	minInt := minVal.(types.Int).Value().(int64)
+	maxInt := maxVal.(types.Int).Value().(int64)
+	if minInt >= maxInt {
+		return types.NewErr("random.seededInt min must be less than max")
+	}
+
+	seedStr := seed.(types.String).Value().(string)
+	hash := sha256.Sum256([]byte(seedStr))
+
+	// Read first 8 bytes as uint64 for better distribution
+	v := uint64(hash[0])<<56 | uint64(hash[1])<<48 | uint64(hash[2])<<40 | uint64(hash[3])<<32 |
+		uint64(hash[4])<<24 | uint64(hash[5])<<16 | uint64(hash[6])<<8 | uint64(hash[7])
+
+	rangeSize := uint64(maxInt - minInt)
+	result := minInt + int64(v%rangeSize)
+
+	return types.Int(result)
 }
 
 func generateDeterministicString(length ref.Val, seed ref.Val) ref.Val {

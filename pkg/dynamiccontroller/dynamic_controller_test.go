@@ -186,6 +186,75 @@ func TestEnqueueObject(t *testing.T) {
 	assert.Equal(t, 1, dc.queue.Len())
 }
 
+func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	consumerParentGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "parent informer should be running after register")
+
+	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "external",
+		GVR:       parentGVR,
+		Name:      "target",
+		Namespace: "default",
+	}))
+	watcher.Done()
+
+	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child cleanup must not stop a registered parent informer")
+
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+	assert.Nil(t, dc.watches.GetInformer(parentGVR), "informer should stop once both parent and child users are gone")
+}
+
+func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	consumerParentGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+
+	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "external",
+		GVR:       parentGVR,
+		Name:      "target",
+		Namespace: "default",
+	}))
+	watcher.Done()
+
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child watch should keep informer alive after parent deregister")
+
+	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
+	assert.Nil(t, dc.watches.GetInformer(parentGVR), "informer should stop after the remaining child watch is removed")
+}
+
 func TestInstanceUpdatePolicy(t *testing.T) {
 	logger := noopLogger()
 

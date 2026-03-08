@@ -354,14 +354,18 @@ func (dc *DynamicController) Register(
 
 	// Create parent watch if it doesn't exist.
 	if _, exists := dc.parentWatches[parent]; !exists {
-		// Ensure informer is running and wait for cache sync.
-		if err := dc.watches.EnsureWatch(parent); err != nil {
+		// Retain the shared informer for the parent and wait for cache sync.
+		if err := dc.watches.EnsureParentWatch(parent); err != nil {
 			dc.handlers.Delete(parent)
 			return fmt.Errorf("add parent handler %s: %w", parent, err)
 		}
 
 		inf := dc.watches.GetInformer(parent)
 		if inf == nil {
+			dc.watches.ReleaseParentWatch(parent)
+			if !dc.coordinator.HasRequestsForGVR(parent) {
+				dc.watches.StopWatch(parent)
+			}
 			dc.handlers.Delete(parent)
 			return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
 		}
@@ -380,8 +384,11 @@ func (dc *DynamicController) Register(
 		}
 		reg, err := inf.AddEventHandler(parentHandler)
 		if err != nil {
+			dc.watches.ReleaseParentWatch(parent)
+			if !dc.coordinator.HasRequestsForGVR(parent) {
+				dc.watches.StopWatch(parent)
+			}
 			dc.handlers.Delete(parent)
-			dc.watches.StopWatch(parent)
 			return fmt.Errorf("add parent handler %s: %w", parent, err)
 		}
 		dc.parentWatches[parent] = reg
@@ -447,8 +454,12 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 		}
 		delete(dc.parentWatches, parent)
 
-		// Stop the parent informer — it's no longer needed.
-		dc.watches.StopWatch(parent)
+		// Release the parent retention and stop the shared informer only if
+		// no child/external watches still depend on it.
+		dc.watches.ReleaseParentWatch(parent)
+		if !dc.coordinator.HasRequestsForGVR(parent) {
+			dc.watches.StopWatch(parent)
+		}
 
 		gvrCount.Dec()
 		handlerDetachTotal.WithLabelValues("parent").Inc()

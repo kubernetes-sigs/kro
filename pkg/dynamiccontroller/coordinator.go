@@ -114,6 +114,10 @@ type WatchCoordinator struct {
 	collectionIndex map[schema.GroupVersionResource][]collectionEntry
 }
 
+// coordinatorWatchKey is the ownership key the coordinator uses when
+// calling Acquire/Release on the WatchManager.
+const coordinatorWatchKey = "coordinator"
+
 // NewWatchCoordinator creates a new WatchCoordinator.
 func NewWatchCoordinator(watches *WatchManager, enqueue EnqueueFunc, log logr.Logger) *WatchCoordinator {
 	return &WatchCoordinator{
@@ -174,11 +178,10 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 	gvr := req.GVR
 	c.mu.Unlock()
 
-	// Ensure an informer is running for this GVR.
-	// Called outside the coordinator lock to avoid holding it while
-	// the WatchManager acquires its own lock.
-	if err := c.watches.EnsureWatch(gvr); err != nil {
-		c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
+	// Acquire is idempotent per key — safe to call without checking
+	// whether the coordinator already holds this GVR.
+	if _, err := c.watches.Acquire(gvr, coordinatorWatchKey); err != nil {
+		c.log.Error(err, "Failed to acquire watch", "gvr", gvr)
 	}
 
 	return nil
@@ -424,13 +427,23 @@ func (c *WatchCoordinator) findOrphanedGVRsLocked(gvrs []schema.GroupVersionReso
 	return orphaned
 }
 
-// stopWatches stops informers for the given GVRs. Must be called without
-// c.mu held to avoid holding the coordinator lock while the WatchManager
-// acquires its own lock.
+// stopWatches releases the coordinator's references for the given GVRs.
+// Re-validates orphan status under the lock to prevent races where a
+// concurrent addWatch re-populates the index between orphan detection
+// and this call.
 func (c *WatchCoordinator) stopWatches(gvrs []schema.GroupVersionResource) {
+	c.mu.Lock()
+	var confirmed []schema.GroupVersionResource
 	for _, gvr := range gvrs {
-		c.watches.StopWatch(gvr)
-		c.log.V(1).Info("Stopped orphaned child watch", "gvr", gvr)
+		if len(c.scalarIndex[gvr]) == 0 && len(c.collectionIndex[gvr]) == 0 {
+			confirmed = append(confirmed, gvr)
+		}
+	}
+	c.mu.Unlock()
+
+	for _, gvr := range confirmed {
+		c.watches.Release(gvr, coordinatorWatchKey)
+		c.log.V(1).Info("Released orphaned child watch", "gvr", gvr)
 	}
 }
 

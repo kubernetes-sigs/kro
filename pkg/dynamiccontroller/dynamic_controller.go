@@ -80,6 +80,10 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
+// parentWatchKey is the ownership key the DynamicController uses when
+// calling Acquire/Release on the WatchManager for parent GVR watches.
+const parentWatchKey = "parent"
+
 // Config holds the configuration for DynamicController
 type Config struct {
 	// Workers specifies the number of workers processing items from the queue
@@ -354,8 +358,8 @@ func (dc *DynamicController) Register(
 
 	// Create parent watch if it doesn't exist.
 	if _, exists := dc.parentWatches[parent]; !exists {
-		// Ensure informer is running and wait for cache sync.
-		if err := dc.watches.EnsureWatch(parent); err != nil {
+		// Acquire a reference on the informer and wait for cache sync.
+		if _, err := dc.watches.Acquire(parent, parentWatchKey); err != nil {
 			dc.handlers.Delete(parent)
 			return fmt.Errorf("add parent handler %s: %w", parent, err)
 		}
@@ -363,7 +367,8 @@ func (dc *DynamicController) Register(
 		inf := dc.watches.GetInformer(parent)
 		if inf == nil {
 			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
+			dc.watches.Release(parent, parentWatchKey)
+			return fmt.Errorf("add parent handler %s: informer not found after Acquire", parent)
 		}
 
 		// Register event handler directly on the parent informer.
@@ -381,7 +386,7 @@ func (dc *DynamicController) Register(
 		reg, err := inf.AddEventHandler(parentHandler)
 		if err != nil {
 			dc.handlers.Delete(parent)
-			dc.watches.StopWatch(parent)
+			dc.watches.Release(parent, parentWatchKey)
 			return fmt.Errorf("add parent handler %s: %w", parent, err)
 		}
 		dc.parentWatches[parent] = reg
@@ -447,8 +452,10 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 		}
 		delete(dc.parentWatches, parent)
 
-		// Stop the parent informer — it's no longer needed.
-		dc.watches.StopWatch(parent)
+		// Release the parent's reference. If the coordinator still holds
+		// a reference (e.g. a child watches the same GVR), the informer
+		// stays alive until all owners have released.
+		dc.watches.Release(parent, parentWatchKey)
 
 		gvrCount.Dec()
 		handlerDetachTotal.WithLabelValues("parent").Inc()

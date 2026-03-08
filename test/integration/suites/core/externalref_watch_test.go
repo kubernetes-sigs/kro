@@ -21,14 +21,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("ExternalRef Watch", func() {
@@ -466,4 +466,177 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(sortedNames).To(Equal("cm-charlie,cm-alpha,cm-bravo"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
+
+	It("external ref to a chained RGD keeps the producer instance reconciling after consumer deletion",
+		func(ctx SpecContext) {
+			By("creating the producer RGD that owns the watched custom resource kind")
+			producerRGD := generator.NewResourceGraphDefinition("test-chained-producer",
+				generator.WithSchema(
+					"WatchedDatabase", "v1alpha1",
+					map[string]interface{}{
+						"value": "string",
+					},
+					nil,
+				),
+				generator.WithResource("managed", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "watched-database-config",
+					},
+					"data": map[string]interface{}{
+						"value": "${schema.spec.value}",
+					},
+				}, nil, nil),
+			)
+			Expect(env.Client.Create(ctx, producerRGD)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, producerRGD)).To(Succeed())
+			})
+
+			By("waiting for the producer RGD to become active")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: producerRGD.Name}, producerRGD)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(producerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("creating a producer instance and waiting for its managed ConfigMap")
+			producerInstance := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "WatchedDatabase",
+					"metadata": map[string]interface{}{
+						"name":      "watched-db",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"value": "one",
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, producerInstance)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				err := env.Client.Delete(ctx, producerInstance)
+				if err != nil && !apierrors.IsNotFound(err) {
+					Expect(err).ToNot(HaveOccurred())
+				}
+			})
+
+			producerCM := &corev1.ConfigMap{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      producerInstance.GetName(),
+					Namespace: namespace,
+				}, producerInstance)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(producerInstance.Object).To(HaveKey("status"))
+				g.Expect(producerInstance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name:      "watched-database-config",
+					Namespace: namespace,
+				}, producerCM)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(producerCM.Data).To(HaveKeyWithValue("value", "one"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("creating a consumer RGD that externalRefs the producer custom resource kind")
+			consumerRGD := generator.NewResourceGraphDefinition("test-chained-consumer",
+				generator.WithSchema(
+					"DatabaseObserver", "v1alpha1",
+					map[string]interface{}{},
+					nil,
+				),
+				generator.WithExternalRef("database", &krov1alpha1.ExternalRef{
+					APIVersion: "kro.run/v1alpha1",
+					Kind:       "WatchedDatabase",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Name: "watched-db",
+					},
+				}, nil, nil),
+				generator.WithResource("managed", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "database-observer-config",
+					},
+					"data": map[string]interface{}{
+						"value": "${database.spec.value}",
+					},
+				}, nil, nil),
+			)
+			Expect(env.Client.Create(ctx, consumerRGD)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, consumerRGD)).To(Succeed())
+			})
+
+			By("waiting for the consumer RGD to become active")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: consumerRGD.Name}, consumerRGD)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(consumerRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("creating the consumer instance so it registers an externalRef watch on the producer kind")
+			consumerInstance := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "DatabaseObserver",
+					"metadata": map[string]interface{}{
+						"name":      "db-observer",
+						"namespace": namespace,
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, consumerInstance)).To(Succeed())
+
+			consumerCM := &corev1.ConfigMap{}
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      consumerInstance.GetName(),
+					Namespace: namespace,
+				}, consumerInstance)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(consumerInstance.Object).To(HaveKey("status"))
+				g.Expect(consumerInstance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+				err = env.Client.Get(ctx, types.NamespacedName{
+					Name:      "database-observer-config",
+					Namespace: namespace,
+				}, consumerCM)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(consumerCM.Data).To(HaveKeyWithValue("value", "one"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			By("deleting the consumer instance so its externalRef watch is cleaned up")
+			Expect(env.Client.Delete(ctx, consumerInstance)).To(Succeed())
+			Eventually(func() bool {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      consumerInstance.GetName(),
+					Namespace: namespace,
+				}, consumerInstance)
+				return apierrors.IsNotFound(err)
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(BeTrue())
+
+			By("updating the producer instance after consumer deletion")
+			Expect(env.Client.Get(ctx, types.NamespacedName{
+				Name:      producerInstance.GetName(),
+				Namespace: namespace,
+			}, producerInstance)).To(Succeed())
+			Expect(unstructured.SetNestedField(producerInstance.Object, "two", "spec", "value")).To(Succeed())
+			Expect(env.Client.Update(ctx, producerInstance)).To(Succeed())
+
+			By("asserting the producer instance still reconciles via its parent watch")
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "watched-database-config",
+					Namespace: namespace,
+				}, producerCM)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(producerCM.Data).To(HaveKeyWithValue("value", "two"))
+			}, 5*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed(),
+				"producer managed resource should still update after the consumer externalRef instance is deleted",
+			)
+		})
 })

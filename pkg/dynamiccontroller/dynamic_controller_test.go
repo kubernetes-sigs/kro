@@ -495,7 +495,114 @@ func TestKeyFromGVR(t *testing.T) {
 	}
 }
 
-func TestRegister_EnsureWatchSyncError(t *testing.T) {
+// TestChildCleanup_DoesNotStopParentInformer verifies that when a child/externalRef
+// watch shares the same GVR as a parent watch, cleaning up the child's coordinator
+// reference does not stop the parent's informer. This is the core bug that keyed
+// ownership prevents: without separate ownership keys, releasing the coordinator's
+// reference would kill the parent informer.
+func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	// Producer RGD's parent GVR — also used as an externalRef by the consumer.
+	producerGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "producers"}
+	// Consumer RGD's parent GVR.
+	consumerGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	ctx := t.Context()
+	go func() { _ = dc.Start(ctx) }()
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
+
+	noopHandler := Handler(func(_ context.Context, _ controllerruntime.Request) error { return nil })
+
+	// Register producer as a parent — acquires informer with key "parent".
+	require.NoError(t, dc.Register(ctx, producerGVR, noopHandler))
+	assert.NotNil(t, dc.watches.GetInformer(producerGVR), "producer informer should be running")
+
+	// Register consumer as a parent.
+	require.NoError(t, dc.Register(ctx, consumerGVR, noopHandler))
+
+	// Simulate consumer's instance reconciler watching producerGVR as an externalRef.
+	// This goes through the coordinator, which acquires with key "coordinator".
+	consumerInstance := types.NamespacedName{Name: "my-consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerGVR, consumerInstance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "producer-ref",
+		GVR:       producerGVR,
+		Name:      "my-producer",
+		Namespace: "default",
+	}))
+	watcher.Done()
+
+	// producerGVR now has two owners: "parent" and "coordinator".
+	assert.NotNil(t, dc.watches.GetInformer(producerGVR), "producer informer should still be running with two owners")
+
+	// Consumer instance is deleted — coordinator releases its reference.
+	dc.coordinator.RemoveInstance(consumerGVR, consumerInstance)
+
+	// The producer's parent informer MUST survive because the "parent" key still owns it.
+	assert.NotNil(t, dc.watches.GetInformer(producerGVR),
+		"producer informer must survive child cleanup — parent key still holds ownership")
+	// 2 active watches: producerGVR (parent) + consumerGVR (parent).
+	assert.Equal(t, 2, dc.watches.ActiveWatchCount(),
+		"expected both parent informers still active")
+}
+
+// TestDeregister_KeepsInformerWhileChildWatchRemains verifies the reverse scenario:
+// when a parent is deregistered but the coordinator still holds a reference to the
+// same GVR (because another RGD's instance watches it as an externalRef), the
+// informer stays alive until the coordinator also releases.
+func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	// Shared GVR: acts as both a parent for producerRGD and an externalRef for consumerRGD.
+	sharedGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "shared"}
+	consumerGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	ctx := t.Context()
+	go func() { _ = dc.Start(ctx) }()
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
+
+	noopHandler := Handler(func(_ context.Context, _ controllerruntime.Request) error { return nil })
+
+	// Register sharedGVR as a parent.
+	require.NoError(t, dc.Register(ctx, sharedGVR, noopHandler))
+
+	// Register consumer and have an instance watch sharedGVR via coordinator.
+	require.NoError(t, dc.Register(ctx, consumerGVR, noopHandler))
+	consumerInstance := types.NamespacedName{Name: "my-consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerGVR, consumerInstance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "shared-ref",
+		GVR:       sharedGVR,
+		Name:      "my-shared",
+		Namespace: "default",
+	}))
+	watcher.Done()
+
+	// Deregister sharedGVR as parent — releases "parent" key.
+	require.NoError(t, dc.Deregister(ctx, sharedGVR))
+
+	// Informer MUST survive because coordinator still holds "coordinator" key.
+	assert.NotNil(t, dc.watches.GetInformer(sharedGVR),
+		"informer must survive parent deregister — coordinator still holds ownership")
+
+	// Now clean up the coordinator reference.
+	dc.coordinator.RemoveInstance(consumerGVR, consumerInstance)
+
+	// Now the informer should stop — no owners remain.
+	assert.Nil(t, dc.watches.GetInformer(sharedGVR),
+		"informer should stop after all owners release")
+}
+
+func TestRegister_AcquireSyncError(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1.AddMetaToScheme(scheme))
 

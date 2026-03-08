@@ -30,9 +30,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// WatchManager manages informer lifecycle per GVR.
-// Informers start lazily on first use and stay alive until Shutdown().
-// This avoids all start/stop races and lock-while-blocking issues.
+// WatchManager manages informer lifecycle per GVR using keyed ownership.
+// Callers Acquire a GVR with a unique key to start (or reuse) an informer
+// and Release it when done. Acquire is idempotent per key — calling it
+// twice with the same key is a no-op. The informer stops when all owners
+// have Released it. Shutdown() force-stops all informers regardless of
+// outstanding owners.
 type WatchManager struct {
 	mu      sync.Mutex
 	watches map[schema.GroupVersionResource]*gvrWatch
@@ -44,7 +47,7 @@ type WatchManager struct {
 	// Set at construction time; never nil.
 	onEvent EventHandler
 
-	// SyncTimeout is the maximum time to wait for cache sync in EnsureWatch.
+	// SyncTimeout is the maximum time to wait for cache sync in Acquire.
 	// Zero means use the default (30s).
 	SyncTimeout time.Duration
 
@@ -54,11 +57,12 @@ type WatchManager struct {
 }
 
 // gvrWatch wraps a single SharedIndexInformer for one GVR.
-// Once started, the informer runs until Shutdown().
+// The informer runs until all owners have Released it or Shutdown() is called.
 type gvrWatch struct {
 	gvr      schema.GroupVersionResource
 	informer cache.SharedIndexInformer
 	stopCh   chan struct{}
+	owners   map[string]struct{} // keyed ownership set
 	log      logr.Logger
 }
 
@@ -76,19 +80,25 @@ func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent Ev
 	return wm
 }
 
-// EnsureWatch idempotently ensures an informer is running for the given GVR.
-// If the informer is already running, this is a no-op. After starting the
-// informer it waits for the initial cache sync with a timeout and returns an
-// error if the sync does not complete.
-func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
+// Acquire adds the given key to the ownership set for the GVR and ensures
+// the informer is running. Acquire is idempotent: calling it again with the
+// same key is a no-op and returns (false, nil). Returns (true, nil) when the
+// key was newly added. The informer stops only when all owners Release it.
+func (m *WatchManager) Acquire(gvr schema.GroupVersionResource, key string) (bool, error) {
 	m.mu.Lock()
 
-	if _, ok := m.watches[gvr]; ok {
+	if w, ok := m.watches[gvr]; ok {
+		if _, held := w.owners[key]; held {
+			m.mu.Unlock()
+			return false, nil
+		}
+		w.owners[key] = struct{}{}
 		m.mu.Unlock()
-		return nil
+		return true, nil
 	}
 
 	w := m.newWatch(gvr)
+	w.owners[key] = struct{}{}
 	m.watches[gvr] = w
 
 	go w.informer.Run(w.stopCh)
@@ -102,28 +112,37 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
 	defer cancel()
 
 	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
-		// Stop and remove the broken watch so a future EnsureWatch can retry
-		// with a fresh informer instead of returning early for a registered
-		// but non-functional watch.
-		m.StopWatch(gvr)
-		return fmt.Errorf("cache sync timeout for %s", gvr)
+		// Remove our key rather than force-removing. A concurrent
+		// Acquire may have added another key while we were waiting for
+		// sync, so force-removing would kill their watch.
+		m.mu.Lock()
+		delete(w.owners, key)
+		if len(w.owners) == 0 {
+			close(w.stopCh)
+			delete(m.watches, gvr)
+		}
+		m.mu.Unlock()
+		return false, fmt.Errorf("cache sync timeout for %s", gvr)
 	}
-	return nil
+	return true, nil
 }
 
-// StopWatch stops the informer for the given GVR and removes it from the
-// watches map. It is non-blocking and idempotent. A subsequent EnsureWatch
-// for the same GVR will create a fresh informer.
-func (m *WatchManager) StopWatch(gvr schema.GroupVersionResource) {
+// Release removes the given key from the ownership set for the GVR.
+// If the key is not present, this is a no-op. When the ownership set
+// becomes empty, the informer is stopped and removed.
+func (m *WatchManager) Release(gvr schema.GroupVersionResource, key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w, ok := m.watches[gvr]
 	if !ok {
 		return
 	}
-	close(w.stopCh)
-	delete(m.watches, gvr)
-	m.log.V(1).Info("Watch stopped", "gvr", gvr)
+	delete(w.owners, key)
+	if len(w.owners) == 0 {
+		close(w.stopCh)
+		delete(m.watches, gvr)
+		m.log.V(1).Info("Watch stopped", "gvr", gvr)
+	}
 }
 
 // GetInformer returns the SharedIndexInformer for the given GVR, or nil
@@ -184,6 +203,7 @@ func (m *WatchManager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
 		gvr:      gvr,
 		informer: inf,
 		stopCh:   make(chan struct{}),
+		owners:   make(map[string]struct{}),
 		log:      m.log.WithValues("gvr", gvr.String()),
 	}
 

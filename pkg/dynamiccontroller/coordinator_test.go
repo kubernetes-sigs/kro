@@ -299,9 +299,10 @@ func TestStopOrphanedWatch_RemoveInstance(t *testing.T) {
 	coord.RemoveInstance(testParentGVR, instance)
 	assert.Equal(t, 0, coord.watches.ActiveWatchCount(), "expected 0 active watches after removing last requestor")
 
-	// EnsureWatch can re-create it.
-	assert.NoError(t, coord.watches.EnsureWatch(testDeployGVR))
-	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after EnsureWatch")
+	// Acquire can re-create it.
+	_, err := coord.watches.Acquire(testDeployGVR, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after Acquire")
 }
 
 func TestStopOrphanedWatch_DoneCleanup(t *testing.T) {
@@ -692,7 +693,7 @@ func TestDoneInstance_NoState(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 }
 
-func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
+func TestAddWatch_AcquireSyncError(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true))
 
 	scheme := runtime.NewScheme()
@@ -712,14 +713,14 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// EnsureWatch will fail sync but addWatch logs and returns nil.
+	// Acquire will fail sync but addWatch logs and returns nil.
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deploy",
 		GVR:       testDeployGVR,
 		Name:      "d1",
 		Namespace: "default",
 	})
-	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
+	assert.NoError(t, err) // addWatch does not propagate Acquire errors
 
 	wm.Shutdown()
 }
@@ -738,6 +739,59 @@ func TestRemoveInstance_ScalarIndexCleanup(t *testing.T) {
 	scalar, collection := coord.WatchRequestCount()
 	assert.Equal(t, 0, scalar)
 	assert.Equal(t, 0, collection)
+}
+
+func TestConcurrentAddWatch_SameGVR(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+
+	recorder := &enqueueRecorder{}
+	var coord *WatchCoordinator
+	wm := NewWatchManager(client, 1*time.Hour, func(event Event) {
+		if coord != nil {
+			coord.RouteEvent(event)
+		}
+	}, log)
+
+	coord = NewWatchCoordinator(wm, recorder.enqueue, log)
+
+	// Launch N goroutines that each add a watch for the same GVR via
+	// different instances. Acquire is idempotent per key, so even though
+	// multiple goroutines call Acquire concurrently, the coordinator
+	// holds exactly one ownership entry per GVR.
+	const n = 10
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			inst := types.NamespacedName{
+				Name:      fmt.Sprintf("app-%d", idx),
+				Namespace: "default",
+			}
+			w := coord.ForInstance(testParentGVR, inst)
+			_ = w.Watch(WatchRequest{
+				NodeID:    "deployment",
+				GVR:       testDeployGVR,
+				Name:      fmt.Sprintf("d-%d", idx),
+				Namespace: "default",
+			})
+			w.Done()
+		}(i)
+	}
+	wg.Wait()
+
+	// Should have exactly 1 active watch (shared GVR).
+	assert.Equal(t, 1, wm.ActiveWatchCount(),
+		"expected exactly 1 active watch for the shared GVR")
+
+	// Remove all instances — watch should stop cleanly with no leaked refs.
+	coord.RemoveParentGVR(testParentGVR)
+	assert.Equal(t, 0, wm.ActiveWatchCount(),
+		"expected 0 active watches after removing all instances (no ref leak)")
 }
 
 func TestRemoveParentGVR_NonExistent(t *testing.T) {

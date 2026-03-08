@@ -212,7 +212,7 @@ func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
 		Name:      "target",
 		Namespace: "default",
 	}))
-	watcher.Done()
+	watcher.Done(true)
 
 	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
 	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child cleanup must not stop a registered parent informer")
@@ -246,7 +246,7 @@ func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
 		Name:      "target",
 		Namespace: "default",
 	}))
-	watcher.Done()
+	watcher.Done(true)
 
 	require.NoError(t, dc.Deregister(ctx, parentGVR))
 	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child watch should keep informer alive after parent deregister")

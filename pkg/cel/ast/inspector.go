@@ -106,20 +106,11 @@ type Inspector struct {
 	loopVars map[string]struct{}
 }
 
-// knownFunctions contains the list of all CEL functions that are supported
-//
-// we need a better way to manage this list going forward... perhaps a Check
-// call is better suited than maintaining a hardcoded list.
-var knownFunctions = []string{
-	"random.seededString",
-	"json.unmarshal",
-	"json.marshal",
-	"base64.decode",
-	"base64.encode",
-	"lists.range",
-}
-
 // NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.
+//
+// The set of known functions is derived automatically from the environment,
+// so adding new CEL libraries or functions does not require updating a
+// hardcoded list.
 func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	resourceMap := map[string]struct{}{}
 	for _, r := range resources {
@@ -127,8 +118,10 @@ func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	}
 
 	functionMap := map[string]struct{}{}
-	for _, fn := range knownFunctions {
-		functionMap[fn] = struct{}{}
+	if env != nil {
+		for fnName := range env.Functions() {
+			functionMap[fnName] = struct{}{}
+		}
 	}
 
 	return &Inspector{

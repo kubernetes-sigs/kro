@@ -352,6 +352,14 @@ func (c *WatchCoordinator) WatchRequestCount() (scalar, collection int) {
 	return
 }
 
+// HasRequestsForGVR reports whether any child or external watch requests still
+// exist for the given GVR.
+func (c *WatchCoordinator) HasRequestsForGVR(gvr schema.GroupVersionResource) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.scalarIndex[gvr]) > 0 || len(c.collectionIndex[gvr]) > 0
+}
+
 // --- internal helpers ---
 
 func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchRequest) {

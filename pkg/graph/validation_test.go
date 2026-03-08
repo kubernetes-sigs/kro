@@ -20,6 +20,9 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -716,6 +719,139 @@ func TestValidateNoKROOwnedLabels(t *testing.T) {
 					t.Errorf("validateNoKROOwnedLabels() error = %v, should contain %q", err, tt.errorMsg)
 				}
 			}
+		})
+	}
+}
+
+func TestValidateCombinableResourceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		res     *v1alpha1.Resource
+		wantErr string
+	}{
+		{
+			name:    "missing both template and external ref",
+			res:     &v1alpha1.Resource{ID: "res"},
+			wantErr: "exactly one of template or externalRef must be provided",
+		},
+		{
+			name: "template and external ref together",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				Template:    runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+			wantErr: "cannot use externalRef with template",
+		},
+		{
+			name: "external ref and foreach together",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+				ForEach:     []v1alpha1.ForEachDimension{{"item": "${schema.spec.items}"}},
+			},
+			wantErr: "cannot use externalRef with forEach",
+		},
+		{
+			name: "template only is valid",
+			res: &v1alpha1.Resource{
+				ID:       "res",
+				Template: runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+			},
+		},
+		{
+			name: "external ref only is valid",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCombinableResourceFields(tt.res)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateTemplateConstraints(t *testing.T) {
+	tests := []struct {
+		name       string
+		resource   *v1alpha1.Resource
+		object     map[string]interface{}
+		namespaced bool
+		wantErr    string
+	}{
+		{
+			name: "invalid metadata namespace shape",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": "not-a-map",
+			},
+			wantErr: "invalid metadata.namespace",
+		},
+		{
+			name: "cluster scoped resource must not set namespace",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+				},
+			},
+			wantErr: "cluster-scoped and must not set metadata.namespace",
+		},
+		{
+			name: "reserved kro label bubbles up",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"labels": map[string]interface{}{
+						"kro.run/owned": "true",
+					},
+				},
+			},
+			namespaced: true,
+			wantErr:    "reserved for internal use",
+		},
+		{
+			name: "valid namespaced object",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+					"labels": map[string]interface{}{
+						"app": "demo",
+					},
+				},
+			},
+			namespaced: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }

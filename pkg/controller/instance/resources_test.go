@@ -296,7 +296,7 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	currentCollection := newConfigMapObject("one", "default")
 	currentCollection.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "configs",
+		metadata.NodeIDLabel:     metadata.SafeNodeID("configs"),
 	})
 	currentExternal := newConfigMapObject("ext", "default")
 	currentExternal.SetLabels(map[string]string{"app": "demo"})
@@ -367,7 +367,7 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	current := newConfigMapObject("one", "default")
 	current.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "configs",
+		metadata.NodeIDLabel:     metadata.SafeNodeID("configs"),
 		"app":                    "demo",
 	})
 	matchingExternal := newConfigMapObject("ext", "default")
@@ -574,10 +574,11 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
-	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
+	assert.Equal(t, metadata.SafeNodeID("configs"), obj.GetLabels()[metadata.NodeIDLabel])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
 	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
+	assert.Equal(t, "configs", obj.GetAnnotations()[metadata.NodeAnnotation])
 
 	require.NoError(t, controller.patchInstanceWithApplySetMetadata(rcx, applyset.Metadata{
 		ID:                   "demo",

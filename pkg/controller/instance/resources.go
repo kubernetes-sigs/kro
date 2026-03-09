@@ -457,7 +457,7 @@ func (c *Controller) applyDecoratorLabels(
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	annotations[metadata.NodeIDAnnotation] = nodeID
+	annotations[metadata.NodeAnnotation] = nodeID
 	obj.SetAnnotations(annotations)
 }
 

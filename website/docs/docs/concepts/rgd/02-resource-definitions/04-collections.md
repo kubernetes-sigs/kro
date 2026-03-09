@@ -787,20 +787,20 @@ used for querying or debugging:
 
 | Annotation | Description | Example |
 |------------|-------------|---------|
-| `kro.run/node-id-original` | The original human-readable resource ID from the RGD | `workerPods` |
+| `kro.run/node` | The human-readable resource ID from the RGD | `workerPods` |
 
 The `kro.run/node-id` label stores a deterministic hash rather than the raw
 resource ID because Kubernetes limits label values to 63 characters. The
-original ID is preserved in the `kro.run/node-id-original` annotation for
+original ID is preserved in the `kro.run/node` annotation for
 traceability.
 
 These labels and annotations enable:
 - **Querying**: Find all items in a collection by label selector:
   `kubectl get pods -l kro.run/node-id=39edeed848ad0ddc`
-- **Finding by resource ID**: Since `kro.run/node-id-original` is an annotation (not a label), use jsonpath to filter by the human-readable ID:
-  `kubectl get pods -o jsonpath='{.items[?(@.metadata.annotations.kro\.run/node-id-original=="workerPods")].metadata.name}'`
+- **Finding by resource ID**: Since `kro.run/node` is an annotation (not a label), use jsonpath to filter by the human-readable ID:
+  `kubectl get pods -o jsonpath='{.items[?(@.metadata.annotations.kro\.run/node=="workerPods")].metadata.name}'`
 - **Ordering**: Understand item position via `collection-index`
-- **Debugging**: The `kro.run/node-id-original` annotation provides the human-readable resource ID for tracing resources back to their source RGD
+- **Debugging**: The `kro.run/node` annotation provides the human-readable resource ID for tracing resources back to their source RGD
 
 :::note
 The combination of `instance-id` + `node-id` + `collection-index` uniquely

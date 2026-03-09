@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -235,6 +236,25 @@ var _ = Describe("ExternalRef", func() {
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+		By("patching the external deployment and ensuring the managed deployment reacts via watch")
+		Expect(env.Client.Get(ctx, types.NamespacedName{
+			Name:      deployment1.Name,
+			Namespace: deployment1.Namespace,
+		}, deployment1)).To(Succeed())
+		originalExternalDeployment := deployment1.DeepCopy()
+		deployment1.Spec.Replicas = ptr.To[int32](4)
+		Expect(env.Client.Patch(ctx, deployment1, client.MergeFrom(originalExternalDeployment))).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			deployment := &appsv1.Deployment{}
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "foo-instance",
+				Namespace: namespace,
+			}, deployment)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(4)))
+		}, 3*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
+
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 		Expect(env.Client.Delete(ctx, deployment1)).To(Succeed())
@@ -259,7 +279,8 @@ var _ = Describe("ExternalRef", func() {
 
 		testCRD := &apiextensionsv1.CustomResourceDefinition{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: crdName,
+				Name:        crdName,
+				Annotations: map[string]string{"phase": "pending"},
 			},
 			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
 				Group: "kro.run",
@@ -295,7 +316,9 @@ var _ = Describe("ExternalRef", func() {
 				map[string]interface{}{
 					"crdName": "string",
 				},
-				nil,
+				map[string]interface{}{
+					"observedPhase": "${crd.metadata.annotations[\"phase\"]}",
+				},
 			),
 			generator.WithExternalRef("crd", &krov1alpha1.ExternalRef{
 				APIVersion: "apiextensions.k8s.io/v1",
@@ -350,7 +373,31 @@ var _ = Describe("ExternalRef", func() {
 			}, instance)
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			observedPhase, found, err := unstructured.NestedString(instance.Object, "status", "observedPhase")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(observedPhase).To(Equal("pending"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("patching the referenced CRD annotation and ensuring instance status reacts via watch")
+		Expect(env.Client.Get(ctx, types.NamespacedName{Name: crdName}, testCRD)).To(Succeed())
+		originalCRD := testCRD.DeepCopy()
+		testCRD.Annotations["phase"] = "ready"
+		Expect(env.Client.Patch(ctx, testCRD, client.MergeFrom(originalCRD))).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: instance.GetNamespace(),
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			observedPhase, found, err := unstructured.NestedString(instance.Object, "status", "observedPhase")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(observedPhase).To(Equal("ready"))
+		}, 3*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
@@ -397,6 +444,9 @@ var _ = Describe("ExternalRef", func() {
 				map[string]interface{}{},
 				map[string]interface{}{
 					"configCount": "${string(size(allconfigs))}",
+					"teamValues": "${allconfigs.filter(" +
+						"c, c.metadata.name == 'config-alpha' || c.metadata.name == 'config-beta'" +
+						").sortBy(c, c.metadata.name).map(c, c.data.key).join(\",\")}",
 				},
 			),
 			generator.WithExternalRef("allconfigs", &krov1alpha1.ExternalRef{
@@ -452,7 +502,34 @@ var _ = Describe("ExternalRef", func() {
 			_, err = fmt.Sscanf(configCount, "%d", &count)
 			g.Expect(err).To(Succeed())
 			g.Expect(count).To(BeNumerically(">=", 2))
+
+			teamValues, found, err := unstructured.NestedString(instance.Object, "status", "teamValues")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(teamValues).To(Equal("value1,value2"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("patching a matched ConfigMap and ensuring the collection status reacts via watch")
+		Expect(env.Client.Get(ctx, types.NamespacedName{
+			Name:      cm2.Name,
+			Namespace: cm2.Namespace,
+		}, cm2)).To(Succeed())
+		originalCM := cm2.DeepCopy()
+		cm2.Data["key"] = "value2-updated"
+		Expect(env.Client.Patch(ctx, cm2, client.MergeFrom(originalCM))).To(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+
+			teamValues, found, err := unstructured.NestedString(instance.Object, "status", "teamValues")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(teamValues).To(Equal("value1,value2-updated"))
+		}, 3*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())

@@ -1565,9 +1565,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
 						path:                 "metadata.name",
-						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
+						expressions:          []string{"vpc.metadata.name + \"cluster\" + schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						standaloneExpression: true,
 					},
 					{
 						path:                 "spec.resourcesVPCConfig.subnetIDs[0]",
@@ -1596,21 +1596,21 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:                 "metadata.labels.combined",
-						expressions:          []string{"cluster.metadata.name", "schema.spec.environment"},
+						expressions:          []string{"cluster.metadata.name + \"-\" + schema.spec.environment"},
 						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						standaloneExpression: true,
 					},
 					{
 						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"schema.spec.environment", "schema.spec.region"},
+						expressions:          []string{"schema.spec.environment + \"-\" + schema.spec.region"},
 						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: false,
+						standaloneExpression: true,
 					},
 					{
 						path:                 "metadata.labels[\"two.dynamics\"]",
-						expressions:          []string{"vpc.metadata.name", "cluster.status.ackResourceMetadata.arn"},
+						expressions:          []string{"vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn"},
 						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						standaloneExpression: true,
 					},
 					{
 						path:                 "spec.containers[0].env[0].value",
@@ -3773,8 +3773,12 @@ func TestBuildStatusSchema(t *testing.T) {
 		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
 		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
 		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
-		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "type mismatch in resource"},
-		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true, wantInterpolated: true},
+		// TODO: Improve error messages for compiled string templates. Currently when CEL
+		// type-checking fails, users see the compiled form (e.g. "prefix-" + expr) instead
+		// of their original template (e.g. "prefix-${expr}"). Add OriginalTemplate field
+		// to FieldDescriptor and use it in builder error paths.
+		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "found no matching overload for '_+_' applied to '(string, int)'"},
+		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
 	}
 
 	for _, tt := range tests {

@@ -491,27 +491,6 @@ func TestResolveField(t *testing.T) {
 			},
 		},
 		{
-			name: "multiple expressions in string",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": "prefix-${value1}-${value2}-suffix",
-				},
-			},
-			data: map[string]interface{}{
-				"value1": "one",
-				"value2": "two",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value1", "value2"),
-			},
-			want: ResolutionResult{
-				Path:     "spec.field",
-				Resolved: true,
-				Replaced: "prefix-one-two-suffix",
-			},
-		},
-		{
 			name: "array path with standalone expression",
 			resource: map[string]interface{}{
 				"spec": map[string]interface{}{
@@ -571,25 +550,6 @@ func TestResolveField(t *testing.T) {
 			},
 		},
 		{
-			name: "error - non-string value for template",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": 123,
-				},
-			},
-			data: map[string]interface{}{
-				"value": "resolved",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value"),
-			},
-			want: ResolutionResult{
-				Path:  "spec.field",
-				Error: fmt.Errorf("expected string value for path spec.field"),
-			},
-		},
-		{
 			name: "deeply nested array path",
 			resource: map[string]interface{}{
 				"spec": map[string]interface{}{
@@ -617,55 +577,6 @@ func TestResolveField(t *testing.T) {
 			},
 		},
 		{
-			name: "multiple expressions with different types",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": "Count: ${count}, Name: ${name}, Active: ${active}",
-				},
-			},
-			data: map[string]interface{}{
-				"count":  42,
-				"name":   "test",
-				"active": true,
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("count", "name", "active"),
-			},
-			want: ResolutionResult{
-				Path:     "spec.field",
-				Resolved: true,
-				Replaced: "Count: 42, Name: test, Active: true",
-			},
-		},
-		{
-			name: "nested array with multiple expressions",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{},
-						nil,
-						map[string]interface{}{
-							"image": "${image.name}:${image.tag}",
-						},
-					},
-				},
-			},
-			data: map[string]interface{}{
-				"image.name": "nginx",
-				"image.tag":  "latest",
-			},
-			field: variable.FieldDescriptor{
-				Path:        `spec.containers[2].image`,
-				Expressions: krocel.NewUncompiledSlice("image.name", "image.tag"),
-			},
-			want: ResolutionResult{
-				Path:     "spec.containers[2].image",
-				Resolved: true,
-				Replaced: "nginx:latest",
-			},
-		},
-		{
 			name: "error - leading dot in path fails consistently",
 			resource: map[string]interface{}{
 				"field": "${value}",
@@ -682,27 +593,6 @@ func TestResolveField(t *testing.T) {
 				Path:     ".field",
 				Resolved: false,
 				Error:    fmt.Errorf("error getting value: invalid path '.field': empty field name at position 0"),
-			},
-		},
-		{
-			name: "error - missing data for one expression in template",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": "prefix-${value1}-${value2}-suffix",
-				},
-			},
-			data: map[string]interface{}{
-				"value1": "one",
-				// value2 is missing
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value1", "value2"),
-			},
-			want: ResolutionResult{
-				Path:     "spec.field",
-				Resolved: false,
-				Error:    fmt.Errorf("no data provided for expression: value2"),
 			},
 		},
 	}
@@ -776,14 +666,14 @@ func TestResolver(t *testing.T) {
 				},
 			},
 			map[string]interface{}{
-				"value":  "resolved",
-				"suffix": "done",
+				"\"resolved-\" + \"done\"": "resolved-done",
 			},
 		)
 		summary := r.Resolve([]variable.FieldDescriptor{
 			{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value", "suffix"),
+				Path:                 "spec.field",
+				Expressions:          krocel.NewUncompiledSlice("\"resolved-\" + \"done\""),
+				StandaloneExpression: true,
 			},
 		})
 		assert.Equal(t, 1, summary.TotalExpressions)
@@ -934,26 +824,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				Path:     "data.field",
 				Resolved: true,
 				Replaced: map[string]interface{}{},
-			},
-		},
-		{
-			name: "string template with expression ending in braces",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"value": "prefix-${expr ? value : {}}-suffix",
-				},
-			},
-			data: map[string]interface{}{
-				"expr ? value : {}": "resolved",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.value",
-				Expressions: krocel.NewUncompiledSlice("expr ? value : {}"),
-			},
-			want: ResolutionResult{
-				Path:     "spec.value",
-				Resolved: true,
-				Replaced: "prefix-resolved-suffix",
 			},
 		},
 	}

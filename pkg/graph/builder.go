@@ -775,31 +775,14 @@ func buildStatusSchema(
 	// Infer types for each status field expression using CEL type checking
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
-		if fieldDescriptor.StandaloneExpression {
-			// Single standalone expression - use its output type
-			expression := fieldDescriptor.Expressions[0]
+		expression := fieldDescriptor.Expressions[0]
 
-			checkedAST, err := parseCheckAndCompile(env, expression)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-			}
-
-			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
-		} else {
-			// String interpolation - validate all expressions and result is string
-			for _, expression := range fieldDescriptor.Expressions {
-				checkedAST, err := parseCheckAndCompile(env, expression)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-				}
-
-				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, cel.StringType, expression.Original, "status", fieldDescriptor.Path, typeProvider); err != nil {
-					return nil, nil, nil, err
-				}
-			}
-			statusTypeMap[fieldDescriptor.Path] = cel.StringType
+		checkedAST, err := parseCheckAndCompile(env, expression)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
 		}
+
+		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
 	}
 
 	// convert the CEL types to OpenAPI schema - best effort.
@@ -961,14 +944,9 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 	return currentSchema, typeName, nil
 }
 
-// getExpectedTypeForField computes the expected CEL type for a field descriptor.
-// For standalone expressions, the type is derived from the OpenAPI schema at the path.
-// For string templates, the expected type is always string.
+// getExpectedTypeForField computes the expected CEL type for a field descriptor
+// by deriving it from the OpenAPI schema at the path.
 func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
-	if !descriptor.StandaloneExpression {
-		return cel.StringType
-	}
-
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType

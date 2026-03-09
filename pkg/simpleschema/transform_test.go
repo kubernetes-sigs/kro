@@ -26,11 +26,12 @@ import (
 
 func TestBuildOpenAPISchema(t *testing.T) {
 	tests := []struct {
-		name    string
-		obj     map[string]interface{}
-		types   map[string]interface{}
-		want    *extv1.JSONSchemaProps
-		wantErr bool
+		name          string
+		obj           map[string]interface{}
+		types         map[string]interface{}
+		want          *extv1.JSONSchemaProps
+		requiredTypes map[string]bool
+		wantErr       bool
 	}{
 		{
 			name: "Complex nested schema",
@@ -124,6 +125,28 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						},
 					},
 				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Required custom type marks field as required",
+			obj: map[string]interface{}{
+				"value": "RequiredString",
+			},
+			types: map[string]interface{}{
+				"RequiredString": "string | required=true",
+				"OptionalString": "string",
+			},
+			want: &extv1.JSONSchemaProps{
+				Type:     "object",
+				Required: []string{"value"},
+				Properties: map[string]extv1.JSONSchemaProps{
+					"value": {Type: "string"},
+				},
+			},
+			requiredTypes: map[string]bool{
+				"RequiredString": true,
+				"OptionalString": false,
 			},
 			wantErr: false,
 		},
@@ -1069,11 +1092,22 @@ func TestBuildOpenAPISchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ToOpenAPISpec(tt.obj, tt.types)
+			got, _, err := ToOpenAPISpec(tt.obj, tt.types)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("BuildOpenAPISchema() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
+			if tt.requiredTypes != nil {
+				transformer, err := newTransformer(tt.types)
+				if err != nil {
+					t.Fatalf("newTransformer() error = %v", err)
+				}
+				for typeName, wantRequired := range tt.requiredTypes {
+					assert.Equal(t, wantRequired, transformer.IsRequired(typeName))
+				}
+			}
+
 			assert.Equal(t, got, tt.want)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("BuildOpenAPISchema() = %+v, want %+v", got, tt.want)
@@ -1284,7 +1318,7 @@ func TestDefaultPropagation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ToOpenAPISpec(tt.obj, tt.types)
+			got, _, err := ToOpenAPISpec(tt.obj, tt.types)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ToOpenAPISpec() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1292,6 +1326,280 @@ func TestDefaultPropagation(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ToOpenAPISpec() mismatch:\ngot:  %+v\nwant: %+v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestToOpenAPISpecPrinterColumns(t *testing.T) {
+	tests := []struct {
+		name        string
+		obj         map[string]interface{}
+		types       map[string]interface{}
+		wantColumns []PrinterColumn
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "scalar spec fields generate printer columns",
+			obj: map[string]interface{}{
+				"image": `string | kubectlPrint="IMAGE"`,
+				"port":  `float | kubectlPrint="PORT"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "string",
+					Path:       []string{"image"},
+					Title:      "IMAGE",
+				},
+				{
+					TargetType: "float",
+					Path:       []string{"port"},
+					Title:      "PORT",
+				},
+			},
+		},
+		{
+			name: "scalar spec fields can override printer column titles",
+			obj: map[string]interface{}{
+				"image": `string | kubectlPrint="CONTAINERIMAGE"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "string",
+					Path:       []string{"image"},
+					Title:      "CONTAINERIMAGE",
+				},
+			},
+		},
+		{
+			name: "empty kubectlPrint title returns error",
+			obj: map[string]interface{}{
+				"image": `string | kubectlPrint=""`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicate kubectlPrint markers are rejected",
+			obj: map[string]interface{}{
+				"image": `string | kubectlPrint="IMAGE" kubectlPrint="IMG"`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "nested object fields generate nested json paths",
+			obj: map[string]interface{}{
+				"ingress": map[string]interface{}{
+					"className": `string | kubectlPrint="CLASSNAME"`,
+					"enabled":   `boolean | kubectlPrint="ENABLED"`,
+				},
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "string",
+					Path:       []string{"ingress", "className"},
+					Title:      "CLASSNAME",
+				},
+				{
+					TargetType: "boolean",
+					Path:       []string{"ingress", "enabled"},
+					Title:      "ENABLED",
+				},
+			},
+		},
+		{
+			name: "custom type printer columns expand without a reference marker",
+			obj: map[string]interface{}{
+				"ingress": "Ingress",
+				"port":    "Port",
+			},
+			types: map[string]interface{}{
+				"Ingress": map[string]interface{}{
+					"enabled": `boolean | kubectlPrint="ENABLED"`,
+				},
+				"Port": `integer | kubectlPrint="PORT"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "boolean",
+					Path:       []string{"ingress", "enabled"},
+					Title:      "ENABLED",
+				},
+				{
+					TargetType: "integer",
+					Path:       []string{"port"},
+					Title:      "PORT",
+				},
+			},
+		},
+		{
+			name: "custom type printer columns allow single-column title override at the reference field",
+			obj: map[string]interface{}{
+				"ingress": `Ingress | kubectlPrint="INGRESS"`,
+				"port":    `Port | kubectlPrint="PORT"`,
+			},
+			types: map[string]interface{}{
+				"Ingress": map[string]interface{}{
+					"enabled": `boolean | kubectlPrint="ENABLED"`,
+				},
+				"Port": `integer | kubectlPrint="VALUE"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "boolean",
+					Path:       []string{"ingress", "enabled"},
+					Title:      "INGRESS",
+				},
+				{
+					TargetType: "integer",
+					Path:       []string{"port"},
+					Title:      "PORT",
+				},
+			},
+		},
+		{
+			name: "custom type printer columns can be overridden when exactly one column is generated",
+			obj: map[string]interface{}{
+				"release": `ReleaseChannel | kubectlPrint="RELEASE"`,
+			},
+			types: map[string]interface{}{
+				"ReleaseChannel": `string | kubectlPrint="CHANNEL"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "string",
+					Path:       []string{"release"},
+					Title:      "RELEASE",
+				},
+			},
+		},
+		{
+			name: "kubectlPrint on multi-column custom type is rejected",
+			obj: map[string]interface{}{
+				"ingress": `Ingress | kubectlPrint="INGRESS"`,
+			},
+			types: map[string]interface{}{
+				"Ingress": map[string]interface{}{
+					"className": `string | kubectlPrint="CLASSNAME"`,
+					"enabled":   `boolean | kubectlPrint="ENABLED"`,
+				},
+			},
+			wantErr:     true,
+			errContains: `field ingress: kubectlPrint on field "ingress" references custom type with 2 printer columns`,
+		},
+		{
+			name: "array of printer-marked custom type is rejected",
+			obj: map[string]interface{}{
+				"ports": "[]Port",
+			},
+			types: map[string]interface{}{
+				"Port": `integer | kubectlPrint="PORT"`,
+			},
+			wantErr:     true,
+			errContains: `field ports: kubectlPrint markers inside array types are not supported`,
+		},
+		{
+			name: "map of printer-marked custom type is rejected",
+			obj: map[string]interface{}{
+				"ingresses": "map[string]Ingress",
+			},
+			types: map[string]interface{}{
+				"Ingress": map[string]interface{}{
+					"enabled": `boolean | kubectlPrint="ENABLED"`,
+				},
+			},
+			wantErr:     true,
+			errContains: `field ingresses: kubectlPrint markers inside map types are not supported`,
+		},
+		{
+			name: "alias wrapping collection of printer-marked custom type is rejected",
+			obj: map[string]interface{}{
+				"ports": "PortList",
+			},
+			types: map[string]interface{}{
+				"Port":     `integer | kubectlPrint="PORT"`,
+				"PortList": `[]Port`,
+			},
+			wantErr:     true,
+			errContains: `building schema for PortList: kubectlPrint markers inside array types are not supported`,
+		},
+		{
+			name: "deeply nested custom type printer columns keep distinct paths",
+			obj: map[string]interface{}{
+				"platform": map[string]interface{}{
+					"networking": map[string]interface{}{
+						"ingress": "Ingress",
+					},
+				},
+			},
+			types: map[string]interface{}{
+				"Ingress": map[string]interface{}{
+					"className": `string | kubectlPrint="CLASSNAME"`,
+					"enabled":   `boolean | kubectlPrint="ENABLED"`,
+				},
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "string",
+					Path:       []string{"platform", "networking", "ingress", "className"},
+					Title:      "CLASSNAME",
+				},
+				{
+					TargetType: "boolean",
+					Path:       []string{"platform", "networking", "ingress", "enabled"},
+					Title:      "ENABLED",
+				},
+			},
+		},
+		{
+			name: "non scalar field keeps printer intent",
+			obj: map[string]interface{}{
+				"config": `object | kubectlPrint="CONFIG"`,
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "object",
+					Path:       []string{"config"},
+					Title:      "CONFIG",
+				},
+			},
+		},
+		{
+			name: "custom object field keeps printer intent",
+			obj: map[string]interface{}{
+				"config": `Config | kubectlPrint="CONFIG"`,
+			},
+			types: map[string]interface{}{
+				"Config": map[string]interface{}{
+					"name": "string",
+				},
+			},
+			wantColumns: []PrinterColumn{
+				{
+					TargetType: "object",
+					Path:       []string{"config"},
+					Title:      "CONFIG",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema, gotColumns, err := ToOpenAPISpec(tt.obj, tt.types)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ToOpenAPISpec() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			if schema == nil {
+				t.Fatal("ToOpenAPISpec() returned nil schema")
+			}
+			assert.Equal(t, tt.wantColumns, gotColumns)
 		})
 	}
 }
@@ -1487,7 +1795,7 @@ func TestComplexSchemaE2E(t *testing.T) {
 		},
 	}
 
-	got, err := ToOpenAPISpec(obj, types)
+	got, _, err := ToOpenAPISpec(obj, types)
 	if err != nil {
 		t.Fatalf("ToOpenAPISpec() error = %v", err)
 	}

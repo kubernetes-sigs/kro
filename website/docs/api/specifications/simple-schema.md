@@ -234,6 +234,7 @@ Fields can have multiple markers for validation and documentation:
 name: string | required=true default="app" description="Application name"
 replicas: integer | default=3 minimum=1 maximum=10
 mode: string | enum="debug,info,warn,error" default="info"
+image: string | kubectlPrint="IMAGE"
 ```
 
 ### Supported Markers
@@ -251,8 +252,11 @@ mode: string | enum="debug,info,warn,error" default="info"
 - `uniqueItems=true`: Ensures array elements are unique
 - `minItems=number`: Minimum number of items in arrays
 - `maxItems=number`: Maximum number of items in arrays
+- `kubectlPrint="Title"`: Adds a printer column and uses `Title` as the column header
 
 Multiple markers can be combined using the `|` separator.
+
+`kubectlPrint` only supports fields whose generated JSONPath uses identifier-safe segments.
 
 ### String Validation Markers
 
@@ -437,19 +441,45 @@ override them with its own values.
 
 ## Additional Printer Columns
 
-You can define `additionalPrinterColumns` for the created CRD through the ResourceGraphDefinition by setting them on `spec.schema.additionalPrinterColumns`.
+Fields in `schema.spec` can opt into generated CRD printer columns directly:
 
 ```kro
 schema:
   spec:
-    image: string | default="nginx"
+    image: string | default="nginx" kubectlPrint="CONTAINERIMAGE"
+    ingress:
+      enabled: boolean | default=false kubectlPrint="ENABLED"
+```
+
+This generates printer columns with inferred names, types, and JSONPaths such as
+`.spec.image` and `.spec.ingress.enabled`.
+
+For custom types, any scalar subfields inside that type that are marked with
+`kubectlPrint` expand under every reference path where that type is used.
+
+```kro
+schema:
+  spec:
+    ingress: IngressSettings
+  types:
+    IngressSettings:
+      className: string | kubectlPrint="CLASSNAME"
+      enabled: boolean | kubectlPrint="ENABLED"
+```
+
+This generates columns like `CLASSNAME` and `ENABLED`.
+
+For status fields or any case that needs an explicit JSONPath, you can still define
+`additionalPrinterColumns` on `spec.schema.additionalPrinterColumns`.
+
+```kro
+schema:
+  spec:
+    image: string | default="nginx" kubectlPrint="IMAGE"
   status:
     availableReplicas: ${deployment.status.availableReplicas}
   additionalPrinterColumns:
     - jsonPath: .status.availableReplicas
       name: Available replicas
       type: integer
-    - jsonPath: .spec.image
-      name: Image
-      type: string
 ```

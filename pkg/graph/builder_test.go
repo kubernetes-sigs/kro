@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
@@ -28,11 +29,116 @@ import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
 var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
+
+func TestBuildInstanceSpecPrinterColumns(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       []simpleschema.PrinterColumn
+		want        []extv1.CustomResourceColumnDefinition
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "scalar columns are converted to CRD printer columns",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image"},
+					TargetType: "string",
+					Title:      "IMAGE",
+				},
+				{
+					Path:       []string{"port"},
+					TargetType: "float",
+					Title:      "PORT",
+				},
+			},
+			want: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "IMAGE",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+				{
+					Name:     "PORT",
+					Type:     "number",
+					JSONPath: ".spec.port",
+				},
+			},
+		},
+		{
+			name: "explicit titles are preserved",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image"},
+					TargetType: "string",
+					Title:      "CONTAINERIMAGE",
+				},
+			},
+			want: []extv1.CustomResourceColumnDefinition{
+				{
+					Name:     "CONTAINERIMAGE",
+					Type:     "string",
+					JSONPath: ".spec.image",
+				},
+			},
+		},
+		{
+			name: "empty title is rejected by builder",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"className"},
+					TargetType: "string",
+					Title:      "",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "className": kubectlPrint requires a non-empty title`,
+		},
+		{
+			name: "non scalar columns are rejected by builder",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"config"},
+					TargetType: "object",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "config": kubectlPrint marker only supports scalar fields`,
+		},
+		{
+			name: "non identifier path segments are rejected",
+			input: []simpleschema.PrinterColumn{
+				{
+					Path:       []string{"image-tag"},
+					TargetType: "string",
+					Title:      "IMAGE",
+				},
+			},
+			wantErr:     true,
+			errContains: `spec field "image-tag": kubectlPrint only supports identifier-safe field names`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildInstanceSpecPrinterColumns(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 	tests := []struct {

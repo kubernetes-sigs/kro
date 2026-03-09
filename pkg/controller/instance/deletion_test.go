@@ -115,7 +115,7 @@ func TestPlanNodesForDeletionSkipsIgnoredExternalAndMissingNodes(t *testing.T) {
 	currentCollection := newConfigMapObject("one", "default")
 	currentCollection.SetLabels(map[string]string{
 		metadata.InstanceIDLabel: string(instance.GetUID()),
-		metadata.NodeIDLabel:     "configs",
+		metadata.NodeIDLabel:     metadata.SafeNodeID("configs"),
 	})
 
 	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(ignoredNode, externalNode, collectionNode, missingNode), currentCollection)

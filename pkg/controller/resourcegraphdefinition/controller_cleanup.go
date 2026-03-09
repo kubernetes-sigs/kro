@@ -34,6 +34,9 @@ import (
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
+	// Evict cached build artifacts for this RGD.
+	r.getBuildCache().Delete(rgd.Name)
+
 	// shutdown microcontroller
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {

@@ -24,7 +24,6 @@ import (
 	"github.com/google/cel-go/ext"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	k8scellib "k8s.io/apiserver/pkg/cel/library"
-	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
@@ -144,8 +143,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 
 // defaultEnvironment is the shared implementation that builds the CEL environment
 // and returns both the environment and the DeclTypeProvider (if typed resources
-// were configured).
+// were configured). Uses a throwaway cache for SchemaDeclType/MaybeAssignTypeName.
 func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
+	return defaultEnvironmentWithCache(NewCompilationCache(), options...)
+}
+
+// defaultEnvironmentWithCache builds a CEL environment using the given cache
+// for SchemaDeclType and MaybeAssignTypeName lookups.
+func defaultEnvironmentWithCache(cache CompilationCache, options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
 	base, err := baseEnv()
 	if err != nil {
 		return nil, nil, fmt.Errorf("base environment: %w", err)
@@ -171,10 +176,10 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
 
 		for name, schema := range opts.typedResources {
-			declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
+			declType := cache.SchemaDeclType(schema)
 			if declType != nil {
 				typeName := TypeNamePrefix + name
-				declType = declType.MaybeAssignTypeName(typeName)
+				declType = cache.MaybeAssignTypeName(schema, declType, typeName)
 
 				// add type declaration
 				declTypes = append(declTypes, declType)
@@ -215,49 +220,6 @@ func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, erro
 // CEL expressions against OpenAPI schemas.
 func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))
-}
-
-// TypedEnvironmentWithProvider creates a typed CEL environment and also returns
-// the DeclTypeProvider that was created internally. This avoids the need to
-// create a separate provider via CreateDeclTypeProvider for the same schemas.
-func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error) {
-	return defaultEnvironment(WithTypedResources(schemas))
-}
-
-// UntypedEnvironment creates a CEL environment without type declarations.
-//
-// This is theoretically cheaper to use as there are no Schema conversions
-// required. NOTE(a-hilaly): maybe use this for runtime? undecided.
-func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
-	return DefaultEnvironment(WithResourceIDs(resourceIDs))
-}
-
-// CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
-// This is used for deep introspection of type structures when generating schemas.
-// The provider maps CEL type names to their full DeclType definitions with all fields.
-func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
-	if len(schemas) == 0 {
-		return nil
-	}
-
-	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
-	for name, schema := range schemas {
-		declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
-		if declType != nil {
-			declType = declType.MaybeAssignTypeName(name)
-			declTypes = append(declTypes, declType)
-		}
-	}
-
-	if len(declTypes) == 0 {
-		return nil
-	}
-
-	provider := NewDeclTypeProvider(declTypes...)
-	// Enable recognition of CEL reserved keywords as field names.
-	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
-	provider.SetRecognizeKeywordAsFieldName(true)
-	return provider
 }
 
 // ListElementType extracts the element type from a CEL list type.

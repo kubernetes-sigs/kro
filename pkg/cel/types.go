@@ -19,6 +19,7 @@ package cel
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -27,14 +28,23 @@ import (
 	apiservercel "k8s.io/apiserver/pkg/cel"
 )
 
+// fieldTypeMapCache caches FieldTypeMap results keyed by *apiservercel.DeclType pointer.
+// Safe because DeclType is immutable after MaybeAssignTypeName, and FieldTypeMap
+// is a pure function of its input type.
+var fieldTypeMapCache sync.Map // key: *apiservercel.DeclType, value: map[string]*apiservercel.DeclType
+
 // FieldTypeMap constructs a map of the field and object types nested within a given type.
 func FieldTypeMap(path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
+	if v, ok := fieldTypeMapCache.Load(t); ok {
+		return v.(map[string]*apiservercel.DeclType)
+	}
 	if t.IsObject() && t.TypeName() != "object" {
 		path = t.TypeName()
 	}
-	types := make(map[string]*apiservercel.DeclType)
-	buildDeclTypes(path, t, types)
-	return types
+	typeMap := make(map[string]*apiservercel.DeclType)
+	buildDeclTypes(path, t, typeMap)
+	fieldTypeMapCache.Store(t, typeMap)
+	return typeMap
 }
 
 func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*apiservercel.DeclType) {

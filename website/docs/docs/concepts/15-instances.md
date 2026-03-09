@@ -315,4 +315,4 @@ spec:
 
 The `Optional` instance here *must* specify `str` in the Instance, otherwise reconciliation will fail.
 
-For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`
+For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`. For more information, see [The Optional Operator](./rgd/02-resource-definitions/03-readiness.md#the-optional-operator-)

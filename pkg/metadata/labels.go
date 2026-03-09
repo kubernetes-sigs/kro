@@ -35,8 +35,8 @@ const (
 )
 
 const (
-	NodeIDLabel      = LabelKROPrefix + "node-id"
-	NodeIDAnnotation = LabelKROPrefix + "node-id-original"
+	NodeIDLabel    = LabelKROPrefix + "node-id"
+	NodeAnnotation = LabelKROPrefix + "node"
 
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.

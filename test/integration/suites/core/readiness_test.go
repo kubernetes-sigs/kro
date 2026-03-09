@@ -226,7 +226,7 @@ var _ = Describe("Readiness", func() {
 			// Verify deployment specs
 			g.Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(replicas)))
-			g.Expect(deployment.Annotations).To(HaveKeyWithValue(metadata.NodeIDAnnotation, "deployment"))
+			g.Expect(deployment.Annotations).To(HaveKeyWithValue(metadata.NodeAnnotation, "deployment"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Verify Service is not created yet
@@ -275,7 +275,7 @@ var _ = Describe("Readiness", func() {
 
 			// validate service spec
 			g.Expect(service.Annotations).To(HaveKeyWithValue("app", "service"))
-			g.Expect(service.Annotations).To(HaveKeyWithValue(metadata.NodeIDAnnotation, "service"))
+			g.Expect(service.Annotations).To(HaveKeyWithValue(metadata.NodeAnnotation, "service"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Delete instance

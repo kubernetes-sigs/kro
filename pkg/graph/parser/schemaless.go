@@ -64,9 +64,8 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			expr := strings.TrimPrefix(field, "${")
 			expr = strings.TrimSuffix(expr, "}")
 			expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-				Expressions:          []*krocel.Expression{{Original: expr}},
-				Path:                 path,
-				StandaloneExpression: true,
+				Expressions: []*krocel.Expression{{Original: expr}},
+				Path:        path,
 			})
 		} else {
 			expressions, err := extractExpressions(field)
@@ -74,12 +73,10 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 				return nil, nil, err
 			}
 			if len(expressions) > 0 {
-				// String template in schemaless parsing - always produces string
 				celExpr := buildStringTemplate(field, expressions)
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:          []*krocel.Expression{{Original: celExpr}},
-					Path:                 path,
-					StandaloneExpression: true,
+					Expressions: []*krocel.Expression{{Original: celExpr}},
+					Path:        path,
 				})
 			} else {
 				allPlainFieldPaths = append(allPlainFieldPaths, path)

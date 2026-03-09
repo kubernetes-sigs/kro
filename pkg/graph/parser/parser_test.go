@@ -168,21 +168,21 @@ func TestParseResource(t *testing.T) {
 		}
 
 		expectedExpressions := []variable.FieldDescriptor{
-			{Path: "stringField", Expressions: krocel.NewUncompiledSlice("string.value"), StandaloneExpression: true},
-			{Path: "intField", Expressions: krocel.NewUncompiledSlice("int.value"), StandaloneExpression: true},
-			{Path: "boolField", Expressions: krocel.NewUncompiledSlice("bool.value"), StandaloneExpression: true},
-			{Path: "nestedObject.nestedString", Expressions: krocel.NewUncompiledSlice("nested.string"), StandaloneExpression: true},
-			{Path: "nestedObject.nestedStringMultiple", Expressions: krocel.NewUncompiledSlice("nested.string1 + \"-\" + nested.string2"), StandaloneExpression: true},
-			{Path: "simpleArray[0]", Expressions: krocel.NewUncompiledSlice("array[0]"), StandaloneExpression: true},
-			{Path: "simpleArray[1]", Expressions: krocel.NewUncompiledSlice("array[1]"), StandaloneExpression: true},
-			{Path: "mapField.key1", Expressions: krocel.NewUncompiledSlice("map.key1"), StandaloneExpression: true},
-			{Path: "mapField.key2", Expressions: krocel.NewUncompiledSlice("map.key2"), StandaloneExpression: true},
-			{Path: "specialCharacters.simpleAnnotation", Expressions: krocel.NewUncompiledSlice("simpleannotation"), StandaloneExpression: true},
-			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: krocel.NewUncompiledSlice("dotedannotationvalue"), StandaloneExpression: true},
-			{Path: "specialCharacters[\"\"]", Expressions: krocel.NewUncompiledSlice("emptyannotation"), StandaloneExpression: true},
-			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: krocel.NewUncompiledSlice("value"), StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: krocel.NewUncompiledSlice("schemaless.value"), StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: krocel.NewUncompiledSlice("schemaless.nested.value"), StandaloneExpression: true},
+			{Path: "stringField", Expressions: krocel.NewUncompiledSlice("string.value")},
+			{Path: "intField", Expressions: krocel.NewUncompiledSlice("int.value")},
+			{Path: "boolField", Expressions: krocel.NewUncompiledSlice("bool.value")},
+			{Path: "nestedObject.nestedString", Expressions: krocel.NewUncompiledSlice("nested.string")},
+			{Path: "nestedObject.nestedStringMultiple", Expressions: krocel.NewUncompiledSlice("nested.string1 + \"-\" + nested.string2")},
+			{Path: "simpleArray[0]", Expressions: krocel.NewUncompiledSlice("array[0]")},
+			{Path: "simpleArray[1]", Expressions: krocel.NewUncompiledSlice("array[1]")},
+			{Path: "mapField.key1", Expressions: krocel.NewUncompiledSlice("map.key1")},
+			{Path: "mapField.key2", Expressions: krocel.NewUncompiledSlice("map.key2")},
+			{Path: "specialCharacters.simpleAnnotation", Expressions: krocel.NewUncompiledSlice("simpleannotation")},
+			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: krocel.NewUncompiledSlice("dotedannotationvalue")},
+			{Path: "specialCharacters[\"\"]", Expressions: krocel.NewUncompiledSlice("emptyannotation")},
+			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: krocel.NewUncompiledSlice("value")},
+			{Path: "schemalessField.something", Expressions: krocel.NewUncompiledSlice("schemaless.value")},
+			{Path: "schemalessField.nestedSomething.nested", Expressions: krocel.NewUncompiledSlice("schemaless.nested.value")},
 		}
 
 		expressions, err := ParseResource(resource, schema)
@@ -212,13 +212,6 @@ func TestParseResource(t *testing.T) {
 				t.Errorf(
 					"Expression[%d] expressions mismatch for path %s:\n  got:  %v\n  want: %v",
 					i, expected.Path, exprOriginals(actual.Expressions), exprOriginals(expected.Expressions),
-				)
-			}
-
-			if actual.StandaloneExpression != expected.StandaloneExpression {
-				t.Errorf(
-					"Expression[%d] StandaloneExpression mismatch for path %s:\n  got:  %v\n  want: %v",
-					i, expected.Path, actual.StandaloneExpression, expected.StandaloneExpression,
 				)
 			}
 		}
@@ -558,12 +551,12 @@ func TestParseWithExpectedSchema(t *testing.T) {
 	}
 
 	expectedExpressions := map[string]variable.FieldDescriptor{
-		"stringField":                               {Path: "stringField", Expressions: krocel.NewUncompiledSlice("string.value"), StandaloneExpression: true},
-		"objectField":                               {Path: "objectField", Expressions: krocel.NewUncompiledSlice("object.value"), StandaloneExpression: true},
-		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: krocel.NewUncompiledSlice("nested.string"), StandaloneExpression: true},
-		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: krocel.NewUncompiledSlice("deep.nested"), StandaloneExpression: true},
-		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: krocel.NewUncompiledSlice("array[0]"), StandaloneExpression: true},
-		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: krocel.NewUncompiledSlice("object.in.array"), StandaloneExpression: true},
+		"stringField":                               {Path: "stringField", Expressions: krocel.NewUncompiledSlice("string.value")},
+		"objectField":                               {Path: "objectField", Expressions: krocel.NewUncompiledSlice("object.value")},
+		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: krocel.NewUncompiledSlice("nested.string")},
+		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: krocel.NewUncompiledSlice("deep.nested")},
+		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: krocel.NewUncompiledSlice("array[0]")},
+		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: krocel.NewUncompiledSlice("object.in.array")},
 	}
 
 	if len(expressions) != len(expectedExpressions) {
@@ -579,9 +572,6 @@ func TestParseWithExpectedSchema(t *testing.T) {
 
 		if !equalExprs(expr.Expressions, expected.Expressions) {
 			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, exprOriginals(expected.Expressions), exprOriginals(expr.Expressions))
-		}
-		if expr.StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.StandaloneExpression, expr.StandaloneExpression)
 		}
 
 		// remove the matched expression from the map
@@ -1283,9 +1273,8 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 
 		expected := variable.FieldDescriptor{
-			Path:                 "networkRef.name",
-			Expressions:          krocel.NewUncompiledSlice("network.metadata.name"),
-			StandaloneExpression: true,
+			Path:        "networkRef.name",
+			Expressions: krocel.NewUncompiledSlice("network.metadata.name"),
 		}
 
 		if expressions[0].Path != expected.Path {
@@ -1294,10 +1283,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 
 		if !equalExprs(expressions[0].Expressions, expected.Expressions) {
 			t.Errorf("Expressions mismatch: got %v, want %v", exprOriginals(expressions[0].Expressions), exprOriginals(expected.Expressions))
-		}
-
-		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
 		}
 	})
 
@@ -1372,9 +1357,8 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 
 		expected := variable.FieldDescriptor{
-			Path:                 "networkRef.external",
-			Expressions:          krocel.NewUncompiledSlice("network.selfLink"),
-			StandaloneExpression: true,
+			Path:        "networkRef.external",
+			Expressions: krocel.NewUncompiledSlice("network.selfLink"),
 		}
 
 		if expressions[0].Path != expected.Path {
@@ -1382,10 +1366,6 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 		if !equalExprs(expressions[0].Expressions, expected.Expressions) {
 			t.Errorf("Expected expressions %v, got %v", exprOriginals(expected.Expressions), exprOriginals(expressions[0].Expressions))
-		}
-
-		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
 		}
 	})
 }
@@ -1416,9 +1396,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "spec.template",
-					Expressions:          krocel.NewUncompiledSlice("template.value"),
-					StandaloneExpression: true,
+					Path:        "spec.template",
+					Expressions: krocel.NewUncompiledSlice("template.value"),
 				},
 			},
 		},
@@ -1446,9 +1425,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "spec.template.nested[0].key",
-					Expressions:          krocel.NewUncompiledSlice("template.value"),
-					StandaloneExpression: true,
+					Path:        "spec.template.nested[0].key",
+					Expressions: krocel.NewUncompiledSlice("template.value"),
 				},
 			},
 		},
@@ -1513,24 +1491,20 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "program.resources.app.properties.spec.name",
-					Expressions:          krocel.NewUncompiledSlice("schema.spec.name"),
-					StandaloneExpression: true,
+					Path:        "program.resources.app.properties.spec.name",
+					Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.region",
-					Expressions:          krocel.NewUncompiledSlice("schema.spec.region"),
-					StandaloneExpression: true,
+					Path:        "program.resources.app.properties.spec.region",
+					Expressions: krocel.NewUncompiledSlice("schema.spec.region"),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.services[0].name",
-					Expressions:          krocel.NewUncompiledSlice("schema.spec.name + \"-service\""),
-					StandaloneExpression: true,
+					Path:        "program.resources.app.properties.spec.services[0].name",
+					Expressions: krocel.NewUncompiledSlice("schema.spec.name + \"-service\""),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.services[0].instanceCount",
-					Expressions:          krocel.NewUncompiledSlice("schema.spec.instanceCount"),
-					StandaloneExpression: true,
+					Path:        "program.resources.app.properties.spec.services[0].instanceCount",
+					Expressions: krocel.NewUncompiledSlice("schema.spec.instanceCount"),
 				},
 			},
 		},
@@ -1580,9 +1554,6 @@ func TestPreserveUnknownFields(t *testing.T) {
 
 					if !equalExprs(actualExpr.Expressions, expectedExpr.Expressions) {
 						t.Errorf("Path %s: expected expressions %v, got %v", path, exprOriginals(expectedExpr.Expressions), exprOriginals(actualExpr.Expressions))
-					}
-					if actualExpr.StandaloneExpression != expectedExpr.StandaloneExpression {
-						t.Errorf("Path %s: expected StandaloneExpression %v, got %v", path, expectedExpr.StandaloneExpression, actualExpr.StandaloneExpression)
 					}
 				}
 			}
@@ -1782,9 +1753,6 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 					}
 					if field.Expressions[0].Original != tc.expectedExpr {
 						t.Errorf("Expression mismatch:\ngot:  %q\nwant: %q", field.Expressions[0].Original, tc.expectedExpr)
-					}
-					if !field.StandaloneExpression {
-						t.Error("Expected StandaloneExpression to be true")
 					}
 				}
 			}

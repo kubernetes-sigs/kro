@@ -372,9 +372,8 @@ func newTestGraphWithInstance(instanceNode *graph.Node, nodes ...*graph.Node) *g
 func standaloneField(path string, expr *krocel.Expression, kind variable.ResourceVariableKind) *variable.ResourceField {
 	return &variable.ResourceField{
 		FieldDescriptor: variable.FieldDescriptor{
-			Path:                 path,
-			Expressions:          []*krocel.Expression{expr},
-			StandaloneExpression: true,
+			Path:        path,
+			Expressions: []*krocel.Expression{expr},
 		},
 		Kind: kind,
 	}

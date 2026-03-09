@@ -32,8 +32,7 @@ func areEqualExpressionFields(a, b []variable.FieldDescriptor) bool {
 
 	for i := range a {
 		if !equalExprs(a[i].Expressions, b[i].Expressions) ||
-			a[i].Path != b[i].Path ||
-			a[i].StandaloneExpression != b[i].StandaloneExpression {
+			a[i].Path != b[i].Path {
 			return false
 		}
 	}
@@ -87,9 +86,8 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("resource.value"),
-					Path:                 "field",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("resource.value"),
+					Path:        "field",
 				},
 			},
 			plainFieldPathsWant: []string{"anotherField"},
@@ -105,9 +103,8 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("nested.value"),
-					Path:                 "outer.inner",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("nested.value"),
+					Path:        "outer.inner",
 				},
 			},
 			plainFieldPathsWant: []string{"outer.anotherInner"},
@@ -123,14 +120,12 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("array[0]"),
-					Path:                 "array[0]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("array[0]"),
+					Path:        "array[0]",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("array[1]"),
-					Path:                 "array[1]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("array[1]"),
+					Path:        "array[1]",
 				},
 			},
 			wantErr: false,
@@ -144,7 +139,6 @@ func TestParseSchemalessResource(t *testing.T) {
 				{
 					Expressions: krocel.NewUncompiledSlice("\"Start \" + expr1 + \" middle \" + expr2 + \" end\""),
 					Path:        "field",
-					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -164,14 +158,12 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("string.value"),
-					Path:                 "string",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("string.value"),
+					Path:        "string",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("array.value"),
-					Path:                 "nested.array[0]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("array.value"),
+					Path:        "nested.array[0]",
 				},
 			},
 			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]"},
@@ -231,9 +223,8 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("deeply.nested.value"),
-					Path:                 "level1.level2.level3.level4",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("deeply.nested.value"),
+					Path:        "level1.level2.level3.level4",
 				},
 			},
 			wantErr: false,
@@ -252,14 +243,12 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("expr1"),
-					Path:                 "array[0]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("expr1"),
+					Path:        "array[0]",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("expr2"),
-					Path:                 "array[3].nested",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("expr2"),
+					Path:        "array[3].nested",
 				},
 			},
 			plainFieldPathsWant: []string{"array[1]", "array[2]"},
@@ -273,14 +262,12 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice(""),
-					Path:                 "empty1",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice(""),
+					Path:        "empty1",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("    "),
-					Path:                 "empty2",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("    "),
+					Path:        "empty2",
 				},
 			},
 			wantErr: false,
@@ -322,34 +309,28 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions:          krocel.NewUncompiledSlice("string.value"),
-					Path:                 "string",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("string.value"),
+					Path:        "string",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("array.value"),
-					Path:                 "nested.array[0]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("array.value"),
+					Path:        "nested.array[0]",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("\"Start \" + expr1 + \" middle \" + expr2 + \" end\""),
-					Path:                 "complex.field",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("\"Start \" + expr1 + \" middle \" + expr2 + \" end\""),
+					Path:        "complex.field",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("nested.value"),
-					Path:                 "complex.nested.inner",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("nested.value"),
+					Path:        "complex.nested.inner",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("expr4"),
-					Path:                 "complex.array[1]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("expr4"),
+					Path:        "complex.array[1]",
 				},
 				{
-					Expressions:          krocel.NewUncompiledSlice("expr5"),
-					Path:                 "complex.array[2]",
-					StandaloneExpression: true,
+					Expressions: krocel.NewUncompiledSlice("expr5"),
+					Path:        "complex.array[2]",
 				},
 			},
 			plainFieldPathsWant: []string{"number", "bool", "nested.array[1]", "complex.array[0]"},

@@ -1684,9 +1684,8 @@ func (b *testNodeBuilder) withTemplateExpr(expr string, kind variable.ResourceVa
 func (b *testNodeBuilder) withTemplateVar(path string, exprs ...string) *testNodeBuilder {
 	b.templateVars = append(b.templateVars, &variable.ResourceField{
 		FieldDescriptor: variable.FieldDescriptor{
-			Path:                 path,
-			Expressions:          krocel.NewUncompiledSlice(exprs...),
-			StandaloneExpression: true,
+			Path:        path,
+			Expressions: krocel.NewUncompiledSlice(exprs...),
 		},
 	})
 	return b

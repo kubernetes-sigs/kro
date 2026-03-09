@@ -1546,16 +1546,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.status.vpcID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "spec.vpcID",
+						expressions: []string{"vpc.status.vpcID"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.tags[0].value",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:        "spec.tags[0].value",
+						expressions: []string{"schema.spec.environment"},
+						kind:        variable.ResourceVariableKindStatic,
 					},
 				})
 
@@ -1564,16 +1562,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, cluster.Variables, 2)
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
-						path:                 "metadata.name",
-						expressions:          []string{"vpc.metadata.name + \"cluster\" + schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "metadata.name",
+						expressions: []string{"vpc.metadata.name + \"cluster\" + schema.spec.environment"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.resourcesVPCConfig.subnetIDs[0]",
-						expressions:          []string{"subnet.status.subnetID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "spec.resourcesVPCConfig.subnetIDs[0]",
+						expressions: []string{"subnet.status.subnetID"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 				})
 				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
@@ -1583,46 +1579,39 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, monitor.Variables, 7)
 				validateVariables(t, monitor.Variables, []expectedVar{
 					{
-						path:                 "metadata.labels.environment",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:        "metadata.labels.environment",
+						expressions: []string{"schema.spec.environment"},
+						kind:        variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels.cluster",
-						expressions:          []string{"cluster.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "metadata.labels.cluster",
+						expressions: []string{"cluster.metadata.name"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels.combined",
-						expressions:          []string{"cluster.metadata.name + \"-\" + schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "metadata.labels.combined",
+						expressions: []string{"cluster.metadata.name + \"-\" + schema.spec.environment"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"schema.spec.environment + \"-\" + schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:        "metadata.labels[\"two.statics\"]",
+						expressions: []string{"schema.spec.environment + \"-\" + schema.spec.region"},
+						kind:        variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels[\"two.dynamics\"]",
-						expressions:          []string{"vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "metadata.labels[\"two.dynamics\"]",
+						expressions: []string{"vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[0].value",
-						expressions:          []string{"cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "spec.containers[0].env[0].value",
+						expressions: []string{"cluster.status.ackResourceMetadata.arn"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[1].value",
-						expressions:          []string{"schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:        "spec.containers[0].env[1].value",
+						expressions: []string{"schema.spec.region"},
+						kind:        variable.ResourceVariableKindStatic,
 					},
 				})
 				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, exprOriginals(monitor.ReadyWhen))
@@ -1703,10 +1692,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:        "spec.vpcID",
+						expressions: []string{"vpc.metadata.name"},
+						kind:        variable.ResourceVariableKindDynamic,
 					},
 				})
 
@@ -1727,10 +1715,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 }
 
 type expectedVar struct {
-	path                 string
-	expressions          []string
-	kind                 variable.ResourceVariableKind
-	standaloneExpression bool
+	path        string
+	expressions []string
+	kind        variable.ResourceVariableKind
 }
 
 func validateVariables(t *testing.T, actual []*variable.ResourceField, expected []expectedVar) {
@@ -1744,10 +1731,9 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 			exprs[j] = e.Original
 		}
 		actualVars[i] = expectedVar{
-			path:                 v.Path,
-			expressions:          exprs,
-			kind:                 v.Kind,
-			standaloneExpression: v.StandaloneExpression,
+			path:        v.Path,
+			expressions: exprs,
+			kind:        v.Kind,
 		}
 	}
 
@@ -3764,11 +3750,10 @@ func TestBuildStatusSchema(t *testing.T) {
 	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
 	inspector := newUnitInspector(t, "resource")
 	tests := []struct {
-		name             string
-		statusRaw        string
-		wantErr          string
-		wantStringField  bool
-		wantInterpolated bool
+		name            string
+		statusRaw       string
+		wantErr         string
+		wantStringField bool
 	}{
 		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
 		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
@@ -3794,7 +3779,6 @@ func TestBuildStatusSchema(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Len(t, fieldDescriptors, 1)
-			assert.Equal(t, tt.wantInterpolated, !fieldDescriptors[0].StandaloneExpression)
 			assert.Equal(t, "string", statusSchema.Properties["field"].Type)
 		})
 	}
@@ -3928,12 +3912,10 @@ func TestBuilderHelperCases(t *testing.T) {
 			name: "getExpectedTypeForField falls back to dyn on bad paths",
 			run: func(t *testing.T) {
 				assert.Equal(t, cel.DynType, getExpectedTypeForField(&variable.FieldDescriptor{
-					Path:                 "spec[",
-					StandaloneExpression: true,
+					Path: "spec[",
 				}, rootSchema, "resource", provider))
 				assert.Equal(t, cel.DynType, getExpectedTypeForField(&variable.FieldDescriptor{
-					Path:                 "spec.missing",
-					StandaloneExpression: true,
+					Path: "spec.missing",
 				}, rootSchema, "resource", provider))
 			},
 		},

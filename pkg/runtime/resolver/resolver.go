@@ -98,7 +98,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 		return result
 	}
 
-	expr := field.Expressions[0].Original
+	expr := field.Expression.Original
 	resolvedValue, ok := r.data[expr]
 	if !ok {
 		result.Error = fmt.Errorf("no data provided for expression: %s", expr)

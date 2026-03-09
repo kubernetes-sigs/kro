@@ -1546,14 +1546,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:        "spec.vpcID",
-						expressions: []string{"vpc.status.vpcID"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "spec.vpcID",
+						expression: "vpc.status.vpcID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "spec.tags[0].value",
-						expressions: []string{"schema.spec.environment"},
-						kind:        variable.ResourceVariableKindStatic,
+						path:       "spec.tags[0].value",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
 
@@ -1562,14 +1562,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, cluster.Variables, 2)
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
-						path:        "metadata.name",
-						expressions: []string{"vpc.metadata.name + \"cluster\" + schema.spec.environment"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "metadata.name",
+						expression: "vpc.metadata.name + \"cluster\" + schema.spec.environment",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "spec.resourcesVPCConfig.subnetIDs[0]",
-						expressions: []string{"subnet.status.subnetID"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "spec.resourcesVPCConfig.subnetIDs[0]",
+						expression: "subnet.status.subnetID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
 				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
@@ -1579,39 +1579,39 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, monitor.Variables, 7)
 				validateVariables(t, monitor.Variables, []expectedVar{
 					{
-						path:        "metadata.labels.environment",
-						expressions: []string{"schema.spec.environment"},
-						kind:        variable.ResourceVariableKindStatic,
+						path:       "metadata.labels.environment",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:        "metadata.labels.cluster",
-						expressions: []string{"cluster.metadata.name"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "metadata.labels.cluster",
+						expression: "cluster.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "metadata.labels.combined",
-						expressions: []string{"cluster.metadata.name + \"-\" + schema.spec.environment"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "metadata.labels.combined",
+						expression: "cluster.metadata.name + \"-\" + schema.spec.environment",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "metadata.labels[\"two.statics\"]",
-						expressions: []string{"schema.spec.environment + \"-\" + schema.spec.region"},
-						kind:        variable.ResourceVariableKindStatic,
+						path:       "metadata.labels[\"two.statics\"]",
+						expression: "schema.spec.environment + \"-\" + schema.spec.region",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:        "metadata.labels[\"two.dynamics\"]",
-						expressions: []string{"vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "metadata.labels[\"two.dynamics\"]",
+						expression: "vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "spec.containers[0].env[0].value",
-						expressions: []string{"cluster.status.ackResourceMetadata.arn"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "spec.containers[0].env[0].value",
+						expression: "cluster.status.ackResourceMetadata.arn",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:        "spec.containers[0].env[1].value",
-						expressions: []string{"schema.spec.region"},
-						kind:        variable.ResourceVariableKindStatic,
+						path:       "spec.containers[0].env[1].value",
+						expression: "schema.spec.region",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
 				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, exprOriginals(monitor.ReadyWhen))
@@ -1692,9 +1692,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:        "spec.vpcID",
-						expressions: []string{"vpc.metadata.name"},
-						kind:        variable.ResourceVariableKindDynamic,
+						path:       "spec.vpcID",
+						expression: "vpc.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
 
@@ -1715,9 +1715,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 }
 
 type expectedVar struct {
-	path        string
-	expressions []string
-	kind        variable.ResourceVariableKind
+	path       string
+	expression string
+	kind       variable.ResourceVariableKind
 }
 
 func validateVariables(t *testing.T, actual []*variable.ResourceField, expected []expectedVar) {
@@ -1725,15 +1725,10 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
-		// Extract Original strings from expressions for comparison
-		exprs := make([]string, len(v.Expressions))
-		for j, e := range v.Expressions {
-			exprs[j] = e.Original
-		}
 		actualVars[i] = expectedVar{
-			path:        v.Path,
-			expressions: exprs,
-			kind:        v.Kind,
+			path:       v.Path,
+			expression: v.Expression.Original,
+			kind:       v.Kind,
 		}
 	}
 
@@ -3651,10 +3646,8 @@ func TestBuildInstanceNode(t *testing.T) {
 		{
 			name: "dependency extraction failure",
 			variables: []variable.FieldDescriptor{{
-				Path: "field",
-				Expressions: []*krocel.Expression{
-					expr("resource +"),
-				},
+				Path:       "field",
+				Expression: expr("resource +"),
 			}},
 			template: map[string]interface{}{"field": "${resource +}"},
 			wantErr:  "failed to extract dependencies",
@@ -3662,10 +3655,8 @@ func TestBuildInstanceNode(t *testing.T) {
 		{
 			name: "status field must reference a resource",
 			variables: []variable.FieldDescriptor{{
-				Path: "field",
-				Expressions: []*krocel.Expression{
-					expr("true"),
-				},
+				Path:       "field",
+				Expression: expr("true"),
 			}},
 			template: map[string]interface{}{"field": "${true}"},
 			wantErr:  "must refer to a resource",
@@ -3673,10 +3664,8 @@ func TestBuildInstanceNode(t *testing.T) {
 		{
 			name: "successful node prefixes status path",
 			variables: []variable.FieldDescriptor{{
-				Path: "field",
-				Expressions: []*krocel.Expression{
-					expr("resource.spec.name"),
-				},
+				Path:       "field",
+				Expression: expr("resource.spec.name"),
 			}},
 			template: map[string]interface{}{"field": "${resource.spec.name}"},
 			wantPath: "status.field",

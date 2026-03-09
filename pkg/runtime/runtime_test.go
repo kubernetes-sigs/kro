@@ -101,7 +101,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+									Expression: krocel.NewUncompiled("schema.spec.name"),
 								},
 							},
 						},
@@ -112,7 +112,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+									Expression: krocel.NewUncompiled("schema.spec.name"),
 								},
 							},
 						},
@@ -143,8 +143,8 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindIteration,
 								FieldDescriptor: variable.FieldDescriptor{
-									Path:        "metadata.name",
-									Expressions: krocel.NewUncompiledSlice("region"),
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("region"),
 								},
 							},
 						},
@@ -158,8 +158,8 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindIteration,
 								FieldDescriptor: variable.FieldDescriptor{
-									Path:        "metadata.name",
-									Expressions: krocel.NewUncompiledSlice("region"),
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("region"),
 								},
 							},
 						},
@@ -172,8 +172,8 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Path:        "metadata.name",
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("schema.spec.name"),
 								},
 							},
 						},
@@ -185,8 +185,8 @@ func TestFromGraph(t *testing.T) {
 						{
 							Kind: variable.ResourceVariableKindStatic,
 							FieldDescriptor: variable.FieldDescriptor{
-								Path:        "status.name",
-								Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+								Path:       "status.name",
+								Expression: krocel.NewUncompiled("schema.spec.name"),
 							},
 						},
 					},
@@ -267,8 +267,8 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 				{
 					Kind: variable.ResourceVariableKindDynamic,
 					FieldDescriptor: variable.FieldDescriptor{
-						Path:        "status.deploymentReady",
-						Expressions: krocel.NewUncompiledSlice("deployment.status.ready"),
+						Path:       "status.deploymentReady",
+						Expression: krocel.NewUncompiled("deployment.status.ready"),
 					},
 				},
 			},

@@ -30,16 +30,16 @@ type FieldDescriptor struct {
 	// Example: spec.template.spec.containers[0].env[0].value
 	Path string
 
-	// Expressions contains the CEL expressions for this field.
+	// Expression is the CEL expression for this field.
 	//
 	// Lifecycle:
 	//   - Parser creates with Expression.Original set (References, Program nil)
 	//   - Builder populates Expression.References during dependency extraction
 	//   - Builder populates Expression.Program during compilation
 	//
-	// Always contains exactly one expression. String templates like "prefix-${a}-${b}"
-	// are compiled into a single CEL concatenation expression at parse time.
-	Expressions []*krocel.Expression
+	// String templates like "prefix-${a}-${b}" are compiled into a single CEL
+	// concatenation expression at parse time.
+	Expression *krocel.Expression
 }
 
 // ResourceField represents a variable in a resource template. Variables are fields

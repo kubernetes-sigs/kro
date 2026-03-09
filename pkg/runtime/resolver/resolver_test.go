@@ -459,8 +459,8 @@ func TestResolveField(t *testing.T) {
 				},
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("notProvided"),
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("notProvided"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
@@ -479,8 +479,8 @@ func TestResolveField(t *testing.T) {
 				"value": []float64{1, 2, 3.5},
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
@@ -501,8 +501,8 @@ func TestResolveField(t *testing.T) {
 				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.array[0]",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Path:       "spec.array[0]",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.array[0]",
@@ -519,8 +519,8 @@ func TestResolveField(t *testing.T) {
 			},
 			data: map[string]interface{}{},
 			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("missing"),
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("missing"),
 			},
 			want: ResolutionResult{
 				Path:  "spec.field",
@@ -536,8 +536,8 @@ func TestResolveField(t *testing.T) {
 				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.nonexistent.field",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Path:       "spec.nonexistent.field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:  "spec.nonexistent.field",
@@ -561,8 +561,8 @@ func TestResolveField(t *testing.T) {
 				"value": "papa-ou-t-es",
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.nested.array[0].field",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Path:       "spec.nested.array[0].field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.nested.array[0].field",
@@ -579,8 +579,8 @@ func TestResolveField(t *testing.T) {
 				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:        ".field",
-				Expressions: krocel.NewUncompiledSlice("value"),
+				Path:       ".field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     ".field",
@@ -630,8 +630,8 @@ func TestResolveDynamicArrayIndexes(t *testing.T) {
 	}
 
 	field := variable.FieldDescriptor{
-		Path:        "spec.array[1]",
-		Expressions: krocel.NewUncompiledSlice("value"),
+		Path:       "spec.array[1]",
+		Expression: krocel.NewUncompiled("value"),
 	}
 
 	r := NewResolver(resource, data)
@@ -663,8 +663,8 @@ func TestResolver(t *testing.T) {
 		)
 		summary := r.Resolve([]variable.FieldDescriptor{
 			{
-				Path:        "spec.field",
-				Expressions: krocel.NewUncompiledSlice("\"resolved-\" + \"done\""),
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("\"resolved-\" + \"done\""),
 			},
 		})
 		assert.Equal(t, 1, summary.TotalExpressions)
@@ -688,12 +688,12 @@ func TestResolver(t *testing.T) {
 		)
 		summary := r.Resolve([]variable.FieldDescriptor{
 			{
-				Path:        "spec.field1",
-				Expressions: krocel.NewUncompiledSlice("value1"),
+				Path:       "spec.field1",
+				Expression: krocel.NewUncompiled("value1"),
 			},
 			{
-				Path:        "spec.field2",
-				Expressions: krocel.NewUncompiledSlice("value2"),
+				Path:       "spec.field2",
+				Expression: krocel.NewUncompiled("value2"),
 			},
 		})
 		assert.Equal(t, 2, summary.TotalExpressions)
@@ -759,8 +759,8 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				"includeAnnotations ? annotations : {}": map[string]interface{}{},
 			},
 			field: variable.FieldDescriptor{
-				Path:        "metadata.annotations",
-				Expressions: krocel.NewUncompiledSlice("includeAnnotations ? annotations : {}"),
+				Path:       "metadata.annotations",
+				Expression: krocel.NewUncompiled("includeAnnotations ? annotations : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "metadata.annotations",
@@ -781,8 +781,8 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				},
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.config",
-				Expressions: krocel.NewUncompiledSlice("has(schema.config) && includeConfig ? schema.config : {}"),
+				Path:       "spec.config",
+				Expression: krocel.NewUncompiled("has(schema.config) && includeConfig ? schema.config : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.config",
@@ -803,8 +803,8 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				"condition ? {} : {}": map[string]interface{}{},
 			},
 			field: variable.FieldDescriptor{
-				Path:        "data.field",
-				Expressions: krocel.NewUncompiledSlice("condition ? {} : {}"),
+				Path:       "data.field",
+				Expression: krocel.NewUncompiled("condition ? {} : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "data.field",

@@ -265,8 +265,8 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions: []*krocel.Expression{{Original: expr}},
-			Path:        path,
+			Expression: &krocel.Expression{Original: expr},
+			Path:       path,
 		}}, nil
 	}
 
@@ -281,8 +281,8 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 	if len(expressions) > 0 {
 		celExpr := buildStringTemplate(field, expressions)
 		return []variable.FieldDescriptor{{
-			Expressions: []*krocel.Expression{{Original: celExpr}},
-			Path:        path,
+			Expression: &krocel.Expression{Original: celExpr},
+			Path:       path,
 		}}, nil
 	}
 	return nil, nil

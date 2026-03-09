@@ -378,17 +378,10 @@ func (n *Node) softResolve() ([]*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
-	// Filter to only fully-resolvable fields (all expressions available)
+	// Filter to only fully-resolvable fields (expression value available)
 	var resolvable []variable.FieldDescriptor
 	for _, v := range n.templateVars {
-		complete := true
-		for _, expr := range v.Expressions {
-			if _, ok := values[expr.Original]; !ok {
-				complete = false
-				break
-			}
-		}
-		if complete {
+		if _, ok := values[v.Expression.Original]; ok {
 			resolvable = append(resolvable, v.FieldDescriptor)
 		}
 	}
@@ -504,12 +497,10 @@ func (n *Node) exprSetsForVars(
 	}
 
 	for _, v := range vars {
-		for _, expr := range v.Expressions {
-			if kind, ok := exprKinds[expr.Original]; ok && kind.IsIteration() {
-				iterExprs[expr.Original] = struct{}{}
-			} else {
-				baseExprs[expr.Original] = struct{}{}
-			}
+		if kind, ok := exprKinds[v.Expression.Original]; ok && kind.IsIteration() {
+			iterExprs[v.Expression.Original] = struct{}{}
+		} else {
+			baseExprs[v.Expression.Original] = struct{}{}
 		}
 	}
 	return baseExprs, iterExprs
@@ -521,10 +512,7 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 	desired := base.DeepCopy()
 	res := resolver.NewResolver(desired.Object, values)
 	for _, v := range n.templateVars {
-		if len(v.Expressions) == 0 {
-			continue
-		}
-		if val, ok := values[v.Expressions[0].Original]; ok {
+		if val, ok := values[v.Expression.Original]; ok {
 			_ = res.UpsertValueAtPath(v.Path, val)
 		}
 	}

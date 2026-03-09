@@ -100,8 +100,8 @@ func toFieldDescriptors(vars []*variable.ResourceField) []variable.FieldDescript
 	result := make([]variable.FieldDescriptor, len(vars))
 	for i, v := range vars {
 		result[i] = variable.FieldDescriptor{
-			Path:        v.Path,
-			Expressions: v.Expressions,
+			Path:       v.Path,
+			Expression: v.Expression,
 		}
 	}
 	return result

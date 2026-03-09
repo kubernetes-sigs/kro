@@ -74,10 +74,8 @@ func TestNodeDeepCopy(t *testing.T) {
 			{
 				Kind: variable.ResourceVariableKindStatic,
 				FieldDescriptor: variable.FieldDescriptor{
-					Path: "spec.name",
-					Expressions: []*krocel.Expression{
-						{Original: "schema.spec.name"},
-					},
+					Path:       "spec.name",
+					Expression: &krocel.Expression{Original: "schema.spec.name"},
 				},
 			},
 		},
@@ -97,7 +95,7 @@ func TestNodeDeepCopy(t *testing.T) {
 	original.Meta.Dependencies[0] = "changed"
 	original.Template.Object["metadata"].(map[string]interface{})["name"] = "mutated"
 	original.Variables[0].Path = "spec.other"
-	original.Variables[0].Expressions[0] = &krocel.Expression{Original: "schema.spec.other"}
+	original.Variables[0].Expression = &krocel.Expression{Original: "schema.spec.other"}
 	original.IncludeWhen[0] = &krocel.Expression{Original: "false"}
 	original.ReadyWhen[0] = &krocel.Expression{Original: "false"}
 	original.ForEach[0].Name = "zone"
@@ -105,7 +103,7 @@ func TestNodeDeepCopy(t *testing.T) {
 	assert.Equal(t, []string{"network"}, copied.Meta.Dependencies)
 	assert.Equal(t, "test", copied.Template.Object["metadata"].(map[string]interface{})["name"])
 	assert.Equal(t, "spec.name", copied.Variables[0].Path)
-	assert.Equal(t, "schema.spec.name", copied.Variables[0].Expressions[0].Original)
+	assert.Equal(t, "schema.spec.name", copied.Variables[0].Expression.Original)
 	assert.Equal(t, "schema.spec.enabled", copied.IncludeWhen[0].Original)
 	assert.Equal(t, "vpc.status.state == 'ready'", copied.ReadyWhen[0].Original)
 	assert.Equal(t, "region", copied.ForEach[0].Name)

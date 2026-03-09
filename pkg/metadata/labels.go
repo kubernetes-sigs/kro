@@ -53,6 +53,7 @@ const (
 	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
 	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
 	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
+	InstanceReconcileLabel = LabelKROPrefix + "reconcile"
 
 	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"

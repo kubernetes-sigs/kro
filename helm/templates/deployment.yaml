@@ -67,6 +67,8 @@ spec:
               value: {{ .Values.config.clientBurst | quote }}
             - name: KRO_RGD_MAX_COLLECTION_SIZE
               value: {{ .Values.config.rgd.maxCollectionSize | quote }}
+            - name: KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE
+              value: {{ .Values.config.rgd.maxCollectionDimensionSize | quote }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
@@ -93,6 +95,8 @@ spec:
             - "$(KRO_CLIENT_BURST)"
             - --rgd-max-collection-size
             - "$(KRO_RGD_MAX_COLLECTION_SIZE)"
+            - --rgd-max-collection-dimension-size
+            - "$(KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}

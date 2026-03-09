@@ -16,6 +16,7 @@ package resolver
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -73,5 +74,5 @@ func MustRegister(registry prometheus.Registerer) {
 // TODO(a-hilaly): rework all kro custom metrics to use a custom registry, and
 // register them all somewhere central.
 func init() {
-	MustRegister(prometheus.DefaultRegisterer)
+	MustRegister(metrics.Registry)
 }

@@ -44,64 +44,58 @@ func TestNodeErrors(t *testing.T) {
 	err2 := errors.New("error 2")
 	singleErr := errors.New("node failed")
 
-	tests := map[string]struct {
-		nodeStates     map[string]*NodeState
-		expectError    bool
-		expectedErrors []error
+	tests := []struct {
+		name       string
+		nodeStates map[string]*NodeState
+		wantErrors []error
 	}{
-		"no errors": {
+		{
+			name: "no errors",
 			nodeStates: map[string]*NodeState{
 				"resource1": {State: "ACTIVE", Err: nil},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
-			expectError:    false,
-			expectedErrors: nil,
 		},
-		"single error": {
+		{
+			name: "single error",
 			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: singleErr},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
-			expectError:    true,
-			expectedErrors: []error{singleErr},
+			wantErrors: []error{singleErr},
 		},
-		"multiple errors": {
+		{
+			name: "multiple errors",
 			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: err1},
 				"resource2": {State: "FAILED", Err: err2},
 			},
-			expectError:    true,
-			expectedErrors: []error{err1, err2},
+			wantErrors: []error{err1, err2},
 		},
-		"empty node states": {
-			nodeStates:     map[string]*NodeState{},
-			expectError:    false,
-			expectedErrors: nil,
+		{
+			name:       "empty node states",
+			nodeStates: map[string]*NodeState{},
 		},
 	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			state := &StateManager{
-				NodeStates: tt.nodeStates,
-			}
-
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &StateManager{NodeStates: tt.nodeStates}
 			err := state.NodeErrors()
 
-			if tt.expectError {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-
-				// Check that all expected errors are contained in the result
-				for _, expectedErr := range tt.expectedErrors {
-					if !errors.Is(err, expectedErr) {
-						t.Errorf("expected error to contain %v, got %v", expectedErr, err)
-					}
-				}
-			} else {
+			if len(tt.wantErrors) == 0 {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			for _, wantErr := range tt.wantErrors {
+				if !errors.Is(err, wantErr) {
+					t.Errorf("expected error to contain %v, got %v", wantErr, err)
 				}
 			}
 		})

@@ -59,18 +59,32 @@ This allows multiple instances to share the same configuration without duplicati
 
 ## What You Can Reference
 
-External references require these fields:
+External references support two forms: **scalar** (single resource by name) and **collection** (multiple resources by label selector).
 
 ```kro
-# Required fields
-- id: myExternal
+# Scalar: reference a single resource by name
+- id: myConfig
   externalRef:
-    apiVersion: v1           # Required: API version
-    kind: ConfigMap          # Required: Resource type
+    apiVersion: v1
+    kind: ConfigMap
     metadata:
-      name: my-config        # Required: Resource name
-      namespace: default     # Optional: Defaults to instance namespace
+      name: my-config          # Fetch one resource by name
+      namespace: default       # Optional: Defaults to instance namespace
+
+# Collection: reference multiple resources by label selector
+- id: teamConfigs
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      selector:                # Fetch all matching resources as an array
+        matchLabels:
+          team: platform
 ```
+
+:::warning
+`name` and `selector` are **mutually exclusive**. You must provide exactly one of them. A scalar ref exposes a single object; a collection ref exposes an array.
+:::
 
 You can reference any Kubernetes resource:
 - **Namespaced resources**: ConfigMaps, Secrets, Services (specify namespace or use instance namespace)
@@ -148,7 +162,179 @@ kro will:
 3. Wait for `database` to be ready
 4. Create `app`
 
+## External Collections
+
+When you use `selector` instead of `name`, the external ref becomes a **collection** — an array of all resources matching the label selector. This lets you aggregate data from a dynamic set of resources.
+
+### Defining a Collection Selector
+
+Use standard Kubernetes [LabelSelector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) syntax:
+
+```kro
+# matchLabels — all labels must match
+- id: teamConfigs
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      selector:
+        matchLabels:
+          team: platform
+          env: production
+
+# matchExpressions — set-based requirements
+- id: prodSecrets
+  externalRef:
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      selector:
+        matchExpressions:
+          - key: tier
+            operator: In
+            values: ["gold", "silver"]
+          - key: deprecated
+            operator: DoesNotExist
+```
+
+### Collection as Array
+
+A collection external ref is exposed as an array. Use CEL list functions to work with it:
+
+```kro
+# Number of matching resources
+configCount: ${string(size(teamConfigs))}
+
+# Extract names
+names: ${teamConfigs.map(c, c.metadata.name).join(",")}
+
+# Filter by a data field
+critical: ${teamConfigs.filter(c, c.data.?priority == "critical")}
+
+# Check if any match a condition
+hasCritical: ${teamConfigs.exists(c, c.data.?priority == "critical")}
+```
+
+You can also use collections in status expressions:
+
+```kro
+status:
+  configCount: ${string(size(teamConfigs))}
+  allNames: ${teamConfigs.map(c, c.metadata.name).join(",")}
+```
+
+For more on collections and iteration patterns, see **[Collections](./04-collections.md)**.
+
+### CEL Expressions in Selectors
+
+`matchExpressions` values can contain CEL expressions using `${...}` syntax, enabling per-instance filtering:
+
+```kro
+- id: teamConfigs
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      selector:
+        matchExpressions:
+          - key: team
+            operator: In
+            values: ["${schema.spec.teamName}"]
+```
+
+Each instance of the custom resource resolves the CEL expression with its own spec values. For example, an instance with `spec.teamName: bravo` only sees ConfigMaps labeled `team=bravo`.
+
+:::note
+CEL selector values are evaluated on every reconciliation. If the schema field changes, the matched set updates automatically on the next reconcile.
+:::
+
+### Empty Selectors
+
+An empty selector matches **all** resources of the given kind in the target namespace:
+
+```kro
+- id: allConfigs
+  externalRef:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      selector: {}
+```
+
+:::warning
+An empty selector can return a large number of resources. Use specific labels to keep the result set bounded.
+:::
+
+### Sorting with sortBy
+
+Collections have no guaranteed order. Use `sortBy` to sort by a field:
+
+```kro
+# Sort by a data field (lexicographic ordering)
+sortedNames: ${configs.sortBy(c, c.data.priority).map(c, c.metadata.name).join(",")}
+
+# Sort by resource name — useful for deterministic ordering
+byName: ${configs.sortBy(c, c.metadata.name)}
+
+# Sort by UID — guaranteed unique, stable tiebreaker
+byUID: ${configs.sortBy(c, c.metadata.uid)}
+```
+
+For example, to build a comma-separated list of ConfigMap names in alphabetical order:
+
+```kro
+status:
+  orderedNames: ${teamConfigs.sortBy(c, c.metadata.name).map(c, c.metadata.name).join(",")}
+  # → "api-config,db-config,web-config"
+```
+
+`sortBy(variable, expression)` is a comprehension that returns a new list sorted in ascending lexicographic order of the expression result. To sort numerically, ensure values have consistent string-sortable formatting (e.g., zero-padded numbers).
+
+## Reactive Watches
+
+External references — both scalar and collection — are watched via Kubernetes informers. When the external resource changes, kro detects the change and triggers re-reconciliation automatically.
+
+### How It Works
+
+- kro sets up an **informer watch** for each external ref's GVK (GroupVersionKind)
+- **No configuration required** — watches are set up automatically when the RGD becomes active
+
+### Practical Scenario
+
+Consider a Deployment that reads its replica count from a shared ConfigMap:
+
+```kro
+resources:
+  - id: config
+    externalRef:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: scaling-config
+
+  - id: app
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+      spec:
+        replicas: ${config.data.replicas}
+```
+
+When an operator updates `scaling-config`, the informer watch fires and kro immediately reconciles, updating the Deployment's replica count — without waiting for the next requeue cycle.
+
+### Collections and Watches
+
+For collection external refs, watches also detect:
+- **New resources** that match the selector (e.g., a new ConfigMap with the right labels)
+- **Removed resources** that no longer match (deleted or relabeled)
+- **Updated resources** in the matched set
+
+This means collection-based status expressions (like `size(configs)`) stay current as the cluster state evolves.
+
 ## Next Steps
 
-- **[CEL Expressions](../03-cel-expressions.md)** - Learn more about the `?` operator
+- **[Collections](./04-collections.md)** - Learn about forEach iteration and collection patterns
+- **[CEL Expressions](../03-cel-expressions.md)** - Learn more about the `?` operator and list functions
 - **[Dependencies & Ordering](../04-dependencies-ordering.md)** - Understand how external refs affect dependency graphs

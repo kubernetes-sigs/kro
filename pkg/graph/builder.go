@@ -25,6 +25,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -95,11 +96,17 @@ type Builder struct {
 	restMapper     meta.RESTMapper
 }
 
+// RGDConfig holds RGD runtime configuration parameters.
+type RGDConfig struct {
+	MaxCollectionSize          int
+	MaxCollectionDimensionSize int
+}
+
 // NewResourceGraphDefinition creates a new ResourceGraphDefinition object from the given ResourceGraphDefinition
 // CRD. The ResourceGraphDefinition object is a fully processed and validated representation
 // of the resource graph definition CRD, it's underlying resources, and the relationships between
 // the resources.
-func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition) (*Graph, error) {
+func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphDefinition, rgdConfig RGDConfig) (*Graph, error) {
 	// Before anything else, let's copy the resource graph definition to avoid modifying the
 	// original object.
 	rgd := originalCR.DeepCopy()
@@ -111,7 +118,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    that the names of the resources are valid to be used in CEL expressions.
 	//    for example name-something-something is not a valid name for a resource,
 	//    because in CEL - is a subtraction operator.
-	err := validateResourceGraphDefinitionNamingConventions(rgd)
+	err := validateResourceGraphDefinition(rgd, rgdConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
@@ -245,13 +252,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	celSchemas[SchemaVarName] = schemaWithoutStatus
 
 	// Create a single typed CEL environment with all schemas for compilation.
-	// Following Kubernetes best practice: create one env, extend once at init,
-	// compile all expressions against it. AST inspection handles scope validation.
-	typedEnv, err := krocel.TypedEnvironment(celSchemas)
+	// TypedEnvironmentWithProvider returns both the env and the DeclTypeProvider it
+	// creates internally, avoiding duplicate schema-to-DeclType conversions.
+	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
-	typeProvider := krocel.CreateDeclTypeProvider(celSchemas)
 
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
@@ -290,6 +296,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to create instance node: %w", err)
 	}
 
+	// Build resource schemas map for runtime CEL value conversion.
+	// Include both resource schemas and the instance schema (without status).
+	resourceSchemas := make(map[string]*spec.Schema, len(schemas)+1)
+	for id, sch := range schemas {
+		resourceSchemas[id] = sch
+	}
+	resourceSchemas[InstanceNodeID] = schemaWithoutStatus
+
 	resourceGraphDefinition := &Graph{
 		DAG:              dag,
 		Instance:         instance,
@@ -297,24 +311,21 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		Resources:        nodes,
 		TopologicalOrder: topologicalOrder,
 		CRD:              instanceCRD,
+		ResourceSchemas:  resourceSchemas,
 	}
 	return resourceGraphDefinition, nil
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
+// The selector (if any) is embedded directly in the template so that ParseSchemalessResource
+// can extract CEL expressions from the entire resource in a single pass.
 func (b *Builder) buildExternalRefResource(
-	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
-	resourceObject := map[string]interface{}{}
-	resourceObject["apiVersion"] = externalRef.APIVersion
-	resourceObject["kind"] = externalRef.Kind
-	metadata := map[string]interface{}{
-		"name": externalRef.Metadata.Name,
+	externalRef *v1alpha1.ExternalRef) (map[string]interface{}, error) {
+	result, err := runtime.DefaultUnstructuredConverter.ToUnstructured(externalRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert ExternalRef to unstructured: %w", err)
 	}
-	if externalRef.Metadata.Namespace != "" {
-		metadata["namespace"] = externalRef.Metadata.Namespace
-	}
-	resourceObject["metadata"] = metadata
-	return resourceObject
+	return result, nil
 }
 
 // buildRGResource builds a node from the given resource definition.
@@ -339,7 +350,10 @@ func (b *Builder) buildRGResource(
 			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
 	} else {
-		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
+		var err error
+		if resourceObject, err = b.buildExternalRefResource(rgResource.ExternalRef); err != nil {
+			return nil, nil, fmt.Errorf("failed to build external ref resource %s: %w", rgResource.ID, err)
+		}
 	}
 
 	// 3. Check if it looks like a valid Kubernetes resource.
@@ -370,7 +384,14 @@ func (b *Builder) buildRGResource(
 
 	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
-	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+	if rgResource.ExternalRef != nil {
+		// External ref templates are synthetic (not user YAML), so use the
+		// schemaless parser for the entire resource uniformly.
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rgResource.ID, err)
+		}
+	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
@@ -415,10 +436,14 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
-	// Determine node type
+	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
-		nodeType = NodeTypeExternal
+		if rgResource.ExternalRef.Metadata.Selector != nil {
+			nodeType = NodeTypeExternalCollection
+		} else {
+			nodeType = NodeTypeExternal
+		}
 	} else if len(forEachDimensions) > 0 {
 		nodeType = NodeTypeCollection
 	}
@@ -939,7 +964,7 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 // getExpectedTypeForField computes the expected CEL type for a field descriptor.
 // For standalone expressions, the type is derived from the OpenAPI schema at the path.
 // For string templates, the expected type is always string.
-func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
+func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
 	if !descriptor.StandaloneExpression {
 		return cel.StringType
 	}
@@ -954,20 +979,27 @@ func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *s
 		return cel.DynType
 	}
 
-	return getCelTypeFromSchema(schema, typeName)
+	return getCelTypeFromSchema(schema, typeName, typeProvider)
 }
 
-// getCelTypeFromSchema converts an OpenAPI schema to a CEL type with the given type name
-func getCelTypeFromSchema(schema *spec.Schema, typeName string) *cel.Type {
+// getCelTypeFromSchema looks up a pre-registered CEL type by name from the
+// provider (O(1) hash lookup). Falls back to converting the schema directly
+// for nested types that aren't registered at the top level.
+func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+	if typeProvider != nil {
+		if declType, found := typeProvider.FindDeclType(typeName); found {
+			return declType.CelType()
+		}
+	}
+
+	// Fallback: convert schema directly for nested/leaf types not in the provider
 	if schema == nil {
 		return cel.DynType
 	}
-
 	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 	if declType == nil {
 		return cel.DynType
 	}
-
 	declType = declType.MaybeAssignTypeName(typeName)
 	return declType.CelType()
 }
@@ -1098,7 +1130,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
+		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
 		for _, expression := range templateVariable.Expressions {
 			// Parse, type-check, and compile
@@ -1276,13 +1308,13 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 }
 
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
-// Collections (those with forEach) are wrapped as list types
-// so other nodes can reference them as arrays and use CEL list functions.
+// Collections (forEach) and external collections (selector) are wrapped as
+// list types so other nodes can reference them as arrays and use CEL list functions.
 func collectNodeSchemas(nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
-			if node.Meta.Type == NodeTypeCollection {
+			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
 				result[id] = schema.WrapSchemaAsList(sch)
 			} else {
 				result[id] = sch

@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -22,10 +23,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 const testMaxCollectionSize = 1000
@@ -71,27 +74,29 @@ func TestNode_IsIgnored(t *testing.T) {
 }
 
 func TestNode_IsReady(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
 	tests := []struct {
-		name      string
-		node      *Node
-		wantReady bool
-		wantErr   bool
+		name    string
+		node    *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
-			name:      "single resource without readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).build(),
-			wantReady: false,
+			name:    "single resource without readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "single resource without readyWhen, observed - ready",
 			node: newTestNode("test", graph.NodeTypeResource).
 				withObserved(map[string]any{"metadata": map[string]any{"name": "test"}}).build(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
-			name:      "single resource with readyWhen, not observed - not ready",
-			node:      newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
-			wantReady: false,
+			name:    "single resource with readyWhen, not observed - not ready",
+			node:    newTestNode("test", graph.NodeTypeResource).withReadyWhen("test.status.ready").build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "ignored nodes are always ready",
@@ -100,19 +105,13 @@ func TestNode_IsReady(t *testing.T) {
 					withDep(newTestNode("schema", graph.NodeTypeInstance).build()).
 					withResolvedIncludeWhen("false", false).build()).
 				withReadyWhen("test.status.ready").build(),
-			wantReady: true, // ignored, so ready
+			wantErr: assert.NoError, // ignored, so ready
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.wantReady, ready)
-			}
+			tt.wantErr(t, tt.node.CheckReadiness())
 		})
 	}
 }
@@ -244,6 +243,217 @@ func TestNode_BuildContext(t *testing.T) {
 	}
 }
 
+func TestNode_BuildContext_SchemaAwareConversion(t *testing.T) {
+	// This test verifies that the schema-aware conversion correctly converts
+	// Secret data fields from base64 strings to bytes, matching CEL compile-time types.
+	// Before this fix, string(secret.data.clientId) would fail because CEL compiled
+	// it as string(bytes) but received a string at runtime.
+	secretSch := secretSchema()
+
+	// Create a typed CEL environment where "secret" has the proper Secret schema.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"secret": secretSch,
+	})
+	require.NoError(t, err)
+
+	// Compile: string(secret.data.clientId) — typed as string(bytes), the Kubernetes convention.
+	celAST, issues := typedEnv.Compile("string(secret.data.clientId)")
+	require.NoError(t, issues.Err())
+	program, err := typedEnv.Program(celAST)
+	require.NoError(t, err)
+
+	expr := &krocel.Expression{
+		Original:   "string(secret.data.clientId)",
+		Program:    program,
+		References: []string{"secret"},
+	}
+
+	// Build a secret dep node with the schema and base64-encoded observed data.
+	secretDep := newTestNode("secret", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Secret",
+			"metadata":   map[string]any{"name": "test-secret", "namespace": "default"},
+			"data": map[string]any{
+				"clientId":     "bWF4",             // base64("max")
+				"clientSecret": "bXVzdGVybWFubg==", // base64("mustermann")
+			},
+		}).
+		withResourceSchema(secretSch).
+		build()
+
+	// Build the node that depends on the secret.
+	node := newTestNode("deployment", graph.NodeTypeResource).
+		withDep(secretDep).
+		build()
+
+	// Build context — this should wrap the secret with UnstructuredToVal.
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "secret")
+
+	// Evaluate the expression — this is the key assertion.
+	// Before the fix, this would fail with "no such overload: string(string)".
+	result, err := expr.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "max", result, "string(secret.data.clientId) should decode base64 to 'max'")
+
+	// Also test the second field.
+	celAST2, issues2 := typedEnv.Compile("string(secret.data.clientSecret)")
+	require.NoError(t, issues2.Err())
+	program2, err := typedEnv.Program(celAST2)
+	require.NoError(t, err)
+
+	expr2 := &krocel.Expression{
+		Original:   "string(secret.data.clientSecret)",
+		Program:    program2,
+		References: []string{"secret"},
+	}
+
+	result2, err := expr2.Eval(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "mustermann", result2, "string(secret.data.clientSecret) should decode base64 to 'mustermann'")
+}
+
+func TestNode_BuildContext_PreserveUnknownFields(t *testing.T) {
+	// This test verifies that fields inside x-kubernetes-preserve-unknown-fields objects
+	// are accessible via CEL expressions. Before this fix, UnstructuredToVal would hide
+	// these fields behind an opaque wrapper that rejected all field access.
+
+	// Schema: spec.config is {type: "object", x-kubernetes-preserve-unknown-fields: true}
+	// with no properties — simulating a CRD that allows arbitrary nested data.
+	preserveUnknownSchema := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"spec": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"config": {
+							VendorExtensible: spec.VendorExtensible{
+								Extensions: spec.Extensions{
+									"x-kubernetes-preserve-unknown-fields": true,
+								},
+							},
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+							},
+						},
+					},
+				}},
+				"status": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"additional": {SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Schema: &spec.Schema{
+									VendorExtensible: spec.VendorExtensible{
+										Extensions: spec.Extensions{
+											"x-kubernetes-preserve-unknown-fields": true,
+										},
+									},
+								},
+							},
+						}},
+					},
+				}},
+			},
+		},
+	}
+
+	// Create a typed CEL env where "external" is declared as dyn.
+	typedEnv, err := krocel.TypedEnvironment(map[string]*spec.Schema{
+		"external": preserveUnknownSchema,
+	})
+	require.NoError(t, err)
+
+	t.Run("preserve-unknown object field access", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.spec.config.foo")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.spec.config.foo",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"spec": map[string]any{
+					"config": map[string]any{
+						"foo": "bar",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "bar", result)
+	})
+
+	t.Run("additionalProperties with preserve-unknown values", func(t *testing.T) {
+		celAST, issues := typedEnv.Compile("external.status.additional.key")
+		require.NoError(t, issues.Err())
+		program, err := typedEnv.Program(celAST)
+		require.NoError(t, err)
+
+		expr := &krocel.Expression{
+			Original:   "external.status.additional.key",
+			Program:    program,
+			References: []string{"external"},
+		}
+
+		dep := newTestNode("external", graph.NodeTypeExternal).
+			withObserved(map[string]any{
+				"status": map[string]any{
+					"additional": map[string]any{
+						"key": "value",
+					},
+				},
+			}).
+			withResourceSchema(preserveUnknownSchema).
+			build()
+
+		node := newTestNode("test", graph.NodeTypeResource).
+			withDep(dep).
+			build()
+
+		ctx := node.buildContext()
+		result, err := expr.Eval(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "value", result)
+	})
+}
+
+func TestNode_BuildContext_NilSchemaFallback(t *testing.T) {
+	// When no schema is provided, buildContext should pass raw objects (backward compatible).
+	dep := newTestNode("configmap", graph.NodeTypeResource).
+		withObserved(map[string]any{
+			"data": map[string]any{"key": "value"},
+		}).
+		build()
+
+	node := newTestNode("test", graph.NodeTypeResource).
+		withDep(dep).
+		build()
+
+	ctx := node.buildContext()
+	require.Contains(t, ctx, "configmap")
+
+	// Without schema, the value should be a raw map.
+	_, isMap := ctx["configmap"].(map[string]any)
+	assert.True(t, isMap, "without schema, context value should be a raw map")
+}
+
 func TestNode_ContextDependencyIDs(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -354,16 +564,20 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 }
 
 func TestNode_IsReady_Collection(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
+
 	tests := []struct {
-		name      string
-		node      *Node
-		wantReady bool
+		name    string
+		node    *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
 			name: "collection with nil desired is not ready",
 			node: newTestNode("buckets", graph.NodeTypeCollection).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection with resolved empty desired is ready",
@@ -373,7 +587,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "collection with fewer observed than desired is not ready",
@@ -384,12 +598,12 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "Pod", "ns", "bucket-1")).
 				withReadyWhen("each.status.ready == true").build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
-			name:      "collection without readyWhen, nil desired - not ready",
-			node:      newTestNode("items", graph.NodeTypeCollection).build(),
-			wantReady: false,
+			name:    "collection without readyWhen, nil desired - not ready",
+			node:    newTestNode("items", graph.NodeTypeCollection).build(),
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection without readyWhen, empty desired - ready",
@@ -398,7 +612,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			}(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "collection without readyWhen, observed < desired - not ready",
@@ -409,7 +623,7 @@ func TestNode_IsReady_Collection(t *testing.T) {
 				).
 				withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "cm-1")).
 				build(),
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "collection without readyWhen, observed >= desired - ready",
@@ -423,15 +637,13 @@ func TestNode_IsReady_Collection(t *testing.T) {
 					newUnstructured("v1", "ConfigMap", "ns", "cm-2"),
 				).
 				build(),
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node.IsReady()
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
+			tt.wantErr(t, tt.node.CheckReadiness())
 		})
 	}
 }
@@ -528,12 +740,13 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 }
 
 func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
+	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
+		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
+	}
 	tests := []struct {
-		name       string
-		node       func() *Node
-		wantReady  bool
-		wantErr    bool
-		errContain string
+		name    string
+		node    func() *Node
+		wantErr assert.ErrorAssertionFunc
 	}{
 		{
 			name: "readyWhen evaluates to true",
@@ -545,7 +758,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "readyWhen evaluates to false",
@@ -557,7 +770,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": false}}).
 					withReadyWhen("vpc.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "multiple readyWhen - all must be true",
@@ -569,7 +782,7 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"ready": true, "state": "pending"}}).
 					withReadyWhen("vpc.status.ready == true", "vpc.status.state == 'available'").build()
 			},
-			wantReady: false,
+			wantErr: waitingForReadinessErr,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -581,23 +794,15 @@ func TestNode_IsSingleResourceReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{"status": map[string]any{"replicas": int64(3), "errorDivisor": int64(0)}}).
 					withReadyWhen("deployment.status.replicas / deployment.status.errorDivisor > 0").build()
 			},
-			wantErr:    true,
-			errContain: "division by zero",
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				return assert.ErrorContains(t, err, "division by zero")
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
-			if tt.wantErr {
-				assert.Error(t, err)
-				if tt.errContain != "" {
-					assert.Contains(t, err.Error(), tt.errContain)
-				}
-				return
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
+			tt.wantErr(t, tt.node().CheckReadiness())
 		})
 	}
 }
@@ -756,7 +961,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				n.desired = []*unstructured.Unstructured{}
 				return n
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "all items ready",
@@ -775,7 +980,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: true,
+			wantErr: false,
 		},
 		{
 			name: "one item not ready",
@@ -794,7 +999,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "fewer observed than desired",
@@ -812,7 +1017,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "CEL data pending returns false",
@@ -825,7 +1030,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withObserved(map[string]any{}).
 					withReadyWhen("each.status.ready == true").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "multiple readyWhen - all must pass",
@@ -841,7 +1046,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 					withReadyWhen("each.status.ready == true").
 					withReadyWhen("each.status.phase == 'Running'").build()
 			},
-			wantReady: false,
+			wantErr: true,
 		},
 		{
 			name: "division by zero in readyWhen",
@@ -866,7 +1071,7 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ready, err := tt.node().IsReady()
+			err := tt.node().CheckReadiness()
 			if tt.wantErr {
 				assert.Error(t, err)
 				if tt.errContain != "" {
@@ -875,7 +1080,6 @@ func TestNode_IsCollectionReady_WithCEL(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
-			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }
@@ -1384,6 +1588,7 @@ type testNodeBuilder struct {
 	templateExprs    []*expressionEvaluationState
 	templateVars     []*variable.ResourceField
 	template         *unstructured.Unstructured
+	resourceSchema   *spec.Schema
 }
 
 // newTestNode creates a new test node builder with the given ID and type.
@@ -1493,6 +1698,12 @@ func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	return b
 }
 
+// withResourceSchema sets the OpenAPI schema for this node's resource.
+func (b *testNodeBuilder) withResourceSchema(schema *spec.Schema) *testNodeBuilder {
+	b.resourceSchema = schema
+	return b
+}
+
 // build constructs the Node.
 func (b *testNodeBuilder) build() *Node {
 	node := &Node{
@@ -1511,9 +1722,1282 @@ func (b *testNodeBuilder) build() *Node {
 		forEachExprs:     b.forEachExprs,
 		templateExprs:    b.templateExprs,
 		templateVars:     b.templateVars,
-		rgdConfig: RGDConfig{
+		rgdConfig: graph.RGDConfig{
 			MaxCollectionSize: testMaxCollectionSize,
 		},
+		resourceSchema: b.resourceSchema,
 	}
 	return node
+}
+
+// secretSchema returns the OpenAPI schema for v1/Secret with format:byte data values.
+func secretSchema() *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				"metadata": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name":      {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						"namespace": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				}},
+				"data": {SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type:   []string{"string"},
+								Format: "byte",
+							},
+						},
+					},
+				}},
+			},
+		},
+	}
+}
+
+func TestErrorHelpers(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   func(t *testing.T)
+	}{
+		{
+			name: "IsDataPending matches wrapped sentinel",
+			fn: func(t *testing.T) {
+				err := errors.New("other")
+				assert.False(t, IsDataPending(err))
+				assert.True(t, IsDataPending(errors.Join(err, ErrDataPending)))
+			},
+		},
+		{
+			name: "isCELDataPending matches known retryable CEL errors",
+			fn: func(t *testing.T) {
+				assert.False(t, isCELDataPending(nil))
+
+				for _, msg := range []string{
+					"eval failed: no such key: status",
+					"eval failed: no such field: ready",
+					"eval failed: no such attribute: schema",
+					"eval failed: index out of bounds: 1",
+				} {
+					assert.True(t, isCELDataPending(errors.New(msg)), msg)
+				}
+
+				assert.False(t, isCELDataPending(errors.New("division by zero")))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.fn)
+	}
+}
+
+func TestEvalExprAny(t *testing.T) {
+	tests := []struct {
+		name           string
+		expr           *expressionEvaluationState
+		ctx            map[string]any
+		want           any
+		wantErrContain string
+		wantResolved   bool
+	}{
+		{
+			name: "returns cached value without evaluation",
+			expr: &expressionEvaluationState{
+				Expression:    krocel.NewUncompiled("schema.spec.name"),
+				Kind:          variable.ResourceVariableKindStatic,
+				Resolved:      true,
+				ResolvedValue: "cached",
+			},
+			ctx:          map[string]any{"schema": map[string]any{"spec": map[string]any{"name": "fresh"}}},
+			want:         "cached",
+			wantResolved: true,
+		},
+		{
+			name: "evaluates and caches uncached expression",
+			expr: func() *expressionEvaluationState {
+				expr := &expressionEvaluationState{
+					Expression: mustCompileTestExpr("schema.spec.name"),
+					Kind:       variable.ResourceVariableKindStatic,
+				}
+				expr.Expression.References = []string{"schema"}
+				return expr
+			}(),
+			ctx: map[string]any{
+				"schema": map[string]any{"spec": map[string]any{"name": "demo"}},
+				"other":  "ignored",
+			},
+			want:         "demo",
+			wantResolved: true,
+		},
+		{
+			name: "propagates evaluation errors",
+			expr: func() *expressionEvaluationState {
+				expr := &expressionEvaluationState{
+					Expression: mustCompileTestExpr("schema.spec.total / schema.spec.divisor"),
+					Kind:       variable.ResourceVariableKindStatic,
+				}
+				expr.Expression.References = []string{"schema"}
+				return expr
+			}(),
+			ctx: map[string]any{
+				"schema": map[string]any{"spec": map[string]any{"total": int64(10), "divisor": int64(0)}},
+			},
+			wantErrContain: "division by zero",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, err := evalExprAny(tt.expr, tt.ctx)
+			if tt.wantErrContain != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, val)
+			assert.Equal(t, tt.wantResolved, tt.expr.Resolved)
+			assert.Equal(t, tt.want, tt.expr.ResolvedValue)
+		})
+	}
+}
+
+func TestEvalBoolExpr(t *testing.T) {
+	tests := []struct {
+		name           string
+		expr           *expressionEvaluationState
+		ctx            map[string]any
+		want           bool
+		wantErrContain string
+		wantResolved   bool
+	}{
+		{
+			name: "returns cached bool",
+			expr: &expressionEvaluationState{
+				Expression:    krocel.NewUncompiled("schema.spec.enabled"),
+				Kind:          variable.ResourceVariableKindIncludeWhen,
+				Resolved:      true,
+				ResolvedValue: true,
+			},
+			ctx:          map[string]any{},
+			want:         true,
+			wantResolved: true,
+		},
+		{
+			name: "returns false for null values without caching",
+			expr: &expressionEvaluationState{
+				Expression: mustCompileTestExpr("null"),
+				Kind:       variable.ResourceVariableKindIncludeWhen,
+			},
+			ctx:          map[string]any{},
+			want:         false,
+			wantResolved: false,
+		},
+		{
+			name: "errors when expression is not bool",
+			expr: &expressionEvaluationState{
+				Expression: mustCompileTestExpr("1"),
+				Kind:       variable.ResourceVariableKindIncludeWhen,
+			},
+			ctx:            map[string]any{},
+			wantErrContain: "did not return bool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, err := evalBoolExpr(tt.expr, tt.ctx)
+			if tt.wantErrContain != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, val)
+			assert.Equal(t, tt.wantResolved, tt.expr.Resolved)
+		})
+	}
+}
+
+func TestEvalListExpr(t *testing.T) {
+	tests := []struct {
+		name           string
+		expr           *expressionEvaluationState
+		ctx            map[string]any
+		want           []any
+		wantErrContain string
+		wantResolved   bool
+	}{
+		{
+			name: "returns cached list",
+			expr: &expressionEvaluationState{
+				Expression:    krocel.NewUncompiled("schema.spec.items"),
+				Kind:          variable.ResourceVariableKindIteration,
+				Resolved:      true,
+				ResolvedValue: []any{"cached"},
+			},
+			ctx:          map[string]any{},
+			want:         []any{"cached"},
+			wantResolved: true,
+		},
+		{
+			name: "returns list and caches value",
+			expr: func() *expressionEvaluationState {
+				expr := &expressionEvaluationState{
+					Expression: mustCompileTestExpr("schema.spec.items"),
+					Kind:       variable.ResourceVariableKindIteration,
+				}
+				expr.Expression.References = []string{"schema"}
+				return expr
+			}(),
+			ctx: map[string]any{
+				"schema": map[string]any{"spec": map[string]any{"items": []any{"a", "b"}}},
+			},
+			want:         []any{"a", "b"},
+			wantResolved: true,
+		},
+		{
+			name: "errors on null result",
+			expr: &expressionEvaluationState{
+				Expression: mustCompileTestExpr("null"),
+				Kind:       variable.ResourceVariableKindIteration,
+			},
+			ctx:            map[string]any{},
+			wantErrContain: "expected list",
+		},
+		{
+			name: "errors on non-list result",
+			expr: &expressionEvaluationState{
+				Expression: mustCompileTestExpr("1"),
+				Kind:       variable.ResourceVariableKindIteration,
+			},
+			ctx:            map[string]any{},
+			wantErrContain: "did not return a list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, err := evalListExpr(tt.expr, tt.ctx)
+			if tt.wantErrContain != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, val)
+			assert.Equal(t, tt.wantResolved, tt.expr.Resolved)
+		})
+	}
+}
+
+func TestFilterContext(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  map[string]any
+		refs []string
+		want map[string]any
+		same bool
+	}{
+		{
+			name: "returns original context when refs are empty",
+			ctx:  map[string]any{"a": 1, "b": 2},
+			want: map[string]any{"a": 1, "b": 2},
+			same: true,
+		},
+		{
+			name: "filters to referenced keys",
+			ctx:  map[string]any{"a": 1, "b": 2},
+			refs: []string{"b", "missing"},
+			want: map[string]any{"b": 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterContext(tt.ctx, tt.refs)
+			assert.Equal(t, tt.want, got)
+			if tt.same {
+				got["c"] = 3
+				assert.Equal(t, 3, tt.ctx["c"])
+			}
+		})
+	}
+}
+
+func TestNormalizeNamespaces(t *testing.T) {
+	tests := []struct {
+		name           string
+		objs           []*unstructured.Unstructured
+		namespace      string
+		wantNamespaces []string
+	}{
+		{
+			name: "fills missing namespace and preserves explicit namespace",
+			objs: []*unstructured.Unstructured{
+				newUnstructured("v1", "ConfigMap", "", "generated"),
+				newUnstructured("v1", "ConfigMap", "explicit", "existing"),
+			},
+			namespace:      "tenant-a",
+			wantNamespaces: []string{"tenant-a", "explicit"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalizeNamespaces(tt.objs, tt.namespace)
+			for i, obj := range tt.objs {
+				assert.Equal(t, tt.wantNamespaces[i], obj.GetNamespace())
+			}
+		})
+	}
+}
+
+func TestNode_TemplateVarsForPaths(t *testing.T) {
+	node := newTestNode("test", graph.NodeTypeResource).
+		withTemplateVar("metadata.name", "schema.spec.name").
+		withTemplateVar("metadata.namespace", "schema.metadata.namespace").
+		withTemplateVar("data.value", "vpc.status.id").
+		build()
+
+	tests := []struct {
+		name      string
+		paths     []string
+		wantPaths []string
+	}{
+		{
+			name:      "nil paths returns all template vars",
+			paths:     nil,
+			wantPaths: []string{"metadata.name", "metadata.namespace", "data.value"},
+		},
+		{
+			name:      "filters to identity paths",
+			paths:     identityPaths,
+			wantPaths: []string{"metadata.name", "metadata.namespace"},
+		},
+		{
+			name:      "returns empty slice for unknown paths",
+			paths:     []string{"status.ready"},
+			wantPaths: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := node.templateVarsForPaths(tt.paths)
+			require.Len(t, result, len(tt.wantPaths))
+			for i, path := range tt.wantPaths {
+				assert.Equal(t, path, result[i].Path)
+			}
+		})
+	}
+}
+
+func TestNode_NeededDeps(t *testing.T) {
+	schemaExpr := krocel.NewUncompiled("schema.spec.name")
+	schemaExpr.References = []string{"schema"}
+	vpcExpr := krocel.NewUncompiled("vpc.status.id")
+	vpcExpr.References = []string{"vpc"}
+	iterExpr := krocel.NewUncompiled("region")
+	iterExpr.References = []string{"region"}
+
+	node := newTestNode("test", graph.NodeTypeResource).build()
+	node.templateExprs = []*expressionEvaluationState{
+		{Expression: schemaExpr, Kind: variable.ResourceVariableKindStatic},
+		{Expression: vpcExpr, Kind: variable.ResourceVariableKindDynamic},
+		{Expression: iterExpr, Kind: variable.ResourceVariableKindIteration},
+	}
+
+	tests := []struct {
+		name     string
+		exprs    map[string]struct{}
+		wantDeps []string
+	}{
+		{
+			name:     "nil filter includes all non-iteration deps",
+			exprs:    nil,
+			wantDeps: []string{"schema", "vpc"},
+		},
+		{
+			name: "explicit filter narrows dependencies",
+			exprs: map[string]struct{}{
+				"vpc.status.id": {},
+			},
+			wantDeps: []string{"vpc"},
+		},
+		{
+			name:     "empty filter returns no dependencies",
+			exprs:    map[string]struct{}{},
+			wantDeps: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.ElementsMatch(t, tt.wantDeps, node.neededDeps(tt.exprs))
+		})
+	}
+}
+
+func TestNode_GetDesiredIdentity(t *testing.T) {
+	tests := []struct {
+		name        string
+		node        func() *Node
+		expectPanic bool
+		validate    func(t *testing.T, result []*unstructured.Unstructured, err error)
+	}{
+		{
+			name: "resource resolves only identity fields and normalizes namespace",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"name": "demo"},
+					}).build()
+				subnet := newTestNode("subnet", graph.NodeTypeResource).build()
+
+				node := newTestNode("configmap", graph.NodeTypeResource).
+					withDep(schema).
+					withDep(subnet).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${schema.spec.name}"},
+						"data":       map[string]any{"subnet": "${subnet.status.id}"},
+					}).
+					withTemplateVar("metadata.name", "schema.spec.name").
+					withTemplateVar("data.subnet", "subnet.status.id").
+					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
+					withTemplateExpr("subnet.status.id", variable.ResourceVariableKindDynamic).
+					build()
+				node.Spec.Meta.Namespaced = true
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "demo", result[0].GetName())
+				assert.Equal(t, "tenant-a", result[0].GetNamespace())
+			},
+		},
+		{
+			name: "collection resolves identities without collection index labels",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"regions": []any{"east", "west"}},
+					}).build()
+
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.Meta.Namespaced = true
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 2)
+				assert.Equal(t, []string{"east", "west"}, []string{result[0].GetName(), result[1].GetName()})
+				assert.Equal(t, []string{"tenant-a", "tenant-a"}, []string{result[0].GetNamespace(), result[1].GetNamespace()})
+				assert.Empty(t, result[0].GetLabels()[metadata.CollectionIndexLabel])
+				assert.Empty(t, result[1].GetLabels()[metadata.CollectionIndexLabel])
+			},
+		},
+		{
+			name: "external collection has no desired identity",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				assert.Nil(t, result)
+			},
+		},
+		{
+			name: "external resource resolves identity like a single resource",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternal).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Secret",
+						"metadata":   map[string]any{"name": "external-name"},
+					}).
+					build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "external-name", result[0].GetName())
+			},
+		},
+		{
+			name: "resource identity errors are propagated",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"total": int64(10), "divisor": int64(0)},
+					}).build()
+
+				node := newTestNode("configmap", graph.NodeTypeResource).
+					withDep(schema).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${schema.spec.total / schema.spec.divisor}"},
+					}).
+					withTemplateVar("metadata.name", "schema.spec.total / schema.spec.divisor").
+					withTemplateExpr("schema.spec.total / schema.spec.divisor", variable.ResourceVariableKindStatic).
+					build()
+				node.templateExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			validate: func(t *testing.T, _ []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "division by zero")
+			},
+		},
+		{
+			name: "collection identity errors are propagated",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{"spec": map[string]any{}}).
+					build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			validate: func(t *testing.T, _ []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrDataPending)
+			},
+		},
+		{
+			name: "instance nodes panic when asked for desired identity",
+			node: func() *Node {
+				return newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).build()
+			},
+			expectPanic: true,
+		},
+		{
+			name: "unknown node types panic",
+			node: func() *Node {
+				return newTestNode("mystery", graph.NodeType(99)).build()
+			},
+			expectPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := tt.node()
+			if tt.expectPanic {
+				assert.Panics(t, func() {
+					_, _ = node.GetDesiredIdentity()
+				})
+				return
+			}
+
+			result, err := node.GetDesiredIdentity()
+			tt.validate(t, result, err)
+		})
+	}
+}
+
+func TestNode_DeleteTargets(t *testing.T) {
+	tests := []struct {
+		name        string
+		node        func() *Node
+		expectPanic bool
+		validate    func(t *testing.T, node *Node, result []*unstructured.Unstructured, err error)
+	}{
+		{
+			name: "resource deletes currently observed object set",
+			node: func() *Node {
+				return newTestNode("configmap", graph.NodeTypeResource).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "desired"},
+					}).
+					withObservedUnstructured(newUnstructured("v1", "ConfigMap", "ns", "observed")).
+					build()
+			},
+			validate: func(t *testing.T, node *Node, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Same(t, node.observed[0], result[0])
+			},
+		},
+		{
+			name: "collection deletes only observed objects that still match desired identities in desired order",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"regions": []any{"east", "west"}},
+					}).build()
+
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					withObservedUnstructured(
+						newUnstructured("v1", "ConfigMap", "tenant-a", "west"),
+						newUnstructured("v1", "ConfigMap", "tenant-a", "orphan"),
+						newUnstructured("v1", "ConfigMap", "tenant-a", "east"),
+					).
+					build()
+				node.Spec.Meta.Namespaced = true
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			validate: func(t *testing.T, _ *Node, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 2)
+				assert.Equal(t, []string{"east", "west"}, []string{result[0].GetName(), result[1].GetName()})
+			},
+		},
+		{
+			name: "external nodes panic because they are never delete targets",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternal).build()
+			},
+			expectPanic: true,
+		},
+		{
+			name: "external collections panic because they are never delete targets",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).build()
+			},
+			expectPanic: true,
+		},
+		{
+			name: "instance nodes panic because they are never delete targets",
+			node: func() *Node {
+				return newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).build()
+			},
+			expectPanic: true,
+		},
+		{
+			name: "identity resolution errors are surfaced",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{"spec": map[string]any{}}).
+					build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			validate: func(t *testing.T, _ *Node, _ []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrDataPending)
+			},
+		},
+		{
+			name: "unknown node types panic",
+			node: func() *Node {
+				return newTestNode("mystery", graph.NodeType(99)).build()
+			},
+			expectPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := tt.node()
+			if tt.expectPanic {
+				assert.Panics(t, func() {
+					_, _ = node.DeleteTargets()
+				})
+				return
+			}
+
+			result, err := node.DeleteTargets()
+			tt.validate(t, node, result, err)
+		})
+	}
+}
+
+func TestNode_GetDesired(t *testing.T) {
+	tests := []struct {
+		name        string
+		node        func() *Node
+		expectPanic bool
+		validate    func(t *testing.T, result []*unstructured.Unstructured, err error)
+	}{
+		{
+			name: "resource desired is namespace-normalized",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"name": "demo"},
+					}).build()
+
+				node := newTestNode("configmap", graph.NodeTypeResource).
+					withDep(schema).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${schema.spec.name}"},
+					}).
+					withTemplateVar("metadata.name", "schema.spec.name").
+					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
+					build()
+				node.Spec.Meta.Namespaced = true
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "demo", result[0].GetName())
+				assert.Equal(t, "tenant-a", result[0].GetNamespace())
+			},
+		},
+		{
+			name: "collection desired gets index labels and namespaces",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"regions": []any{"east", "west"}},
+					}).build()
+
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.Meta.Namespaced = true
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 2)
+				assert.Equal(t, "0", result[0].GetLabels()[metadata.CollectionIndexLabel])
+				assert.Equal(t, "1", result[1].GetLabels()[metadata.CollectionIndexLabel])
+				assert.Equal(t, []string{"tenant-a", "tenant-a"}, []string{result[0].GetNamespace(), result[1].GetNamespace()})
+			},
+		},
+		{
+			name: "instance desired uses soft resolution",
+			node: func() *Node {
+				return newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withDep(newTestNode("vpc", graph.NodeTypeResource).
+						withObserved(map[string]any{"status": map[string]any{"vpcId": "vpc-123"}}).build()).
+					withTemplate(map[string]any{"status": map[string]any{"vpcId": "${vpc.status.vpcId}"}}).
+					withTemplateVar("status.vpcId", "vpc.status.vpcId").
+					withTemplateExpr("vpc.status.vpcId", variable.ResourceVariableKindDynamic).
+					build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				vpcID, found, getErr := unstructured.NestedString(result[0].Object, "status", "vpcId")
+				require.NoError(t, getErr)
+				assert.True(t, found)
+				assert.Equal(t, "vpc-123", vpcID)
+			},
+		},
+		{
+			name: "external collection resolves template like a single desired object",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Service",
+						"metadata": map[string]any{
+							"name": "selector-template",
+							"labels": map[string]any{
+								"app": "demo",
+							},
+						},
+					}).
+					build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "selector-template", result[0].GetName())
+			},
+		},
+		{
+			name: "dependency readiness failures are wrapped",
+			node: func() *Node {
+				dep := newTestNode("vpc", graph.NodeTypeResource).
+					withObserved(map[string]any{
+						"status": map[string]any{"replicas": int64(3), "divisor": int64(0)},
+					}).
+					withReadyWhen("vpc.status.replicas / vpc.status.divisor > 0").
+					build()
+
+				return newTestNode("configmap", graph.NodeTypeResource).
+					withDep(dep).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "child"},
+					}).
+					build()
+			},
+			validate: func(t *testing.T, _ []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to check readiness of dependent node")
+			},
+		},
+		{
+			name: "unknown node types panic",
+			node: func() *Node {
+				return newTestNode("mystery", graph.NodeType(99)).build()
+			},
+			expectPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := tt.node()
+			if tt.expectPanic {
+				assert.Panics(t, func() {
+					_, _ = node.GetDesired()
+				})
+				return
+			}
+
+			result, err := node.GetDesired()
+			tt.validate(t, result, err)
+		})
+	}
+}
+
+func TestNode_SetObserved_ExternalCollection(t *testing.T) {
+	tests := []struct {
+		name      string
+		node      *Node
+		observed  []*unstructured.Unstructured
+		wantNames []string
+	}{
+		{
+			name: "external collection keeps observed order untouched",
+			node: newTestNode("external", graph.NodeTypeExternalCollection).build(),
+			observed: []*unstructured.Unstructured{
+				newUnstructured("v1", "Service", "ns", "c"),
+				newUnstructured("v1", "Service", "ns", "a"),
+				newUnstructured("v1", "Service", "ns", "b"),
+			},
+			wantNames: []string{"c", "a", "b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.node.SetObserved(tt.observed)
+			require.Len(t, tt.node.observed, len(tt.wantNames))
+			for i, name := range tt.wantNames {
+				assert.Equal(t, name, tt.node.observed[i].GetName())
+			}
+		})
+	}
+}
+
+func TestNode_CheckReadiness_ExternalCollection(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           func() *Node
+		wantErrIs      error
+		wantErrContain string
+	}{
+		{
+			name: "missing observed state does not block external collection readiness",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withReadyWhen("each.status.ready == true").
+					build()
+			},
+		},
+		{
+			name: "observed external items can satisfy readyWhen",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withObserved(map[string]any{"status": map[string]any{"ready": true}}).
+					withReadyWhen("each.status.ready == true").
+					build()
+			},
+		},
+		{
+			name: "pending readyWhen surfaces waiting sentinel",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withObserved(map[string]any{}).
+					withReadyWhen("each.status.ready == true").
+					build()
+			},
+			wantErrIs: ErrWaitingForReadiness,
+		},
+		{
+			name: "non-bool readyWhen returns a type error",
+			node: func() *Node {
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withObserved(map[string]any{"status": map[string]any{"ready": "yes"}}).
+					withReadyWhen("each.status.ready").
+					build()
+			},
+			wantErrContain: "did not return bool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.node().CheckReadiness()
+			if tt.wantErrIs == nil && tt.wantErrContain == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			if tt.wantErrIs != nil {
+				assert.ErrorIs(t, err, tt.wantErrIs)
+			}
+			if tt.wantErrContain != "" {
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+			}
+		})
+	}
+}
+
+func TestNode_CheckReadiness_IsIgnoredErrors(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           func() *Node
+		wantErrContain string
+	}{
+		{
+			name: "ignore evaluation failures are surfaced before readiness checks",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"total": int64(10), "divisor": int64(0)},
+					}).build()
+				parent := newTestNode("parent", graph.NodeTypeResource).
+					withDep(schema).
+					withIncludeWhen("schema.spec.total / schema.spec.divisor > 0").
+					build()
+				return newTestNode("child", graph.NodeTypeResource).
+					withDep(parent).
+					build()
+			},
+			wantErrContain: "is ignore check failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.node().CheckReadiness()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErrContain)
+		})
+	}
+}
+
+func TestNode_EvaluateForEach_Errors(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           func() *Node
+		wantErrIs      error
+		wantErrContain string
+	}{
+		{
+			name: "missing list input returns data pending",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{"spec": map[string]any{}}).
+					build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			wantErrIs: ErrDataPending,
+		},
+		{
+			name: "non-list forEach input returns a type error",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{"spec": map[string]any{"regions": int64(1)}}).
+					build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				return node
+			},
+			wantErrContain: "did not return a list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.node().evaluateForEach()
+			assert.Nil(t, result)
+			require.Error(t, err)
+			if tt.wantErrIs != nil {
+				assert.ErrorIs(t, err, tt.wantErrIs)
+			}
+			if tt.wantErrContain != "" {
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+			}
+		})
+	}
+}
+
+func TestNode_HardResolveSingleResource_Errors(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           func() *Node
+		wantErrContain string
+	}{
+		{
+			name: "resolver summary errors are returned",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"name": "demo"},
+					}).build()
+				node := newTestNode("configmap", graph.NodeTypeResource).
+					withDep(schema).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "demo"},
+					}).
+					withTemplateVar("metadata[", "schema.spec.name").
+					withTemplateExpr("schema.spec.name", variable.ResourceVariableKindStatic).
+					build()
+				node.templateExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			wantErrContain: "resolve errors",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := tt.node()
+			result, err := node.hardResolveSingleResource(node.templateVars)
+			assert.Nil(t, result)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErrContain)
+		})
+	}
+}
+
+func TestNode_HardResolveCollection_Errors(t *testing.T) {
+	tests := []struct {
+		name           string
+		node           func() *Node
+		wantErrIs      error
+		wantErrContain string
+	}{
+		{
+			name: "base expression failures are wrapped",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"divisor": int64(0),
+							"regions": []any{"east"},
+							"total":   int64(10),
+						},
+					}).build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${schema.spec.total / schema.spec.divisor}"},
+					}).
+					withTemplateVar("metadata.name", "schema.spec.total / schema.spec.divisor").
+					withTemplateExpr("schema.spec.total / schema.spec.divisor", variable.ResourceVariableKindStatic).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.templateExprs[0].Expression.References = []string{"schema"}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			wantErrContain: `node "configs" base eval`,
+		},
+		{
+			name: "iteration pending errors return ErrDataPending",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{
+							"items":  []any{map[string]any{}},
+							"prefix": "cfg",
+						},
+					}).build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.items").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${schema.spec.prefix + '-' + item.missing}"},
+					}).
+					withTemplateVar("metadata.name", "schema.spec.prefix + '-' + item.missing").
+					withTemplateExpr("schema.spec.prefix + '-' + item.missing", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "item", Expression: krocel.NewUncompiled("schema.spec.items")},
+				}
+				node.templateExprs[0].Expression.References = []string{"schema"}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			wantErrIs: ErrDataPending,
+		},
+		{
+			name: "resolver summary errors are returned",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"spec": map[string]any{"regions": []any{"east"}},
+					}).build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata[", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			wantErrContain: "collection resolve: resolve errors",
+		},
+		{
+			name: "identity collisions are rejected",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{
+						"metadata": map[string]any{"namespace": "tenant-a"},
+						"spec":     map[string]any{"regions": []any{"dup", "dup"}},
+					}).build()
+				node := newTestNode("configs", graph.NodeTypeCollection).
+					withDep(schema).
+					withForEach("schema.spec.regions").
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "ConfigMap",
+						"metadata":   map[string]any{"name": "${region}"},
+					}).
+					withTemplateVar("metadata.name", "region").
+					withTemplateExpr("region", variable.ResourceVariableKindIteration).
+					build()
+				node.Spec.Meta.Namespaced = true
+				node.Spec.ForEach = []graph.ForEachDimension{
+					{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+				}
+				node.forEachExprs[0].Expression.References = []string{"schema"}
+				return node
+			},
+			wantErrContain: "identity collision",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := tt.node()
+			result, err := node.hardResolveCollection(node.templateVars, true)
+			assert.Nil(t, result)
+			require.Error(t, err)
+			if tt.wantErrIs != nil {
+				assert.ErrorIs(t, err, tt.wantErrIs)
+			}
+			if tt.wantErrContain != "" {
+				assert.Contains(t, err.Error(), tt.wantErrContain)
+			}
+		})
+	}
 }

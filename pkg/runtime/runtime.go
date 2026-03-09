@@ -15,6 +15,8 @@
 package runtime
 
 import (
+	"time"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -34,11 +36,6 @@ type Interface interface {
 	Instance() *Node
 }
 
-// RGDConfig holds RGD runtime configuration parameters.
-type RGDConfig struct {
-	MaxCollectionSize int
-}
-
 // Runtime is the execution context for a single reconciliation.
 // It holds nodes in topological order and provides access to the instance node.
 // Expression deduplication is done during FromGraph construction via a local cache.
@@ -46,12 +43,18 @@ type Runtime struct {
 	order     []string
 	nodes     map[string]*Node
 	instance  *Node
-	rgdConfig RGDConfig
+	rgdConfig graph.RGDConfig
 }
 
 // FromGraph creates a new Runtime from a Graph and instance.
 // This is called at the start of each reconciliation.
-func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig RGDConfig) (*Runtime, error) {
+func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig graph.RGDConfig) (*Runtime, error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		runtimeCreationDuration.Observe(duration.Seconds())
+		runtimeCreationTotal.Inc()
+	}()
 	instanceObj := instance.DeepCopy()
 
 	rt := &Runtime{
@@ -91,17 +94,19 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig RG
 	// Phase 1: Create all nodes first (without deps wired).
 	for _, id := range rt.order {
 		rt.nodes[id] = &Node{
-			Spec:      g.Nodes[id].DeepCopy(),
-			deps:      make(map[string]*Node),
-			rgdConfig: rgdConfig,
+			Spec:           g.Nodes[id].DeepCopy(),
+			deps:           make(map[string]*Node),
+			rgdConfig:      rgdConfig,
+			resourceSchema: g.ResourceSchemas[id],
 		}
 	}
 
 	// Create instance node.
 	instNode := &Node{
-		Spec:      g.Instance.DeepCopy(),
-		deps:      make(map[string]*Node),
-		rgdConfig: rgdConfig,
+		Spec:           g.Instance.DeepCopy(),
+		deps:           make(map[string]*Node),
+		rgdConfig:      rgdConfig,
+		resourceSchema: g.ResourceSchemas[graph.InstanceNodeID],
 	}
 	instNode.SetObserved([]*unstructured.Unstructured{instanceObj})
 	rt.instance = instNode

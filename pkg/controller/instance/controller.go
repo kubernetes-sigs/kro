@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -28,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -51,7 +53,7 @@ type ReconcileConfig struct {
 	// support.
 	DeletionPolicy string
 	// RGDConfig holds RGD runtime configuration parameters.
-	RGDConfig runtime.RGDConfig
+	RGDConfig graph.RGDConfig
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -81,8 +83,10 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	labeler         metadata.Labeler
-	reconcileConfig ReconcileConfig
+	instanceLabeler      metadata.Labeler
+	childResourceLabeler metadata.Labeler
+	reconcileConfig      ReconcileConfig
+	coordinator          *dynamiccontroller.WatchCoordinator
 }
 
 // NewController constructs a new controller with static RGD.
@@ -92,21 +96,31 @@ func NewController(
 	gvr schema.GroupVersionResource,
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
-	labeler metadata.Labeler,
+	instanceLabeler metadata.Labeler,
+	childResourceLabeler metadata.Labeler,
+	coord *dynamiccontroller.WatchCoordinator,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		client:          client,
-		gvr:             gvr,
-		rgd:             rgd,
-		labeler:         labeler,
-		reconcileConfig: reconcileConfig,
+		log:                  log,
+		client:               client,
+		gvr:                  gvr,
+		rgd:                  rgd,
+		instanceLabeler:      instanceLabeler,
+		childResourceLabeler: childResourceLabeler,
+		reconcileConfig:      reconcileConfig,
+		coordinator:          coord,
 	}
 }
 
 // Reconcile implements the controller-runtime Reconcile interface.
 func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error) {
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
+
+	// Get per-instance watcher from the coordinator.
+	watcher := c.coordinator.ForInstance(c.gvr, req.NamespacedName)
+	defer func() {
+		watcher.Done(err == nil)
+	}()
 
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do
@@ -140,11 +154,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.labeler,
+		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,
 	)
+	rcx.Watcher = watcher
 
 	//--------------------------------------------------------------
 	// 4. Handle deletion: clean up children and status
@@ -172,12 +187,19 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile nodes (SSA + prune) and update runtime state
+	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
 	//--------------------------------------------------------------
-	if err := c.reconcileNodes(rcx); err != nil {
-		rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
-		_ = c.updateStatus(rcx)
-		return err
+	labels := inst.GetLabels()
+	reconcileState, ok := labels[metadata.InstanceReconcileLabel]
+	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+		rcx.Mark.ReconciliationActive()
+		if err := c.reconcileNodes(rcx); err != nil {
+			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+			_ = c.updateStatus(rcx)
+			return err
+		}
+	} else {
+		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceReconcileLabel, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
@@ -191,8 +213,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")
 		}
+	case InstanceStateInProgress:
+		err := rcx.StateManager.NodeErrors()
+		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
 	default:
-		rcx.Mark.ResourcesNotReady("awaiting resource readiness")
+		rcx.Mark.ResourcesNotReady("unknown instance state")
 	}
 
 	//--------------------------------------------------------------
@@ -221,7 +246,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	hasFinalizer := metadata.HasInstanceFinalizer(obj)
 	needFinalizer := !hasFinalizer
 
-	wantLabels := c.labeler.Labels()
+	wantLabels := c.instanceLabeler.Labels()
 	haveLabels := obj.GetLabels()
 	needLabelPatch := false
 

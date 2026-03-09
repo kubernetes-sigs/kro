@@ -16,6 +16,7 @@ package cel
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/cel-go/cel"
 
@@ -69,6 +70,12 @@ func NewUncompiledSlice(exprs ...string) []*Expression {
 
 // Eval evaluates the compiled expression and returns the result.
 func (e *Expression) Eval(ctx map[string]any) (any, error) {
+	startTime := time.Now()
+	defer func() {
+		exprEvalDuration.Observe(time.Since(startTime).Seconds())
+		exprEvalTotal.Inc()
+	}()
+
 	out, _, err := e.Program.Eval(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("eval %q: %w", e.Original, err)

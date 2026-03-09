@@ -336,12 +336,12 @@ func (a *ApplySet) Prune(ctx context.Context, opts PruneOptions) (*PruneResult, 
 	}
 
 	// List and delete orphans
-	pruned, err := a.prune(ctx, pruneMappings, scopeNamespaces, opts.KeepUIDs, opts.Concurrency)
+	pruned, conflicts, err := a.prune(ctx, pruneMappings, scopeNamespaces, opts.KeepUIDs, opts.Concurrency)
 	if err != nil {
 		return nil, err
 	}
 
-	return &PruneResult{Pruned: pruned}, nil
+	return &PruneResult{Pruned: pruned, Conflicts: conflicts}, nil
 }
 
 func (a *ApplySet) applyResource(
@@ -454,7 +454,7 @@ func (a *ApplySet) prune(
 	namespaces sets.Set[string],
 	keepUIDs sets.Set[types.UID],
 	concurrency int,
-) ([]PruneResultItem, error) {
+) ([]PruneResultItem, int, error) {
 	// Track candidates with their GVR for deletion
 	type pruneCandidate struct {
 		obj *unstructured.Unstructured
@@ -522,7 +522,7 @@ func (a *ApplySet) prune(
 		})
 	}
 	if err := listGroup.Wait(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Delete candidates concurrently
@@ -538,17 +538,36 @@ func (a *ApplySet) prune(
 
 	var mu sync.Mutex
 	var results []PruneResultItem
+	conflicts := 0
 
 	for _, c := range candidates {
 		eg.Go(func() error {
+			uid := c.obj.GetUID()
+			deleteOpts := metav1.DeleteOptions{
+				Preconditions: &metav1.Preconditions{UID: &uid},
+			}
 			var err error
 			if c.obj.GetNamespace() != "" {
-				err = a.client.Resource(c.gvr).Namespace(c.obj.GetNamespace()).Delete(egCtx, c.obj.GetName(), metav1.DeleteOptions{})
+				err = a.client.Resource(c.gvr).Namespace(c.obj.GetNamespace()).Delete(egCtx, c.obj.GetName(), deleteOpts)
 			} else {
-				err = a.client.Resource(c.gvr).Delete(egCtx, c.obj.GetName(), metav1.DeleteOptions{})
+				err = a.client.Resource(c.gvr).Delete(egCtx, c.obj.GetName(), deleteOpts)
 			}
 
-			if err != nil && !apierrors.IsNotFound(err) {
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					return nil
+				}
+				if apierrors.IsConflict(err) {
+					a.log.V(2).Info("skipped prune due to UID mismatch (resource recreated)",
+						"name", c.obj.GetName(),
+						"namespace", c.obj.GetNamespace(),
+						"gvr", c.gvr.String(),
+					)
+					mu.Lock()
+					conflicts++
+					mu.Unlock()
+					return nil
+				}
 				return fmt.Errorf("delete %s/%s: %w", c.obj.GetNamespace(), c.obj.GetName(), err)
 			}
 
@@ -566,10 +585,10 @@ func (a *ApplySet) prune(
 	}
 
 	if err := eg.Wait(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return results, nil
+	return results, conflicts, nil
 }
 
 func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string]) {

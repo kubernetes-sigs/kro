@@ -34,8 +34,9 @@ func deploymentService(
 		generator.WithSchema(
 			"DeploymentService", "v1alpha1",
 			map[string]interface{}{
-				"name": "string",
-				"port": "integer | default=80",
+				"name":     "string",
+				"port":     "integer | default=80",
+				"replicas": "integer | default=1",
 			},
 			map[string]interface{}{
 				"deploymentConditions": "${deployment.status.conditions}",
@@ -78,7 +79,7 @@ func deploymentDef() map[string]interface{} {
 			"name": "${schema.spec.name}",
 		},
 		"spec": map[string]interface{}{
-			"replicas": 1,
+			"replicas": "${schema.spec.replicas}",
 			"selector": map[string]interface{}{
 				"matchLabels": map[string]interface{}{
 					"app": "deployment",

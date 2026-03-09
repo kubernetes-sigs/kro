@@ -67,7 +67,7 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		)
 
 		// If there's nothing to update, just return.
-		if equality.Semantic.DeepEqual(current.Status, o.Status) {
+		if equality.Semantic.DeepEqual(current.Status, dc.Status) {
 			return nil
 		}
 

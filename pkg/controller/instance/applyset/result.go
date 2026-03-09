@@ -30,12 +30,20 @@ type ApplyResult struct {
 // PruneResult contains outcomes for prune operations.
 // All items in Pruned are successful deletes (errors return from Prune directly).
 type PruneResult struct {
-	Pruned []PruneResultItem
+	Pruned    []PruneResultItem
+	Conflicts int
 }
 
 // HasPruned returns true if any resources were pruned.
 func (r *PruneResult) HasPruned() bool {
 	return len(r.Pruned) > 0
+}
+
+// HasConflicts returns true if prune encountered UID precondition conflicts.
+// These are safe skips (resource was recreated), but callers may choose to
+// requeue and retry prune while keeping superset prune scope.
+func (r *PruneResult) HasConflicts() bool {
+	return r.Conflicts > 0
 }
 
 // ApplyResultItem is the outcome of applying a single resource.

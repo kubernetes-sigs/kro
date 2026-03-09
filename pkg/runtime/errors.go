@@ -24,6 +24,8 @@ import (
 // This is a retryable condition - the controller should requeue and try again.
 var ErrDataPending = errors.New("data pending")
 
+var ErrWaitingForReadiness = errors.New("waiting for readiness")
+
 // ErrDesiredNotResolved indicates that the desired state for a node has not
 // been resolved yet. This typically happens when GetDesired is called on a
 // node that is still in Pending or Error state.

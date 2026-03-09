@@ -28,6 +28,12 @@ const (
 // Allow nested expressions, but only if they are escaped with quotes ${outer("${inner}")} is allowed, but ${outer(${inner})} is not
 var ErrNestedExpression = errors.New("nested expressions are not allowed unless inside string literals")
 
+// ExtractExpressions extracts all non-nested CEL expressions from a string.
+// It returns an error if it encounters a nested expression.
+func ExtractExpressions(str string) ([]string, error) {
+	return extractExpressions(str)
+}
+
 // extractExpressions extracts all non-nested CEL expressions from a string.
 // It returns an error if it encounters a nested expression.
 func extractExpressions(str string) ([]string, error) {

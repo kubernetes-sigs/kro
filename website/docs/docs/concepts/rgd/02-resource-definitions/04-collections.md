@@ -517,8 +517,11 @@ looks surprising.
 
 ### External References
 
-Collections are only supported for templated resources. A resource cannot use
-both `forEach` and `externalRef`.
+A resource cannot use both `forEach` and `externalRef` — they are mutually
+exclusive fields. However, external refs can act as collections on their own
+by using `selector` instead of `name`. See
+**[External Collections](./05-external-references.md#external-collections)**
+for details on label-selector-based external collections.
 
 ### Dimension Explosion
 
@@ -548,6 +551,16 @@ Currently, collections that exceed this limit will get stuck during deletion. If
 accidentally create a collection larger than the configured limit, manual cleanup may
 be required.
 :::
+
+### Collection Dimension Limit
+
+Each resource is limited to **10 forEach dimensions** by default. If a resource
+defines more forEach iterators than this limit, validation fails at RGD
+processing time before any resources are created.
+
+This prevents combinatorial explosion from deeply nested cartesian products.
+This limit is configurable through the CLI flag `--rgd-max-collection-dimension-size`
+or the Helm value `config.rgd.maxCollectionDimensionSize`.
 
 ### includeWhen Is Collection-wide
 

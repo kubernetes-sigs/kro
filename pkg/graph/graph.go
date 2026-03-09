@@ -16,6 +16,7 @@ package graph
 
 import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 )
@@ -41,4 +42,9 @@ type Graph struct {
 
 	// CRD is the generated CustomResourceDefinition for the instance.
 	CRD *extv1.CustomResourceDefinition
+
+	// ResourceSchemas maps node ID to the OpenAPI schema for that resource.
+	// Includes resource schemas (keyed by resource ID) and the instance schema
+	// (keyed by InstanceNodeID). Used at runtime for schema-aware CEL value conversion.
+	ResourceSchemas map[string]*spec.Schema
 }

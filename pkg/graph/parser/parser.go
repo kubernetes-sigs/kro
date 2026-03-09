@@ -283,8 +283,12 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 	if len(expressions) > 0 {
 		// String template: "foo-${expr1}-${expr2}"
 		// StandaloneExpression=false tells builder this is string concatenation
+		exprStrings := make([]string, len(expressions))
+		for i, m := range expressions {
+			exprStrings[i] = m.expr
+		}
 		return []variable.FieldDescriptor{{
-			Expressions:          krocel.NewUncompiledSlice(expressions...),
+			Expressions:          krocel.NewUncompiledSlice(exprStrings...),
 			Path:                 path,
 			StandaloneExpression: false,
 		}}, nil

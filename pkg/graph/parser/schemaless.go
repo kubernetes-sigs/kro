@@ -75,8 +75,12 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			}
 			if len(expressions) > 0 {
 				// String template in schemaless parsing - always produces string
+				exprStrings := make([]string, len(expressions))
+				for i, m := range expressions {
+					exprStrings[i] = m.expr
+				}
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expressions:          krocel.NewUncompiledSlice(expressions...),
+					Expressions:          krocel.NewUncompiledSlice(exprStrings...),
 					Path:                 path,
 					StandaloneExpression: false,
 				})

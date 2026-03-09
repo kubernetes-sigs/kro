@@ -39,7 +39,11 @@ type CompilationCache interface {
 	// TypedEnvironmentWithProvider creates a typed CEL environment and returns
 	// the DeclTypeProvider. Results are cached by canonical schema set.
 	TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error)
+	// ParseAndCheck parses and type-checks a CEL expression without compiling
+	// a program. The checked AST is cached for later reuse by ParseCheckAndCompile.
+	ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error)
 	// ParseCheckAndCompile returns a cached compiled program and checked AST.
+	// If a checked AST was previously cached by ParseAndCheck, it is reused.
 	ParseCheckAndCompile(env *cel.Env, expr string) (cel.Program, *cel.Ast, error)
 	// ExtendWithTypedVar returns a cached environment extending the parent
 	// with a single typed variable declaration.
@@ -51,6 +55,7 @@ type compilationCache struct {
 	declTypes    sync.Map // key: *spec.Schema, value: *apiservercel.DeclType
 	namedTypes   sync.Map // key: namedDeclTypeCacheKey, value: *apiservercel.DeclType
 	typedEnvs    sync.Map // key: string, value: *typedEnvCacheEntry
+	checkedASTs  sync.Map // key: programCacheKey, value: *cel.Ast
 	programs     sync.Map // key: programCacheKey, value: *programCacheEntry
 	extendedEnvs sync.Map // key: extendedEnvCacheKey, value: *cel.Env
 }
@@ -143,9 +148,41 @@ func (c *compilationCache) TypedEnvironmentWithProvider(schemas map[string]*spec
 	return defaultEnvironmentWithCache(c, WithTypedResources(schemas))
 }
 
+// ParseAndCheck parses and type-checks a CEL expression without compiling
+// a program. The checked AST is cached for later reuse by ParseCheckAndCompile.
+func (c *compilationCache) ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error) {
+	key := programCacheKey{expr: expr, env: env}
+
+	// Check if we already have a full program cached — reuse its AST.
+	if v, ok := c.programs.Load(key); ok {
+		entry := v.(*programCacheEntry)
+		return entry.ast, nil
+	}
+
+	// Check the AST-only cache.
+	if v, ok := c.checkedASTs.Load(key); ok {
+		return v.(*cel.Ast), nil
+	}
+
+	parsedAST, issues := env.Parse(expr)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+
+	checkedAST, issues := env.Check(parsedAST)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+
+	c.checkedASTs.Store(key, checkedAST)
+	return checkedAST, nil
+}
+
 // ParseCheckAndCompile returns a cached compiled program and checked AST
 // for the given expression and environment. On cache miss, it parses,
 // type-checks, and compiles the expression, then stores the result.
+// If a checked AST was previously cached by ParseAndCheck, it is reused
+// to skip the parse and check phases.
 func (c *compilationCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Program, *cel.Ast, error) {
 	key := programCacheKey{expr: expr, env: env}
 	if v, ok := c.programs.Load(key); ok {
@@ -153,14 +190,21 @@ func (c *compilationCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.
 		return entry.program, entry.ast, nil
 	}
 
-	parsedAST, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		return nil, nil, issues.Err()
-	}
+	// Try to reuse a previously cached checked AST.
+	var checkedAST *cel.Ast
+	if v, ok := c.checkedASTs.Load(key); ok {
+		checkedAST = v.(*cel.Ast)
+	} else {
+		parsedAST, issues := env.Parse(expr)
+		if issues != nil && issues.Err() != nil {
+			return nil, nil, issues.Err()
+		}
 
-	checkedAST, issues := env.Check(parsedAST)
-	if issues != nil && issues.Err() != nil {
-		return nil, nil, issues.Err()
+		var checkIssues *cel.Issues
+		checkedAST, checkIssues = env.Check(parsedAST)
+		if checkIssues != nil && checkIssues.Err() != nil {
+			return nil, nil, checkIssues.Err()
+		}
 	}
 
 	program, err := env.Program(checkedAST)

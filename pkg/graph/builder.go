@@ -284,6 +284,15 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to build instance status schema: %w", err)
 	}
 
+	// Compile programs for status expressions in a separate pass.
+	// buildStatusSchema only parsed and type-checked (cheap); now we compile
+	// programs (expensive) using the cached ASTs.
+	for _, fd := range statusVariables {
+		if _, err := parseCheckAndCompile(b.celCache, typedEnv, fd.Expression); err != nil {
+			return nil, fmt.Errorf("failed to compile status expression %q at path %q: %w", fd.Expression.UserExpression(), fd.Path, err)
+		}
+	}
+
 	// Update the CRD with the inferred status schema.
 	crd.SetCRDStatus(instanceCRD, *statusSchema, true)
 
@@ -767,12 +776,15 @@ func buildStatusSchema(
 		}
 	}
 
-	// Infer types for each status field expression using CEL type checking
+	// Infer types for each status field expression using CEL type checking.
+	// Only parse and check here (no program compilation) — programs are compiled
+	// in a separate pass after buildStatusSchema returns. This separates cheap
+	// schema inference from expensive program compilation.
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
 		expression := fieldDescriptor.Expression
 
-		checkedAST, err := parseCheckAndCompile(cache, env, expression)
+		checkedAST, err := parseAndCheck(cache, env, expression)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
@@ -1165,6 +1177,13 @@ func parseCheckAndCompile(cache krocel.CompilationCache, env *cel.Env, expr *kro
 	expr.Program = program
 
 	return checkedAST, nil
+}
+
+// parseAndCheck only parses and type-checks a CEL expression (no program compilation).
+// The checked AST is cached so that a later parseCheckAndCompile call for the same
+// expression can skip the parse+check phases.
+func parseAndCheck(cache krocel.CompilationCache, env *cel.Env, expr *krocel.Expression) (*cel.Ast, error) {
+	return cache.ParseAndCheck(env, expr.Original)
 }
 
 // validateConditionExpression validates a single condition expression (includeWhen or readyWhen).

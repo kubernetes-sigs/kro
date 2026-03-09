@@ -77,6 +77,11 @@ func allTypesForDecl(declTypes []*apiservercel.DeclType) map[string]*apiserverce
 	if declTypes == nil {
 		return nil
 	}
+	// Fast path: single type — return FieldTypeMap directly, zero extra allocation.
+	// This is the common case when called from ExtendWithTypedVar with one type.
+	if len(declTypes) == 1 {
+		return FieldTypeMap(declTypes[0].TypeName(), declTypes[0])
+	}
 	allTypes := map[string]*apiservercel.DeclType{}
 	for _, declType := range declTypes {
 		for k, t := range FieldTypeMap(declType.TypeName(), declType) {

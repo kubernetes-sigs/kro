@@ -172,7 +172,7 @@ func TestParseResource(t *testing.T) {
 			{Path: "intField", Expressions: krocel.NewUncompiledSlice("int.value"), StandaloneExpression: true},
 			{Path: "boolField", Expressions: krocel.NewUncompiledSlice("bool.value"), StandaloneExpression: true},
 			{Path: "nestedObject.nestedString", Expressions: krocel.NewUncompiledSlice("nested.string"), StandaloneExpression: true},
-			{Path: "nestedObject.nestedStringMultiple", Expressions: krocel.NewUncompiledSlice("nested.string1", "nested.string2"), StandaloneExpression: false},
+			{Path: "nestedObject.nestedStringMultiple", Expressions: krocel.NewUncompiledSlice("nested.string1 + \"-\" + nested.string2"), StandaloneExpression: true},
 			{Path: "simpleArray[0]", Expressions: krocel.NewUncompiledSlice("array[0]"), StandaloneExpression: true},
 			{Path: "simpleArray[1]", Expressions: krocel.NewUncompiledSlice("array[1]"), StandaloneExpression: true},
 			{Path: "mapField.key1", Expressions: krocel.NewUncompiledSlice("map.key1"), StandaloneExpression: true},
@@ -1524,8 +1524,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 				},
 				{
 					Path:                 "program.resources.app.properties.spec.services[0].name",
-					Expressions:          krocel.NewUncompiledSlice("schema.spec.name"),
-					StandaloneExpression: false,
+					Expressions:          krocel.NewUncompiledSlice("schema.spec.name + \"-service\""),
+					StandaloneExpression: true,
 				},
 				{
 					Path:                 "program.resources.app.properties.spec.services[0].instanceCount",
@@ -1790,6 +1790,67 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("Expected to find field descriptor for path %q", tc.expectedExprPath)
+			}
+		})
+	}
+}
+
+func TestBuildStringTemplate(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		matches []exprMatch
+		want    string
+	}{
+		{
+			name:    "prefix only",
+			input:   "prefix-${expr}",
+			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
+			want:    `"prefix-" + expr`,
+		},
+		{
+			name:    "suffix only",
+			input:   "${expr}-suffix",
+			matches: []exprMatch{{expr: "expr", start: 0, end: 7}},
+			want:    `expr + "-suffix"`,
+		},
+		{
+			name:    "prefix and suffix",
+			input:   "prefix-${expr}-suffix",
+			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
+			want:    `"prefix-" + expr + "-suffix"`,
+		},
+		{
+			name:  "multiple expressions",
+			input: "a-${expr1}-b-${expr2}-c",
+			matches: []exprMatch{
+				{expr: "expr1", start: 2, end: 10},
+				{expr: "expr2", start: 13, end: 21},
+			},
+			want: `"a-" + expr1 + "-b-" + expr2 + "-c"`,
+		},
+		{
+			name:  "adjacent expressions",
+			input: "${expr1}${expr2}",
+			matches: []exprMatch{
+				{expr: "expr1", start: 0, end: 8},
+				{expr: "expr2", start: 8, end: 16},
+			},
+			want: `expr1 + expr2`,
+		},
+		{
+			name:    "literal with quotes",
+			input:   `say "hello" ${expr}`,
+			matches: []exprMatch{{expr: "expr", start: 12, end: 19}},
+			want:    `"say \"hello\" " + expr`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildStringTemplate(tt.input, tt.matches)
+			if got != tt.want {
+				t.Errorf("buildStringTemplate() = %q, want %q", got, tt.want)
 			}
 		})
 	}

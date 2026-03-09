@@ -142,8 +142,9 @@ func TestParseSchemalessResource(t *testing.T) {
 			},
 			expressionsWant: []variable.FieldDescriptor{
 				{
-					Expressions: krocel.NewUncompiledSlice("expr1", "expr2"),
+					Expressions: krocel.NewUncompiledSlice("\"Start \" + expr1 + \" middle \" + expr2 + \" end\""),
 					Path:        "field",
+					StandaloneExpression: true,
 				},
 			},
 			wantErr: false,
@@ -331,8 +332,9 @@ func TestParseSchemalessResourceEdgeCases(t *testing.T) {
 					StandaloneExpression: true,
 				},
 				{
-					Expressions: krocel.NewUncompiledSlice("expr1", "expr2"),
-					Path:        "complex.field",
+					Expressions:          krocel.NewUncompiledSlice("\"Start \" + expr1 + \" middle \" + expr2 + \" end\""),
+					Path:                 "complex.field",
+					StandaloneExpression: true,
 				},
 				{
 					Expressions:          krocel.NewUncompiledSlice("nested.value"),

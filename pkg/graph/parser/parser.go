@@ -17,6 +17,7 @@ package parser
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -281,19 +282,33 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		// String template: "foo-${expr1}-${expr2}"
-		// StandaloneExpression=false tells builder this is string concatenation
-		exprStrings := make([]string, len(expressions))
-		for i, m := range expressions {
-			exprStrings[i] = m.expr
-		}
+		celExpr := buildStringTemplate(field, expressions)
 		return []variable.FieldDescriptor{{
-			Expressions:          krocel.NewUncompiledSlice(exprStrings...),
+			Expressions:          []*krocel.Expression{{Original: celExpr}},
 			Path:                 path,
-			StandaloneExpression: false,
+			StandaloneExpression: true,
 		}}, nil
 	}
 	return nil, nil
+}
+
+// buildStringTemplate builds a CEL concatenation expression from a string
+// template with embedded expressions.
+// e.g. "prefix-${expr1}-${expr2}" → `"prefix-" + expr1 + "-" + expr2`
+func buildStringTemplate(original string, matches []exprMatch) string {
+	var parts []string
+	pos := 0
+	for _, m := range matches {
+		if m.start > pos {
+			parts = append(parts, strconv.Quote(original[pos:m.start]))
+		}
+		parts = append(parts, m.expr)
+		pos = m.end
+	}
+	if pos < len(original) {
+		parts = append(parts, strconv.Quote(original[pos:]))
+	}
+	return strings.Join(parts, " + ")
 }
 
 func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {

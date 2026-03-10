@@ -795,7 +795,7 @@ used for querying or debugging:
 
 | Label | Description | Example |
 |-------|-------------|---------|
-| `kro.run/node-id` | FNV-64a hash of the resource ID from the RGD (16-char hex) | `39edeed848ad0ddc` |
+| `kro.run/node-id` | FNV-64a hash of the node identifier from the RGD (16-char hex) | `39edeed848ad0ddc` |
 | `kro.run/collection-index` | Position in the collection (0-indexed) | `0`, `1`, `2` |
 | `kro.run/collection-size` | Total number of items in the collection | `3` |
 | `kro.run/instance-id` | UID of the instance that owns this resource | `a1b2c3...` |

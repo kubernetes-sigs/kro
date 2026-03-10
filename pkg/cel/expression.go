@@ -35,9 +35,16 @@ import (
 //   - Builder: populates Program during compilation (after type validation)
 //   - Runtime: calls Eval() with context containing values for References
 type Expression struct {
-	// Original is the raw CEL expression string, preserved for error messages
-	// and debugging. Set by parser.
+	// Original is the CEL expression string used for compilation and evaluation.
+	// For compiled string templates, this contains the generated concatenation
+	// expression (e.g. `"prefix-" + expr`), not the user's original template.
+	// See OriginalTemplate for the user-facing form. Set by parser.
 	Original string
+
+	// OriginalTemplate is the user's original string template before compilation
+	// into a CEL concatenation expression. Only set for compiled templates
+	// (e.g. "prefix-${expr}" → Original: `"prefix-" + expr`).
+	OriginalTemplate string
 
 	// References lists all identifiers this expression accesses (e.g., "schema", "vpc").
 	// These are the keys that must be present in the context passed to Eval.
@@ -59,7 +66,7 @@ func NewUncompiled(expr string) *Expression {
 }
 
 // NewUncompiledSlice creates a slice of uncompiled Expressions from strings.
-// Use this in parser/tests for multi-expression fields like string templates.
+// Use this in tests for condition slices (IncludeWhen, ReadyWhen).
 func NewUncompiledSlice(exprs ...string) []*Expression {
 	result := make([]*Expression, len(exprs))
 	for i, expr := range exprs {

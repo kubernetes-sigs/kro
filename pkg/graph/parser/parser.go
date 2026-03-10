@@ -281,7 +281,7 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 	if len(expressions) > 0 {
 		celExpr := buildStringTemplate(field, expressions)
 		return []variable.FieldDescriptor{{
-			Expression: &krocel.Expression{Original: celExpr},
+			Expression: &krocel.Expression{Original: celExpr, OriginalTemplate: field},
 			Path:       path,
 		}}, nil
 	}

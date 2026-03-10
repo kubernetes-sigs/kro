@@ -3747,11 +3747,7 @@ func TestBuildStatusSchema(t *testing.T) {
 		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
 		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
 		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
-		// TODO: Improve error messages for compiled string templates. Currently when CEL
-		// type-checking fails, users see the compiled form (e.g. "prefix-" + expr) instead
-		// of their original template (e.g. "prefix-${expr}"). Add OriginalTemplate field
-		// to FieldDescriptor and use it in builder error paths.
-		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "found no matching overload for '_+_' applied to '(string, int)'"},
+		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + resource.spec.replicas\n | ..........^"},
 		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
 	}
 

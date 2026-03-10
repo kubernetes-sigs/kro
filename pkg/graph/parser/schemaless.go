@@ -75,7 +75,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 			if len(expressions) > 0 {
 				celExpr := buildStringTemplate(field, expressions)
 				expressionsFields = append(expressionsFields, variable.FieldDescriptor{
-					Expression: &krocel.Expression{Original: celExpr},
+					Expression: &krocel.Expression{Original: celExpr, OriginalTemplate: field},
 					Path:       path,
 				})
 			} else {

@@ -752,7 +752,7 @@ func buildStatusSchema(
 		expression := fieldDescriptor.Expression
 		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.Original, err)
+			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, userExpression(expression), err)
 		}
 		// Populate expression.References for restricted environment compilation
 		for _, dep := range result.ResourceDependencies {
@@ -769,7 +769,7 @@ func buildStatusSchema(
 
 		checkedAST, err := parseCheckAndCompile(env, expression)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
+			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", userExpression(expression), fieldDescriptor.Path, err)
 		}
 
 		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
@@ -1101,18 +1101,29 @@ func validateAndCompileTemplates(
 		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
 		expression := templateVariable.Expression
+		displayExpr := userExpression(expression)
 		// Parse, type-check, and compile
 		checkedAST, err := parseCheckAndCompile(compileEnv, expression)
 		if err != nil {
-			return fmt.Errorf("failed to compile template expression %q at path %q: %w", expression.Original, templateVariable.Path, err)
+			return fmt.Errorf("failed to compile template expression %q at path %q: %w", displayExpr, templateVariable.Path, err)
 		}
 
 		outputType := checkedAST.OutputType()
-		if err := validateExpressionType(outputType, expectedType, expression.Original, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
+		if err := validateExpressionType(outputType, expectedType, displayExpr, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// userExpression returns the user-facing expression string for error messages.
+// For compiled string templates, this returns the original template; otherwise
+// it returns the CEL expression.
+func userExpression(expr *krocel.Expression) string {
+	if expr.OriginalTemplate != "" {
+		return expr.OriginalTemplate
+	}
+	return expr.Original
 }
 
 // validateExpressionType verifies that the CEL expression output type matches

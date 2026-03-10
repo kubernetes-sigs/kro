@@ -787,7 +787,7 @@ used for querying or debugging:
 
 | Annotation | Description | Example |
 |------------|-------------|---------|
-| `kro.run/node` | The human-readable resource ID from the RGD | `workerPods` |
+| `kro.run/node` | A human-readable node identifier from the RGD | `workerPods` |
 
 The `kro.run/node-id` label stores a deterministic hash rather than the raw
 resource ID because Kubernetes limits label values to 63 characters. The

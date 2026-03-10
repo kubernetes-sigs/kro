@@ -15,7 +15,7 @@
 package parser
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -47,7 +47,7 @@ func parseSchemalessResource(resource interface{}, path string) ([]variable.Fiel
 		}
 	case []interface{}:
 		for i, item := range field {
-			itemPath := fmt.Sprintf("%s[%d]", path, i)
+			itemPath := path + "[" + strconv.Itoa(i) + "]"
 			itemExpressions, plainFieldPaths, err := parseSchemalessResource(item, itemPath)
 			if err != nil {
 				return nil, nil, err

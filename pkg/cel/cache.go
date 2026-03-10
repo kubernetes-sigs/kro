@@ -17,8 +17,10 @@ package cel
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -274,7 +276,8 @@ func makeEnvCacheKey(schemas map[string]*spec.Schema) string {
 		}
 		b.WriteString(name)
 		b.WriteByte(':')
-		fmt.Fprintf(&b, "%p", schemas[name])
+		b.WriteString("0x")
+		b.WriteString(strconv.FormatUint(uint64(uintptr(unsafe.Pointer(schemas[name]))), 16))
 	}
 	return b.String()
 }

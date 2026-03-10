@@ -157,7 +157,7 @@ func (e *Environment) setupController() error {
 	dc := dynamiccontroller.NewDynamicController(
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
 		dynamiccontroller.Config{
-			Workers:         3,
+			Workers:         40,
 			ResyncPeriod:    0, // disabled resync
 			QueueMaxRetries: 20,
 			MinRetryDelay:   200 * time.Millisecond,
@@ -172,7 +172,7 @@ func (e *Environment) setupController() error {
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
-		10,
+		40,
 		graph.RGDConfig{
 			MaxCollectionSize:          1000,
 			MaxCollectionDimensionSize: 10,

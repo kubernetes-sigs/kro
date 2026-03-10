@@ -127,7 +127,7 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 
 | Annotation | Description |
 |------------|-------------|
-| `kro.run/node` | The human-readable resource ID from the RGD (e.g., `workerPods`). This preserves the readable ID since `kro.run/node-id` stores a fixed-length hash to comply with the Kubernetes 63-character label value limit. |
+| `kro.run/node` | The human-readable node identifier based on the RGD (e.g., `workerPods`). This preserves a readable identifier since `kro.run/node-id` stores a fixed-length hash to comply with the Kubernetes 63-character label value limit. |
 
 These labels and annotations allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 

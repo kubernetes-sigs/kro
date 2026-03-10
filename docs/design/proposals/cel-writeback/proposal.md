@@ -1,4 +1,4 @@
-# CEL Write-Back: Stateful Transitions in ResourceGraphDefinitions
+# KREP-021: CEL Write-Back — Stateful Transitions in ResourceGraphDefinitions
 
 **Author:** Rafael Panazzo (https://github.com/pnz1990)
 **Status:** Draft / Open Question (see §Design Details and §Other Solutions Considered)

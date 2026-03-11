@@ -25,6 +25,7 @@ import (
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -70,8 +71,8 @@ func TestPlanNodesForDeletionSkipsUnresolvedIdentityAndPicksLastExistingNode(t *
 	require.NoError(t, err)
 	require.NotNil(t, node)
 	assert.Equal(t, "deploy", node.Spec.Meta.ID)
-	assert.Equal(t, NodeStateDeleted, rcx.StateManager.NodeStates["pending"].State)
-	assert.Equal(t, NodeStateInProgress, rcx.StateManager.NodeStates["deploy"].State)
+	assert.Equal(t, v1alpha1.NodeStateDeleted, rcx.StateManager.NodeStates["pending"].State)
+	assert.Equal(t, v1alpha1.NodeStateInProgress, rcx.StateManager.NodeStates["deploy"].State)
 }
 
 func TestPlanNodesForDeletionSkipsIgnoredExternalAndMissingNodes(t *testing.T) {
@@ -122,9 +123,9 @@ func TestPlanNodesForDeletionSkipsIgnoredExternalAndMissingNodes(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, node)
 	assert.Equal(t, "configs", node.Spec.Meta.ID)
-	assert.Equal(t, NodeStateSkipped, rcx.StateManager.NodeStates["ignored"].State)
-	assert.Equal(t, NodeStateSkipped, rcx.StateManager.NodeStates["external"].State)
-	assert.Equal(t, NodeStateDeleted, rcx.StateManager.NodeStates["missing"].State)
+	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["ignored"].State)
+	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["external"].State)
+	assert.Equal(t, v1alpha1.NodeStateDeleted, rcx.StateManager.NodeStates["missing"].State)
 }
 
 func TestPlanNodesForDeletionErrors(t *testing.T) {
@@ -187,28 +188,28 @@ func TestDeleteTarget(t *testing.T) {
 		name        string
 		observed    []*unstructured.Unstructured
 		deleteErr   string
-		wantState   string
+		wantState   v1alpha1.NodeState
 		wantErrText string
 	}{
 		{
 			name:      "marks deleted when there are no targets",
-			wantState: NodeStateDeleted,
+			wantState: v1alpha1.NodeStateDeleted,
 		},
 		{
 			name:      "marks deleted when the target no longer exists",
 			observed:  []*unstructured.Unstructured{newDeploymentObject("gone", "default")},
-			wantState: NodeStateDeleted,
+			wantState: v1alpha1.NodeStateDeleted,
 		},
 		{
 			name:      "marks deleting when the API accepted deletion",
 			observed:  []*unstructured.Unstructured{newDeploymentObject("demo", "default")},
-			wantState: NodeStateDeleting,
+			wantState: v1alpha1.NodeStateDeleting,
 		},
 		{
 			name:        "marks error when deletion fails",
 			observed:    []*unstructured.Unstructured{newDeploymentObject("demo", "default")},
 			deleteErr:   "delete failed",
-			wantState:   NodeStateError,
+			wantState:   v1alpha1.NodeStateError,
 			wantErrText: "delete failed",
 		},
 	}
@@ -265,7 +266,7 @@ func TestReconcileDeletionRequeuesWhileChildDeletionInFlight(t *testing.T) {
 	err := controller.reconcileDeletion(rcx)
 	var retryAfter *requeue.RequeueNeededAfter
 	require.ErrorAs(t, err, &retryAfter)
-	assert.Equal(t, InstanceStateDeleting, rcx.StateManager.State)
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, rcx.StateManager.State)
 }
 
 func TestSetUnmanaged(t *testing.T) {

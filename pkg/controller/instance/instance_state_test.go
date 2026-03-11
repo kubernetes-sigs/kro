@@ -17,13 +17,15 @@ package instance
 import (
 	"errors"
 	"testing"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 func TestNewStateManager(t *testing.T) {
 	state := newStateManager()
 
-	if state.State != InstanceStateInProgress {
-		t.Errorf("expected State to be %q, got %q", InstanceStateInProgress, state.State)
+	if state.State != v1alpha1.InstanceStateInProgress {
+		t.Errorf("expected State to be %q, got %q", v1alpha1.InstanceStateInProgress, state.State)
 	}
 
 	if state.NodeStates == nil {

@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -30,7 +31,7 @@ import (
 
 // reconcileDeletion drives deletion workflow for an instance.
 func (c *Controller) reconcileDeletion(rcx *ReconcileContext) error {
-	rcx.StateManager.State = InstanceStateDeleting
+	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
 	rcx.Mark.ResourcesUnderDeletion("deleting resources")
 
 	deletionNode, err := c.planNodesForDeletion(rcx)

@@ -30,6 +30,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -75,12 +76,12 @@ func TestReconcileNodesPaths(t *testing.T) {
 		node                  *graph.Node
 		wantErr               string
 		wantRequeue           bool
-		wantState             InstanceState
+		wantState             v1alpha1.InstanceState
 		wantToolingAnnotation bool
 	}{
 		{
 			name:                  "empty graph reconcile nodes returns cleanly",
-			wantState:             InstanceStateActive,
+			wantState:             v1alpha1.InstanceStateActive,
 			wantToolingAnnotation: true,
 		},
 		{
@@ -137,7 +138,7 @@ func TestReconcileNodesPaths(t *testing.T) {
 				if tt.wantErr != "" {
 					assert.Contains(t, err.Error(), tt.wantErr)
 				}
-				assert.NotEqual(t, InstanceStateError, rcx.StateManager.State)
+				assert.NotEqual(t, v1alpha1.InstanceStateError, rcx.StateManager.State)
 				return
 			}
 
@@ -163,7 +164,7 @@ func TestProcessNodePaths(t *testing.T) {
 		reactorErr        string
 		wantResources     int
 		wantSkipApply     bool
-		wantState         string
+		wantState         v1alpha1.NodeState
 		wantErr           string
 	}{
 		{
@@ -183,7 +184,7 @@ func TestProcessNodePaths(t *testing.T) {
 			},
 			wantResources: 1,
 			wantSkipApply: true,
-			wantState:     NodeStateSkipped,
+			wantState:     v1alpha1.NodeStateSkipped,
 		},
 		{
 			name: "resource get error marks node error",
@@ -199,7 +200,7 @@ func TestProcessNodePaths(t *testing.T) {
 			reactorVerb:     "get",
 			reactorResource: "deployments",
 			reactorErr:      "get failed",
-			wantState:       NodeStateError,
+			wantState:       v1alpha1.NodeStateError,
 			wantErr:         "get failed",
 		},
 		{
@@ -213,7 +214,7 @@ func TestProcessNodePaths(t *testing.T) {
 				},
 				Template: newConfigMapObject("missing", ""),
 			},
-			wantState: NodeStateWaitingForReadiness,
+			wantState: v1alpha1.NodeStateWaitingForReadiness,
 		},
 		{
 			name: "external ref becomes ready when object exists",
@@ -227,7 +228,7 @@ func TestProcessNodePaths(t *testing.T) {
 				Template: newConfigMapObject("present", ""),
 			},
 			currentObjs: []apimachineryruntime.Object{newConfigMapObject("present", "default")},
-			wantState:   NodeStateSynced,
+			wantState:   v1alpha1.NodeStateSynced,
 		},
 		{
 			name: "desired resolution errors mark node error",
@@ -251,7 +252,7 @@ func TestProcessNodePaths(t *testing.T) {
 					standaloneField("metadata.name", mustCompileControllerExpr(t, "1 / 0"), variable.ResourceVariableKindStatic),
 				},
 			},
-			wantState: NodeStateError,
+			wantState: v1alpha1.NodeStateError,
 			wantErr:   "division by zero",
 		},
 		{
@@ -271,7 +272,7 @@ func TestProcessNodePaths(t *testing.T) {
 				obj.SetDeletionTimestamp(&now)
 				return obj
 			}()},
-			wantState: NodeStateDeleting,
+			wantState: v1alpha1.NodeStateDeleting,
 			wantErr:   "currently being deleted",
 		},
 		{
@@ -290,7 +291,7 @@ func TestProcessNodePaths(t *testing.T) {
 				obj.SetDeletionTimestamp(&now)
 				return obj
 			}()},
-			wantState: NodeStateDeleting,
+			wantState: v1alpha1.NodeStateDeleting,
 			wantErr:   "currently being deleted",
 		},
 	}
@@ -354,7 +355,7 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	resources, err = controller.processNode(rcx, rcx.Runtime.Nodes()[1])
 	require.NoError(t, err)
 	assert.Nil(t, resources)
-	assert.Equal(t, NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
+	assert.Equal(t, v1alpha1.NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
 }
 
 func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
@@ -437,7 +438,7 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 		[]*unstructured.Unstructured{externalCollection.Template.DeepCopy()},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
+	assert.Equal(t, v1alpha1.NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
 }
 
 func TestProcessExternalRefNodePaths(t *testing.T) {
@@ -446,18 +447,18 @@ func TestProcessExternalRefNodePaths(t *testing.T) {
 		desired     []*unstructured.Unstructured
 		currentObjs []apimachineryruntime.Object
 		reactorErr  string
-		wantState   string
+		wantState   v1alpha1.NodeState
 		wantErr     string
 	}{
 		{
 			name:      "skips when the desired list is empty",
-			wantState: NodeStateSkipped,
+			wantState: v1alpha1.NodeStateSkipped,
 		},
 		{
 			name:       "marks error when get fails",
 			desired:    []*unstructured.Unstructured{newConfigMapObject("demo", "default")},
 			reactorErr: "get failed",
-			wantState:  NodeStateError,
+			wantState:  v1alpha1.NodeStateError,
 			wantErr:    "get failed",
 		},
 		{
@@ -469,7 +470,7 @@ func TestProcessExternalRefNodePaths(t *testing.T) {
 				obj.SetDeletionTimestamp(&now)
 				return obj
 			}()},
-			wantState: NodeStateSynced,
+			wantState: v1alpha1.NodeStateSynced,
 		},
 	}
 
@@ -525,7 +526,7 @@ func TestProcessExternalRefNodeWaitsForReadiness(t *testing.T) {
 	state := rcx.StateManager.NewNodeState("external")
 	err := controller.processExternalRefNode(rcx, rcx.Runtime.Nodes()[0], state, []*unstructured.Unstructured{newConfigMapObject("demo", "default")})
 	require.NoError(t, err)
-	assert.Equal(t, NodeStateWaitingForReadiness, state.State)
+	assert.Equal(t, v1alpha1.NodeStateWaitingForReadiness, state.State)
 }
 
 func TestProcessExternalCollectionNodePaths(t *testing.T) {
@@ -535,20 +536,20 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 		desired     []*unstructured.Unstructured
 		currentObjs []apimachineryruntime.Object
 		reactorErr  string
-		wantState   string
+		wantState   v1alpha1.NodeState
 		wantErr     string
 	}{
 		{
 			name:      "skips when the desired list is empty",
 			node:      newExternalCollectionNodeForResources(t, nil),
-			wantState: NodeStateSkipped,
+			wantState: v1alpha1.NodeStateSkipped,
 		},
 		{
 			name:       "marks error when list fails",
 			node:       newExternalCollectionNodeForResources(t, nil),
 			desired:    []*unstructured.Unstructured{newConfigMapObject("demo", "default")},
 			reactorErr: "list failed",
-			wantState:  NodeStateError,
+			wantState:  v1alpha1.NodeStateError,
 			wantErr:    "list failed",
 		},
 		{
@@ -570,7 +571,7 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 					},
 				},
 			}},
-			wantState: NodeStateError,
+			wantState: v1alpha1.NodeStateError,
 			wantErr:   "invalid label selector",
 		},
 		{
@@ -588,7 +589,7 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 				}
 				return obj
 			}()},
-			wantState: NodeStateWaitingForReadiness,
+			wantState: v1alpha1.NodeStateWaitingForReadiness,
 		},
 		{
 			name: "terminating external collection item does not use deleting shortcut",
@@ -607,7 +608,7 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 				}
 				return obj
 			}()},
-			wantState: NodeStateSynced,
+			wantState: v1alpha1.NodeStateSynced,
 		},
 	}
 
@@ -793,12 +794,12 @@ func TestProcessApplyResultsAndReadiness(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
-	assert.Equal(t, NodeStateWaitingForReadiness, rcx.StateManager.NodeStates["deploy"].State)
-	assert.Equal(t, NodeStateError, rcx.StateManager.NodeStates["configs"].State)
+	assert.Equal(t, v1alpha1.NodeStateWaitingForReadiness, rcx.StateManager.NodeStates["deploy"].State)
+	assert.Equal(t, v1alpha1.NodeStateError, rcx.StateManager.NodeStates["configs"].State)
 
 	waiting := &NodeState{}
 	setStateFromReadiness(rcx.Runtime.Nodes()[0], waiting)
-	assert.Equal(t, NodeStateWaitingForReadiness, waiting.State)
+	assert.Equal(t, v1alpha1.NodeStateWaitingForReadiness, waiting.State)
 
 	errorNode := &graph.Node{
 		Meta: graph.NodeMeta{
@@ -816,7 +817,7 @@ func TestProcessApplyResultsAndReadiness(t *testing.T) {
 	controller, rcx, _ = newControllerAndContext(t, instance, newTestGraph(errorNode))
 	rcx.Runtime.Nodes()[0].SetObserved([]*unstructured.Unstructured{newDeploymentObject("bad", "default")})
 	setStateFromReadiness(rcx.Runtime.Nodes()[0], errState)
-	assert.Equal(t, NodeStateError, errState.State)
+	assert.Equal(t, v1alpha1.NodeStateError, errState.State)
 
 	controller, rcx, _ = newControllerAndContext(t, instance, newTestGraph(resourceNode))
 	rcx.StateManager.NewNodeState("deploy")
@@ -827,7 +828,7 @@ func TestProcessApplyResultsAndReadiness(t *testing.T) {
 		}},
 	})
 	require.Error(t, err)
-	assert.Equal(t, NodeStateError, rcx.StateManager.NodeStates["deploy"].State)
+	assert.Equal(t, v1alpha1.NodeStateError, rcx.StateManager.NodeStates["deploy"].State)
 }
 
 func TestUpdateCollectionFromApplyResultsPaths(t *testing.T) {
@@ -835,13 +836,13 @@ func TestUpdateCollectionFromApplyResultsPaths(t *testing.T) {
 		name      string
 		items     []interface{}
 		results   map[string]applyset.ApplyResultItem
-		wantState string
+		wantState v1alpha1.NodeState
 	}{
 		{
 			name:      "handles empty collections as ready",
 			items:     []interface{}{},
 			results:   map[string]applyset.ApplyResultItem{},
-			wantState: NodeStateSynced,
+			wantState: v1alpha1.NodeStateSynced,
 		},
 		{
 			name:  "sets ready when observed items are present",
@@ -849,7 +850,7 @@ func TestUpdateCollectionFromApplyResultsPaths(t *testing.T) {
 			results: map[string]applyset.ApplyResultItem{
 				"configs-0": {Observed: newConfigMapObject("one", "default")},
 			},
-			wantState: NodeStateSynced,
+			wantState: v1alpha1.NodeStateSynced,
 		},
 	}
 
@@ -876,13 +877,13 @@ func TestUpdateCollectionFromApplyResultsErrorAndPendingPaths(t *testing.T) {
 		name      string
 		node      *graph.Node
 		items     []interface{}
-		wantState string
+		wantState v1alpha1.NodeState
 		wantErr   string
 	}{
 		{
 			name:      "returns nil while collection desired data is still pending",
 			node:      newCollectionNodeForResources(t),
-			wantState: NodeStateInProgress,
+			wantState: v1alpha1.NodeStateInProgress,
 		},
 		{
 			name: "marks error when collection desired resolution fails",
@@ -911,7 +912,7 @@ func TestUpdateCollectionFromApplyResultsErrorAndPendingPaths(t *testing.T) {
 				}},
 			},
 			items:     []interface{}{"one"},
-			wantState: NodeStateError,
+			wantState: v1alpha1.NodeStateError,
 			wantErr:   "division by zero",
 		},
 	}

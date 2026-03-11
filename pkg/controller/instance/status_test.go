@@ -47,10 +47,10 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 
 	rcx := &ReconcileContext{
 		Instance:     instance,
-		StateManager: &StateManager{State: InstanceStateInProgress},
+		StateManager: &StateManager{State: v1alpha1.InstanceStateInProgress},
 	}
 	status := rcx.initialStatus()
-	assert.Equal(t, InstanceStateActive, status["state"])
+	assert.Equal(t, v1alpha1.InstanceStateActive, status["state"])
 
 	marker.ResourcesNotReady("not yet")
 	marker.ReconciliationSuspended("paused")
@@ -58,9 +58,9 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker.InstanceNotManaged("nope")
 	marker.GraphResolutionFailed("bad graph")
 
-	rcx.StateManager.State = InstanceStateDeleting
+	rcx.StateManager.State = v1alpha1.InstanceStateDeleting
 	status = rcx.initialStatus()
-	assert.Equal(t, InstanceStateDeleting, status["state"])
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, status["state"])
 
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, InstanceManaged).Status)
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, GraphResolved).Status)
@@ -79,7 +79,7 @@ func TestUpdateStatusPaths(t *testing.T) {
 		{
 			name:      "copies resolved status fields but preserves reserved keys",
 			wantURL:   "https://demo",
-			wantState: string(InstanceStateDeleting),
+			wantState: string(v1alpha1.InstanceStateDeleting),
 		},
 		{
 			name:    "returns instance desired resolution error",
@@ -129,7 +129,7 @@ func TestUpdateStatusPaths(t *testing.T) {
 			}
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraphWithInstance(instanceNode))
-			rcx.StateManager.State = InstanceStateDeleting
+			rcx.StateManager.State = v1alpha1.InstanceStateDeleting
 
 			err := controller.updateStatus(rcx)
 			if tt.wantErr != "" {

@@ -692,6 +692,68 @@ func TestNode_IsIgnored_WithCEL(t *testing.T) {
 			wantIgnored: true,
 		},
 		{
+			name: "resource-backed includeWhen evaluates to true",
+			node: func() *Node {
+				vpc := newTestNode("vpc", graph.NodeTypeResource).
+					withObserved(map[string]any{"status": map[string]any{"state": "available"}}).build()
+				return newTestNode("subnet", graph.NodeTypeResource).
+					withDep(vpc).
+					withIncludeWhenRefs("vpc.status.state == 'available'", "vpc").build()
+			},
+			wantIgnored: false,
+		},
+		{
+			name: "resource-backed includeWhen evaluates to false",
+			node: func() *Node {
+				vpc := newTestNode("vpc", graph.NodeTypeResource).
+					withObserved(map[string]any{"status": map[string]any{"state": "pending"}}).build()
+				return newTestNode("subnet", graph.NodeTypeResource).
+					withDep(vpc).
+					withIncludeWhenRefs("vpc.status.state == 'available'", "vpc").build()
+			},
+			wantIgnored: true,
+		},
+		{
+			name: "resource-backed includeWhen waits for dependency readiness",
+			node: func() *Node {
+				vpc := newTestNode("vpc", graph.NodeTypeResource).
+					withObserved(map[string]any{"status": map[string]any{}}).
+					withReadyWhen("vpc.status.state == 'available'").build()
+				return newTestNode("subnet", graph.NodeTypeResource).
+					withDep(vpc).
+					withIncludeWhenRefs("vpc.status.state == 'available'", "vpc").build()
+			},
+			wantErr: true,
+			errIs:   ErrDataPending,
+		},
+		{
+			name: "resource-backed includeWhen missing field is pending",
+			node: func() *Node {
+				vpc := newTestNode("vpc", graph.NodeTypeResource).
+					withObserved(map[string]any{"metadata": map[string]any{"name": "vpc"}}).build()
+				return newTestNode("subnet", graph.NodeTypeResource).
+					withDep(vpc).
+					withIncludeWhenRefs("vpc.status.state == 'available'", "vpc").build()
+			},
+			wantErr: true,
+			errIs:   ErrDataPending,
+		},
+		{
+			name: "resource-backed includeWhen false is contagious to downstream resources",
+			node: func() *Node {
+				source := newTestNode("source", graph.NodeTypeResource).
+					withObserved(map[string]any{"data": map[string]any{"enabled": "false"}}).build()
+				middle := newTestNode("middle", graph.NodeTypeResource).
+					withDep(source).
+					withIncludeWhenRefs("source.data.enabled == 'true'", "source").build()
+				return newTestNode("child", graph.NodeTypeResource).
+					withDep(middle).
+					withTemplateExpr("middle.data.value", variable.ResourceVariableKindDynamic).
+					build()
+			},
+			wantIgnored: true,
+		},
+		{
 			name: "division by zero in includeWhen",
 			node: func() *Node {
 				schema := newTestNode("schema", graph.NodeTypeInstance).
@@ -1541,6 +1603,7 @@ var testEnv = func() *cel.Env {
 		"schema", "vpc", "subnet", "deployment", "configmap",
 		"pods", "test", "each", "item", "region", "az", "iterator",
 		"child", "parent", "grandparent", "ignoredParent", "missing",
+		"source", "middle",
 		"buckets", "external", "a", "b", "policy", "configs", "results",
 		"optional", "subnets",
 	}))
@@ -1625,6 +1688,17 @@ func (b *testNodeBuilder) withIncludeWhen(exprs ...string) *testNodeBuilder {
 			Kind:       variable.ResourceVariableKindIncludeWhen,
 		})
 	}
+	return b
+}
+
+// withIncludeWhenRefs adds includeWhen expressions with explicit identifier references.
+func (b *testNodeBuilder) withIncludeWhenRefs(expr string, refs ...string) *testNodeBuilder {
+	compiled := mustCompileTestExpr(expr)
+	compiled.References = append(compiled.References, refs...)
+	b.includeWhenExprs = append(b.includeWhenExprs, &expressionEvaluationState{
+		Expression: compiled,
+		Kind:       variable.ResourceVariableKindIncludeWhen,
+	})
 	return b
 }
 

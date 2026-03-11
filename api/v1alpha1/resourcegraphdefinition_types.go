@@ -190,14 +190,19 @@ type Resource struct {
 	// ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
 	// All expressions must evaluate to true for the resource to be ready.
 	// If not specified, the resource is considered ready when it exists.
-	// Example: ["self.status.phase == 'Running'", "self.status.readyReplicas > 0"]
+	// Examples:
+	// - Single resource: ["database.status.phase == 'Running'", "database.status.readyReplicas > 0"]
+	// - Collection: ["each.status.phase == 'Running'"]
 	//
 	// +kubebuilder:validation:Optional
 	ReadyWhen []string `json:"readyWhen,omitempty"`
 	// IncludeWhen is a list of CEL expressions that determine whether this resource should be created.
 	// All expressions must evaluate to true for the resource to be included.
 	// If not specified, the resource is always included.
-	// Example: ["schema.spec.enableMonitoring == true"]
+	// Expressions may reference schema fields and upstream resources. They are
+	// re-evaluated during reconciliation, so resources may be created later or
+	// pruned later as conditions change.
+	// Example: ["schema.spec.enableMonitoring == true", "network.status.ready == true"]
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`

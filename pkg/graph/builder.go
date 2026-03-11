@@ -537,10 +537,16 @@ func (b *Builder) buildDependencyGraph(
 			return nil, err
 		}
 
+		includeWhenDeps, err := extractConditionDependencies(inspector, node.IncludeWhen, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract dependencies from includeWhen: %w", err)
+		}
+
 		// Add all dependencies to node and DAG
-		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps))
+		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps)+len(includeWhenDeps))
 		allDeps = append(allDeps, templateDeps...)
 		allDeps = append(allDeps, forEachDeps...)
+		allDeps = append(allDeps, includeWhenDeps...)
 		node.Meta.Dependencies = append(node.Meta.Dependencies, allDeps...)
 		if err := directedAcyclicGraph.AddDependencies(node.Meta.ID, allDeps); err != nil {
 			return nil, err
@@ -812,7 +818,7 @@ func buildStatusSchema(
 
 // inspectExpressionRestricted uses the shared inspector to parse an expression,
 // then validates that only the allowed identifiers are referenced.
-// This is used for restricted contexts like includeWhen (only schema) or readyWhen (only self).
+// This is used for restricted contexts like forEach (only known resources).
 func inspectExpressionRestricted(inspector *ast.Inspector, expr string, allowedIdentifiers []string) (ast.ExpressionInspection, error) {
 	result, err := inspector.Inspect(expr)
 	if err != nil {
@@ -896,6 +902,46 @@ func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iter
 		return nil, nil, fmt.Errorf("uses unknown functions: %v", inspectionResult.UnknownFunctions)
 	}
 	return resourceDeps, iteratorRefs, nil
+}
+
+// extractConditionDependencies extracts resource dependencies from condition
+// expressions such as includeWhen and readyWhen. It also populates
+// expr.References for later validation. iteratorVars can be used for
+// collection-scoped bindings like "each".
+func extractConditionDependencies(
+	inspector *ast.Inspector,
+	expressions []*krocel.Expression,
+	iteratorVars []string,
+) ([]string, error) {
+	var allDeps []string
+
+	for _, expression := range expressions {
+		nodeDeps, _, err := extractDependencies(inspector, expression, iteratorVars)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, dep := range nodeDeps {
+			if !slices.Contains(allDeps, dep) {
+				allDeps = append(allDeps, dep)
+			}
+		}
+	}
+
+	return allDeps, nil
+}
+
+// validateConditionReferences verifies that a set of already-inspected
+// condition expressions only reference the allowed identifiers.
+func validateConditionReferences(expressions []*krocel.Expression, allowedIdentifiers []string) error {
+	for _, expression := range expressions {
+		for _, ref := range expression.References {
+			if !slices.Contains(allowedIdentifiers, ref) {
+				return fmt.Errorf("references unknown identifiers: [%s]", ref)
+			}
+		}
+	}
+	return nil
 }
 
 // parseForEachDimensions converts API forEach dimensions (map[string]string) to
@@ -1054,12 +1100,12 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 
 	// Validate and compile includeWhen expressions if present
 	if len(node.IncludeWhen) > 0 {
-		// includeWhen expressions can ONLY reference the schema (instance spec).
-		// At runtime, includeWhen is evaluated before any resources are created.
-		for _, expression := range node.IncludeWhen {
-			if _, err := inspectExpressionRestricted(inspector, expression.Original, []string{SchemaVarName}); err != nil {
-				return fmt.Errorf("resource %q includeWhen: %w", node.Meta.ID, err)
-			}
+		// includeWhen expressions can reference schema plus any resource dependency
+		// already discovered for this node. Resource refs are evaluated at runtime
+		// against observed upstream state.
+		allowedVars := append([]string{SchemaVarName}, node.Meta.Dependencies...)
+		if err := validateConditionReferences(node.IncludeWhen, allowedVars); err != nil {
+			return fmt.Errorf("resource %q includeWhen: %w", node.Meta.ID, err)
 		}
 
 		// Compile includeWhen using the shared typed environment
@@ -1073,14 +1119,17 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 		// readyWhen expressions can ONLY reference the node itself (or 'each' for collections).
 		// At runtime, IsResourceReady/IsCollectionReady only has the resource in scope.
 		allowedVar := node.Meta.ID
+		var iteratorVars []string
 		if node.Meta.Type == NodeTypeCollection {
 			allowedVar = EachVarName
+			iteratorVars = []string{EachVarName}
 		}
 
-		for _, expression := range node.ReadyWhen {
-			if _, err := inspectExpressionRestricted(inspector, expression.Original, []string{allowedVar}); err != nil {
-				return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
-			}
+		if _, err := extractConditionDependencies(inspector, node.ReadyWhen, iteratorVars); err != nil {
+			return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
+		}
+		if err := validateConditionReferences(node.ReadyWhen, []string{allowedVar}); err != nil {
+			return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
 		}
 
 		// For readyWhen on collections, we need "each" variable which isn't in the shared env.

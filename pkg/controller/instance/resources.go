@@ -32,6 +32,33 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+type resourceDeletingError struct {
+	NodeID      string
+	ResourceRef string
+}
+
+func (e *resourceDeletingError) Error() string {
+	return fmt.Sprintf(
+		"resource %q for node %q is currently being deleted; waiting for deletion to complete before continuing reconciliation",
+		e.ResourceRef,
+		e.NodeID,
+	)
+}
+
+func newResourceDeletingError(nodeID string, obj *unstructured.Unstructured) *resourceDeletingError {
+	return &resourceDeletingError{
+		NodeID:      nodeID,
+		ResourceRef: resourceRef(obj),
+	}
+}
+
+func resourceRef(obj *unstructured.Unstructured) string {
+	if obj.GetNamespace() == "" {
+		return obj.GetName()
+	}
+	return obj.GetNamespace() + "/" + obj.GetName()
+}
+
 // reconcileNodes orchestrates node processing, apply, prune, and state updates.
 func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	rcx.Log.V(2).Info("Reconciling resources")
@@ -297,6 +324,16 @@ func (c *Controller) processRegularNode(
 		return nil, state.Err
 	}
 
+	if current != nil && current.GetDeletionTimestamp() != nil {
+		state.SetDeleting()
+		rcx.Log.V(1).Info("Resource is terminating; waiting for deletion to complete",
+			"id", id,
+			"namespace", current.GetNamespace(),
+			"name", current.GetName(),
+		)
+		return nil, newResourceDeletingError(id, current)
+	}
+
 	if current != nil {
 		node.SetObserved([]*unstructured.Unstructured{current})
 	}
@@ -334,12 +371,9 @@ func (c *Controller) processCollectionNode(
 		return nil, state.Err
 	}
 
-	// Pass unordered observed items to runtime; it will align them to desired
-	// order by identity.
-	node.SetObserved(existingItems)
-
 	// Empty collection: observed is set (possibly with orphans to prune), mark ready.
 	if collectionSize == 0 {
+		node.SetObserved(existingItems)
 		state.SetReady()
 		return nil, nil
 	}
@@ -351,12 +385,31 @@ func (c *Controller) processCollectionNode(
 		existingByKey[key] = current
 	}
 
+	for _, expandedResource := range expandedResources {
+		requestWatch(rcx, id, gvr, expandedResource.GetName(), expandedResource.GetNamespace())
+	}
+
+	for _, expandedResource := range expandedResources {
+		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
+		current := existingByKey[key]
+		if current != nil && current.GetDeletionTimestamp() != nil {
+			state.SetDeleting()
+			rcx.Log.V(1).Info("Collection resource is terminating; waiting for deletion to complete",
+				"id", id,
+				"namespace", current.GetNamespace(),
+				"name", current.GetName(),
+			)
+			return nil, newResourceDeletingError(id, current)
+		}
+	}
+
+	// Pass unordered observed items to runtime; it will align them to desired
+	// order by identity.
+	node.SetObserved(existingItems)
+
 	// Build resources list for apply
 	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
-		// Register watch for each collection item.
-		requestWatch(rcx, id, gvr, expandedResource.GetName(), expandedResource.GetNamespace())
-
 		// Apply decorator labels with collection info
 		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)

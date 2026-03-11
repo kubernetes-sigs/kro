@@ -16,6 +16,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -194,6 +195,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	if !ok || !strings.EqualFold(reconcileState, "disabled") {
 		rcx.Mark.ReconciliationActive()
 		if err := c.reconcileNodes(rcx); err != nil {
+			var deletingErr *resourceDeletingError
+			if errors.As(err, &deletingErr) {
+				rcx.Mark.ResourcesDeleting("%v", deletingErr)
+				_ = c.updateStatus(rcx)
+				return rcx.delayedRequeue(deletingErr)
+			}
 			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
 			_ = c.updateStatus(rcx)
 			return err

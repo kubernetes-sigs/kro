@@ -231,6 +231,87 @@ func TestReconcileResourceMutationRequestsRequeue(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, stored, ResourcesReady).Status)
 }
 
+func TestReconcileTerminatingManagedResourcesSetDeletingStatus(t *testing.T) {
+	tests := []struct {
+		name              string
+		configureInstance func(*unstructured.Unstructured)
+		graph             *graph.Graph
+		buildCurrent      func(*unstructured.Unstructured) []apimachineryruntime.Object
+		wantMessage       string
+	}{
+		{
+			name: "single resource",
+			graph: newTestGraph(&graph.Node{
+				Meta: graph.NodeMeta{
+					ID:         "deploy",
+					Type:       graph.NodeTypeResource,
+					GVR:        controllerTestDeployGVR,
+					Namespaced: true,
+				},
+				Template: newDeploymentObject("demo", ""),
+			}),
+			buildCurrent: func(_ *unstructured.Unstructured) []apimachineryruntime.Object {
+				current := newDeploymentObject("demo", "default")
+				now := metav1.Now()
+				current.SetDeletionTimestamp(&now)
+				return []apimachineryruntime.Object{current}
+			},
+			wantMessage: `resource "default/demo" for node "deploy" is currently being deleted`,
+		},
+		{
+			name: "collection resource",
+			configureInstance: func(instance *unstructured.Unstructured) {
+				_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+			},
+			graph: newTestGraph(newCollectionNodeForResources(t)),
+			buildCurrent: func(instance *unstructured.Unstructured) []apimachineryruntime.Object {
+				current := newConfigMapObject("one", "default")
+				current.SetLabels(map[string]string{
+					metadata.InstanceIDLabel: string(instance.GetUID()),
+					metadata.NodeIDLabel:     "configs",
+				})
+				now := metav1.Now()
+				current.SetDeletionTimestamp(&now)
+				return []apimachineryruntime.Object{current}
+			},
+			wantMessage: `resource "default/one" for node "configs" is currently being deleted`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newInstanceObject("demo", "default")
+			if tt.configureInstance != nil {
+				tt.configureInstance(instance)
+			}
+
+			objs := tt.buildCurrent(instance)
+			args := append([]apimachineryruntime.Object{instance.DeepCopy()}, objs...)
+			raw := newControllerTestDynamicClient(t, args...)
+			controller, _ := newControllerUnderTest(t, raw, tt.graph)
+
+			err := controller.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()},
+			})
+			var retryAfter *requeue.RequeueNeededAfter
+			require.ErrorAs(t, err, &retryAfter)
+
+			stored := getStoredParentObject(t, raw)
+			state, found, err := unstructured.NestedString(stored.Object, "status", "state")
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, string(InstanceStateInProgress), state)
+
+			cond := conditionByType(t, stored, ResourcesReady)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			require.NotNil(t, cond.Reason)
+			assert.Equal(t, "ResourceDeleting", *cond.Reason)
+			require.NotNil(t, cond.Message)
+			assert.Contains(t, *cond.Message, tt.wantMessage)
+		})
+	}
+}
+
 func TestReconcileManagedStateFailureMarksStatus(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	raw := newControllerTestDynamicClient(t, instance.DeepCopy())

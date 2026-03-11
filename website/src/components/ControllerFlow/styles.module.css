@@ -1,0 +1,591 @@
+.container {
+  margin: 2.5rem 0 3rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Main flow layout ── */
+
+.flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 2.25rem 1.8rem;
+  background: transparent;
+  overflow: visible;
+}
+
+/* ── Left: RGD + Instance stacked ── */
+
+.inputs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.card {
+  border-radius: 8px;
+  padding: 0.54rem 0.76rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.67rem;
+  min-width: 171px;
+}
+
+.cardButton {
+  display: block;
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.cardButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.cardButton:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 3px;
+  transform: translateY(-1px);
+}
+
+[data-theme='dark'] .cardButton:hover {
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+/* RGD: blueprint — dashed, muted */
+
+.rgdCard {
+  border: 1.5px dashed var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-surface-color);
+}
+
+/* Instantiation arrow between cards */
+
+.instantiateArrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--ifm-color-emphasis-400);
+  padding: 0.15rem 0;
+}
+
+/* Instance: concrete — solid, prominent */
+
+.instanceCard {
+  border: 1.5px solid var(--ifm-color-primary);
+  background: var(--ifm-background-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='dark'] .instanceCard {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Card header */
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.36rem;
+  margin-bottom: 0.32rem;
+}
+
+.cardBadge {
+  font-size: 0.5rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.09rem 0.32rem;
+  border-radius: 3px;
+  line-height: 1.3;
+}
+
+.rgdCard .cardBadge {
+  background: var(--ifm-color-emphasis-100);
+  color: var(--ifm-color-emphasis-600);
+}
+
+.instanceCard .cardBadge {
+  background: rgba(91, 127, 201, 0.12);
+  color: var(--ifm-color-primary);
+}
+
+[data-theme='dark'] .instanceCard .cardBadge {
+  background: rgba(147, 197, 253, 0.15);
+}
+
+.cardKind {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ifm-heading-color);
+}
+
+/* Card fields */
+
+.cardFields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.13rem;
+}
+
+.field {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.fieldKey {
+  color: var(--ifm-color-emphasis-500);
+  font-weight: 400;
+}
+
+.fieldType {
+  color: #be7b8a;
+  font-weight: 400;
+}
+
+[data-theme='dark'] .fieldType {
+  color: #e0c080;
+}
+
+.fieldVal {
+  color: var(--ifm-color-primary);
+  font-weight: 400;
+}
+
+.stage2,
+.stage3 {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.visible .stage2 {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.08s;
+}
+
+.visible .stage3 {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.16s;
+}
+
+.inputWire {
+  flex-shrink: 0;
+  width: 76px;
+  height: 158px;
+  color: var(--ifm-color-primary);
+}
+
+.inputWireSvg {
+  width: 76px;
+  height: 158px;
+  display: block;
+}
+
+.stackWire {
+  display: none;
+  flex-shrink: 0;
+  color: var(--ifm-color-primary);
+}
+
+/* ── Wire SVGs ── */
+
+.wire {
+  flex-shrink: 0;
+  width: 54px;
+  color: var(--ifm-color-primary);
+}
+
+.wireSvgH {
+  width: 54px;
+  height: 22px;
+  display: block;
+}
+
+.wireSvgV {
+  width: 22px;
+  height: 43px;
+  display: block;
+}
+
+.wireLine {
+  stroke-dasharray: 5 3;
+}
+
+.wireHead {
+  opacity: 0.7;
+}
+
+/* ── Controller ── */
+
+.controller {
+  flex-shrink: 0;
+}
+
+.controllerInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.36rem;
+  padding: 1.08rem 1.35rem;
+  border: 2px solid var(--ifm-color-primary);
+  border-radius: 11px;
+  background: rgba(91, 127, 201, 0.06);
+}
+
+[data-theme='dark'] .controllerInner {
+  background: rgba(143, 168, 212, 0.08);
+}
+
+.controllerIcon {
+  display: flex;
+  color: var(--ifm-color-primary);
+  animation: spin 10s linear infinite;
+}
+
+.controllerLabel {
+  font-size: 0.81rem;
+  font-weight: 800;
+  color: var(--ifm-color-primary);
+  letter-spacing: 0.04em;
+}
+
+.outputs {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 378px;
+}
+
+.graphCard {
+  width: 100%;
+  padding: 0.9rem 0.9rem 0.76rem;
+  border: 1.5px dashed var(--ifm-color-primary);
+  border-radius: 10px;
+  background: var(--ifm-background-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='dark'] .graphCard {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* ── DAG Grid ── */
+
+.dag {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(153px, 1fr));
+  column-gap: 1.35rem;
+  row-gap: 0;
+  justify-items: center;
+  align-items: center;
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 378px;
+}
+
+.resourceNode {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.4rem 0.9rem;
+  border: 1.5px solid var(--ifm-color-primary);
+  border-radius: 6px;
+  background: rgba(91, 127, 201, 0.06);
+  min-width: 153px;
+  text-align: center;
+}
+
+[data-theme='dark'] .resourceNode {
+  background: rgba(143, 168, 212, 0.1);
+}
+
+.dagSpan {
+  grid-column: 1 / -1;
+}
+
+.dagCol1 {
+  grid-column: 1;
+}
+
+.resKind {
+  font-family: var(--ifm-heading-font-family);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--ifm-heading-color);
+  line-height: 1.2;
+  letter-spacing: 0.015em;
+}
+
+.resApi {
+  font-size: 0.61rem;
+  font-weight: 500;
+  color: var(--ifm-color-primary);
+  font-family: var(--ifm-font-family-monospace);
+  margin-top: 0.1rem;
+}
+
+/* ── DAG edge connectors ── */
+
+.edgeRow {
+  grid-column: 1 / -1;
+  width: 100%;
+  color: var(--ifm-color-primary);
+  margin: -7px 0;
+}
+
+.edgeSvg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.edgeDown {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ifm-color-primary);
+  margin: -7px 0;
+}
+
+.edgeDownSvg {
+  width: 18px;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.26);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  animation: overlayIn 0.18s ease;
+}
+
+.modal {
+  width: min(880px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 10px;
+  background: #ffffff;
+  background-image: none;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+  animation: modalIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme='dark'] .modal {
+  background: #111827;
+  background-image: none;
+  border-color: var(--ifm-color-emphasis-200);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.5rem 1.5rem 0.75rem;
+  background: #ffffff;
+  background-image: none;
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  color: var(--ifm-color-primary);
+}
+
+.modalClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-color-primary);
+  cursor: pointer;
+  font: inherit;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.modalClose:hover {
+  background: var(--ifm-color-primary);
+  color: #fff;
+  transform: scale(1.08);
+}
+
+.modalClose:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}
+
+.modalCloseIcon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.modalBody {
+  padding: 0 1.5rem 1.5rem;
+  background: #ffffff;
+  background-image: none;
+}
+
+.modalCode {
+  margin-bottom: 0;
+}
+
+[data-theme='dark'] .modalHeader,
+[data-theme='dark'] .modalBody,
+[data-theme='dark'] .modalCode {
+  background: #111827;
+}
+
+[data-theme='dark'] .modalHeader {
+  background: #111827;
+}
+
+[data-theme='dark'] .modalClose {
+  color: var(--ifm-color-primary-lighter, #93c5fd);
+  background: var(--ifm-background-surface-color);
+  border-color: var(--ifm-color-emphasis-200);
+}
+
+[data-theme='dark'] .modalClose:hover {
+  background: var(--ifm-color-primary);
+  color: #fff;
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 1500px) {
+  .flow {
+    flex-direction: column;
+    padding: 1.75rem 1rem;
+    gap: 0.85rem;
+  }
+
+  .inputs,
+  .outputs {
+    width: 100%;
+    align-items: center;
+  }
+
+  .controller {
+    width: min(100%, 220px);
+  }
+
+  .controllerInner {
+    width: 100%;
+  }
+
+  .card {
+    min-width: 0;
+    width: min(100%, 320px);
+  }
+
+  .inputWire {
+    display: none;
+  }
+
+  .desktopOutputWire {
+    display: none;
+  }
+
+  .stackWire {
+    display: block;
+  }
+
+  .outputs {
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .graphCard {
+    width: min(100%, 460px);
+  }
+
+  .dag {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .flow {
+    padding: 1.5rem 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .resourceNode {
+    min-width: 140px;
+    padding: 0.45rem 0.8rem;
+  }
+
+  .wireSvgV {
+    width: 20px;
+    height: 42px;
+  }
+
+  .modalHeader {
+    flex-direction: column;
+  }
+
+  .modalClose {
+    width: 100%;
+  }
+}

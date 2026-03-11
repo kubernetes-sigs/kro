@@ -98,7 +98,7 @@ func (n *Node) IsIgnored() (bool, error) {
 	for _, expr := range n.includeWhenExprs {
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
+			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
 			nodeIgnoredTotal.Inc()
@@ -574,12 +574,12 @@ func (n *Node) checkSingleResourceReadiness() error {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
-			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, err)
+			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), err)
 		}
 		if !result {
-			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 		}
 	}
 	return nil
@@ -618,16 +618,16 @@ func (n *Node) checkCollectionReadiness() error {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.Original, i, ErrWaitingForReadiness)
+					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, ErrWaitingForReadiness)
 				}
-				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.Original, i, err)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.UserExpression())
 			}
 			if !result {
-				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
 		}
 	}

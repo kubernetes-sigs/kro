@@ -101,7 +101,7 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 	expr := field.Expression.Original
 	resolvedValue, ok := r.data[expr]
 	if !ok {
-		result.Error = fmt.Errorf("no data provided for expression: %s", expr)
+		result.Error = fmt.Errorf("no data provided for expression: %s", field.Expression.UserExpression())
 		return result
 	}
 	// setValueAtPath cannot fail here: if getValueFromPath succeeded,

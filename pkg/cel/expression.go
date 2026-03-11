@@ -75,6 +75,14 @@ func NewUncompiledSlice(exprs ...string) []*Expression {
 	return result
 }
 
+// UserExpression returns the user-facing expression string for error messages.
+func (e *Expression) UserExpression() string {
+	if e.OriginalTemplate != "" {
+		return e.OriginalTemplate
+	}
+	return e.Original
+}
+
 // Eval evaluates the compiled expression and returns the result.
 func (e *Expression) Eval(ctx map[string]any) (any, error) {
 	startTime := time.Now()
@@ -85,12 +93,12 @@ func (e *Expression) Eval(ctx map[string]any) (any, error) {
 
 	out, _, err := e.Program.Eval(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("eval %q: %w", e.Original, err)
+		return nil, fmt.Errorf("eval %q: %w", e.UserExpression(), err)
 	}
 
 	native, err := conversion.GoNativeType(out)
 	if err != nil {
-		return nil, fmt.Errorf("convert %q: %w", e.Original, err)
+		return nil, fmt.Errorf("convert %q: %w", e.UserExpression(), err)
 	}
 
 	return native, nil

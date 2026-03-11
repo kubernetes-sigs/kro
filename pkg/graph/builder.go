@@ -752,7 +752,7 @@ func buildStatusSchema(
 		expression := fieldDescriptor.Expression
 		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, userExpression(expression), err)
+			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
 		}
 		// Populate expression.References for restricted environment compilation
 		for _, dep := range result.ResourceDependencies {
@@ -769,7 +769,7 @@ func buildStatusSchema(
 
 		checkedAST, err := parseCheckAndCompile(env, expression)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", userExpression(expression), fieldDescriptor.Path, err)
+			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
 
 		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
@@ -1101,7 +1101,7 @@ func validateAndCompileTemplates(
 		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
 		expression := templateVariable.Expression
-		displayExpr := userExpression(expression)
+		displayExpr := expression.UserExpression()
 		// Parse, type-check, and compile
 		checkedAST, err := parseCheckAndCompile(compileEnv, expression)
 		if err != nil {
@@ -1114,16 +1114,6 @@ func validateAndCompileTemplates(
 		}
 	}
 	return nil
-}
-
-// userExpression returns the user-facing expression string for error messages.
-// For compiled string templates, this returns the original template; otherwise
-// it returns the CEL expression.
-func userExpression(expr *krocel.Expression) string {
-	if expr.OriginalTemplate != "" {
-		return expr.OriginalTemplate
-	}
-	return expr.Original
 }
 
 // validateExpressionType verifies that the CEL expression output type matches
@@ -1183,7 +1173,7 @@ func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, erro
 func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditionType, resourceID string) error {
 	checkedAST, err := parseCheckAndCompile(env, expr)
 	if err != nil {
-		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.Original, resourceID, err)
+		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.UserExpression(), resourceID, err)
 	}
 
 	// Verify the expression returns bool or optional_type(bool)
@@ -1191,7 +1181,7 @@ func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditio
 	if !conversion.IsBoolOrOptionalBool(outputType) {
 		return fmt.Errorf(
 			"%s expression %q in resource %q must return bool or optional_type(bool), but returns %q",
-			conditionType, expr.Original, resourceID, outputType.String(),
+			conditionType, expr.UserExpression(), resourceID, outputType.String(),
 		)
 	}
 

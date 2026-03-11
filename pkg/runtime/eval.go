@@ -51,7 +51,7 @@ func evalBoolExpr(expr *expressionEvaluationState, ctx map[string]any) (bool, er
 	}
 	result, ok := val.(bool)
 	if !ok {
-		return false, fmt.Errorf("expression %q did not return bool", expr.Expression.Original)
+		return false, fmt.Errorf("expression %q did not return bool", expr.Expression.UserExpression())
 	}
 
 	expr.Resolved = true
@@ -70,11 +70,11 @@ func evalListExpr(expr *expressionEvaluationState, ctx map[string]any) ([]any, e
 		return nil, err
 	}
 	if val == nil {
-		return nil, fmt.Errorf("expression %q returned null, expected list", expr.Expression.Original)
+		return nil, fmt.Errorf("expression %q returned null, expected list", expr.Expression.UserExpression())
 	}
 	result, ok := val.([]any)
 	if !ok {
-		return nil, fmt.Errorf("expression %q did not return a list", expr.Expression.Original)
+		return nil, fmt.Errorf("expression %q did not return a list", expr.Expression.UserExpression())
 	}
 
 	expr.Resolved = true

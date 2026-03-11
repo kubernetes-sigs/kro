@@ -60,15 +60,6 @@ type ResourceGraphDefinitionReconciler struct {
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
 	rgdConfig               graph.RGDConfig
-
-	buildCache buildCache
-}
-
-func (r *ResourceGraphDefinitionReconciler) getBuildCache() buildCache {
-	if r.buildCache != nil {
-		return r.buildCache
-	}
-	return noopBuildCache{}
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -90,7 +81,6 @@ func NewResourceGraphDefinitionReconciler(
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,
 		rgdConfig:               rgdConfig,
-		buildCache:              newBuildCache(),
 	}
 }
 

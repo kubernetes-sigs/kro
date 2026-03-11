@@ -117,21 +117,11 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
 // and extract resource information. It skips the expensive build pipeline when the
 // RGD's .metadata.generation has not changed since the last successful build.
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
-	// Fast path: reuse the cached graph when the spec hasn't changed.
-	if cached := r.getBuildCache().Get(rgd.Name, rgd.Generation); cached != nil {
-		ctrl.LoggerFrom(ctx).V(1).Info("skipping RGD rebuild, generation unchanged",
-			"name", rgd.Name, "generation", rgd.Generation)
-		return cached, buildResourcesInfo(cached), nil
-	}
-
+func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd, r.rgdConfig)
 	if err != nil {
 		return nil, nil, newGraphError(err)
 	}
-
-	// Cache the successful build keyed by RGD name.
-	r.getBuildCache().Store(rgd.Name, rgd.Generation, processedRGD)
 
 	return processedRGD, buildResourcesInfo(processedRGD), nil
 }

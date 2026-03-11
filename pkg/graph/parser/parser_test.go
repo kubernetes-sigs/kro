@@ -148,7 +148,7 @@ func TestParseResource(t *testing.T) {
 			{Path: "intField", Expression: krocel.NewUncompiled("int.value")},
 			{Path: "boolField", Expression: krocel.NewUncompiled("bool.value")},
 			{Path: "nestedObject.nestedString", Expression: krocel.NewUncompiled("nested.string")},
-			{Path: "nestedObject.nestedStringMultiple", Expression: krocel.NewUncompiled("nested.string1 + \"-\" + nested.string2")},
+			{Path: "nestedObject.nestedStringMultiple", Expression: krocel.NewUncompiled("(nested.string1) + \"-\" + (nested.string2)")},
 			{Path: "simpleArray[0]", Expression: krocel.NewUncompiled("array[0]")},
 			{Path: "simpleArray[1]", Expression: krocel.NewUncompiled("array[1]")},
 			{Path: "mapField.key1", Expression: krocel.NewUncompiled("map.key1")},
@@ -1476,7 +1476,7 @@ func TestPreserveUnknownFields(t *testing.T) {
 				},
 				{
 					Path:       "program.resources.app.properties.spec.services[0].name",
-					Expression: krocel.NewUncompiled("schema.spec.name + \"-service\""),
+					Expression: krocel.NewUncompiled("(schema.spec.name) + \"-service\""),
 				},
 				{
 					Path:       "program.resources.app.properties.spec.services[0].instanceCount",
@@ -1746,19 +1746,19 @@ func TestBuildStringTemplate(t *testing.T) {
 			name:    "prefix only",
 			input:   "prefix-${expr}",
 			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
-			want:    `"prefix-" + expr`,
+			want:    `"prefix-" + (expr)`,
 		},
 		{
 			name:    "suffix only",
 			input:   "${expr}-suffix",
 			matches: []exprMatch{{expr: "expr", start: 0, end: 7}},
-			want:    `expr + "-suffix"`,
+			want:    `(expr) + "-suffix"`,
 		},
 		{
 			name:    "prefix and suffix",
 			input:   "prefix-${expr}-suffix",
 			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
-			want:    `"prefix-" + expr + "-suffix"`,
+			want:    `"prefix-" + (expr) + "-suffix"`,
 		},
 		{
 			name:  "multiple expressions",
@@ -1767,7 +1767,7 @@ func TestBuildStringTemplate(t *testing.T) {
 				{expr: "expr1", start: 2, end: 10},
 				{expr: "expr2", start: 13, end: 21},
 			},
-			want: `"a-" + expr1 + "-b-" + expr2 + "-c"`,
+			want: `"a-" + (expr1) + "-b-" + (expr2) + "-c"`,
 		},
 		{
 			name:  "adjacent expressions",
@@ -1776,13 +1776,13 @@ func TestBuildStringTemplate(t *testing.T) {
 				{expr: "expr1", start: 0, end: 8},
 				{expr: "expr2", start: 8, end: 16},
 			},
-			want: `expr1 + expr2`,
+			want: `(expr1) + (expr2)`,
 		},
 		{
 			name:    "literal with quotes",
 			input:   `say "hello" ${expr}`,
 			matches: []exprMatch{{expr: "expr", start: 12, end: 19}},
-			want:    `"say \"hello\" " + expr`,
+			want:    `"say \"hello\" " + (expr)`,
 		},
 	}
 

@@ -298,7 +298,7 @@ func buildStringTemplate(original string, matches []exprMatch) string {
 		if m.start > pos {
 			parts = append(parts, strconv.Quote(original[pos:m.start]))
 		}
-		parts = append(parts, m.expr)
+		parts = append(parts, "("+m.expr+")")
 		pos = m.end
 	}
 	if pos < len(original) {

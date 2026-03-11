@@ -1563,7 +1563,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
 						path:       "metadata.name",
-						expression: "vpc.metadata.name + \"cluster\" + schema.spec.environment",
+						expression: "(vpc.metadata.name) + \"cluster\" + (schema.spec.environment)",
 						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
@@ -1590,17 +1590,17 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 					},
 					{
 						path:       "metadata.labels.combined",
-						expression: "cluster.metadata.name + \"-\" + schema.spec.environment",
+						expression: "(cluster.metadata.name) + \"-\" + (schema.spec.environment)",
 						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
 						path:       "metadata.labels[\"two.statics\"]",
-						expression: "schema.spec.environment + \"-\" + schema.spec.region",
+						expression: "(schema.spec.environment) + \"-\" + (schema.spec.region)",
 						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
 						path:       "metadata.labels[\"two.dynamics\"]",
-						expression: "vpc.metadata.name + \"-\" + cluster.status.ackResourceMetadata.arn",
+						expression: "(vpc.metadata.name) + \"-\" + (cluster.status.ackResourceMetadata.arn)",
 						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
@@ -3747,7 +3747,7 @@ func TestBuildStatusSchema(t *testing.T) {
 		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
 		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
 		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
-		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + resource.spec.replicas\n | ..........^"},
+		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + (resource.spec.replicas)\n | ..........^"},
 		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
 	}
 

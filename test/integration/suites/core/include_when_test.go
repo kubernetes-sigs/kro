@@ -370,4 +370,446 @@ var _ = Describe("Conditions", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should skip downstream dependents when an upstream includeWhen is false", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-conditions-contagious",
+			generator.WithSchema(
+				"ContagiousConditions", "v1alpha1",
+				map[string]interface{}{
+					"name":         "string",
+					"enableParent": "boolean",
+				},
+				nil,
+			),
+			generator.WithResource("parent", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-parent",
+				},
+				"data": map[string]interface{}{
+					"key": "parent",
+				},
+			}, nil, []string{"${schema.spec.enableParent}"}),
+			generator.WithResource("child", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${parent.metadata.name}-child",
+				},
+				"data": map[string]interface{}{
+					"fromParent": "${parent.data.key}",
+				},
+			}, nil, nil),
+			generator.WithResource("always", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-always",
+				},
+				"data": map[string]interface{}{
+					"key": "always",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		name := "test-conditions-contagious"
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "ContagiousConditions",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name":         name,
+					"enableParent": false,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, instance)
+		})
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		always := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-always",
+				Namespace: namespace,
+			}, always)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(always.Data).To(HaveKeyWithValue("key", "always"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-parent",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "parent should be skipped by includeWhen")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-parent-child",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should be skipped contagiously because parent is skipped")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
+	It("should propagate exclusion when includeWhen depends on another resource", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-conditions-resource-backed-contagious",
+			generator.WithSchema(
+				"ResourceBackedContagiousConditions", "v1alpha1",
+				map[string]interface{}{
+					"name":         "string",
+					"enableMiddle": "boolean",
+				},
+				nil,
+			),
+			generator.WithResource("source", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-source",
+				},
+				"data": map[string]interface{}{
+					"enabled": "${schema.spec.enableMiddle ? 'true' : 'false'}",
+				},
+			}, nil, nil),
+			generator.WithResource("middle", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-middle",
+				},
+				"data": map[string]interface{}{
+					"value": "middle",
+				},
+			}, nil, []string{"${source.data.enabled == 'true'}"}),
+			generator.WithResource("child", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${middle.metadata.name}-child",
+				},
+				"data": map[string]interface{}{
+					"fromMiddle": "${middle.data.value}",
+				},
+			}, nil, nil),
+			generator.WithResource("always", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-always",
+				},
+				"data": map[string]interface{}{
+					"key": "always",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		name := "test-resource-backed-contagious"
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "ResourceBackedContagiousConditions",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name":         name,
+					"enableMiddle": false,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, instance)
+		})
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		source := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-source",
+				Namespace: namespace,
+			}, source)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(source.Data).To(HaveKeyWithValue("enabled", "false"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		always := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-always",
+				Namespace: namespace,
+			}, always)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-middle",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "middle should be excluded by resource-backed includeWhen")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-middle-child",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should be excluded contagiously because middle is skipped")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
+	It("should wait for status-backed includeWhen before creating dependent resources", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-conditions-status-backed",
+			generator.WithSchema(
+				"StatusBackedConditions", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			generator.WithResource("source", map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-source",
+				},
+				"spec": map[string]interface{}{
+					"replicas": 1,
+					"selector": map[string]interface{}{
+						"matchLabels": map[string]interface{}{
+							"app": "${schema.spec.name}",
+						},
+					},
+					"template": map[string]interface{}{
+						"metadata": map[string]interface{}{
+							"labels": map[string]interface{}{
+								"app": "${schema.spec.name}",
+							},
+						},
+						"spec": map[string]interface{}{
+							"containers": []interface{}{
+								map[string]interface{}{
+									"name":  "nginx",
+									"image": "nginx",
+								},
+							},
+						},
+					},
+				},
+			}, nil, nil),
+			generator.WithResource("gated", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-gated",
+				},
+				"data": map[string]interface{}{
+					"fromSource": "${source.metadata.name}",
+				},
+			}, nil, []string{"${source.status.availableReplicas == source.spec.replicas}"}),
+			generator.WithResource("child", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-child",
+				},
+				"data": map[string]interface{}{
+					"fromGated": "${gated.data.fromSource}",
+				},
+			}, nil, nil),
+			generator.WithResource("always", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${schema.spec.name}-always",
+				},
+				"data": map[string]interface{}{
+					"key": "always",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		createdRGD := &krov1alpha1.ResourceGraphDefinition{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, createdRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(createdRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		name := "status-backed"
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       "StatusBackedConditions",
+				"metadata": map[string]interface{}{
+					"name":      name,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"name": name,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			_ = env.Client.Delete(ctx, instance)
+		})
+
+		source := &appsv1.Deployment{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-source",
+				Namespace: namespace,
+			}, source)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(source.Spec.Replicas).ToNot(BeNil())
+			g.Expect(*source.Spec.Replicas).To(Equal(int32(1)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		always := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-always",
+				Namespace: namespace,
+			}, always)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(always.Data).To(HaveKeyWithValue("key", "always"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("IN_PROGRESS"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-gated",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "gated resource should wait for source.status.availableReplicas")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-child",
+				Namespace: namespace,
+			}, &corev1.ConfigMap{})
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "child should wait until the gated resource is included")
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		source.Status.Replicas = 1
+		source.Status.ReadyReplicas = 1
+		source.Status.AvailableReplicas = 1
+		source.Status.Conditions = []appsv1.DeploymentCondition{
+			{
+				Type:    appsv1.DeploymentAvailable,
+				Status:  corev1.ConditionTrue,
+				Reason:  "MinimumReplicasAvailable",
+				Message: "Deployment has minimum availability.",
+			},
+		}
+		Expect(env.Client.Status().Update(ctx, source)).To(Succeed())
+
+		gated := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-gated",
+				Namespace: namespace,
+			}, gated)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(gated.Data).To(HaveKeyWithValue("fromSource", name+"-source"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		child := &corev1.ConfigMap{}
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name + "-child",
+				Namespace: namespace,
+			}, child)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(child.Data).To(HaveKeyWithValue("fromGated", name+"-source"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      name,
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			state, found, err := unstructured.NestedString(instance.Object, "status", "state")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(state).To(Equal("ACTIVE"))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 })

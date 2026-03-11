@@ -6,7 +6,7 @@ sidebar_position: 2
 
 Not all resources in a ResourceGraphDefinition need to be created for every instance. Sometimes you want to create resources conditionally based on user configuration - like enabling monitoring, backups, or TLS only when requested.
 
-kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions when an instance is created and only includes the resource if all conditions are true.
+kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions during reconciliation and only includes the resource if all conditions are true.
 
 ## Basic Example
 
@@ -38,7 +38,7 @@ spec:
     enabled: true  # Ingress will be created
 ```
 
-If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped entirely.
+If `ingress.enabled` is `false`, the Ingress resource is skipped entirely. If the field may be omitted, give it a default or guard the expression so a missing field does not raise an evaluation error.
 
 ## How includeWhen Works
 
@@ -46,12 +46,14 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 
 - If **all** expressions evaluate to `true`, the resource is included
 - If **any** expression evaluates to `false`, the resource is skipped
+- Conditions are re-evaluated on later reconciliations; if a previously included resource starts evaluating to `false`, kro prunes it
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
 - For [collections](./04-collections.md), `includeWhen` applies to the entire collection
 
 ## What You Can Reference
 
-Currently, `includeWhen` expressions can only reference `schema.spec` fields:
+`includeWhen` expressions can reference `schema.spec` fields and upstream
+resources:
 
 ```kro
 # ✓ Valid - references schema.spec and returns boolean
@@ -59,6 +61,12 @@ includeWhen:
   - ${schema.spec.ingress.enabled}
   - ${schema.spec.environment == "production"}
   - ${schema.spec.replicas > 3}
+```
+
+```kro
+# ✓ Valid - references an upstream resource
+includeWhen:
+  - ${deployment.status.availableReplicas > 0}
 ```
 
 ```kro
@@ -70,7 +78,11 @@ includeWhen:
 kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring they reference valid fields and return boolean values.
 
 :::note
-Currently, `includeWhen` can only reference `schema.spec` because conditions are evaluated before any resources are created. Support for conditional inclusion based on other resources' states is planned for future releases.
+When `includeWhen` references other resources, kro treats them as dependencies.
+The condition is evaluated against the observed upstream state, and reconciliation
+waits until the referenced resources have enough data to evaluate safely.
+As that upstream state changes, the resource may become includable later or be
+pruned later if the condition flips to `false`.
 :::
 
 ## Dependencies and Skipped Resources

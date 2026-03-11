@@ -411,7 +411,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "failed to parse includeWhen expressions",
 		},
 		{
-			name: "includeWhen expression reference a different resource",
+			name: "includeWhen expression references unknown resource",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -420,23 +420,16 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
-					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
-					"kind":       "VPC",
-					"metadata": map[string]interface{}{
-						"name": "test-vpc",
-					},
-				}, nil, []string{"invalid ! syntax"}),
 				generator.WithResource("subnet", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
 					"metadata": map[string]interface{}{
 						"name": "test-vpc",
 					},
-				}, nil, []string{"${vpc.status.state == 'available'}"}),
+				}, nil, []string{"${missing.status.state == 'available'}"}),
 			},
 			wantErr: true,
-			errMsg:  "failed to parse includeWhen expressions",
+			errMsg:  "references unknown identifiers: [missing]",
 		},
 		{
 			name: "missing required field",
@@ -3181,6 +3174,163 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	}
 }
 
+func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		checkGraph                  func(t *testing.T, g *Graph)
+	}{
+		{
+			name: "adds dependency from includeWhen resource reference",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenDeps", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("source", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-source",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, nil),
+				generator.WithResource("dependent", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-dependent",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, []string{"${source.data.enabled == 'true'}"}),
+			},
+			checkGraph: func(t *testing.T, g *Graph) {
+				dependent := g.Resources["dependent"]
+				require.NotNil(t, dependent)
+				assert.Contains(t, dependent.Meta.Dependencies, "source")
+
+				sourceIdx := -1
+				dependentIdx := -1
+				for i, id := range g.TopologicalOrder {
+					if id == "source" {
+						sourceIdx = i
+					}
+					if id == "dependent" {
+						dependentIdx = i
+					}
+				}
+				assert.GreaterOrEqual(t, sourceIdx, 0)
+				assert.GreaterOrEqual(t, dependentIdx, 0)
+				assert.Less(t, sourceIdx, dependentIdx)
+			},
+		},
+		{
+			name: "detects cycle created only by includeWhen references",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenCycle", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("a", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-a",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, []string{"${b.data.enabled == 'true'}"}),
+				generator.WithResource("b", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-b",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, []string{"${a.data.enabled == 'true'}"}),
+			},
+			wantErr: true,
+			errMsg:  "graph contains a cycle",
+		},
+		{
+			name: "detects cycle between template dependency and includeWhen dependency",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenTemplateCycle", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("a", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${b.metadata.name}-a",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, nil),
+				generator.WithResource("b", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-b",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, []string{"${a.data.enabled == 'true'}"}),
+			},
+			wantErr: true,
+			errMsg:  "graph contains a cycle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-includewhen-refs", tt.resourceGraphDefinitionOpts...)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, g)
+
+			if tt.checkGraph != nil {
+				tt.checkGraph(t, g)
+			}
+		})
+	}
+}
+
 func TestGraphBuilder_CollectionValidation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
 	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
@@ -3969,15 +4119,18 @@ func TestBuilderHelperCases(t *testing.T) {
 			},
 		},
 		{
-			name: "validateAndCompileNode rejects non schema includeWhen refs",
+			name: "validateAndCompileNode rejects includeWhen refs to non-dependency resources",
 			run: func(t *testing.T) {
+				e := expr("other.spec.name == 'x'")
+				e.References = []string{"other"}
 				node := &Node{
-					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
-					IncludeWhen: []*krocel.Expression{expr("resource.spec.name == 'x'")},
+					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource, Dependencies: []string{}},
+					IncludeWhen: []*krocel.Expression{e},
 				}
-				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource", "other"), resourceEnv, rootSchema, provider)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "includeWhen")
+				assert.Contains(t, err.Error(), "references unknown identifiers")
 			},
 		},
 		{

@@ -134,8 +134,8 @@ If you prefer folded scalars (`>`), also use `>-` to avoid the trailing newline:
 readyWhen:
   - >-
     ${
-      self.status.phase == "Ready" &&
-      self.status.observedGeneration == self.metadata.generation
+      deployment.status.phase == "Ready" &&
+      deployment.status.observedGeneration == deployment.metadata.generation
     }
 ```
 

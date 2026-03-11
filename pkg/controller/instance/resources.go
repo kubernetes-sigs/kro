@@ -241,6 +241,9 @@ func (c *Controller) processNode(
 
 	ignored, err := node.IsIgnored()
 	if err != nil {
+		if runtime.IsDataPending(err) {
+			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
+		}
 		state.SetError(err)
 		return nil, err
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -48,42 +49,42 @@ func TestContextHelpersAndStateTransitions(t *testing.T) {
 
 	state := &NodeState{}
 	state.SetInProgress()
-	assert.Equal(t, NodeStateInProgress, state.State)
+	assert.Equal(t, v1alpha1.NodeStateInProgress, state.State)
 	state.SetReady()
-	assert.Equal(t, NodeStateSynced, state.State)
+	assert.Equal(t, v1alpha1.NodeStateSynced, state.State)
 	state.SetSkipped()
-	assert.Equal(t, NodeStateSkipped, state.State)
+	assert.Equal(t, v1alpha1.NodeStateSkipped, state.State)
 	state.SetDeleted()
-	assert.Equal(t, NodeStateDeleted, state.State)
+	assert.Equal(t, v1alpha1.NodeStateDeleted, state.State)
 	state.SetDeleting()
-	assert.Equal(t, NodeStateDeleting, state.State)
+	assert.Equal(t, v1alpha1.NodeStateDeleting, state.State)
 	state.SetWaitingForReadiness(errors.New("waiting"))
-	assert.Equal(t, NodeStateWaitingForReadiness, state.State)
+	assert.Equal(t, v1alpha1.NodeStateWaitingForReadiness, state.State)
 	state.SetError(errors.New("boom"))
-	assert.Equal(t, NodeStateError, state.State)
+	assert.Equal(t, v1alpha1.NodeStateError, state.State)
 
 	manager := newStateManager()
 	manager.NewNodeState("a").SetReady()
 	manager.NewNodeState("b").SetSkipped()
 	manager.Update()
-	assert.Equal(t, InstanceStateActive, manager.State)
+	assert.Equal(t, v1alpha1.InstanceStateActive, manager.State)
 
 	manager.ReconcileErr = errors.New("boom")
 	manager.Update()
-	assert.Equal(t, InstanceStateError, manager.State)
+	assert.Equal(t, v1alpha1.InstanceStateError, manager.State)
 
 	manager.ReconcileErr = requeue.NeededAfter(errors.New("later"), time.Second)
-	manager.State = InstanceStateInProgress
+	manager.State = v1alpha1.InstanceStateInProgress
 	rcx.StateManager = manager
 	rcx.updateInstanceState()
-	assert.Equal(t, InstanceStateInProgress, rcx.StateManager.State)
+	assert.Equal(t, v1alpha1.InstanceStateInProgress, rcx.StateManager.State)
 
 	manager = newStateManager()
 	manager.NewNodeState("waiting").SetWaitingForReadiness(nil)
 	manager.Update()
-	assert.Equal(t, InstanceStateInProgress, manager.State)
+	assert.Equal(t, v1alpha1.InstanceStateInProgress, manager.State)
 
-	manager.State = InstanceStateDeleting
+	manager.State = v1alpha1.InstanceStateDeleting
 	manager.Update()
-	assert.Equal(t, InstanceStateDeleting, manager.State)
+	assert.Equal(t, v1alpha1.InstanceStateDeleting, manager.State)
 }

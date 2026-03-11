@@ -194,7 +194,7 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 		"conditions": arr,
 	}
 	if condSet.For(&unstructuredWrapper{inst}).IsRootReady() {
-		status["state"] = InstanceStateActive
+		status["state"] = v1alpha1.InstanceStateActive
 	} else {
 		status["state"] = rcx.StateManager.State
 	}

@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -212,16 +213,17 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
 	// which keeps StateManager.State as IN_PROGRESS.
 	switch rcx.StateManager.State {
-	case InstanceStateActive:
+	case v1alpha1.InstanceStateActive:
 		rcx.Mark.ResourcesReady()
-	case InstanceStateError:
+	case v1alpha1.InstanceStateError:
 		if err := rcx.StateManager.NodeErrors(); err != nil {
 			rcx.Mark.ResourcesNotReady("resource error: %v", err)
 		} else {
 			rcx.Mark.ResourcesNotReady("resource reconciliation error")
 		}
-	case InstanceStateInProgress:
-		rcx.Mark.ResourcesNotReady("resource reconciliation in progress")
+	case v1alpha1.InstanceStateInProgress:
+		err := rcx.StateManager.NodeErrors()
+		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
 	default:
 		rcx.Mark.ResourcesNotReady("unknown instance state")
 	}

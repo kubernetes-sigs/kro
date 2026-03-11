@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
@@ -152,17 +153,18 @@ func TestReconcileNodesPaths(t *testing.T) {
 func TestProcessNodePaths(t *testing.T) {
 	disabled := false
 	tests := []struct {
-		name            string
-		specEnabled     *bool
-		node            *graph.Node
-		currentObjs     []apimachineryruntime.Object
-		reactorVerb     string
-		reactorResource string
-		reactorErr      string
-		wantResources   int
-		wantSkipApply   bool
-		wantState       string
-		wantErr         string
+		name              string
+		specEnabled       *bool
+		configureInstance func(*unstructured.Unstructured)
+		node              *graph.Node
+		currentObjs       []apimachineryruntime.Object
+		reactorVerb       string
+		reactorResource   string
+		reactorErr        string
+		wantResources     int
+		wantSkipApply     bool
+		wantState         string
+		wantErr           string
 	}{
 		{
 			name:        "ignored node becomes skip apply",
@@ -252,6 +254,45 @@ func TestProcessNodePaths(t *testing.T) {
 			wantState: NodeStateError,
 			wantErr:   "division by zero",
 		},
+		{
+			name: "terminating managed resource marks deleting",
+			node: &graph.Node{
+				Meta: graph.NodeMeta{
+					ID:         "deploy",
+					Type:       graph.NodeTypeResource,
+					GVR:        controllerTestDeployGVR,
+					Namespaced: true,
+				},
+				Template: newDeploymentObject("demo", ""),
+			},
+			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
+				obj := newDeploymentObject("demo", "default")
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return obj
+			}()},
+			wantState: NodeStateDeleting,
+			wantErr:   "currently being deleted",
+		},
+		{
+			name: "terminating managed collection resource marks deleting",
+			configureInstance: func(instance *unstructured.Unstructured) {
+				_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+			},
+			node: newCollectionNodeForResources(t),
+			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
+				obj := newConfigMapObject("one", "default")
+				obj.SetLabels(map[string]string{
+					metadata.InstanceIDLabel: "demo-uid",
+					metadata.NodeIDLabel:     "configs",
+				})
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return obj
+			}()},
+			wantState: NodeStateDeleting,
+			wantErr:   "currently being deleted",
+		},
 	}
 
 	for _, tt := range tests {
@@ -259,6 +300,9 @@ func TestProcessNodePaths(t *testing.T) {
 			instance := newInstanceObject("demo", "default")
 			if tt.specEnabled != nil {
 				_ = unstructured.SetNestedField(instance.Object, *tt.specEnabled, "spec", "enabled")
+			}
+			if tt.configureInstance != nil {
+				tt.configureInstance(instance)
 			}
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(tt.node), tt.currentObjs...)
@@ -290,7 +334,7 @@ func TestProcessNodeCollectionTypes(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
 
-	collectionNode := newCollectionNodeForResources(t, "configs")
+	collectionNode := newCollectionNodeForResources(t)
 	externalCollection := newExternalCollectionNodeForResources(t, nil)
 
 	currentCollection := newConfigMapObject("one", "default")
@@ -416,6 +460,17 @@ func TestProcessExternalRefNodePaths(t *testing.T) {
 			wantState:  NodeStateError,
 			wantErr:    "get failed",
 		},
+		{
+			name:    "terminating external ref does not use deleting shortcut",
+			desired: []*unstructured.Unstructured{newConfigMapObject("demo", "default")},
+			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
+				obj := newConfigMapObject("demo", "default")
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return obj
+			}()},
+			wantState: NodeStateSynced,
+		},
 	}
 
 	for _, tt := range tests {
@@ -534,6 +589,25 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 				return obj
 			}()},
 			wantState: NodeStateWaitingForReadiness,
+		},
+		{
+			name: "terminating external collection item does not use deleting shortcut",
+			node: newExternalCollectionNodeForResources(t, nil),
+			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
+				obj := newConfigMapObject("match", "default")
+				obj.SetLabels(map[string]string{"app": "demo"})
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return obj
+			}()},
+			desired: []*unstructured.Unstructured{func() *unstructured.Unstructured {
+				obj := newConfigMapObject("demo", "default")
+				obj.Object["metadata"].(map[string]interface{})["selector"] = map[string]interface{}{
+					"matchLabels": map[string]interface{}{"app": "demo"},
+				}
+				return obj
+			}()},
+			wantState: NodeStateSynced,
 		},
 	}
 
@@ -784,7 +858,7 @@ func TestUpdateCollectionFromApplyResultsPaths(t *testing.T) {
 			instance := newInstanceObject("demo", "default")
 			_ = unstructured.SetNestedSlice(instance.Object, tt.items, "spec", "items")
 
-			collection := newCollectionNodeForResources(t, "configs")
+			collection := newCollectionNodeForResources(t)
 			controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collection))
 			node := rcx.Runtime.Nodes()[0]
 			_, err := node.GetDesired()
@@ -807,7 +881,7 @@ func TestUpdateCollectionFromApplyResultsErrorAndPendingPaths(t *testing.T) {
 	}{
 		{
 			name:      "returns nil while collection desired data is still pending",
-			node:      newCollectionNodeForResources(t, "configs"),
+			node:      newCollectionNodeForResources(t),
 			wantState: NodeStateInProgress,
 		},
 		{
@@ -917,12 +991,110 @@ func TestReconcileNodesRetryBranches(t *testing.T) {
 	assert.Contains(t, err.Error(), "UID conflicts")
 }
 
-func newCollectionNodeForResources(t *testing.T, id string) *graph.Node {
+func TestReconcileNodesBlocksDependentsWhenManagedResourcesAreTerminating(t *testing.T) {
+	tests := []struct {
+		name              string
+		configureInstance func(*unstructured.Unstructured)
+		nodes             []*graph.Node
+		currentObjs       func(*unstructured.Unstructured) []apimachineryruntime.Object
+		dependentName     string
+	}{
+		{
+			name: "regular resource blocks dependent apply",
+			nodes: []*graph.Node{
+				{
+					Meta: graph.NodeMeta{
+						ID:           "config",
+						Type:         graph.NodeTypeResource,
+						GVR:          controllerTestCMGVR,
+						Namespaced:   true,
+						Dependencies: nil,
+					},
+					Template: newConfigMapObject("demo-config", ""),
+				},
+				{
+					Meta: graph.NodeMeta{
+						ID:           "deploy",
+						Type:         graph.NodeTypeResource,
+						GVR:          controllerTestDeployGVR,
+						Namespaced:   true,
+						Dependencies: []string{"config"},
+					},
+					Template: newDeploymentObject("demo", ""),
+				},
+			},
+			currentObjs: func(_ *unstructured.Unstructured) []apimachineryruntime.Object {
+				obj := newConfigMapObject("demo-config", "default")
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return []apimachineryruntime.Object{obj}
+			},
+			dependentName: "demo",
+		},
+		{
+			name: "collection blocks dependent apply",
+			configureInstance: func(instance *unstructured.Unstructured) {
+				_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+			},
+			nodes: []*graph.Node{
+				func() *graph.Node {
+					node := newCollectionNodeForResources(t)
+					node.Meta.Dependencies = nil
+					return node
+				}(),
+				{
+					Meta: graph.NodeMeta{
+						ID:           "deploy",
+						Type:         graph.NodeTypeResource,
+						GVR:          controllerTestDeployGVR,
+						Namespaced:   true,
+						Dependencies: []string{"configs"},
+					},
+					Template: newDeploymentObject("demo", ""),
+				},
+			},
+			currentObjs: func(instance *unstructured.Unstructured) []apimachineryruntime.Object {
+				obj := newConfigMapObject("one", "default")
+				obj.SetLabels(map[string]string{
+					metadata.InstanceIDLabel: string(instance.GetUID()),
+					metadata.NodeIDLabel:     "configs",
+				})
+				now := metav1.Now()
+				obj.SetDeletionTimestamp(&now)
+				return []apimachineryruntime.Object{obj}
+			},
+			dependentName: "demo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newInstanceObject("demo", "default")
+			if tt.configureInstance != nil {
+				tt.configureInstance(instance)
+			}
+
+			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph(tt.nodes...), tt.currentObjs(instance)...)
+			err := controller.reconcileNodes(rcx)
+
+			var deletingErr *resourceDeletingError
+			require.ErrorAs(t, err, &deletingErr)
+			assert.Contains(t, err.Error(), "currently being deleted")
+
+			deployClient := raw.Resource(controllerTestDeployGVR).Namespace("default")
+			_, getErr := deployClient.Get(t.Context(), tt.dependentName, metav1.GetOptions{})
+			require.Error(t, getErr)
+			assert.True(t, apierrors.IsNotFound(getErr), "dependent resource should not be created while dependency is terminating")
+		})
+	}
+}
+
+func newCollectionNodeForResources(t *testing.T) *graph.Node {
 	t.Helper()
 
 	return &graph.Node{
 		Meta: graph.NodeMeta{
-			ID:         id,
+			ID:         "configs",
 			Type:       graph.NodeTypeCollection,
 			GVR:        controllerTestCMGVR,
 			Namespaced: true,

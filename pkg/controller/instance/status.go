@@ -115,6 +115,11 @@ func (m *ConditionsMarker) ResourcesNotReady(msg string, args ...any) {
 	m.cs.SetFalse(ResourcesReady, "NotReady", fmt.Sprintf(msg, args...))
 }
 
+// ResourcesDeleting signals there are managed resources currently terminating.
+func (m *ConditionsMarker) ResourcesDeleting(msg string, args ...any) {
+	m.cs.SetFalse(ResourcesReady, "ResourceDeleting", fmt.Sprintf(msg, args...))
+}
+
 // ReconciliationSuspended signals that reconciliation is suspended
 func (m *ConditionsMarker) ReconciliationSuspended(msg string, args ...any) {
 	m.cs.SetTrueWithReason(ReconciliationSuspended, "Suspended", fmt.Sprintf(msg, args...))

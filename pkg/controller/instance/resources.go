@@ -25,6 +25,7 @@ import (
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -614,9 +615,9 @@ func (c *Controller) processApplyResults(
 			continue
 		}
 
-		if state.State == NodeStateError ||
-			state.State == NodeStateSkipped ||
-			state.State == NodeStateWaitingForReadiness {
+		if state.State == v1alpha1.NodeStateError ||
+			state.State == v1alpha1.NodeStateSkipped ||
+			state.State == v1alpha1.NodeStateWaitingForReadiness {
 			continue
 		}
 

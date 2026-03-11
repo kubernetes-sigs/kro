@@ -178,7 +178,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	}
 
 	newState := rcx.StateManager.State
-	if InstanceState(previousState) != newState {
+	if v1alpha1.InstanceState(previousState) != newState {
 		gvk := rcx.Instance.GroupVersionKind().String()
 		instanceStateTransitionsTotal.WithLabelValues(
 			gvk,
@@ -211,7 +211,7 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 		"conditions": arr,
 	}
 	if condSet.For(&unstructuredWrapper{inst}).IsRootReady() {
-		status["state"] = InstanceStateActive
+		status["state"] = v1alpha1.InstanceStateActive
 	} else {
 		status["state"] = rcx.StateManager.State
 	}

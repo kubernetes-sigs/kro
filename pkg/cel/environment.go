@@ -24,8 +24,10 @@ import (
 	"github.com/google/cel-go/ext"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	k8scellib "k8s.io/apiserver/pkg/cel/library"
+	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 	"github.com/kubernetes-sigs/kro/pkg/cel/library"
 )
 
@@ -145,12 +147,12 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 // and returns both the environment and the DeclTypeProvider (if typed resources
 // were configured). Uses a throwaway cache for SchemaDeclType/MaybeAssignTypeName.
 func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
-	return defaultEnvironmentWithCache(NewCompilationCache(), options...)
+	return defaultEnvironmentWithBuilderCache(celcache.NewBuilderCache(), options...)
 }
 
-// defaultEnvironmentWithCache builds a CEL environment using the given cache
+// defaultEnvironmentWithBuilderCache builds a CEL environment using the given cache
 // for SchemaDeclType and MaybeAssignTypeName lookups.
-func defaultEnvironmentWithCache(cache CompilationCache, options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
+func defaultEnvironmentWithBuilderCache(cache *celcache.BuilderCache, options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
 	base, err := baseEnv()
 	if err != nil {
 		return nil, nil, fmt.Errorf("base environment: %w", err)
@@ -175,8 +177,12 @@ func defaultEnvironmentWithCache(cache CompilationCache, options ...EnvOption) (
 
 		declTypes := make([]*apiservercel.DeclType, 0, len(opts.typedResources))
 
+		schemaDeclType := func(s *spec.Schema) *apiservercel.DeclType {
+			return SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: s}, false)
+		}
+
 		for name, schema := range opts.typedResources {
-			declType := cache.SchemaDeclType(schema)
+			declType := cache.SchemaDeclType(schema, schemaDeclType)
 			if declType != nil {
 				typeName := TypeNamePrefix + name
 				declType = cache.MaybeAssignTypeName(schema, declType, typeName)
@@ -192,7 +198,7 @@ func defaultEnvironmentWithCache(cache CompilationCache, options ...EnvOption) (
 		}
 
 		if len(declTypes) > 0 {
-			provider = NewDeclTypeProvider(declTypes...)
+			provider = NewDeclTypeProvider(cache, declTypes...)
 			// Enable recognition of CEL reserved keywords as field names
 			provider.SetRecognizeKeywordAsFieldName(true)
 
@@ -212,6 +218,58 @@ func defaultEnvironmentWithCache(cache CompilationCache, options ...EnvOption) (
 
 	env, err := base.Extend(declarations...)
 	return env, provider, err
+}
+
+// TypedEnvironmentWithProvider creates a typed CEL environment with caching.
+// It returns both the environment and the DeclTypeProvider. Results are cached
+// in the BuilderCache by canonical schema set.
+func TypedEnvironmentWithProvider(cache *celcache.BuilderCache, schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error) {
+	env, provider, err := cache.TypedEnvironmentWithProvider(schemas, func() (*cel.Env, any, error) {
+		return defaultEnvironmentWithBuilderCache(cache, WithTypedResources(schemas))
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if provider == nil {
+		return env, nil, nil
+	}
+	return env, provider.(*DeclTypeProvider), nil
+}
+
+// ExtendWithTypedVar returns a cached environment extending the parent
+// with a single typed variable declaration derived from the given schema.
+// Uses the session cache for environment storage and the builder cache
+// for DeclType lookups.
+func ExtendWithTypedVar(builderCache *celcache.BuilderCache, sessionCache *celcache.SessionCache, parent *cel.Env, varName string, schema *spec.Schema) (*cel.Env, error) {
+	return sessionCache.ExtendWithTypedVar(parent, varName, schema, func() (*cel.Env, error) {
+		schemaDeclType := func(s *spec.Schema) *apiservercel.DeclType {
+			return SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: s}, false)
+		}
+
+		declType := builderCache.SchemaDeclType(schema, schemaDeclType)
+		if declType == nil {
+			return nil, fmt.Errorf("failed to build DeclType for schema")
+		}
+
+		typeName := TypeNamePrefix + varName
+		declType = builderCache.MaybeAssignTypeName(schema, declType, typeName)
+
+		provider := NewDeclTypeProvider(builderCache, declType)
+		provider.SetRecognizeKeywordAsFieldName(true)
+
+		celType := declType.CelType()
+
+		registry := types.NewEmptyRegistry()
+		wrappedProvider, err := provider.WithTypeProvider(registry)
+		if err != nil {
+			return nil, err
+		}
+
+		return parent.Extend(
+			cel.Variable(varName, celType),
+			cel.CustomTypeProvider(wrappedProvider),
+		)
+	})
 }
 
 // TypedEnvironment creates a CEL environment with type checking enabled.

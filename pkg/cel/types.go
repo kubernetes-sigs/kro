@@ -19,32 +19,27 @@ package cel
 import (
 	"fmt"
 	"strconv"
-	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"k8s.io/apimachinery/pkg/util/sets"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+
+	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 )
 
-// fieldTypeMapCache caches FieldTypeMap results keyed by *apiservercel.DeclType pointer.
-// Safe because DeclType is immutable after MaybeAssignTypeName, and FieldTypeMap
-// is a pure function of its input type.
-var fieldTypeMapCache sync.Map // key: *apiservercel.DeclType, value: map[string]*apiservercel.DeclType
-
 // FieldTypeMap constructs a map of the field and object types nested within a given type.
-func FieldTypeMap(path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
-	if v, ok := fieldTypeMapCache.Load(t); ok {
-		return v.(map[string]*apiservercel.DeclType)
-	}
+// The result is cached in the given BuilderCache to avoid redundant computation.
+func FieldTypeMap(cache *celcache.BuilderCache, path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
 	if t.IsObject() && t.TypeName() != "object" {
 		path = t.TypeName()
 	}
-	typeMap := make(map[string]*apiservercel.DeclType)
-	buildDeclTypes(path, t, typeMap)
-	fieldTypeMapCache.Store(t, typeMap)
-	return typeMap
+	return cache.FieldTypeMap(t, func() map[string]*apiservercel.DeclType {
+		typeMap := make(map[string]*apiservercel.DeclType)
+		buildDeclTypes(path, t, typeMap)
+		return typeMap
+	})
 }
 
 func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*apiservercel.DeclType) {
@@ -74,7 +69,9 @@ func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*api
 }
 
 // NewDeclTypeProvider returns an Open API Schema-based type-system which is CEL compatible.
-func NewDeclTypeProvider(rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
+// The cache parameter is used for FieldTypeMap lookups; pass nil to skip caching
+// (a throwaway cache will be created).
+func NewDeclTypeProvider(cache *celcache.BuilderCache, rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
 	// Note, if the schema indicates that it's actually based on another proto
 	// then prefer the proto definition. For expressions in the proto, a new field
 	// annotation will be needed to indicate the expected environment and type of
@@ -86,9 +83,12 @@ func NewDeclTypeProvider(rootTypes ...*apiservercel.DeclType) *DeclTypeProvider 
 	if rootTypes == nil {
 		return &DeclTypeProvider{}
 	}
+	if cache == nil {
+		cache = celcache.NewBuilderCache()
+	}
 	typeMaps := make([]map[string]*apiservercel.DeclType, len(rootTypes))
 	for i, dt := range rootTypes {
-		typeMaps[i] = FieldTypeMap(dt.TypeName(), dt)
+		typeMaps[i] = FieldTypeMap(cache, dt.TypeName(), dt)
 	}
 	return &DeclTypeProvider{
 		typeMaps: typeMaps,

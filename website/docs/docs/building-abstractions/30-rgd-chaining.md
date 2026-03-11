@@ -1,10 +1,12 @@
 ---
-sidebar_position: 2
+sidebar_position: 30
 ---
 
 # RGD Chaining
 
 RGD chaining allows you to compose complex applications by building on top of existing ResourceGraphDefinitions. Instead of duplicating resource definitions, you can create instances of one RGD within another RGD's resource graph.
+
+If you want a single RGD to wrap one lower-level resource, see [Single Resource RGD](./10-single-resource-rgd.md). If you want one RGD to manage several tightly-coupled lower-level resources as one unit, see [Multi Resource RGD](./20-multi-resource-rgd.md).
 
 ## How It Works
 

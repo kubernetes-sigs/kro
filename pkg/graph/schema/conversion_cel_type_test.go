@@ -168,7 +168,7 @@ func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 		"extra":    apiservercel.NewDeclField("extra", apiservercel.DynType, false, nil, nil),
 	}
 	userType := apiservercel.NewObjectType("User", userFields)
-	provider := krocel.NewDeclTypeProvider(userType, addressType)
+	provider := krocel.NewDeclTypeProvider(nil, userType, addressType)
 
 	typeMap := map[string]*cel.Type{
 		"user": userType.CelType(),

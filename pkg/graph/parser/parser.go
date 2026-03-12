@@ -32,6 +32,11 @@ const (
 	schemaTypeAny                    = "any"
 )
 
+var (
+	typesAny             = []string{schemaTypeAny}
+	typesStringOrInteger = []string{"string", "integer"}
+)
+
 // ParseResource extracts CEL expressions from a resource based on
 // the schema. The resource is expected to be a map[string]interface{}.
 //
@@ -95,7 +100,7 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
 		// in the future; just haven't really thought about it yet.
 		// Basically "any" means that the field can be of any type.
-		return []string{schemaTypeAny}, nil
+		return typesAny, nil
 	}
 
 	return nil, fmt.Errorf("unknown schema type")
@@ -106,12 +111,12 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 func handleSchemaExtensions(schema *spec.Schema) ([]string, bool) {
 	// Handle "x-kubernetes-preserve-unknown-fields" extension
 	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-		return []string{schemaTypeAny}, true
+		return typesAny, true
 	}
 
 	// Handle "x-kubernetes-int-or-string" extension
 	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) {
-		return []string{"string", "integer"}, true
+		return typesStringOrInteger, true
 	}
 
 	return nil, false
@@ -201,7 +206,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 		return nil, fmt.Errorf("expected %s type for path %s, got object", strings.Join(expectedTypes, " or "), path)
 	}
 
-	var expressionsFields []variable.FieldDescriptor
+	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for fieldName, value := range field {
 		fieldSchema, err := getFieldSchema(schema, fieldName)
 		if err != nil {
@@ -243,9 +248,9 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 		return nil, err
 	}
 
-	var expressionsFields []variable.FieldDescriptor
+	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for i, item := range field {
-		itemPath := fmt.Sprintf("%s[%d]", path, i)
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
 		itemExpressions, err := parseResource(item, itemSchema, itemPath)
 		if err != nil {
 			return nil, err
@@ -409,12 +414,12 @@ func isInteger(v interface{}) bool {
 // .fieldName to avoid ambiguity and simplify parsing back the path.
 func joinPathAndFieldName(path, fieldName string) string {
 	if fieldName == "" || strings.Contains(fieldName, ".") {
-		return fmt.Sprintf("%s[%q]", path, fieldName)
+		return path + "[\"" + fieldName + "\"]"
 	}
 	if path == "" {
 		return fieldName
 	}
-	return fmt.Sprintf("%s.%s", path, fieldName)
+	return path + "." + fieldName
 }
 
 // hasStructuralSchemaMarkerEnabled checks if a schema has a specific marker enabled.

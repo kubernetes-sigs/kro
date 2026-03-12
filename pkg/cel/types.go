@@ -25,16 +25,21 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"k8s.io/apimachinery/pkg/util/sets"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+
+	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 )
 
 // FieldTypeMap constructs a map of the field and object types nested within a given type.
-func FieldTypeMap(path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
+// The result is cached in the given BuilderCache to avoid redundant computation.
+func FieldTypeMap(cache *celcache.BuilderCache, path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
 	if t.IsObject() && t.TypeName() != "object" {
 		path = t.TypeName()
 	}
-	types := make(map[string]*apiservercel.DeclType)
-	buildDeclTypes(path, t, types)
-	return types
+	return cache.FieldTypeMap(t, func() map[string]*apiservercel.DeclType {
+		typeMap := make(map[string]*apiservercel.DeclType)
+		buildDeclTypes(path, t, typeMap)
+		return typeMap
+	})
 }
 
 func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*apiservercel.DeclType) {
@@ -45,54 +50,58 @@ func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*api
 		// to function properly.
 		types[t.TypeName()] = t
 		for name, field := range t.Fields {
-			fieldPath := fmt.Sprintf("%s.%s", path, name)
+			fieldPath := path + "." + name
 			buildDeclTypes(fieldPath, field.Type, types)
 		}
 	}
 	// Map element properties to type names if needed.
 	if t.IsMap() {
-		mapElemPath := fmt.Sprintf("%s.@elem", path)
+		mapElemPath := path + ".@elem"
 		buildDeclTypes(mapElemPath, t.ElemType, types)
 		types[path] = t
 	}
 	// List element properties.
 	if t.IsList() {
-		listIdxPath := fmt.Sprintf("%s.@idx", path)
+		listIdxPath := path + ".@idx"
 		buildDeclTypes(listIdxPath, t.ElemType, types)
 		types[path] = t
 	}
 }
 
-func allTypesForDecl(declTypes []*apiservercel.DeclType) map[string]*apiservercel.DeclType {
-	if declTypes == nil {
-		return nil
-	}
-	allTypes := map[string]*apiservercel.DeclType{}
-	for _, declType := range declTypes {
-		for k, t := range FieldTypeMap(declType.TypeName(), declType) {
-			allTypes[k] = t
-		}
-	}
-
-	return allTypes
-}
-
 // NewDeclTypeProvider returns an Open API Schema-based type-system which is CEL compatible.
-func NewDeclTypeProvider(rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
+// The cache parameter is used for FieldTypeMap lookups; pass nil to skip caching
+// (a throwaway cache will be created).
+func NewDeclTypeProvider(cache *celcache.BuilderCache, rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
 	// Note, if the schema indicates that it's actually based on another proto
 	// then prefer the proto definition. For expressions in the proto, a new field
 	// annotation will be needed to indicate the expected environment and type of
 	// the expression.
-	allTypes := allTypesForDecl(rootTypes)
+	//
+	// Instead of merging all FieldTypeMaps into a single map (which allocates
+	// ~189MB at scale), we store references to the individual cached FieldTypeMap
+	// results and search across them lazily in findDeclType.
+	if rootTypes == nil {
+		return &DeclTypeProvider{}
+	}
+	if cache == nil {
+		cache = celcache.NewBuilderCache()
+	}
+	typeMaps := make([]map[string]*apiservercel.DeclType, len(rootTypes))
+	for i, dt := range rootTypes {
+		typeMaps[i] = FieldTypeMap(cache, dt.TypeName(), dt)
+	}
 	return &DeclTypeProvider{
-		registeredTypes: allTypes,
+		typeMaps: typeMaps,
 	}
 }
 
 // DeclTypeProvider extends the CEL ref.TypeProvider interface and provides an Open API Schema-based
 // type-system.
 type DeclTypeProvider struct {
-	registeredTypes             map[string]*apiservercel.DeclType
+	// typeMaps holds references to cached FieldTypeMap results for each root type.
+	// We search across them lazily instead of pre-merging into a single map,
+	// which saves ~189MB of allocation at scale (50 RGDs x 50-100 resources).
+	typeMaps                    []map[string]*apiservercel.DeclType
 	typeProvider                types.Provider
 	typeAdapter                 types.Adapter
 	recognizeKeywordAsFieldName bool
@@ -142,19 +151,18 @@ func (rt *DeclTypeProvider) WithTypeProvider(tp types.Provider) (*DeclTypeProvid
 	rtWithTypes := &DeclTypeProvider{
 		typeProvider:                tp,
 		typeAdapter:                 ta,
-		registeredTypes:             rt.registeredTypes,
+		typeMaps:                    rt.typeMaps,
 		recognizeKeywordAsFieldName: rt.recognizeKeywordAsFieldName,
 	}
-	for name, declType := range rt.registeredTypes {
-		tpType, found := tp.FindStructType(name)
-		// cast celType to types.type
-
-		expT := declType.CelType()
-		if found && !expT.IsExactType(tpType) {
-			return nil, fmt.Errorf(
-				"type %s definition differs between CEL environment and type provider", name)
+	for _, typeMap := range rt.typeMaps {
+		for name, declType := range typeMap {
+			tpType, found := tp.FindStructType(name)
+			expT := declType.CelType()
+			if found && !expT.IsExactType(tpType) {
+				return nil, fmt.Errorf(
+					"type %s definition differs between CEL environment and type provider", name)
+			}
 		}
-
 	}
 	return rtWithTypes, nil
 }
@@ -265,21 +273,27 @@ func (rt *DeclTypeProvider) NewValue(typeName string, fields map[string]ref.Val)
 
 // TypeNames returns the list of type names declared within the DeclTypeProvider object.
 func (rt *DeclTypeProvider) TypeNames() []string {
-	typeNames := make([]string, len(rt.registeredTypes))
-	i := 0
-	for name := range rt.registeredTypes {
-		typeNames[i] = name
-		i++
+	// Collect unique names across all type maps.
+	seen := make(map[string]struct{})
+	for _, typeMap := range rt.typeMaps {
+		for name := range typeMap {
+			seen[name] = struct{}{}
+		}
+	}
+	typeNames := make([]string, 0, len(seen))
+	for name := range seen {
+		typeNames = append(typeNames, name)
 	}
 	return typeNames
 }
 
 func (rt *DeclTypeProvider) findDeclType(typeName string) (*apiservercel.DeclType, bool) {
-	declType, found := rt.registeredTypes[typeName]
-	if found {
-		return declType, true
+	for _, typeMap := range rt.typeMaps {
+		if declType, found := typeMap[typeName]; found {
+			return declType, true
+		}
 	}
-	declType = findScalar(typeName)
+	declType := findScalar(typeName)
 	return declType, declType != nil
 }
 

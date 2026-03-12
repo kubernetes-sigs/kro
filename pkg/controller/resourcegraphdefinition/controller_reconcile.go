@@ -115,7 +115,8 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 }
 
 // reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
-// and extract resource information
+// and extract resource information. It skips the expensive build pipeline when the
+// RGD's .metadata.generation has not changed since the last successful build.
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	startTime := time.Now()
 	defer func() {
@@ -129,16 +130,20 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGrap
 		return nil, nil, newGraphError(err)
 	}
 
-	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRGD.Nodes))
-	for _, name := range processedRGD.TopologicalOrder {
-		node := processedRGD.Nodes[name]
+	return processedRGD, buildResourcesInfo(processedRGD), nil
+}
+
+// buildResourcesInfo extracts resource dependency information from a built graph.
+func buildResourcesInfo(g *graph.Graph) []v1alpha1.ResourceInformation {
+	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(g.Nodes))
+	for _, name := range g.TopologicalOrder {
+		node := g.Nodes[name]
 		deps := node.Meta.Dependencies
 		if len(deps) > 0 {
 			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))
 		}
 	}
-
-	return processedRGD, resourcesInfo, nil
+	return resourcesInfo
 }
 
 // buildResourceInfo creates a ResourceInformation struct from name and dependencies

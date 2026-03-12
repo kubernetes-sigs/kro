@@ -847,6 +847,46 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "accepts annotation changes",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{"key": "value1"}
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{"key": "value2"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "accepts annotation additions",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{"key": "value"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "accepts annotation removals",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{"key": "value"}
+				new := newPredicateTestRGD(1, nil)
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
 			name: "ignores status only updates",
 			run: func(pred predicate.Predicate) bool {
 				return pred.Update(event.UpdateEvent{

@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -141,7 +142,8 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 // server.
 //
 // This predicate reconciles when:
-//   - spec changes  (generation changed), or
+//   - spec changes  (generation changed),
+//   - annotation changes, or
 //   - deletion begins (deletionTimestamp transitions from zero to non-zero).
 //
 // It skips:
@@ -156,7 +158,10 @@ func resourceGraphDefinitionPrimaryWatchPredicate() predicate.Predicate {
 
 			oldDeleting := !e.ObjectOld.GetDeletionTimestamp().IsZero()
 			newDeleting := !e.ObjectNew.GetDeletionTimestamp().IsZero()
-			return e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() || oldDeleting != newDeleting
+			// Annotations control behavior but don't trigger new generation
+			return e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() ||
+				oldDeleting != newDeleting ||
+				!maps.Equal(e.ObjectNew.GetAnnotations(), e.ObjectOld.GetAnnotations())
 		},
 		DeleteFunc: func(event.DeleteEvent) bool {
 			return false

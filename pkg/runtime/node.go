@@ -98,7 +98,7 @@ func (n *Node) IsIgnored() (bool, error) {
 	for _, expr := range n.includeWhenExprs {
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
+			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
 			nodeIgnoredTotal.Inc()
@@ -378,17 +378,10 @@ func (n *Node) softResolve() ([]*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
-	// Filter to only fully-resolvable fields (all expressions available)
+	// Filter to only fully-resolvable fields (expression value available)
 	var resolvable []variable.FieldDescriptor
 	for _, v := range n.templateVars {
-		complete := true
-		for _, expr := range v.Expressions {
-			if _, ok := values[expr.Original]; !ok {
-				complete = false
-				break
-			}
-		}
-		if complete {
+		if _, ok := values[v.Expression.Original]; ok {
 			resolvable = append(resolvable, v.FieldDescriptor)
 		}
 	}
@@ -504,12 +497,10 @@ func (n *Node) exprSetsForVars(
 	}
 
 	for _, v := range vars {
-		for _, expr := range v.Expressions {
-			if kind, ok := exprKinds[expr.Original]; ok && kind.IsIteration() {
-				iterExprs[expr.Original] = struct{}{}
-			} else {
-				baseExprs[expr.Original] = struct{}{}
-			}
+		if kind, ok := exprKinds[v.Expression.Original]; ok && kind.IsIteration() {
+			iterExprs[v.Expression.Original] = struct{}{}
+		} else {
+			baseExprs[v.Expression.Original] = struct{}{}
 		}
 	}
 	return baseExprs, iterExprs
@@ -521,10 +512,7 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 	desired := base.DeepCopy()
 	res := resolver.NewResolver(desired.Object, values)
 	for _, v := range n.templateVars {
-		if len(v.Expressions) == 0 {
-			continue
-		}
-		if val, ok := values[v.Expressions[0].Original]; ok {
+		if val, ok := values[v.Expression.Original]; ok {
 			_ = res.UpsertValueAtPath(v.Path, val)
 		}
 	}
@@ -586,12 +574,12 @@ func (n *Node) checkSingleResourceReadiness() error {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
-			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, err)
+			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), err)
 		}
 		if !result {
-			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 		}
 	}
 	return nil
@@ -630,16 +618,16 @@ func (n *Node) checkCollectionReadiness() error {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.Original, i, ErrWaitingForReadiness)
+					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, ErrWaitingForReadiness)
 				}
-				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.Original, i, err)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.UserExpression())
 			}
 			if !result {
-				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
 		}
 	}

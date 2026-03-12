@@ -553,39 +553,38 @@ func extractTemplateDependencies(
 	var iteratorsInIdentity []string
 
 	for _, templateVariable := range node.Variables {
-		for _, expression := range templateVariable.Expressions {
-			nodeDeps, iteratorRefs, err := extractDependencies(inspector, expression, iteratorNames)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
+		expression := templateVariable.Expression
+		nodeDeps, iteratorRefs, err := extractDependencies(inspector, expression, iteratorNames)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
+		}
+
+		// Promote variable Kind based on expression references.
+		// Variables start as Static and get promoted: Static -> Dynamic -> Iteration.
+		// The Kind == Static check prevents downgrading if a previous expression
+		// already promoted it to a higher kind.
+		if len(iteratorRefs) > 0 {
+			templateVariable.Kind = variable.ResourceVariableKindIteration
+		} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
+			templateVariable.Kind = variable.ResourceVariableKindDynamic
+		}
+
+		// Dependencies are tracked in Expression.References
+		allDeps = append(allDeps, nodeDeps...)
+
+		// Track iterators used in identity fields (name/namespace).
+		switch templateVariable.Path {
+		case MetadataNamePath:
+			for _, iter := range iteratorRefs {
+				if !slices.Contains(iteratorsInIdentity, iter) {
+					iteratorsInIdentity = append(iteratorsInIdentity, iter)
+				}
 			}
-
-			// Promote variable Kind based on expression references.
-			// Variables start as Static and get promoted: Static -> Dynamic -> Iteration.
-			// The Kind == Static check prevents downgrading if a previous expression
-			// already promoted it to a higher kind.
-			if len(iteratorRefs) > 0 {
-				templateVariable.Kind = variable.ResourceVariableKindIteration
-			} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
-				templateVariable.Kind = variable.ResourceVariableKindDynamic
-			}
-
-			// Dependencies are tracked in Expression.References
-			allDeps = append(allDeps, nodeDeps...)
-
-			// Track iterators used in identity fields (name/namespace).
-			switch templateVariable.Path {
-			case MetadataNamePath:
+		case MetadataNamespacePath:
+			if node.Meta.Namespaced {
 				for _, iter := range iteratorRefs {
 					if !slices.Contains(iteratorsInIdentity, iter) {
 						iteratorsInIdentity = append(iteratorsInIdentity, iter)
-					}
-				}
-			case MetadataNamespacePath:
-				if node.Meta.Namespaced {
-					for _, iter := range iteratorRefs {
-						if !slices.Contains(iteratorsInIdentity, iter) {
-							iteratorsInIdentity = append(iteratorsInIdentity, iter)
-						}
 					}
 				}
 			}
@@ -646,23 +645,15 @@ func buildInstanceNode(
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
-		// Extract dependencies from ALL expressions in the field (for multi-expression templates)
-		var resourceDeps []string
-		for _, expr := range statusVariable.Expressions {
-			deps, _, err := extractDependencies(inspector, expr, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", expr, err)
-			}
-			for _, dep := range deps {
-				if !slices.Contains(resourceDeps, dep) {
-					resourceDeps = append(resourceDeps, dep)
-				}
-			}
+		// Extract dependencies from the expression
+		deps, _, err := extractDependencies(inspector, statusVariable.Expression, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
-		if len(resourceDeps) == 0 {
+		if len(deps) == 0 {
 			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
 		}
-		instanceDeps = append(instanceDeps, resourceDeps...)
+		instanceDeps = append(instanceDeps, deps...)
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -758,16 +749,15 @@ func buildStatusSchema(
 
 	// Verify status expressions don't reference schema and populate References
 	for _, fieldDescriptor := range fieldDescriptors {
-		for _, expression := range fieldDescriptor.Expressions {
-			result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.Original, err)
-			}
-			// Populate expression.References for restricted environment compilation
-			for _, dep := range result.ResourceDependencies {
-				if !slices.Contains(expression.References, dep.ID) {
-					expression.References = append(expression.References, dep.ID)
-				}
+		expression := fieldDescriptor.Expression
+		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
+		}
+		// Populate expression.References for restricted environment compilation
+		for _, dep := range result.ResourceDependencies {
+			if !slices.Contains(expression.References, dep.ID) {
+				expression.References = append(expression.References, dep.ID)
 			}
 		}
 	}
@@ -775,31 +765,14 @@ func buildStatusSchema(
 	// Infer types for each status field expression using CEL type checking
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
-		if fieldDescriptor.StandaloneExpression {
-			// Single standalone expression - use its output type
-			expression := fieldDescriptor.Expressions[0]
+		expression := fieldDescriptor.Expression
 
-			checkedAST, err := parseCheckAndCompile(env, expression)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-			}
-
-			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
-		} else {
-			// String interpolation - validate all expressions and result is string
-			for _, expression := range fieldDescriptor.Expressions {
-				checkedAST, err := parseCheckAndCompile(env, expression)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-				}
-
-				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, cel.StringType, expression.Original, "status", fieldDescriptor.Path, typeProvider); err != nil {
-					return nil, nil, nil, err
-				}
-			}
-			statusTypeMap[fieldDescriptor.Path] = cel.StringType
+		checkedAST, err := parseCheckAndCompile(env, expression)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
+
+		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
 	}
 
 	// convert the CEL types to OpenAPI schema - best effort.
@@ -961,14 +934,9 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 	return currentSchema, typeName, nil
 }
 
-// getExpectedTypeForField computes the expected CEL type for a field descriptor.
-// For standalone expressions, the type is derived from the OpenAPI schema at the path.
-// For string templates, the expected type is always string.
+// getExpectedTypeForField computes the expected CEL type for a field descriptor
+// by deriving it from the OpenAPI schema at the path.
 func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
-	if !descriptor.StandaloneExpression {
-		return cel.StringType
-	}
-
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType
@@ -1132,17 +1100,17 @@ func validateAndCompileTemplates(
 		// Compute expected type for this field
 		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
-		for _, expression := range templateVariable.Expressions {
-			// Parse, type-check, and compile
-			checkedAST, err := parseCheckAndCompile(compileEnv, expression)
-			if err != nil {
-				return fmt.Errorf("failed to compile template expression %q at path %q: %w", expression.Original, templateVariable.Path, err)
-			}
+		expression := templateVariable.Expression
+		displayExpr := expression.UserExpression()
+		// Parse, type-check, and compile
+		checkedAST, err := parseCheckAndCompile(compileEnv, expression)
+		if err != nil {
+			return fmt.Errorf("failed to compile template expression %q at path %q: %w", displayExpr, templateVariable.Path, err)
+		}
 
-			outputType := checkedAST.OutputType()
-			if err := validateExpressionType(outputType, expectedType, expression.Original, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
-				return err
-			}
+		outputType := checkedAST.OutputType()
+		if err := validateExpressionType(outputType, expectedType, displayExpr, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1205,7 +1173,7 @@ func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, erro
 func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditionType, resourceID string) error {
 	checkedAST, err := parseCheckAndCompile(env, expr)
 	if err != nil {
-		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.Original, resourceID, err)
+		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.UserExpression(), resourceID, err)
 	}
 
 	// Verify the expression returns bool or optional_type(bool)
@@ -1213,7 +1181,7 @@ func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditio
 	if !conversion.IsBoolOrOptionalBool(outputType) {
 		return fmt.Errorf(
 			"%s expression %q in resource %q must return bool or optional_type(bool), but returns %q",
-			conditionType, expr.Original, resourceID, outputType.String(),
+			conditionType, expr.UserExpression(), resourceID, outputType.String(),
 		)
 	}
 

@@ -151,20 +151,16 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 
 		for _, v := range node.Spec.Variables {
 			node.templateVars = append(node.templateVars, v)
-			for _, expr := range v.Expressions {
-				state := getOrCreateExpr(expr, v.Kind, expr.References)
-				node.templateExprs = append(node.templateExprs, state)
-			}
+			state := getOrCreateExpr(v.Expression, v.Kind, v.Expression.References)
+			node.templateExprs = append(node.templateExprs, state)
 		}
 	}
 
 	// Instance status variables (if any) use the same cache.
 	for _, v := range instNode.Spec.Variables {
 		instNode.templateVars = append(instNode.templateVars, v)
-		for _, expr := range v.Expressions {
-			state := getOrCreateExpr(expr, v.Kind, expr.References)
-			instNode.templateExprs = append(instNode.templateExprs, state)
-		}
+		state := getOrCreateExpr(v.Expression, v.Kind, v.Expression.References)
+		instNode.templateExprs = append(instNode.templateExprs, state)
 	}
 
 	return rt, nil

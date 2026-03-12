@@ -16,7 +16,6 @@ package resolver
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
@@ -92,48 +91,24 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 		Path: field.Path,
 	}
 
-	value, err := r.getValueFromPath(field.Path)
+	_, err := r.getValueFromPath(field.Path)
 	if err != nil {
 		// Callers are responsible for providing valid paths.
 		result.Error = fmt.Errorf("error getting value: %v", err)
 		return result
 	}
 
-	if field.StandaloneExpression {
-		expr := field.Expressions[0].Original
-		resolvedValue, ok := r.data[expr]
-		if !ok {
-			result.Error = fmt.Errorf("no data provided for expression: %s", expr)
-			return result
-		}
-		// setValueAtPath cannot fail here: if getValueFromPath succeeded,
-		// the path is valid and traversable.
-		_ = r.setValueAtPath(field.Path, resolvedValue)
-		result.Resolved = true
-		result.Replaced = resolvedValue
-	} else {
-		strValue, ok := value.(string)
-		if !ok {
-			result.Error = fmt.Errorf("expected string value for path %s", field.Path)
-			return result
-		}
-
-		replaced := strValue
-		for _, expr := range field.Expressions {
-			replacement, ok := r.data[expr.Original]
-			if !ok {
-				result.Error = fmt.Errorf("no data provided for expression: %s", expr.Original)
-				return result
-			}
-			replaced = strings.ReplaceAll(replaced, "${"+expr.Original+"}", fmt.Sprintf("%v", replacement))
-		}
-
-		// setValueAtPath cannot fail here: if getValueFromPath succeeded,
-		// the path is valid and traversable.
-		_ = r.setValueAtPath(field.Path, replaced)
-		result.Resolved = true
-		result.Replaced = replaced
+	expr := field.Expression.Original
+	resolvedValue, ok := r.data[expr]
+	if !ok {
+		result.Error = fmt.Errorf("no data provided for expression: %s", field.Expression.UserExpression())
+		return result
 	}
+	// setValueAtPath cannot fail here: if getValueFromPath succeeded,
+	// the path is valid and traversable.
+	_ = r.setValueAtPath(field.Path, resolvedValue)
+	result.Resolved = true
+	result.Replaced = resolvedValue
 
 	return result
 }

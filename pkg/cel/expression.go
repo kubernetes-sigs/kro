@@ -16,6 +16,7 @@ package cel
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/cel-go/cel"
 
@@ -34,9 +35,16 @@ import (
 //   - Builder: populates Program during compilation (after type validation)
 //   - Runtime: calls Eval() with context containing values for References
 type Expression struct {
-	// Original is the raw CEL expression string, preserved for error messages
-	// and debugging. Set by parser.
+	// Original is the CEL expression string used for compilation and evaluation.
+	// For compiled string templates, this contains the generated concatenation
+	// expression (e.g. `"prefix-" + expr`), not the user's original template.
+	// See OriginalTemplate for the user-facing form. Set by parser.
 	Original string
+
+	// OriginalTemplate is the user's original string template before compilation
+	// into a CEL concatenation expression. Only set for compiled templates
+	// (e.g. "prefix-${expr}" → Original: `"prefix-" + expr`).
+	OriginalTemplate string
 
 	// References lists all identifiers this expression accesses (e.g., "schema", "vpc").
 	// These are the keys that must be present in the context passed to Eval.
@@ -58,7 +66,7 @@ func NewUncompiled(expr string) *Expression {
 }
 
 // NewUncompiledSlice creates a slice of uncompiled Expressions from strings.
-// Use this in parser/tests for multi-expression fields like string templates.
+// Use this in tests for condition slices (IncludeWhen, ReadyWhen).
 func NewUncompiledSlice(exprs ...string) []*Expression {
 	result := make([]*Expression, len(exprs))
 	for i, expr := range exprs {
@@ -67,16 +75,30 @@ func NewUncompiledSlice(exprs ...string) []*Expression {
 	return result
 }
 
+// UserExpression returns the user-facing expression string for error messages.
+func (e *Expression) UserExpression() string {
+	if e.OriginalTemplate != "" {
+		return e.OriginalTemplate
+	}
+	return e.Original
+}
+
 // Eval evaluates the compiled expression and returns the result.
 func (e *Expression) Eval(ctx map[string]any) (any, error) {
+	startTime := time.Now()
+	defer func() {
+		exprEvalDuration.Observe(time.Since(startTime).Seconds())
+		exprEvalTotal.Inc()
+	}()
+
 	out, _, err := e.Program.Eval(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("eval %q: %w", e.Original, err)
+		return nil, fmt.Errorf("eval %q: %w", e.UserExpression(), err)
 	}
 
 	native, err := conversion.GoNativeType(out)
 	if err != nil {
-		return nil, fmt.Errorf("convert %q: %w", e.Original, err)
+		return nil, fmt.Errorf("convert %q: %w", e.UserExpression(), err)
 	}
 
 	return native, nil

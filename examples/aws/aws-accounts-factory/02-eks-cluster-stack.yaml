@@ -1,0 +1,134 @@
+# EKS Cluster Stack RGD
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: eks-cluster-stack
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EKSClusterStack
+    spec: 
+    # RGD Input Parameters 
+      clusterName: string
+      region: string
+      version: string
+      subnetIds: '[]string'
+      securityGroupIds: '[]string'
+      nodeGroupDesiredSize: integer | default=1
+      nodeGroupMinSize: integer | default=0
+      nodeGroupMaxSize: integer | default=2
+      nodeInstanceType: string
+    status:
+      clusterArn: ${cluster.status.ackResourceMetadata.arn}
+      clusterEndpoint: ${cluster.status.endpoint}
+      nodeGroupArn: ${nodeGroup.status.ackResourceMetadata.arn}
+  resources:
+    - id: clusterRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName}-role
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.clusterName}-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "eks.amazonaws.com"},
+                "Action": "sts:AssumeRole"
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+            - arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+          tags:
+            - key: Name
+              value: ${schema.spec.clusterName}-role
+    
+    - id: nodeRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName}-node-role
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.clusterName}-node-role
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "ec2.amazonaws.com"},
+                "Action": "sts:AssumeRole"
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+            - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+            - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+          tags:
+            - key: Name
+              value: ${schema.spec.clusterName}-node-role
+    
+    - id: cluster
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.clusterName}
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.clusterName}
+          version: ${schema.spec.version}
+          roleARN: ${clusterRole.status.ackResourceMetadata.arn}
+          resourcesVPCConfig:
+            subnetIDs: ${schema.spec.subnetIds}
+            securityGroupIDs: ${schema.spec.securityGroupIds}
+            endpointPublicAccess: true
+            endpointPrivateAccess: true
+          logging:
+            clusterLogging:
+              - types:
+                  - api
+                  - audit
+                  - authenticator
+                  - controllerManager
+                  - scheduler
+                enabled: true
+          tags:
+            Name: ${schema.spec.clusterName}
+            Environment: demo
+    
+    - id: nodeGroup
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Nodegroup
+        metadata:
+          name: ${schema.spec.clusterName}-ng
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: ${cluster.spec.name}
+          name: ${schema.spec.clusterName}-ng
+          nodeRole: ${nodeRole.status.ackResourceMetadata.arn}
+          subnets: ${schema.spec.subnetIds}
+          scalingConfig:
+            desiredSize: ${schema.spec.nodeGroupDesiredSize}
+            minSize: ${schema.spec.nodeGroupMinSize}
+            maxSize: ${schema.spec.nodeGroupMaxSize}
+          instanceTypes:
+            - ${schema.spec.nodeInstanceType}
+          amiType: AL2023_x86_64_STANDARD
+          tags:
+            Name: ${schema.spec.clusterName}-ng

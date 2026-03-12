@@ -16,11 +16,11 @@ package dag
 
 import (
 	"cmp"
+	"container/heap"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -51,6 +51,40 @@ func (v Vertex[T]) String() string {
 type DirectedAcyclicGraph[T cmp.Ordered] struct {
 	// Vertices stores the nodes in the graph
 	Vertices map[T]*Vertex[T]
+}
+
+type topoHeapItem[T cmp.Ordered] struct {
+	ID    T
+	Order int
+}
+
+type topoHeap[T cmp.Ordered] []topoHeapItem[T]
+
+func (h topoHeap[T]) Len() int {
+	return len(h)
+}
+
+func (h topoHeap[T]) Less(i, j int) bool {
+	if h[i].Order != h[j].Order {
+		return h[i].Order < h[j].Order
+	}
+	return h[i].ID < h[j].ID
+}
+
+func (h topoHeap[T]) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *topoHeap[T]) Push(x any) {
+	*h = append(*h, x.(topoHeapItem[T]))
+}
+
+func (h *topoHeap[T]) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 // NewDirectedAcyclicGraph creates a new directed acyclic graph.
@@ -139,56 +173,53 @@ func (d *DirectedAcyclicGraph[T]) AddDependencies(from T, dependencies []T) erro
 // TopologicalSort returns the vertexes of the graph, respecting topological ordering first,
 // and preserving order of nodes within each "depth" of the topological ordering.
 func (d *DirectedAcyclicGraph[T]) TopologicalSort() ([]T, error) {
-	visited := make(map[T]bool)
-	var order []T
+	remainingDeps := make(map[T]int, len(d.Vertices))
+	dependents := make(map[T][]T, len(d.Vertices))
+	ready := make(topoHeap[T], 0, len(d.Vertices))
 
-	// Make a list of vertices, sorted by Order
-	vertices := make([]*Vertex[T], 0, len(d.Vertices))
-	for _, vertex := range d.Vertices {
-		vertices = append(vertices, vertex)
-	}
-	sort.Slice(vertices, func(i, j int) bool {
-		return vertices[i].Order < vertices[j].Order
-	})
-
-	for len(visited) < len(vertices) {
-		progress := false
-
-		for _, vertex := range vertices {
-			if visited[vertex.ID] {
-				continue
-			}
-
-			allDependenciesReady := true
-			for dep := range vertex.DependsOn {
-				if !visited[dep] {
-					allDependenciesReady = false
-					break
-				}
-			}
-			if !allDependenciesReady {
-				continue
-			}
-
-			order = append(order, vertex.ID)
-			visited[vertex.ID] = true
-			progress = true
-			break // restart inner loop to re-check lower order vertices
+	for id, vertex := range d.Vertices {
+		remainingDeps[id] = len(vertex.DependsOn)
+		if len(vertex.DependsOn) == 0 {
+			ready = append(ready, topoHeapItem[T]{
+				ID:    id,
+				Order: vertex.Order,
+			})
 		}
+		for dependency := range vertex.DependsOn {
+			dependents[dependency] = append(dependents[dependency], id)
+		}
+	}
 
-		if !progress {
-			hasCycle, cycle := d.hasCycle()
-			if !hasCycle {
-				// Unexpected!
-				return nil, &CycleError[T]{}
-			}
-			return nil, &CycleError[T]{
-				Cycle: cycle,
+	heap.Init(&ready)
+
+	order := make([]T, 0, len(d.Vertices))
+	for ready.Len() > 0 {
+		current := heap.Pop(&ready).(topoHeapItem[T])
+		order = append(order, current.ID)
+
+		for _, dependent := range dependents[current.ID] {
+			remainingDeps[dependent]--
+			if remainingDeps[dependent] == 0 {
+				heap.Push(&ready, topoHeapItem[T]{
+					ID:    dependent,
+					Order: d.Vertices[dependent].Order,
+				})
 			}
 		}
 	}
 
-	return order, nil
+	if len(order) == len(d.Vertices) {
+		return order, nil
+	}
+
+	hasCycle, cycle := d.hasCycle()
+	if !hasCycle {
+		// Unexpected!
+		return nil, &CycleError[T]{}
+	}
+	return nil, &CycleError[T]{
+		Cycle: cycle,
+	}
 }
 
 func (d *DirectedAcyclicGraph[T]) hasCycle() (bool, []T) {

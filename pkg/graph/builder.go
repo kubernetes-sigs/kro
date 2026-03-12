@@ -25,6 +25,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
@@ -251,13 +252,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	celSchemas[SchemaVarName] = schemaWithoutStatus
 
 	// Create a single typed CEL environment with all schemas for compilation.
-	// Following Kubernetes best practice: create one env, extend once at init,
-	// compile all expressions against it. AST inspection handles scope validation.
-	typedEnv, err := krocel.TypedEnvironment(celSchemas)
+	// TypedEnvironmentWithProvider returns both the env and the DeclTypeProvider it
+	// creates internally, avoiding duplicate schema-to-DeclType conversions.
+	typedEnv, typeProvider, err := krocel.TypedEnvironmentWithProvider(celSchemas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create typed CEL environment: %w", err)
 	}
-	typeProvider := krocel.CreateDeclTypeProvider(celSchemas)
 
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
@@ -317,19 +317,15 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 }
 
 // buildExternalRefResource builds an empty resource with metadata from the given externalRef definition.
+// The selector (if any) is embedded directly in the template so that ParseSchemalessResource
+// can extract CEL expressions from the entire resource in a single pass.
 func (b *Builder) buildExternalRefResource(
-	externalRef *v1alpha1.ExternalRef) map[string]interface{} {
-	resourceObject := map[string]interface{}{}
-	resourceObject["apiVersion"] = externalRef.APIVersion
-	resourceObject["kind"] = externalRef.Kind
-	metadata := map[string]interface{}{
-		"name": externalRef.Metadata.Name,
+	externalRef *v1alpha1.ExternalRef) (map[string]interface{}, error) {
+	result, err := runtime.DefaultUnstructuredConverter.ToUnstructured(externalRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert ExternalRef to unstructured: %w", err)
 	}
-	if externalRef.Metadata.Namespace != "" {
-		metadata["namespace"] = externalRef.Metadata.Namespace
-	}
-	resourceObject["metadata"] = metadata
-	return resourceObject
+	return result, nil
 }
 
 // buildRGResource builds a node from the given resource definition.
@@ -354,7 +350,10 @@ func (b *Builder) buildRGResource(
 			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
 		}
 	} else {
-		resourceObject = b.buildExternalRefResource(rgResource.ExternalRef)
+		var err error
+		if resourceObject, err = b.buildExternalRefResource(rgResource.ExternalRef); err != nil {
+			return nil, nil, fmt.Errorf("failed to build external ref resource %s: %w", rgResource.ID, err)
+		}
 	}
 
 	// 3. Check if it looks like a valid Kubernetes resource.
@@ -385,7 +384,14 @@ func (b *Builder) buildRGResource(
 
 	// 6. Extract CEL fieldDescriptors from the resource.
 	var fieldDescriptors []variable.FieldDescriptor
-	if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
+	if rgResource.ExternalRef != nil {
+		// External ref templates are synthetic (not user YAML), so use the
+		// schemaless parser for the entire resource uniformly.
+		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse external ref resource %s: %w", rgResource.ID, err)
+		}
+	} else if gvk.Group == "apiextensions.k8s.io" && gvk.Version == "v1" && gvk.Kind == "CustomResourceDefinition" {
 		fieldDescriptors, _, err = parser.ParseSchemalessResource(resourceObject)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse schemaless resource %s: %w", rgResource.ID, err)
@@ -430,10 +436,14 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
 	}
 
-	// Determine node type
+	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
-		nodeType = NodeTypeExternal
+		if rgResource.ExternalRef.Metadata.Selector != nil {
+			nodeType = NodeTypeExternalCollection
+		} else {
+			nodeType = NodeTypeExternal
+		}
 	} else if len(forEachDimensions) > 0 {
 		nodeType = NodeTypeCollection
 	}
@@ -543,39 +553,38 @@ func extractTemplateDependencies(
 	var iteratorsInIdentity []string
 
 	for _, templateVariable := range node.Variables {
-		for _, expression := range templateVariable.Expressions {
-			nodeDeps, iteratorRefs, err := extractDependencies(inspector, expression, iteratorNames)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
+		expression := templateVariable.Expression
+		nodeDeps, iteratorRefs, err := extractDependencies(inspector, expression, iteratorNames)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to extract dependencies: %w", err)
+		}
+
+		// Promote variable Kind based on expression references.
+		// Variables start as Static and get promoted: Static -> Dynamic -> Iteration.
+		// The Kind == Static check prevents downgrading if a previous expression
+		// already promoted it to a higher kind.
+		if len(iteratorRefs) > 0 {
+			templateVariable.Kind = variable.ResourceVariableKindIteration
+		} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
+			templateVariable.Kind = variable.ResourceVariableKindDynamic
+		}
+
+		// Dependencies are tracked in Expression.References
+		allDeps = append(allDeps, nodeDeps...)
+
+		// Track iterators used in identity fields (name/namespace).
+		switch templateVariable.Path {
+		case MetadataNamePath:
+			for _, iter := range iteratorRefs {
+				if !slices.Contains(iteratorsInIdentity, iter) {
+					iteratorsInIdentity = append(iteratorsInIdentity, iter)
+				}
 			}
-
-			// Promote variable Kind based on expression references.
-			// Variables start as Static and get promoted: Static -> Dynamic -> Iteration.
-			// The Kind == Static check prevents downgrading if a previous expression
-			// already promoted it to a higher kind.
-			if len(iteratorRefs) > 0 {
-				templateVariable.Kind = variable.ResourceVariableKindIteration
-			} else if len(nodeDeps) > 0 && templateVariable.Kind == variable.ResourceVariableKindStatic {
-				templateVariable.Kind = variable.ResourceVariableKindDynamic
-			}
-
-			// Dependencies are tracked in Expression.References
-			allDeps = append(allDeps, nodeDeps...)
-
-			// Track iterators used in identity fields (name/namespace).
-			switch templateVariable.Path {
-			case MetadataNamePath:
+		case MetadataNamespacePath:
+			if node.Meta.Namespaced {
 				for _, iter := range iteratorRefs {
 					if !slices.Contains(iteratorsInIdentity, iter) {
 						iteratorsInIdentity = append(iteratorsInIdentity, iter)
-					}
-				}
-			case MetadataNamespacePath:
-				if node.Meta.Namespaced {
-					for _, iter := range iteratorRefs {
-						if !slices.Contains(iteratorsInIdentity, iter) {
-							iteratorsInIdentity = append(iteratorsInIdentity, iter)
-						}
 					}
 				}
 			}
@@ -636,23 +645,15 @@ func buildInstanceNode(
 		path := "status." + statusVariable.Path
 		statusVariable.Path = path
 
-		// Extract dependencies from ALL expressions in the field (for multi-expression templates)
-		var resourceDeps []string
-		for _, expr := range statusVariable.Expressions {
-			deps, _, err := extractDependencies(inspector, expr, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", expr, err)
-			}
-			for _, dep := range deps {
-				if !slices.Contains(resourceDeps, dep) {
-					resourceDeps = append(resourceDeps, dep)
-				}
-			}
+		// Extract dependencies from the expression
+		deps, _, err := extractDependencies(inspector, statusVariable.Expression, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract dependencies from expression %q: %w", statusVariable.Expression, err)
 		}
-		if len(resourceDeps) == 0 {
+		if len(deps) == 0 {
 			return nil, fmt.Errorf("instance status field must refer to a resource: %s", statusVariable.Path)
 		}
-		instanceDeps = append(instanceDeps, resourceDeps...)
+		instanceDeps = append(instanceDeps, deps...)
 
 		instanceStatusVariables = append(instanceStatusVariables, &variable.ResourceField{
 			FieldDescriptor: statusVariable,
@@ -748,16 +749,15 @@ func buildStatusSchema(
 
 	// Verify status expressions don't reference schema and populate References
 	for _, fieldDescriptor := range fieldDescriptors {
-		for _, expression := range fieldDescriptor.Expressions {
-			result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.Original, err)
-			}
-			// Populate expression.References for restricted environment compilation
-			for _, dep := range result.ResourceDependencies {
-				if !slices.Contains(expression.References, dep.ID) {
-					expression.References = append(expression.References, dep.ID)
-				}
+		expression := fieldDescriptor.Expression
+		result, err := inspectExpressionRestricted(inspector, expression.Original, nodeNames)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("status field %q expression %q: %w", fieldDescriptor.Path, expression.UserExpression(), err)
+		}
+		// Populate expression.References for restricted environment compilation
+		for _, dep := range result.ResourceDependencies {
+			if !slices.Contains(expression.References, dep.ID) {
+				expression.References = append(expression.References, dep.ID)
 			}
 		}
 	}
@@ -765,31 +765,14 @@ func buildStatusSchema(
 	// Infer types for each status field expression using CEL type checking
 	statusTypeMap := make(map[string]*cel.Type)
 	for _, fieldDescriptor := range fieldDescriptors {
-		if fieldDescriptor.StandaloneExpression {
-			// Single standalone expression - use its output type
-			expression := fieldDescriptor.Expressions[0]
+		expression := fieldDescriptor.Expression
 
-			checkedAST, err := parseCheckAndCompile(env, expression)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-			}
-
-			statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
-		} else {
-			// String interpolation - validate all expressions and result is string
-			for _, expression := range fieldDescriptor.Expressions {
-				checkedAST, err := parseCheckAndCompile(env, expression)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression, fieldDescriptor.Path, err)
-				}
-
-				outputType := checkedAST.OutputType()
-				if err := validateExpressionType(outputType, cel.StringType, expression.Original, "status", fieldDescriptor.Path, typeProvider); err != nil {
-					return nil, nil, nil, err
-				}
-			}
-			statusTypeMap[fieldDescriptor.Path] = cel.StringType
+		checkedAST, err := parseCheckAndCompile(env, expression)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to type-check status expression %q at path %q: %w", expression.UserExpression(), fieldDescriptor.Path, err)
 		}
+
+		statusTypeMap[fieldDescriptor.Path] = checkedAST.OutputType()
 	}
 
 	// convert the CEL types to OpenAPI schema - best effort.
@@ -951,14 +934,9 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 	return currentSchema, typeName, nil
 }
 
-// getExpectedTypeForField computes the expected CEL type for a field descriptor.
-// For standalone expressions, the type is derived from the OpenAPI schema at the path.
-// For string templates, the expected type is always string.
-func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string) *cel.Type {
-	if !descriptor.StandaloneExpression {
-		return cel.StringType
-	}
-
+// getExpectedTypeForField computes the expected CEL type for a field descriptor
+// by deriving it from the OpenAPI schema at the path.
+func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType
@@ -969,20 +947,27 @@ func getExpectedTypeForField(descriptor *variable.FieldDescriptor, rootSchema *s
 		return cel.DynType
 	}
 
-	return getCelTypeFromSchema(schema, typeName)
+	return getCelTypeFromSchema(schema, typeName, typeProvider)
 }
 
-// getCelTypeFromSchema converts an OpenAPI schema to a CEL type with the given type name
-func getCelTypeFromSchema(schema *spec.Schema, typeName string) *cel.Type {
+// getCelTypeFromSchema looks up a pre-registered CEL type by name from the
+// provider (O(1) hash lookup). Falls back to converting the schema directly
+// for nested types that aren't registered at the top level.
+func getCelTypeFromSchema(schema *spec.Schema, typeName string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+	if typeProvider != nil {
+		if declType, found := typeProvider.FindDeclType(typeName); found {
+			return declType.CelType()
+		}
+	}
+
+	// Fallback: convert schema directly for nested/leaf types not in the provider
 	if schema == nil {
 		return cel.DynType
 	}
-
 	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
 	if declType == nil {
 		return cel.DynType
 	}
-
 	declType = declType.MaybeAssignTypeName(typeName)
 	return declType.CelType()
 }
@@ -1113,19 +1098,19 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID)
+		expectedType := getExpectedTypeForField(&templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
-		for _, expression := range templateVariable.Expressions {
-			// Parse, type-check, and compile
-			checkedAST, err := parseCheckAndCompile(compileEnv, expression)
-			if err != nil {
-				return fmt.Errorf("failed to compile template expression %q at path %q: %w", expression.Original, templateVariable.Path, err)
-			}
+		expression := templateVariable.Expression
+		displayExpr := expression.UserExpression()
+		// Parse, type-check, and compile
+		checkedAST, err := parseCheckAndCompile(compileEnv, expression)
+		if err != nil {
+			return fmt.Errorf("failed to compile template expression %q at path %q: %w", displayExpr, templateVariable.Path, err)
+		}
 
-			outputType := checkedAST.OutputType()
-			if err := validateExpressionType(outputType, expectedType, expression.Original, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
-				return err
-			}
+		outputType := checkedAST.OutputType()
+		if err := validateExpressionType(outputType, expectedType, displayExpr, node.Meta.ID, templateVariable.Path, typeProvider); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1188,7 +1173,7 @@ func parseCheckAndCompile(env *cel.Env, expr *krocel.Expression) (*cel.Ast, erro
 func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditionType, resourceID string) error {
 	checkedAST, err := parseCheckAndCompile(env, expr)
 	if err != nil {
-		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.Original, resourceID, err)
+		return fmt.Errorf("failed to type-check %s expression %q in resource %q: %w", conditionType, expr.UserExpression(), resourceID, err)
 	}
 
 	// Verify the expression returns bool or optional_type(bool)
@@ -1196,7 +1181,7 @@ func validateConditionExpression(env *cel.Env, expr *krocel.Expression, conditio
 	if !conversion.IsBoolOrOptionalBool(outputType) {
 		return fmt.Errorf(
 			"%s expression %q in resource %q must return bool or optional_type(bool), but returns %q",
-			conditionType, expr.Original, resourceID, outputType.String(),
+			conditionType, expr.UserExpression(), resourceID, outputType.String(),
 		)
 	}
 
@@ -1291,13 +1276,13 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 }
 
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
-// Collections (those with forEach) are wrapped as list types
-// so other nodes can reference them as arrays and use CEL list functions.
+// Collections (forEach) and external collections (selector) are wrapped as
+// list types so other nodes can reference them as arrays and use CEL list functions.
 func collectNodeSchemas(nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
-			if node.Meta.Type == NodeTypeCollection {
+			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
 				result[id] = schema.WrapSchemaAsList(sch)
 			} else {
 				result[id] = sch

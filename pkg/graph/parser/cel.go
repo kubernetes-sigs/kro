@@ -28,10 +28,31 @@ const (
 // Allow nested expressions, but only if they are escaped with quotes ${outer("${inner}")} is allowed, but ${outer(${inner})} is not
 var ErrNestedExpression = errors.New("nested expressions are not allowed unless inside string literals")
 
-// extractExpressions extracts all non-nested CEL expressions from a string.
+// exprMatch holds a parsed CEL expression and its position in the original string.
+type exprMatch struct {
+	expr  string // Expression content (without ${})
+	start int    // Position where ${ starts
+	end   int    // Position after closing }
+}
+
+// ExtractExpressions extracts all non-nested CEL expressions from a string.
 // It returns an error if it encounters a nested expression.
-func extractExpressions(str string) ([]string, error) {
-	var expressions []string
+func ExtractExpressions(str string) ([]string, error) {
+	matches, err := extractExpressions(str)
+	if err != nil {
+		return nil, err
+	}
+	exprs := make([]string, len(matches))
+	for i, m := range matches {
+		exprs[i] = m.expr
+	}
+	return exprs, nil
+}
+
+// extractExpressions extracts all non-nested CEL expressions from a string,
+// returning each expression along with its start/end position.
+func extractExpressions(str string) ([]exprMatch, error) {
+	var matches []exprMatch
 
 	start := 0
 	// Iterate over the string and find all expressions
@@ -99,19 +120,23 @@ func extractExpressions(str string) ([]string, error) {
 		// The expression is the substring between the start and end indices
 		// of '${' and the matching '}'
 		expr := str[startIdx+len(exprStart) : endIdx]
-		expressions = append(expressions, expr)
+		matches = append(matches, exprMatch{
+			expr:  expr,
+			start: startIdx,
+			end:   endIdx + 1,
+		})
 		start = endIdx + 1
 	}
-	return expressions, nil
+	return matches, nil
 }
 
 // isStandaloneExpression returns true if the string is a single, complete non-nested expression.
 // It returns an error if it encounters a nested expression.
 func isStandaloneExpression(str string) (bool, error) {
-	expressions, err := extractExpressions(str)
+	matches, err := extractExpressions(str)
 	if err != nil {
 		return false, err
 	}
 
-	return len(expressions) == 1 && str == exprStart+expressions[0]+exprEnd, nil
+	return len(matches) == 1 && matches[0].start == 0 && matches[0].end == len(str), nil
 }

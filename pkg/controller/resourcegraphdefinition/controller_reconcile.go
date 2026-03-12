@@ -17,12 +17,9 @@ package resourcegraphdefinition
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -88,14 +85,6 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
 
-func (r *ResourceGraphDefinitionReconciler) getResourceGVRsToWatchForRGD(processedRGD *graph.Graph) []schema.GroupVersionResource {
-	resourceHandlers := make(map[schema.GroupVersionResource]struct{}, len(processedRGD.Nodes))
-	for _, node := range processedRGD.Nodes {
-		resourceHandlers[node.Meta.GVR] = struct{}{}
-	}
-	return slices.Collect(maps.Keys(resourceHandlers))
-}
-
 // setupMicroController creates a new controller instance with the required configuration
 func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	processedRGD *graph.Graph,
@@ -121,6 +110,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		r.clientSet,
 		instanceLabeler,
 		r.metadataLabeler,
+		r.dynamicController.Coordinator(),
 	)
 }
 
@@ -133,7 +123,8 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGrap
 	}
 
 	resourcesInfo := make([]v1alpha1.ResourceInformation, 0, len(processedRGD.Nodes))
-	for name, node := range processedRGD.Nodes {
+	for _, name := range processedRGD.TopologicalOrder {
+		node := processedRGD.Nodes[name]
 		deps := node.Meta.Dependencies
 		if len(deps) > 0 {
 			resourcesInfo = append(resourcesInfo, buildResourceInfo(name, deps))
@@ -163,23 +154,20 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(
 	return nil
 }
 
-// reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources
+// reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources.
+// Child/external resource watches are discovered dynamically by the coordinator from
+// Watch() calls made by instance reconcilers -- no GVR list needed here.
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(
 	ctx context.Context,
 	processedRGD *graph.Graph,
 	instanceLabeler metadata.Labeler,
 ) error {
-	// If we want to react to changes to resources, we need to watch for them
-	// and trigger reconciliations of the instances whenever these resources change.
-	resourceGVRsToWatch := r.getResourceGVRsToWatchForRGD(processedRGD)
-
-	// Setup and start microcontroller
 	controller := r.setupMicroController(processedRGD, instanceLabeler)
 
 	ctrl.LoggerFrom(ctx).V(1).Info("reconciling resource graph definition micro controller")
 	gvr := processedRGD.Instance.Meta.GVR
 
-	err := r.dynamicController.Register(ctx, gvr, controller.Reconcile, resourceGVRsToWatch...)
+	err := r.dynamicController.Register(ctx, gvr, controller.Reconcile)
 	if err != nil {
 		return newMicroControllerError(err)
 	}

@@ -18,8 +18,14 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
@@ -27,6 +33,8 @@ import (
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
@@ -162,6 +170,50 @@ func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
 			field:        "dynamicKey",
 			expectNil:    false,
 			expectedType: "string",
+		},
+		{
+			name:      "nil schema returns nil",
+			schema:    nil,
+			field:     "anything",
+			expectNil: true,
+		},
+		{
+			name: "empty field returns original schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+				},
+			},
+			field:        "",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "additionalProperties allows without schema returns empty schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+					},
+				},
+			},
+			field:        "dynamicKey",
+			expectNil:    false,
+			expectedType: "",
+		},
+		{
+			name: "missing field returns nil",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				},
+			},
+			field:     "missing",
+			expectNil: true,
 		},
 	}
 
@@ -534,6 +586,22 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "references unknown identifiers: [nonexistent]",
+		},
+		{
+			name: "instance status field must reference a resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"ready": "${true}",
+					},
+				),
+			},
+			wantErr: true,
+			errMsg:  "failed to create instance node",
 		},
 		{
 			name: "invalid field type in resource spec",
@@ -1478,16 +1546,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.status.vpcID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.vpcID",
+						expression: "vpc.status.vpcID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.tags[0].value",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "spec.tags[0].value",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
 
@@ -1496,16 +1562,14 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, cluster.Variables, 2)
 				validateVariables(t, cluster.Variables, []expectedVar{
 					{
-						path:                 "metadata.name",
-						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.name",
+						expression: "(vpc.metadata.name) + \"cluster\" + (schema.spec.environment)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.resourcesVPCConfig.subnetIDs[0]",
-						expressions:          []string{"subnet.status.subnetID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.resourcesVPCConfig.subnetIDs[0]",
+						expression: "subnet.status.subnetID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
 				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
@@ -1515,46 +1579,39 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				assert.Len(t, monitor.Variables, 7)
 				validateVariables(t, monitor.Variables, []expectedVar{
 					{
-						path:                 "metadata.labels.environment",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "metadata.labels.environment",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels.cluster",
-						expressions:          []string{"cluster.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "metadata.labels.cluster",
+						expression: "cluster.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels.combined",
-						expressions:          []string{"cluster.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.labels.combined",
+						expression: "(cluster.metadata.name) + \"-\" + (schema.spec.environment)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"schema.spec.environment", "schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: false,
+						path:       "metadata.labels[\"two.statics\"]",
+						expression: "(schema.spec.environment) + \"-\" + (schema.spec.region)",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels[\"two.dynamics\"]",
-						expressions:          []string{"vpc.metadata.name", "cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.labels[\"two.dynamics\"]",
+						expression: "(vpc.metadata.name) + \"-\" + (cluster.status.ackResourceMetadata.arn)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[0].value",
-						expressions:          []string{"cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.containers[0].env[0].value",
+						expression: "cluster.status.ackResourceMetadata.arn",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[1].value",
-						expressions:          []string{"schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "spec.containers[0].env[1].value",
+						expression: "schema.spec.region",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
 				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, exprOriginals(monitor.ReadyWhen))
@@ -1635,10 +1692,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				// Create expected variables to match against
 				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.vpcID",
+						expression: "vpc.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
 
@@ -1659,10 +1715,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 }
 
 type expectedVar struct {
-	path                 string
-	expressions          []string
-	kind                 variable.ResourceVariableKind
-	standaloneExpression bool
+	path       string
+	expression string
+	kind       variable.ResourceVariableKind
 }
 
 func validateVariables(t *testing.T, actual []*variable.ResourceField, expected []expectedVar) {
@@ -1670,16 +1725,10 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
-		// Extract Original strings from expressions for comparison
-		exprs := make([]string, len(v.Expressions))
-		for j, e := range v.Expressions {
-			exprs[j] = e.Original
-		}
 		actualVars[i] = expectedVar{
-			path:                 v.Path,
-			expressions:          exprs,
-			kind:                 v.Kind,
-			standaloneExpression: v.StandaloneExpression,
+			path:       v.Path,
+			expression: v.Expression.Original,
+			kind:       v.Kind,
 		}
 	}
 
@@ -2131,9 +2180,30 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 }
 
 func TestNewBuilder(t *testing.T) {
-	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
-	assert.Nil(t, err)
-	assert.NotNil(t, builder)
+	tests := []struct {
+		name    string
+		config  *rest.Config
+		client  *http.Client
+		wantErr string
+	}{
+		{name: "success", config: &rest.Config{}, client: &http.Client{}},
+		{name: "schema resolver creation failure", config: &rest.Config{Host: "://bad"}, client: &http.Client{}, wantErr: "failed to create schema resolver"},
+		{name: "rest mapper creation failure", config: &rest.Config{}, client: nil, wantErr: "failed to create dynamic REST mapper"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, err := NewBuilder(tt.config, tt.client)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, builder)
+		})
+	}
 }
 
 func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
@@ -3388,5 +3458,567 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 			require.NoError(t, err)
 			assert.NotNil(t, graph)
 		})
+	}
+}
+
+func newUnitTestBuilder() *Builder {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	return &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+}
+
+func newUnitInspector(t *testing.T, ids ...string) *ast.Inspector {
+	t.Helper()
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(ids))
+	require.NoError(t, err)
+	return ast.NewInspectorWithEnv(env, ids)
+}
+
+func newTypedEnvWithProvider(t *testing.T, schemas map[string]*spec.Schema) (*cel.Env, *krocel.DeclTypeProvider) {
+	t.Helper()
+	env, provider, err := krocel.TypedEnvironmentWithProvider(schemas)
+	require.NoError(t, err)
+	return env, provider
+}
+
+func rawExt(raw string) runtime.RawExtension {
+	return runtime.RawExtension{Raw: []byte(raw)}
+}
+
+func expr(original string) *krocel.Expression {
+	return &krocel.Expression{Original: original}
+}
+
+func objectSchema(fields map[string]spec.Schema) *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type:       []string{"object"},
+			Properties: fields,
+		},
+	}
+}
+
+func TestBuildRGResourceErrorPaths(t *testing.T) {
+	t.Run("template unmarshal error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID:       "bad",
+			Template: rawExt("["),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal resource")
+	})
+
+	t.Run("extract gvk error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "badGVK",
+			Template: rawExt(`
+apiVersion: not/a/valid/apiVersion
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to extract GVK")
+	})
+
+	t.Run("rest mapping error", func(t *testing.T) {
+		fakeResolver, _ := k8s.NewFakeResolver()
+		builder := &Builder{
+			schemaResolver: fakeResolver,
+			restMapper:     meta.NewDefaultRESTMapper([]schema.GroupVersion{}),
+		}
+
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "cm",
+			Template: rawExt(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get REST mapping")
+	})
+
+	t.Run("external ref parse error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Name: "${outer(${inner})}",
+				},
+			},
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse external ref resource")
+	})
+
+	t.Run("crd schemaless parse error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "crd",
+			Template: rawExt(`
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ${outer(${inner})}
+spec:
+  group: tests.kro.run
+`),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
+	})
+
+	t.Run("crd only allows metadata expressions", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "crd",
+			Template: rawExt(`
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tests.kro.run
+spec:
+  group: ${schema.spec.group}
+`),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "only supported for metadata fields")
+	})
+
+	t.Run("schema based parsing error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "vpc",
+			Template: rawExt(`
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPC
+metadata:
+  name: test
+spec:
+  unknownField: ${schema.spec.name}
+`),
+		}, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to extract CEL expressions from schema")
+	})
+
+	t.Run("external selector becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "demo"},
+					},
+				},
+			},
+		}, 0)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+}
+
+func TestBuildInstanceNode(t *testing.T) {
+	inspector := newUnitInspector(t, "resource")
+	tests := []struct {
+		name      string
+		variables []variable.FieldDescriptor
+		template  map[string]interface{}
+		wantErr   string
+		wantPath  string
+		wantDeps  []string
+	}{
+		{
+			name: "dependency extraction failure",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("resource +"),
+			}},
+			template: map[string]interface{}{"field": "${resource +}"},
+			wantErr:  "failed to extract dependencies",
+		},
+		{
+			name: "status field must reference a resource",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("true"),
+			}},
+			template: map[string]interface{}{"field": "${true}"},
+			wantErr:  "must refer to a resource",
+		},
+		{
+			name: "successful node prefixes status path",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("resource.spec.name"),
+			}},
+			template: map[string]interface{}{"field": "${resource.spec.name}"},
+			wantPath: "status.field",
+			wantDeps: []string{"resource"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node, err := buildInstanceNode(
+				"example.com",
+				"v1alpha1",
+				"Test",
+				tt.variables,
+				tt.template,
+				inspector,
+			)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPath, node.Variables[0].Path)
+			assert.Equal(t, tt.wantDeps, node.Meta.Dependencies)
+		})
+	}
+}
+
+func TestBuildInstanceSpecSchema(t *testing.T) {
+	tests := []struct {
+		name    string
+		schema  *krov1alpha1.Schema
+		wantErr string
+	}{
+		{
+			name: "invalid spec yaml",
+			schema: &krov1alpha1.Schema{
+				Spec:  rawExt("["),
+				Types: rawExt("{}"),
+			},
+			wantErr: "failed to unmarshal spec schema",
+		},
+		{
+			name: "invalid custom types yaml",
+			schema: &krov1alpha1.Schema{
+				Spec:  rawExt("{}"),
+				Types: rawExt("["),
+			},
+			wantErr: "failed to unmarshal predefined types",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildInstanceSpecSchema(tt.schema)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestBuildStatusSchema(t *testing.T) {
+	resourceSchema := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name":     {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+		}),
+	})
+	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
+	inspector := newUnitInspector(t, "resource")
+	tests := []struct {
+		name            string
+		statusRaw       string
+		wantErr         string
+		wantStringField bool
+	}{
+		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
+		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
+		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
+		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + (resource.spec.replicas)\n | ..........^"},
+		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statusSchema, fieldDescriptors, _, err := buildStatusSchema(&krov1alpha1.Schema{
+				Status: rawExt(tt.statusRaw),
+			}, []string{"resource"}, inspector, env, provider)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, fieldDescriptors, 1)
+			assert.Equal(t, "string", statusSchema.Properties["field"].Type)
+		})
+	}
+}
+
+func TestGetSchemaWithoutStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		crd           *extv1.CustomResourceDefinition
+		wantErr       string
+		wantHasStatus bool
+		wantHasMeta   bool
+	}{
+		{
+			name: "requires exactly one version",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{},
+				},
+			},
+			wantErr: "exactly one version",
+		},
+		{
+			name: "requires schema",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{}},
+				},
+			},
+			wantErr: "schema defined",
+		},
+		{
+			name: "injects metadata when missing",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"status": {Type: "object"},
+								},
+							},
+						},
+					}},
+				},
+			},
+			wantHasStatus: false,
+			wantHasMeta:   true,
+		},
+		{
+			name: "injects metadata when properties map is nil",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{Type: "object"},
+						},
+					}},
+				},
+			},
+			wantHasStatus: false,
+			wantHasMeta:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schemaWithoutStatus, err := getSchemaWithoutStatus(tt.crd)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			_, hasStatus := schemaWithoutStatus.Properties["status"]
+			_, hasMetadata := schemaWithoutStatus.Properties["metadata"]
+			assert.Equal(t, tt.wantHasStatus, hasStatus)
+			assert.Equal(t, tt.wantHasMeta, hasMetadata)
+		})
+	}
+}
+
+func TestBuilderHelperCases(t *testing.T) {
+	rootSchema := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"items": {
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"array"},
+					Items: &spec.SchemaOrArray{
+						Schema: objectSchema(map[string]spec.Schema{
+							"value": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						}),
+					},
+				},
+			},
+		}),
+	})
+	_, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": rootSchema})
+	resourceEnv, _, err := krocel.TypedEnvironmentWithProvider(map[string]*spec.Schema{
+		SchemaVarName: rootSchema,
+		"resource":    rootSchema,
+	})
+	require.NoError(t, err)
+	plainEnv, err := cel.NewEnv(cel.Variable("items", cel.StringType))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "resolveSchemaAndTypeName handles missing field",
+			run: func(t *testing.T) {
+				_, _, err := resolveSchemaAndTypeName([]fieldpath.Segment{{Name: "missing"}}, rootSchema, "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `field "missing" not found in schema`)
+			},
+		},
+		{
+			name: "resolveSchemaAndTypeName rejects index on non array",
+			run: func(t *testing.T) {
+				_, _, err := resolveSchemaAndTypeName([]fieldpath.Segment{{Name: "spec"}, {Index: 0}}, rootSchema, "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "field is not an array")
+			},
+		},
+		{
+			name: "getExpectedTypeForField falls back to dyn on bad paths",
+			run: func(t *testing.T) {
+				assert.Equal(t, cel.DynType, getExpectedTypeForField(&variable.FieldDescriptor{
+					Path: "spec[",
+				}, rootSchema, "resource", provider))
+				assert.Equal(t, cel.DynType, getExpectedTypeForField(&variable.FieldDescriptor{
+					Path: "spec.missing",
+				}, rootSchema, "resource", provider))
+			},
+		},
+		{
+			name: "getCelTypeFromSchema falls back to dyn for nil and empty schemas",
+			run: func(t *testing.T) {
+				assert.Equal(t, cel.DynType, getCelTypeFromSchema(nil, "resource.Nil", nil))
+				assert.Equal(t, cel.DynType, getCelTypeFromSchema(&spec.Schema{}, "resource.Empty", nil))
+			},
+		},
+		{
+			name: "validateExpressionType reports plain mismatch",
+			run: func(t *testing.T) {
+				err := validateExpressionType(cel.IntType, cel.StringType, "1", "resource", "spec.name", nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `returns type "int" but expected "string"`)
+			},
+		},
+		{
+			name: "parseCheckAndCompile returns parse errors",
+			run: func(t *testing.T) {
+				env, err := cel.NewEnv()
+				require.NoError(t, err)
+				_, err = parseCheckAndCompile(env, expr("1 +"))
+				require.Error(t, err)
+			},
+		},
+		{
+			name: "validateConditionExpression wraps parse failures",
+			run: func(t *testing.T) {
+				env, err := cel.NewEnv()
+				require.NoError(t, err)
+				err = validateConditionExpression(env, expr("1 +"), "includeWhen", "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to type-check includeWhen expression")
+			},
+		},
+		{
+			name: "validateAndCompileForEach handles empty and invalid expressions",
+			run: func(t *testing.T) {
+				iteratorTypes, err := validateAndCompileForEach(plainEnv, &Node{})
+				require.NoError(t, err)
+				assert.Nil(t, iteratorTypes)
+
+				_, err = validateAndCompileForEach(plainEnv, &Node{
+					Meta: NodeMeta{ID: "resource"},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("items +")},
+					},
+				})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `node "resource": forEach iterator "item"`)
+			},
+		},
+		{
+			name: "validateAndCompileNode rejects non schema includeWhen refs",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
+					IncludeWhen: []*krocel.Expression{expr("resource.spec.name == 'x'")},
+				}
+				err := validateAndCompileNode(node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "includeWhen")
+			},
+		},
+		{
+			name: "inspectExpressionRestricted reports parse and function errors",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				_, err := inspectExpressionRestricted(inspector, "resource +", []string{"schema"})
+				require.Error(t, err)
+				_, err = inspectExpressionRestricted(inspector, "missingFn()", []string{"schema"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "uses unknown functions")
+			},
+		},
+		{
+			name: "extractDependencies reports unknown functions",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "resource")
+				_, _, err := extractDependencies(inspector, expr("missingFn()"), nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "uses unknown functions")
+			},
+		},
+		{
+			name: "buildDependencyGraph rejects duplicate node IDs",
+			run: func(t *testing.T) {
+				builder := &Builder{}
+				inspector := newUnitInspector(t, "first", "second")
+				nodes := map[string]*Node{
+					"first":  {Meta: NodeMeta{ID: "dup", Index: 0}},
+					"second": {Meta: NodeMeta{ID: "dup", Index: 1}},
+				}
+				_, err := builder.buildDependencyGraph(nodes, inspector)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to add vertex to graph")
+			},
+		},
+		{
+			name: "extractForEachDependencies wraps extraction errors",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "item")
+				node := &Node{
+					Meta: NodeMeta{ID: "items"},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("item +")},
+					},
+				}
+				_, err := extractForEachDependencies(inspector, node, []string{"item"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to extract dependencies from forEach iterator")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.run)
 	}
 }

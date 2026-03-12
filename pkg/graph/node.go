@@ -56,6 +56,9 @@ const (
 	NodeTypeExternal
 	// NodeTypeInstance is the instance node (ID: "instance").
 	NodeTypeInstance
+	// NodeTypeExternalCollection is an external reference with a label selector
+	// that matches multiple resources (read-only collection, not applied).
+	NodeTypeExternalCollection
 )
 
 // String returns a human-readable string for the node type.
@@ -69,6 +72,8 @@ func (t NodeType) String() string {
 		return "External"
 	case NodeTypeInstance:
 		return "Instance"
+	case NodeTypeExternalCollection:
+		return "ExternalCollection"
 	default:
 		return "Unknown"
 	}
@@ -158,7 +163,8 @@ func (n *Node) DeepCopy() *Node {
 		cp.Variables = make([]*variable.ResourceField, len(n.Variables))
 		for i, v := range n.Variables {
 			copyVar := *v
-			copyVar.Expressions = slices.Clone(v.Expressions)
+			exprCopy := *v.Expression
+			copyVar.Expression = &exprCopy
 			cp.Variables[i] = &copyVar
 		}
 	}

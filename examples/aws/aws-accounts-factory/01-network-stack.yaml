@@ -1,0 +1,209 @@
+# Network Stack RGD
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: network-stack
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: NetworkStack
+    spec:
+    # RGD Input Parameters
+      vpcName: string
+      cidrBlock: string
+      region: string
+      availabilityZones: '[]string'
+    status:
+      vpcId: ${vpc.status.vpcID}
+      publicSubnetIds: ${publicSubnets.map(s, s.status.subnetID)}
+      privateSubnetIds: ${privateSubnets.map(s, s.status.subnetID)}
+      securityGroupId: ${securityGroup.status.id}
+  resources:
+    - id: vpc
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: VPC
+        metadata:
+          name: ${schema.spec.vpcName}
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          cidrBlocks:
+            - ${schema.spec.cidrBlock}
+          enableDNSSupport: true
+          enableDNSHostnames: true
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}
+
+    - id: igw
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: InternetGateway
+        metadata:
+          name: ${schema.spec.vpcName}-igw
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}-igw
+
+    - id: publicRouteTable
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTable
+        metadata:
+          name: ${schema.spec.vpcName}-public-rt
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          routes:
+            - destinationCIDRBlock: "0.0.0.0/0"
+              gatewayRef:
+                from:
+                  name: ${igw.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}-public-rt
+
+    - id: publicSubnets
+      forEach:
+        - idx: ${lists.range(size(schema.spec.availabilityZones))}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.vpcName + '-public-' + string(idx + 1)}
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.availabilityZones[idx]}
+          cidrBlock: ${schema.spec.cidrBlock.split('.')[0] + '.' + schema.spec.cidrBlock.split('.')[1] + '.' + string(idx + 1) + '.0/24'}
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          mapPublicIPOnLaunch: true
+          routeTableRefs:
+            - from:
+                name: ${publicRouteTable.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName + '-public-' + string(idx + 1)}
+            - key: kubernetes.io/role/elb
+              value: "1"
+
+    - id: eip1
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: ElasticIPAddress
+        metadata:
+          name: ${schema.spec.vpcName}-eip-1
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}-nat-eip-1
+
+    - id: natGateway1
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: NATGateway
+        metadata:
+          name: ${schema.spec.vpcName}-nat-1
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          subnetRef:
+            from:
+              name: ${schema.spec.vpcName + '-public-1'}
+          allocationRef:
+            from:
+              name: ${eip1.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}-nat-1
+
+    - id: privateRouteTable
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTable
+        metadata:
+          name: ${schema.spec.vpcName}-private-rt
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          routes:
+            - destinationCIDRBlock: "0.0.0.0/0"
+              natGatewayRef:
+                from:
+                  name: ${natGateway1.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName}-private-rt
+
+    - id: privateSubnets
+      forEach:
+        - idx: ${lists.range(size(schema.spec.availabilityZones))}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.vpcName + '-private-' + string(idx + 1)}
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.availabilityZones[idx]}
+          cidrBlock: ${schema.spec.cidrBlock.split('.')[0] + '.' + schema.spec.cidrBlock.split('.')[1] + '.' + string(idx + size(schema.spec.availabilityZones) + 1) + '.0/24'}
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          routeTableRefs:
+            - from:
+                name: ${privateRouteTable.metadata.name}
+          tags:
+            - key: Name
+              value: ${schema.spec.vpcName + '-private-' + string(idx + 1)}
+            - key: kubernetes.io/role/internal-elb
+              value: "1"
+
+    - id: securityGroup
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: SecurityGroup
+        metadata:
+          name: ${schema.spec.vpcName}-eks-sg
+          namespace: ${schema.metadata.namespace}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.vpcName}-eks-sg
+          description: Security group for EKS cluster
+          vpcRef:
+            from:
+              name: ${vpc.metadata.name}
+          ingressRules:
+            - ipProtocol: "-1"
+              fromPort: -1
+              toPort: -1
+              ipRanges:
+                - cidrIP: ${schema.spec.cidrBlock}
+                  description: Allow all traffic within VPC

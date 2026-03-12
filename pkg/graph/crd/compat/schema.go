@@ -14,6 +14,8 @@
 package compat
 
 import (
+	"bytes"
+
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
@@ -50,8 +52,18 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 		result.AddNonBreakingChange(
 			path+".description",
 			DescriptionChanged,
-			"",
-			"",
+			oldSchema.Description,
+			newSchema.Description,
+		)
+	}
+
+	// default value changes are non-breaking
+	if !defaultsEqual(oldSchema.Default, newSchema.Default) {
+		result.AddNonBreakingChange(
+			path+".default",
+			DefaultChanged,
+			getDefaultValue(oldSchema.Default),
+			getDefaultValue(newSchema.Default),
 		)
 	}
 
@@ -95,6 +107,13 @@ func compare(path string, oldSchema, newSchema *v1.JSONSchemaProps) *Report {
 	compareArrayItems(path, oldSchema, newSchema, result)
 
 	return result
+}
+
+func getDefaultValue(val *v1.JSON) string {
+	if val == nil {
+		return ""
+	}
+	return string(val.Raw)
 }
 
 // compareProperties checks for added, removed, or changed properties
@@ -179,6 +198,23 @@ func compareRequiredFields(path string, oldSchema, newSchema *v1.JSONSchemaProps
 			result.AddNonBreakingChange(path+".required", RequiredRemoved, req, "")
 		}
 	}
+
+	// Check for required fields with default value removed.
+	// If a field is required in both old and new schemas but its default value
+	// was removed, new instances can no longer omit the field and rely on the
+	// default being populated automatically.
+	for req := range newRequiredSet {
+		if !existingProps[req] || !oldRequiredSet[req] {
+			continue
+		}
+		oldProp := oldSchema.Properties[req]
+		newProp := newSchema.Properties[req]
+		oldHasDefault := oldProp.Default != nil && len(oldProp.Default.Raw) > 0
+		newHasDefault := newProp.Default != nil && len(newProp.Default.Raw) > 0
+		if oldHasDefault && !newHasDefault {
+			result.AddBreakingChange(path+".required", RequiredDefaultRemoved, req, "")
+		}
+	}
 }
 
 // compareEnumValues checks for changes to enum values
@@ -225,6 +261,19 @@ func compareArrayItems(path string, oldSchema, newSchema *v1.JSONSchemaProps, re
 			result.AddNonBreakingChange(path+".items", PropertyAdded, "", "")
 		}
 	}
+}
+
+// defaultsEqual compares two JSON default values for equality.
+// Two defaults are equal if they are both nil, or both non-nil with
+// identical Raw byte content.
+func defaultsEqual(a, b *v1.JSON) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return bytes.Equal(a.Raw, b.Raw)
 }
 
 // toStringSet converts a string slice to a map for O(1) lookups

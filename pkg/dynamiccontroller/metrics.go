@@ -34,7 +34,11 @@ func init() {
 		handlerErrorsTotal,
 		informerSyncDuration,
 		informerEventsTotal,
-		// activeWorkersTotal,
+		watchCount,
+		instanceWatchCount,
+		watchRequestCount,
+		routeTotal,
+		routeMatchTotal,
 	)
 }
 
@@ -109,11 +113,39 @@ var (
 		},
 		[]string{"gvr", "event_type"},
 	)
-	/* activeWorkersTotal = prometheus.NewGauge(
+	// New watch-layer metrics
+	watchCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "dynamic_controller_active_workers_total",
-			Help: "Total number of currently active workers",
+			Name: "dynamic_controller_watch_count",
+			Help: "Number of active informers managed by the WatchManager",
 		},
 	)
-	*/
+	instanceWatchCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dynamic_controller_instance_watch_count",
+			Help: "Number of active instance watchers by parent GVR",
+		},
+		[]string{"parent_gvr"},
+	)
+	watchRequestCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dynamic_controller_watch_request_count",
+			Help: "Number of active watch requests by GVR and type (scalar/collection)",
+		},
+		[]string{"gvr", "type"},
+	)
+	routeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dynamic_controller_route_total",
+			Help: "Total events routed through the coordinator by GVR",
+		},
+		[]string{"gvr"},
+	)
+	routeMatchTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dynamic_controller_route_match_total",
+			Help: "Total events that matched at least one instance by GVR",
+		},
+		[]string{"gvr"},
+	)
 )

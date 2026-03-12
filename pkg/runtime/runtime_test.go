@@ -101,7 +101,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+									Expression: krocel.NewUncompiled("schema.spec.name"),
 								},
 							},
 						},
@@ -112,7 +112,7 @@ func TestFromGraph(t *testing.T) {
 							{
 								Kind: variable.ResourceVariableKindStatic,
 								FieldDescriptor: variable.FieldDescriptor{
-									Expressions: krocel.NewUncompiledSlice("schema.spec.name"),
+									Expression: krocel.NewUncompiled("schema.spec.name"),
 								},
 							},
 						},
@@ -127,6 +127,80 @@ func TestFromGraph(t *testing.T) {
 				require.Len(t, nodes[1].templateExprs, 1)
 				// Same pointer = deduplicated
 				assert.Same(t, nodes[0].templateExprs[0], nodes[1].templateExprs[0])
+			},
+		},
+		{
+			name: "iteration expressions stay isolated while static expressions are shared",
+			graph: &graph.Graph{
+				TopologicalOrder: []string{"configs", "subnets", "deployment"},
+				Nodes: map[string]*graph.Node{
+					"configs": {
+						Meta: graph.NodeMeta{ID: "configs", Type: graph.NodeTypeCollection},
+						ForEach: []graph.ForEachDimension{
+							{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+						},
+						Variables: []*variable.ResourceField{
+							{
+								Kind: variable.ResourceVariableKindIteration,
+								FieldDescriptor: variable.FieldDescriptor{
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("region"),
+								},
+							},
+						},
+					},
+					"subnets": {
+						Meta: graph.NodeMeta{ID: "subnets", Type: graph.NodeTypeCollection},
+						ForEach: []graph.ForEachDimension{
+							{Name: "region", Expression: krocel.NewUncompiled("schema.spec.regions")},
+						},
+						Variables: []*variable.ResourceField{
+							{
+								Kind: variable.ResourceVariableKindIteration,
+								FieldDescriptor: variable.FieldDescriptor{
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("region"),
+								},
+							},
+						},
+					},
+					"deployment": {
+						Meta:        graph.NodeMeta{ID: "deployment", Type: graph.NodeTypeResource},
+						IncludeWhen: krocel.NewUncompiledSlice("schema.spec.enabled"),
+						ReadyWhen:   krocel.NewUncompiledSlice("deployment.status.ready"),
+						Variables: []*variable.ResourceField{
+							{
+								Kind: variable.ResourceVariableKindStatic,
+								FieldDescriptor: variable.FieldDescriptor{
+									Path:       "metadata.name",
+									Expression: krocel.NewUncompiled("schema.spec.name"),
+								},
+							},
+						},
+					},
+				},
+				Instance: &graph.Node{
+					Meta: graph.NodeMeta{ID: graph.InstanceNodeID, Type: graph.NodeTypeInstance},
+					Variables: []*variable.ResourceField{
+						{
+							Kind: variable.ResourceVariableKindStatic,
+							FieldDescriptor: variable.FieldDescriptor{
+								Path:       "status.name",
+								Expression: krocel.NewUncompiled("schema.spec.name"),
+							},
+						},
+					},
+				},
+			},
+			instance: testInstance("test"),
+			validate: func(t *testing.T, rt *Runtime) {
+				nodes := rt.Nodes()
+				require.Len(t, nodes, 3)
+				assert.NotSame(t, nodes[0].forEachExprs[0], nodes[1].forEachExprs[0])
+				assert.NotSame(t, nodes[0].templateExprs[0], nodes[1].templateExprs[0])
+				assert.Same(t, nodes[2].templateExprs[0], rt.Instance().templateExprs[0])
+				assert.Len(t, nodes[2].includeWhenExprs, 1)
+				assert.Len(t, nodes[2].readyWhenExprs, 1)
 			},
 		},
 		{
@@ -193,8 +267,8 @@ func TestFromGraph_InstanceWithDependencies(t *testing.T) {
 				{
 					Kind: variable.ResourceVariableKindDynamic,
 					FieldDescriptor: variable.FieldDescriptor{
-						Path:        "status.deploymentReady",
-						Expressions: krocel.NewUncompiledSlice("deployment.status.ready"),
+						Path:       "status.deploymentReady",
+						Expression: krocel.NewUncompiled("deployment.status.ready"),
 					},
 				},
 			},

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apiserver/pkg/cel/openapi"
@@ -73,6 +74,8 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
+	nodeIgnoredCheckTotal.Inc()
+
 	// Check if any dependency is ignored (contagious).
 	for _, dep := range n.deps {
 		ignored, err := dep.IsIgnored()
@@ -80,6 +83,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, err
 		}
 		if ignored {
+			nodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -94,9 +98,10 @@ func (n *Node) IsIgnored() (bool, error) {
 	for _, expr := range n.includeWhenExprs {
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
-			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.Original, err)
+			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
+			nodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -113,11 +118,21 @@ func (n *Node) IsIgnored() (bool, error) {
 //   - External: resolves template (for name/namespace CEL), caller reads instead of applies
 //
 // Note: The caller should call IsIgnored() before GetDesired() for resource nodes.
-func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
+func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 	// Return cached result if available.
 	if n.desired != nil {
 		return n.desired, nil
 	}
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		nodeEvalDuration.Observe(duration.Seconds())
+		nodeEvalTotal.Inc()
+		if err != nil {
+			nodeEvalErrorsTotal.Inc()
+		}
+	}()
 
 	// For resource types, block until all dependencies are ready.
 	// This enforces readyWhen semantics: dependents wait for parents.
@@ -135,8 +150,6 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 		}
 	}
 
-	var result []*unstructured.Unstructured
-	var err error
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeInstance:
 		result, err = n.softResolve()
@@ -145,6 +158,11 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
 		// External refs resolve like resources (for name/namespace CEL),
 		// but the caller reads instead of applies.
+		result, err = n.hardResolveSingleResource(n.templateVars)
+	case graph.NodeTypeExternalCollection:
+		// Resolve the template to evaluate CEL expressions in
+		// metadata (name, namespace, selector). The caller extracts
+		// the resolved selector for LIST operations.
 		result, err = n.hardResolveSingleResource(n.templateVars)
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
@@ -166,11 +184,21 @@ func (n *Node) GetDesired() ([]*unstructured.Unstructured, error) {
 //
 // NOTE: This method does not cache its result in n.desired; callers in non-deletion
 // paths should continue using GetDesired().
-func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
+func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		nodeEvalDuration.Observe(duration.Seconds())
+		nodeEvalTotal.Inc()
+		if err != nil {
+			nodeEvalErrorsTotal.Inc()
+		}
+	}()
+
 	vars := n.templateVarsForPaths(identityPaths)
 	switch n.Spec.Meta.Type {
 	case graph.NodeTypeCollection:
-		result, err := n.hardResolveCollection(vars, false)
+		result, err = n.hardResolveCollection(vars, false)
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +208,7 @@ func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
 		}
 		return result, nil
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
-		result, err := n.hardResolveSingleResource(vars)
+		result, err = n.hardResolveSingleResource(vars)
 		if err != nil {
 			return nil, err
 		}
@@ -189,6 +217,9 @@ func (n *Node) GetDesiredIdentity() ([]*unstructured.Unstructured, error) {
 			normalizeNamespaces(result, inst.observed[0].GetNamespace())
 		}
 		return result, nil
+	case graph.NodeTypeExternalCollection:
+		// External collections have no identity to resolve; they use selectors.
+		return nil, nil
 	case graph.NodeTypeInstance:
 		panic("GetDesiredIdentity called for instance node")
 	default:
@@ -227,7 +258,7 @@ func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 			return orderedIntersection(n.observed, desired), nil
 		}
 		return n.observed, nil
-	case graph.NodeTypeInstance, graph.NodeTypeExternal:
+	case graph.NodeTypeInstance, graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
 		panic(fmt.Sprintf("DeleteTargets called for node type %v", n.Spec.Meta.Type))
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
@@ -265,6 +296,8 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 	if err != nil {
 		return nil, err
 	}
+
+	collectionSize.Observe(float64(len(items)))
 
 	if len(items) == 0 {
 		// Resolved empty collection: return non-nil empty slice to distinguish
@@ -345,17 +378,10 @@ func (n *Node) softResolve() ([]*unstructured.Unstructured, error) {
 		return nil, err
 	}
 
-	// Filter to only fully-resolvable fields (all expressions available)
+	// Filter to only fully-resolvable fields (expression value available)
 	var resolvable []variable.FieldDescriptor
 	for _, v := range n.templateVars {
-		complete := true
-		for _, expr := range v.Expressions {
-			if _, ok := values[expr.Original]; !ok {
-				complete = false
-				break
-			}
-		}
-		if complete {
+		if _, ok := values[v.Expression.Original]; ok {
 			resolvable = append(resolvable, v.FieldDescriptor)
 		}
 	}
@@ -471,12 +497,10 @@ func (n *Node) exprSetsForVars(
 	}
 
 	for _, v := range vars {
-		for _, expr := range v.Expressions {
-			if kind, ok := exprKinds[expr.Original]; ok && kind.IsIteration() {
-				iterExprs[expr.Original] = struct{}{}
-			} else {
-				baseExprs[expr.Original] = struct{}{}
-			}
+		if kind, ok := exprKinds[v.Expression.Original]; ok && kind.IsIteration() {
+			iterExprs[v.Expression.Original] = struct{}{}
+		} else {
+			baseExprs[v.Expression.Original] = struct{}{}
 		}
 	}
 	return baseExprs, iterExprs
@@ -488,10 +512,7 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 	desired := base.DeepCopy()
 	res := resolver.NewResolver(desired.Object, values)
 	for _, v := range n.templateVars {
-		if len(v.Expressions) == 0 {
-			continue
-		}
-		if val, ok := values[v.Expressions[0].Original]; ok {
+		if val, ok := values[v.Expression.Original]; ok {
 			_ = res.UpsertValueAtPath(v.Path, val)
 		}
 	}
@@ -500,17 +521,22 @@ func (n *Node) upsertToTemplate(base *unstructured.Unstructured, values map[stri
 
 // SetObserved stores the observed state(s) from the cluster.
 func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
-	if n.Spec.Meta.Type == graph.NodeTypeCollection {
+	switch n.Spec.Meta.Type {
+	case graph.NodeTypeCollection:
 		n.observed = orderedIntersection(observed, n.desired)
-		return
+	case graph.NodeTypeExternalCollection:
+		// External collections store all observed items directly; there is
+		// no desired set to intersect with.
+		n.observed = observed
+	default:
+		n.observed = observed
 	}
-
-	n.observed = observed
 }
 
 // CheckReadiness evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
 func (n *Node) CheckReadiness() error {
+	nodeReadyCheckTotal.Inc()
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
@@ -520,10 +546,17 @@ func (n *Node) CheckReadiness() error {
 		return nil
 	}
 
-	if n.Spec.Meta.Type == graph.NodeTypeCollection {
-		return n.checkCollectionReadiness()
+	if n.Spec.Meta.Type == graph.NodeTypeCollection || n.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		err = n.checkCollectionReadiness()
+	} else {
+		err = n.checkSingleResourceReadiness()
 	}
-	return n.checkSingleResourceReadiness()
+
+	if err != nil && errors.Is(err, ErrWaitingForReadiness) {
+		nodeNotReadyTotal.Inc()
+	}
+
+	return err
 }
 
 func (n *Node) checkSingleResourceReadiness() error {
@@ -541,30 +574,38 @@ func (n *Node) checkSingleResourceReadiness() error {
 		result, err := evalBoolExpr(expr, ctx)
 		if err != nil {
 			if isCELDataPending(err) {
-				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
-			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.Original, err)
+			return fmt.Errorf("node %q: failed to evaluate readyWhen expression: %q (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), err)
 		}
 		if !result {
-			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+			return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 		}
 	}
 	return nil
 }
 
 func (n *Node) checkCollectionReadiness() error {
-	// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
-	if n.desired == nil {
-		return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
-	}
-	if len(n.desired) == 0 {
-		return nil
-	}
-	if len(n.observed) < len(n.desired) {
-		return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
-	}
-	if len(n.readyWhenExprs) == 0 {
-		return nil
+	if n.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		// External collections: desired carries the selector template, not actual
+		// desired resources. Skip count-based readiness checks.
+		if len(n.readyWhenExprs) == 0 || len(n.observed) == 0 {
+			return nil
+		}
+	} else {
+		// Use nil check (not len==0) to distinguish "not computed" from "empty collection".
+		if n.desired == nil {
+			return fmt.Errorf("node %q: collection not computed (%w)", n.Spec.Meta.ID, ErrWaitingForReadiness)
+		}
+		if len(n.desired) == 0 {
+			return nil
+		}
+		if len(n.observed) < len(n.desired) {
+			return fmt.Errorf("node %q: collection not ready: observed %d but desired %d (%w)", n.Spec.Meta.ID, len(n.observed), len(n.desired), ErrWaitingForReadiness)
+		}
+		if len(n.readyWhenExprs) == 0 {
+			return nil
+		}
 	}
 
 	// Collection readyWhen uses "each" (single item) only.
@@ -577,16 +618,16 @@ func (n *Node) checkCollectionReadiness() error {
 			val, err := expr.Expression.Eval(ctx)
 			if err != nil {
 				if isCELDataPending(err) {
-					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.Original, i, ErrWaitingForReadiness)
+					return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d) (%w)", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, ErrWaitingForReadiness)
 				}
-				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.Original, i, err)
+				return fmt.Errorf("node %q: failed to evaluate readyWhen %q (item %d): %w", n.Spec.Meta.ID, expr.Expression.UserExpression(), i, err)
 			}
 			result, ok := val.(bool)
 			if !ok {
-				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.Original)
+				return fmt.Errorf("readyWhen %q did not return bool", expr.Expression.UserExpression())
 			}
 			if !result {
-				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.Original, ErrWaitingForReadiness)
+				return fmt.Errorf("readyWhen condition evaluated to false: %q (%w)", expr.Expression.UserExpression(), ErrWaitingForReadiness)
 			}
 		}
 	}
@@ -649,7 +690,7 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if len(only) > 0 && !slices.Contains(only, depID) {
 			continue
 		}
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
+		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
 				items[i] = wrapWithSchema(obj.Object, dep.resourceSchema)
@@ -719,7 +760,7 @@ func (n *Node) neededDeps(exprs map[string]struct{}) []string {
 // - iterators: forEach loop variable names from iterCtx (declared as list(dyn))
 func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collections, iterators []string) {
 	for depID, dep := range n.deps {
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection {
+		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
 			collections = append(collections, depID)
 		} else {
 			singles = append(singles, depID)

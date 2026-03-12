@@ -460,6 +460,10 @@ readyConditions: ${deployment.status.conditions.filter(c, c.status == "True")}
 
 # Check all items
 allReady: ${schema.spec.services.all(s, s.enabled)}
+
+# Sort by a field (lexicographic ordering)
+sorted: ${items.sortBy(item, item.data.priority)}
+orderedNames: ${items.sortBy(i, i.data.priority).map(i, i.metadata.name).join(",")}
 ```
 
 ### Aggregating Status

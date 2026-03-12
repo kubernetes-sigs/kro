@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
@@ -231,7 +232,9 @@ func TestInspector_InspectionResults(t *testing.T) {
 			wantFunctions: []FunctionCall{
 				{Name: "contains", Arguments: []string{"ng.labels", `"environment"`}},
 				{Name: "contains", Arguments: []string{"map(iamRole.policies, p, p.actions)", `"eks:*"`}},
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit for nodeGroups.filter
 				{Name: "createList", Arguments: []string{"[ng]"}},
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit for vpc.subnets.filter
 				{Name: "createList", Arguments: []string{"[s]"}},
 				{Name: "filter", Arguments: []string{
 					"nodeGroups",
@@ -285,6 +288,7 @@ func TestInspector_InspectionResults(t *testing.T) {
 				{ID: "pods", Path: "pods"},
 			},
 			wantFunctions: []FunctionCall{
+				{Name: "createList", Arguments: []string{"[]"}}, // AccuInit
 				{Name: "createList", Arguments: []string{"[p]"}},
 				{Name: "filter", Arguments: []string{
 					"pods",
@@ -599,6 +603,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
+				{Name: "createList"}, // AccuInit empty list
 				{Name: "filter"},
 			},
 		},
@@ -615,6 +620,7 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 			},
 			wantFunctions: []FunctionCall{
 				{Name: "createList"},
+				{Name: "createList"}, // AccuInit empty list
 				{Name: "filter"},
 			},
 			wantUnknownRes: nil,
@@ -631,6 +637,30 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				{Name: "processItems"},
 				{Name: "processItems(bucket).validate"},
 			},
+		},
+		{
+			name:      "sortBy macro internal identifiers are not flagged as unknown",
+			resources: []string{"configs"},
+			// sortBy expands into nested comprehensions with internal variables
+			// like @__sortBy_input__ and reused iterVar "c". The inspector must
+			// recognise all of these as internal/loop variables.
+			expression: `configs.sortBy(c, c.data.priority).map(c, c.metadata.name)`,
+			wantResources: []ResourceDependency{
+				{ID: "configs", Path: "configs"},
+			},
+			wantFunctions: []FunctionCall{
+				// macro expansion produces multiple comprehensions and internal calls
+				{Name: "@__sortBy_input__.@sortByAssociatedKeys"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "createList"},
+				{Name: "filter"},
+				{Name: "filter"},
+				{Name: "filter"},
+			},
+			wantUnknownRes: nil,
 		},
 		{
 			name:          "test unknown function with target",
@@ -706,6 +736,310 @@ func TestInspector_UnknownResourcesAndCalls(t *testing.T) {
 				t.Errorf("Function names = %v, want %v", gotFuncNames, wantFuncNames)
 			}
 
+			if !reflect.DeepEqual(got.UnknownResources, tt.wantUnknownRes) {
+				t.Errorf("UnknownResources = %v, want %v", got.UnknownResources, tt.wantUnknownRes)
+			}
+		})
+	}
+}
+
+// TestNewInspectorWithEnv_CustomFunctionsNotResources verifies that when
+// using NewInspectorWithEnv (the production constructor), kro's custom CEL
+// functions are automatically recognised as functions — not misclassified
+// as resource dependencies or unknown functions.
+func TestNewInspectorWithEnv_CustomFunctionsNotResources(t *testing.T) {
+	tests := []struct {
+		name           string
+		resources      []string
+		expression     string
+		wantResources  []ResourceDependency
+		wantFunctions  []FunctionCall
+		wantUnknownFns []UnknownFunction
+		wantUnknownRes []UnknownResource
+	}{
+		{
+			name:       "random.seededString is a function, not a resource",
+			resources:  []string{"schema"},
+			expression: `random.seededString(10, schema.metadata.uid)`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.metadata.uid"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "random.seededString"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "base64.encode is a function, not a resource",
+			resources:  []string{"secret"},
+			expression: `base64.encode(bytes(secret.data.password))`,
+			wantResources: []ResourceDependency{
+				{ID: "secret", Path: "secret.data.password"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "base64.encode"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "json.marshal is a function, not a resource",
+			resources:  []string{"config"},
+			expression: `json.marshal(config.spec.data)`,
+			wantResources: []ResourceDependency{
+				{ID: "config", Path: "config.spec.data"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "json.marshal"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "json.unmarshal is a function, not a resource",
+			resources:  []string{},
+			expression: `json.unmarshal('{"key":"val"}')`,
+			wantFunctions: []FunctionCall{
+				{Name: "json.unmarshal"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "resource named 'random' coexists with random.seededString",
+			resources:  []string{"random"},
+			expression: `random.status.ready == true && random.seededString(5, "seed") != ""`,
+			wantResources: []ResourceDependency{
+				{ID: "random", Path: "random.status.ready"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "random.seededString"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "resource named 'json' coexists with json.marshal",
+			resources:  []string{"json"},
+			expression: `json.status.phase == "Ready" && json.marshal(json.spec.data) != ""`,
+			wantResources: []ResourceDependency{
+				{ID: "json", Path: "json.status.phase"},
+				{ID: "json", Path: "json.spec.data"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "json.marshal"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "multiple custom functions in one expression",
+			resources:  []string{"schema"},
+			expression: `json.marshal(json.unmarshal(random.seededString(5, schema.metadata.uid)))`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.metadata.uid"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "json.marshal"},
+				{Name: "json.unmarshal"},
+				{Name: "random.seededString"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "undeclared resource is reported as unknown",
+			resources:  []string{"schema"},
+			expression: `deployment.spec.replicas > 0 && schema.spec.name != ""`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.name"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: []UnknownResource{
+				{ID: "deployment", Path: "deployment.spec.replicas"},
+			},
+		},
+		{
+			name:           "multiple undeclared resources",
+			resources:      []string{},
+			expression:     `service.spec.port == deployment.spec.containerPort`,
+			wantUnknownFns: nil,
+			wantUnknownRes: []UnknownResource{
+				{ID: "deployment", Path: "deployment.spec.containerPort"},
+				{ID: "service", Path: "service.spec.port"},
+			},
+		},
+		{
+			name:       "undeclared resource passed to custom function",
+			resources:  []string{},
+			expression: `json.marshal(unknown.spec.config)`,
+			wantFunctions: []FunctionCall{
+				{Name: "json.marshal"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: []UnknownResource{
+				{ID: "unknown", Path: "unknown.spec.config"},
+			},
+		},
+		{
+			name:       "mix of known resources, unknown resources, and custom functions",
+			resources:  []string{"schema", "configMap"},
+			expression: `random.seededString(5, schema.metadata.uid) + missing.spec.suffix + configMap.data.key`,
+			wantResources: []ResourceDependency{
+				{ID: "configMap", Path: "configMap.data.key"},
+				{ID: "schema", Path: "schema.metadata.uid"},
+			},
+			wantFunctions: []FunctionCall{
+				{Name: "random.seededString"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: []UnknownResource{
+				{ID: "missing", Path: "missing.spec.suffix"},
+			},
+		},
+		{
+			name:       "method call on undeclared resource reports unknown resource and function",
+			resources:  []string{},
+			expression: `notAResource.customMethod(42)`,
+			wantFunctions: []FunctionCall{
+				{Name: "notAResource.customMethod"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: []UnknownResource{
+				{ID: "notAResource", Path: "notAResource"},
+			},
+		},
+		// CEL stdlib and K8s library functions
+		{
+			name:       "size is not an unknown function",
+			resources:  []string{"pods"},
+			expression: `size(pods.items) > 0`,
+			wantResources: []ResourceDependency{
+				{ID: "pods", Path: "pods.items"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "duration and timestamp are not unknown functions",
+			resources:  []string{"schema"},
+			expression: `duration("24h") > duration(schema.spec.timeout)`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.timeout"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "type conversion functions are not unknown",
+			resources:  []string{"config"},
+			expression: `int(config.spec.replicas) + int(config.spec.extra) > 0`,
+			wantResources: []ResourceDependency{
+				{ID: "config", Path: "config.spec.extra"},
+				{ID: "config", Path: "config.spec.replicas"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "string member functions are not unknown",
+			resources:  []string{"svc"},
+			expression: `svc.metadata.name.startsWith("prod-") && svc.spec.type.contains("Load")`,
+			wantResources: []ResourceDependency{
+				{ID: "svc", Path: "svc.metadata.name"},
+				{ID: "svc", Path: "svc.spec.type"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "lists.range is not an unknown function",
+			resources:  []string{},
+			expression: `lists.range(3)`,
+			wantFunctions: []FunctionCall{
+				{Name: "lists.range"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "has macro is not an unknown function",
+			resources:  []string{"deploy"},
+			expression: `has(deploy.spec.replicas)`,
+			wantResources: []ResourceDependency{
+				{ID: "deploy", Path: "deploy.spec.replicas"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "map and filter comprehensions with stdlib do not produce unknowns",
+			resources:  []string{"pods"},
+			expression: `pods.items.filter(p, p.status == "Running").size() > 0`,
+			wantResources: []ResourceDependency{
+				{ID: "pods", Path: "pods.items"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := make([]cel.EnvOption, 0, len(tt.resources))
+			for _, r := range tt.resources {
+				decls = append(decls, cel.Variable(r, cel.AnyType))
+			}
+			env, err := krocel.DefaultEnvironment(krocel.WithCustomDeclarations(decls))
+			if err != nil {
+				t.Fatalf("Failed to create CEL environment: %v", err)
+			}
+
+			inspector := NewInspectorWithEnv(env, tt.resources)
+			got, err := inspector.Inspect(tt.expression)
+			if err != nil {
+				t.Fatalf("Inspect() error = %v", err)
+			}
+
+			// Check resource dependencies
+			sortDeps := func(a, b ResourceDependency) int {
+				return strings.Compare(a.Path, b.Path)
+			}
+			slices.SortFunc(got.ResourceDependencies, sortDeps)
+			slices.SortFunc(tt.wantResources, sortDeps)
+			if !reflect.DeepEqual(got.ResourceDependencies, tt.wantResources) {
+				t.Errorf("ResourceDependencies = %v, want %v", got.ResourceDependencies, tt.wantResources)
+			}
+
+			// Check function calls by name (env.Functions() may add builtins;
+			// we only assert that the expected custom functions are present)
+			gotNames := map[string]bool{}
+			for _, f := range got.FunctionCalls {
+				gotNames[f.Name] = true
+			}
+			for _, want := range tt.wantFunctions {
+				if !gotNames[want.Name] {
+					t.Errorf("expected FunctionCall %q not found in %v", want.Name, got.FunctionCalls)
+				}
+			}
+
+			// Check unknown functions
+			sortUnknownFns := func(a, b UnknownFunction) int {
+				return strings.Compare(a.Name, b.Name)
+			}
+			slices.SortFunc(got.UnknownFunctions, sortUnknownFns)
+			slices.SortFunc(tt.wantUnknownFns, sortUnknownFns)
+			if !reflect.DeepEqual(got.UnknownFunctions, tt.wantUnknownFns) {
+				t.Errorf("UnknownFunctions = %v, want %v", got.UnknownFunctions, tt.wantUnknownFns)
+			}
+
+			// Check unknown resources
+			sortUnknownRes := func(a, b UnknownResource) int {
+				return strings.Compare(a.Path, b.Path)
+			}
+			slices.SortFunc(got.UnknownResources, sortUnknownRes)
+			slices.SortFunc(tt.wantUnknownRes, sortUnknownRes)
 			if !reflect.DeepEqual(got.UnknownResources, tt.wantUnknownRes) {
 				t.Errorf("UnknownResources = %v, want %v", got.UnknownResources, tt.wantUnknownRes)
 			}

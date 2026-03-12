@@ -81,6 +81,7 @@ deployment:
     kubernetes.io/os: linux
   tolerations: []
   affinity: {}
+  topologySpreadConstraints: []
   priorityClassName: ""
   # Specifies the hostname of the Pod.
   # If not specified, the pod's hostname will be set to a system-defined value.

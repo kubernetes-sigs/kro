@@ -17,6 +17,7 @@ package resolver
 import (
 	"fmt"
 
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
@@ -58,6 +59,10 @@ func NewResolver(resource map[string]interface{}, data map[string]interface{}) *
 
 // Resolve processes all the given ExpressionFields and resolves their CEL expressions.
 // It returns a ResolutionSummary containing information about the resolution process.
+//
+// Omit sentinels are written into the resource like normal values during
+// resolution. After all expressions are evaluated, a single cleanup pass
+// removes any map keys or array elements that hold an omit sentinel.
 func (r *Resolver) Resolve(expressions []variable.FieldDescriptor) ResolutionSummary {
 	summary := ResolutionSummary{
 		TotalExpressions: len(expressions),
@@ -74,6 +79,8 @@ func (r *Resolver) Resolve(expressions []variable.FieldDescriptor) ResolutionSum
 			summary.Errors = append(summary.Errors, result.Error)
 		}
 	}
+
+	cleanOmitSentinels(r.resource)
 
 	return summary
 }
@@ -104,13 +111,43 @@ func (r *Resolver) resolveField(field variable.FieldDescriptor) ResolutionResult
 		result.Error = fmt.Errorf("no data provided for expression: %s", field.Expression.UserExpression())
 		return result
 	}
+
 	// setValueAtPath cannot fail here: if getValueFromPath succeeded,
-	// the path is valid and traversable.
+	// the path is valid and traversable. Omit sentinels are written as
+	// normal values; Resolve strips them in a cleanup pass afterwards.
 	_ = r.setValueAtPath(field.Path, resolvedValue)
 	result.Resolved = true
 	result.Replaced = resolvedValue
 
 	return result
+}
+
+// cleanOmitSentinels recursively walks a resource tree and removes any
+// map keys or array elements whose value is an omit sentinel.
+// For maps, sentinel keys are deleted in place.
+// For arrays, a new filtered slice is returned to the caller.
+func cleanOmitSentinels(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			if sentinels.IsOmit(child) {
+				delete(val, k)
+			} else {
+				val[k] = cleanOmitSentinels(child)
+			}
+		}
+		return val
+	case []interface{}:
+		filtered := make([]interface{}, 0, len(val))
+		for _, elem := range val {
+			if !sentinels.IsOmit(elem) {
+				filtered = append(filtered, cleanOmitSentinels(elem))
+			}
+		}
+		return filtered
+	default:
+		return v
+	}
 }
 
 // getValueFromPath retrieves a value from the resource using a dot-separated path.
@@ -119,29 +156,27 @@ func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid path '%s': %v", path, err)
 	}
+	return traverse(r.resource, segments)
+}
 
-	current := interface{}(r.resource)
-
+// traverse walks the given segments read-only and returns the value at the end.
+func traverse(root interface{}, segments []fieldpath.Segment) (interface{}, error) {
+	current := root
 	for _, segment := range segments {
 		if segment.Index >= 0 {
-			// Handle array access
 			array, ok := current.([]interface{})
 			if !ok {
 				return nil, fmt.Errorf("expected array at path segment: %v", segment)
 			}
-
 			if segment.Index >= len(array) {
 				return nil, fmt.Errorf("array index out of bounds: %d", segment.Index)
 			}
-
 			current = array[segment.Index]
 		} else {
-			// Handle object access
 			currentMap, ok := current.(map[string]interface{})
 			if !ok {
 				return nil, fmt.Errorf("expected map at path segment: %v", segment)
 			}
-
 			value, ok := currentMap[segment.Name]
 			if !ok {
 				return nil, fmt.Errorf("key not found: %s", segment.Name)
@@ -149,7 +184,6 @@ func (r *Resolver) getValueFromPath(path string) (interface{}, error) {
 			current = value
 		}
 	}
-
 	return current, nil
 }
 

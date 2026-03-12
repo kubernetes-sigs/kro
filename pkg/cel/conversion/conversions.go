@@ -24,6 +24,7 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -68,6 +69,10 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.NullType:
 		return nil, nil
 	default:
+		// Check if this is the omit sentinel before falling through to error.
+		if _, ok := v.Value().(sentinels.Omit); ok {
+			return sentinels.Omit{}, nil
+		}
 		// For types we can't convert, return as is with an error
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}

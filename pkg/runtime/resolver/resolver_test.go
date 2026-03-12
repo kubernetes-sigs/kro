@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -834,6 +835,189 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.want.Replaced, value)
 			}
+		})
+	}
+}
+
+func TestResolveFieldOmit(t *testing.T) {
+	tests := []struct {
+		name         string
+		resource     map[string]interface{}
+		data         map[string]interface{}
+		field        variable.FieldDescriptor
+		wantResolved bool
+		wantSentinel bool
+	}{
+		{
+			name: "omit sentinel is placed in map field",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name":   "test",
+					"policy": "${expr}",
+				},
+			},
+			data: map[string]interface{}{
+				"expr": sentinels.Omit{},
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.policy",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: true,
+		},
+		{
+			name: "omit sentinel is placed in array element",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{"${expr}", "keep"},
+				},
+			},
+			data: map[string]interface{}{
+				"expr": sentinels.Omit{},
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.args[0]",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: true,
+		},
+		{
+			name: "non-sentinel value writes normally",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"policy": "${expr}",
+				},
+			},
+			data: map[string]interface{}{
+				"expr": "my-policy",
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.policy",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewResolver(tt.resource, tt.data)
+			result := r.resolveField(tt.field)
+
+			assert.Equal(t, tt.wantResolved, result.Resolved)
+			assert.NoError(t, result.Error)
+
+			value, err := r.getValueFromPath(tt.field.Path)
+			assert.NoError(t, err)
+
+			if tt.wantSentinel {
+				assert.True(t, sentinels.IsOmit(value))
+				assert.True(t, sentinels.IsOmit(result.Replaced))
+			} else {
+				assert.False(t, sentinels.IsOmit(value))
+				assert.Equal(t, tt.data[tt.field.Expression.Original], value)
+			}
+		})
+	}
+}
+
+func TestCleanOmitSentinels(t *testing.T) {
+	tests := []struct {
+		name string
+		in   map[string]interface{}
+		want map[string]interface{}
+	}{
+		{
+			name: "removes top-level map key",
+			in: map[string]interface{}{
+				"keep": "value",
+				"drop": sentinels.Omit{},
+			},
+			want: map[string]interface{}{
+				"keep": "value",
+			},
+		},
+		{
+			name: "removes nested map key",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name":   "test",
+					"policy": sentinels.Omit{},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+				},
+			},
+		},
+		{
+			name: "filters array elements",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{sentinels.Omit{}, "keep1", sentinels.Omit{}, "keep2"},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{"keep1", "keep2"},
+				},
+			},
+		},
+		{
+			name: "filters single-element array to empty",
+			in: map[string]interface{}{
+				"items": []interface{}{sentinels.Omit{}},
+			},
+			want: map[string]interface{}{
+				"items": []interface{}{},
+			},
+		},
+		{
+			name: "cleans deeply nested array inside array",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"args": []interface{}{"keep", sentinels.Omit{}, "also-keep"},
+						},
+					},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"args": []interface{}{"keep", "also-keep"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "no sentinels leaves resource unchanged",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+					"args": []interface{}{"a", "b"},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+					"args": []interface{}{"a", "b"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanOmitSentinels(tt.in)
+			assert.Equal(t, tt.want, tt.in)
 		})
 	}
 }

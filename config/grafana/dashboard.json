@@ -1,0 +1,5248 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": [],
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "cores"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"kro\",container=\"kro\",pod=~\"kro-.*\",image!=\"\"}[2m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"kro\",container=\"kro\",pod=~\"kro-.*\",image!=\"\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Working Set",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 98,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(go_goroutines{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Goroutines",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 7,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * sum(container_memory_working_set_bytes{namespace=\"kro\",container=\"kro\",pod=~\"kro-.*\",image!=\"\"}) / clamp_min(sum(kube_pod_container_resource_limits{namespace=\"kro\",container=\"kro\",resource=\"memory\",unit=\"byte\"}), 1)",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Limit Used",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(controller_runtime_reconcile_total{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Reconcile Rate (ops/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "id": 59,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(workqueue_depth{namespace=\"kro\",service=\"kro-metrics\",name=\"ResourceGraphDefinition\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Workqueue Depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "id": 6,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * sum(controller_runtime_active_workers{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}) / clamp_min(sum(controller_runtime_max_concurrent_reconciles{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}), 1)",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Worker Utilization",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "id": 94,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * (1 - sum(rate(controller_runtime_reconcile_errors_total{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}[5m])) / clamp_min(sum(rate(controller_runtime_reconcile_total{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}[5m])), 1))",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Reconcile Success",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 11
+      },
+      "id": 99,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(dynamic_controller_reconcile_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Dynamic Reconcile Rate (ops/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 11
+      },
+      "id": 100,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_queue_length{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Dynamic Queue Length",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 11
+      },
+      "id": 60,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_gvr_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Managed GVRs (Dynamic)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 11
+      },
+      "id": 101,
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(dynamic_controller_handler_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Dynamic Handler Errors (errors/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "id": 95,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(controller_runtime_reconcile_time_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}[5m])))",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Reconcile p99",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 16
+      },
+      "id": 102,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(dynamic_controller_reconcile_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "refId": "A"
+        }
+      ],
+      "title": "Dynamic Reconcile p99",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 16
+      },
+      "id": 96,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * (1 - sum(rate(rgd_graph_build_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])) / clamp_min(sum(rate(rgd_graph_build_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])), 1))",
+          "refId": "A"
+        }
+      ],
+      "title": "Graph Build Success Rate",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total RGDs"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "super-light-blue"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 15
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [10, 10]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Active RGDs"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 40
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.gradientMode",
+                "value": "scheme"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 16
+      },
+      "id": 97,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "count(count by (rgd_kind)(rgd_graph_build_total{namespace=\"kro\",service=\"kro-metrics\"}))",
+          "legendFormat": "Total RGDs",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_gvr_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "Active RGDs",
+          "refId": "B"
+        }
+      ],
+      "title": "RGDs (Total / Active)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      },
+      "id": 103,
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (le) (increase(controller_runtime_reconcile_time_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\",controller=\"ResourceGraphDefinition\"}[$__rate_interval]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "title": "RGD Reconcile Duration (heatmap)",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gvr"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "GVR"
+              },
+              {
+                "id": "custom.width",
+                "value": 280
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Reconciles"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "gauge",
+                  "valueDisplayMode": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      },
+      "id": 104,
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Reconciles"
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(5, sum by (gvr) (dynamic_controller_reconcile_total{namespace=\"kro\",service=\"kro-metrics\"}))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Top 5 GVRs by Reconcile Count",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "id": 105,
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(cel_builder_cache_requests_total{namespace=\"kro\",service=\"kro-metrics\",result=\"hit\"})",
+          "legendFormat": "hits",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(cel_builder_cache_requests_total{namespace=\"kro\",service=\"kro-metrics\",result=\"miss\"})",
+          "legendFormat": "misses",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(cel_builder_cache_requests_total{namespace=\"kro\",service=\"kro-metrics\",result=\"error\"})",
+          "legendFormat": "errors",
+          "refId": "C"
+        }
+      ],
+      "title": "CEL Builder Cache Totals",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 106,
+      "panels": [],
+      "title": "API Server Interaction",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 30
+      },
+      "id": 107,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "leader_election_master_status{namespace=\"kro\",service=\"kro-metrics\"}",
+          "legendFormat": "Leader",
+          "refId": "A"
+        }
+      ],
+      "title": "Leader Election",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 4,
+        "y": 30
+      },
+      "id": 108,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "API Request Rate (req/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 9,
+        "y": 30
+      },
+      "id": 109,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\",code=~\"4..|5..\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "API Errors (req/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 14,
+        "y": 30
+      },
+      "id": 110,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\",code=\"429\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "API Throttled (429/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100000
+              },
+              {
+                "color": "red",
+                "value": 1000000
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 30
+      },
+      "id": 111,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "API Requests Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "id": 112,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (method, code) (rate(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "{{method}} {{code}}",
+          "refId": "A"
+        }
+      ],
+      "title": "API Requests by Verb and Status (req/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "id": 113,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (method) (rate(rest_client_requests_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "title": "API Request Rate by Verb (req/s)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "id": 8,
+      "panels": [],
+      "title": "RGD Reconciler and Workqueue",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 51
+      },
+      "id": 9,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_active_workers{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Workers",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 51
+      },
+      "id": 10,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_max_concurrent_reconciles{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Max Concurrent",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 51
+      },
+      "id": 11,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_reconcile_panics_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconcile Panics Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 51
+      },
+      "id": 12,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_reconcile_errors_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconcile Errors Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 51
+      },
+      "id": 13,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_terminal_reconcile_errors_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Terminal Errors Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 51
+      },
+      "id": 14,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(controller_runtime_reconcile_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconciles Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (controller, le) (rate(controller_runtime_reconcile_time_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50 {{controller}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (controller, le) (rate(controller_runtime_reconcile_time_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95 {{controller}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (controller, le) (rate(controller_runtime_reconcile_time_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99 {{controller}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Reconcile Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (controller, name) (workqueue_depth{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "{{controller}} / {{name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Workqueue Depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (controller, name, le) (rate(workqueue_queue_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50 {{controller}} / {{name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (controller, name, le) (rate(workqueue_queue_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95 {{controller}} / {{name}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (controller, name, le) (rate(workqueue_queue_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99 {{controller}} / {{name}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Workqueue Queue Wait (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (controller, name, le) (rate(workqueue_work_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50 {{controller}} / {{name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (controller, name, le) (rate(workqueue_work_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95 {{controller}} / {{name}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (controller, name, le) (rate(workqueue_work_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99 {{controller}} / {{name}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Workqueue Processing Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (controller, name) (rate(workqueue_adds_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "adds {{controller}} / {{name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (controller, name) (rate(workqueue_retries_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "retries {{controller}} / {{name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Adds vs Retries Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (controller, name) (workqueue_unfinished_work_seconds{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "unfinished {{controller}} / {{name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max by (controller, name) (workqueue_longest_running_processor_seconds{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "longest {{controller}} / {{name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Unfinished Work vs Longest Running",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 80
+      },
+      "id": 21,
+      "panels": [],
+      "title": "Dynamic Controller",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 81
+      },
+      "id": 22,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_gvr_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Managed GVRs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 81
+      },
+      "id": 23,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_queue_length{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Queue Length",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 81
+      },
+      "id": 24,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(dynamic_controller_handler_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Handler Errors (errors/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 81
+      },
+      "id": 25,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(dynamic_controller_handler_count_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Handlers",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 81
+      },
+      "id": 26,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(dynamic_controller_handler_attach_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Handler Attach Rate (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 81
+      },
+      "id": 27,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(dynamic_controller_handler_detach_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Handler Detach Rate (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 86
+      },
+      "id": 28,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr) (rate(dynamic_controller_reconcile_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "{{gvr}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconcile Rate Top 10 (ops/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 86
+      },
+      "id": 29,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.50, sum by (gvr, le) (rate(dynamic_controller_reconcile_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p50 {{gvr}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.95, sum by (gvr, le) (rate(dynamic_controller_reconcile_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p95 {{gvr}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.99, sum by (gvr, le) (rate(dynamic_controller_reconcile_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p99 {{gvr}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Reconcile Duration Top 10 (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr, type) (rate(dynamic_controller_requeue_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "requeue {{gvr}} / {{type}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr) (rate(dynamic_controller_handler_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "handler errors {{gvr}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Requeue and Handler Error Rates",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "id": 31,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.50, sum by (gvr, le) (rate(dynamic_controller_informer_sync_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p50 {{gvr}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.95, sum by (gvr, le) (rate(dynamic_controller_informer_sync_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p95 {{gvr}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, histogram_quantile(0.99, sum by (gvr, le) (rate(dynamic_controller_informer_sync_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m]))))",
+          "legendFormat": "p99 {{gvr}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Informer Sync Duration Top 10 (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 102
+      },
+      "id": 32,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr, event_type) (rate(dynamic_controller_informer_events_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "{{gvr}} / {{event_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Informer Events Top 10 (events/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 102
+      },
+      "id": 33,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_queue_length{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "queue length",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_gvr_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "gvr count",
+          "refId": "B"
+        }
+      ],
+      "title": "Queue Length vs Managed GVRs",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 110
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (type) (dynamic_controller_handler_count_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "active {{type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Handler Count by Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 110
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (type) (rate(dynamic_controller_handler_attach_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "attach {{type}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (type) (rate(dynamic_controller_handler_detach_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "detach {{type}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Handler Attach/Detach Rates by Type",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 118
+      },
+      "id": 36,
+      "panels": [],
+      "title": "Schema Resolver",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 119
+      },
+      "id": 37,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(schema_resolver_cache_size{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Size",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 119
+      },
+      "id": 38,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * sum(rate(schema_resolver_cache_hits_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])) / clamp_min(sum(rate(schema_resolver_cache_hits_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])) + sum(rate(schema_resolver_cache_misses_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Hit Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 119
+      },
+      "id": 39,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_hits_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Hits (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 119
+      },
+      "id": 40,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_misses_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Misses (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 119
+      },
+      "id": 41,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_evictions_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Evictions (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 119
+      },
+      "id": 42,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Errors (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 124
+      },
+      "id": 43,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_hits_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "hits",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_misses_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "misses",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_cache_evictions_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "evictions",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_singleflight_deduplicated_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "deduplicated",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(schema_resolver_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "errors",
+          "refId": "E"
+        }
+      ],
+      "title": "Cache Activity (events/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 124
+      },
+      "id": 44,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(schema_resolver_api_call_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(schema_resolver_api_call_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(schema_resolver_api_call_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "API Call Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 132
+      },
+      "id": 45,
+      "panels": [],
+      "title": "Go Runtime and Container",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 133
+      },
+      "id": 46,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_goroutines{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Goroutines",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 133
+      },
+      "id": 47,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_threads{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Threads",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 133
+      },
+      "id": 48,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(process_open_fds{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Open FDs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 133
+      },
+      "id": 49,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(process_resident_memory_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "RSS",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 133
+      },
+      "id": 50,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_memstats_heap_inuse_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Heap In Use",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 133
+      },
+      "id": 51,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_sched_gomaxprocs_threads{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "GOMAXPROCS",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 138
+      },
+      "id": 52,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"kro\",container=\"kro\",pod=~\"kro-.*\",image!=\"\"})",
+          "legendFormat": "working set",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(process_resident_memory_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "rss",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(go_memstats_heap_inuse_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "heap in use",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(go_memstats_sys_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "go sys",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(kube_pod_container_resource_limits{namespace=\"kro\",container=\"kro\",resource=\"memory\",unit=\"byte\"})",
+          "legendFormat": "memory limit",
+          "refId": "E"
+        }
+      ],
+      "title": "Memory Footprint",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "threads"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gomaxprocs"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 138
+      },
+      "id": 53,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"kro\",container=\"kro\",pod=~\"kro-.*\",image!=\"\"}[5m]))",
+          "legendFormat": "cpu cores",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_threads{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "threads",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_sched_gomaxprocs_threads{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "gomaxprocs",
+          "refId": "C"
+        }
+      ],
+      "title": "CPU, Threads, and GOMAXPROCS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 146
+      },
+      "id": 54,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.50, sum by (le) (rate(go_gc_pauses_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.95, sum by (le) (rate(go_gc_pauses_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(go_gc_pauses_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "GC Pause",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 146
+      },
+      "id": 55,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.50, sum by (le) (rate(go_sched_latencies_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.95, sum by (le) (rate(go_sched_latencies_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(go_sched_latencies_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Scheduler Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 146
+      },
+      "id": 56,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_gc_heap_live_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "heap live",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_gc_heap_goal_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "heap goal",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_gc_gomemlimit_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "gomemlimit",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(go_memstats_next_gc_bytes{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "next gc",
+          "refId": "D"
+        }
+      ],
+      "title": "Heap Targets",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 154
+      },
+      "id": 57,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(process_open_fds{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "open fds",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(process_max_fds{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "max fds",
+          "refId": "B"
+        }
+      ],
+      "title": "FD Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "binBps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 154
+      },
+      "id": 58,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(process_network_receive_bytes_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "rx",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(process_network_transmit_bytes_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "tx",
+          "refId": "B"
+        }
+      ],
+      "title": "Network I/O Rate",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 162
+      },
+      "id": 61,
+      "panels": [],
+      "title": "Watch Layer and Routing",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 163
+      },
+      "id": 62,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_watch_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Informers",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 163
+      },
+      "id": 63,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(dynamic_controller_instance_watch_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Instance Watches",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 163
+      },
+      "id": 64,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(dynamic_controller_watch_request_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Watch Requests",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 163
+      },
+      "id": 65,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "100 * sum(rate(dynamic_controller_route_match_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])) / clamp_min(sum(rate(dynamic_controller_route_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "title": "Route Match Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 168
+      },
+      "id": 66,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "max(dynamic_controller_watch_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "informers",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(dynamic_controller_instance_watch_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "instance watches",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(dynamic_controller_watch_request_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "watch requests",
+          "refId": "C"
+        }
+      ],
+      "title": "Watch Inventory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 168
+      },
+      "id": 67,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, dynamic_controller_instance_watch_count{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "{{parent_gvr}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Instance Watches Top 10",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 176
+      },
+      "id": 68,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr, type) (dynamic_controller_watch_request_count{namespace=\"kro\",service=\"kro-metrics\"}))",
+          "legendFormat": "{{gvr}} / {{type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Watch Requests Top 10",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 176
+      },
+      "id": 69,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr) (rate(dynamic_controller_route_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "routed {{gvr}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (gvr) (rate(dynamic_controller_route_match_total{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "matched {{gvr}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Route Throughput Top 10 (events/s)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 184
+      },
+      "id": 70,
+      "panels": [],
+      "title": "CEL and Runtime Engine",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 185
+      },
+      "id": 71,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(cel_expr_eval_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "CEL Eval Rate (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 185
+      },
+      "id": 72,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_eval_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Node Eval Rate (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 185
+      },
+      "id": 73,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_creation_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Runtime Creation Rate (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 185
+      },
+      "id": 74,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_eval_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Node Eval Errors (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 190
+      },
+      "id": 75,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(cel_expr_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cel_expr_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(cel_expr_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "CEL Eval Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 190
+      },
+      "id": 76,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(runtime_node_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(runtime_node_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(runtime_node_eval_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Runtime Node Eval Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 198
+      },
+      "id": 77,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(runtime_creation_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(runtime_creation_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(runtime_creation_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Runtime Creation Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 198
+      },
+      "id": 78,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_ignored_check_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "ignored checks",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_ignored_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "ignored nodes",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_ready_check_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "ready checks",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(runtime_node_not_ready_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "not ready",
+          "refId": "D"
+        }
+      ],
+      "title": "Conditional Checks and Outcomes (events/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 206
+      },
+      "id": 79,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(runtime_collection_size_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(runtime_collection_size_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(runtime_collection_size_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Collection Expansion Size (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 214
+      },
+      "id": 90,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (cache) (cel_builder_cache_entries{namespace=\"kro\",service=\"kro-metrics\"})",
+          "legendFormat": "{{cache}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Builder Cache Entries",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 214
+      },
+      "id": 91,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (cache) (rate(cel_builder_cache_requests_total{namespace=\"kro\",service=\"kro-metrics\",result=\"hit\"}[5m]))",
+          "legendFormat": "{{cache}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Builder Cache Hit Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 214
+      },
+      "id": 92,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (cache) (rate(cel_builder_cache_requests_total{namespace=\"kro\",service=\"kro-metrics\",result=\"miss\"}[5m]))",
+          "legendFormat": "{{cache}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Builder Cache Miss Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 214
+      },
+      "id": 93,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (cache, le) (rate(cel_builder_cache_fill_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50 {{cache}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (cache, le) (rate(cel_builder_cache_fill_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99 {{cache}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Builder Cache Fill Duration (p50 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 219
+      },
+      "id": 80,
+      "panels": [],
+      "title": "RGD Lifecycle",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 220
+      },
+      "id": 81,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rgd_graph_build_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Graph Build Rate (ops/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 220
+      },
+      "id": 82,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rgd_graph_build_errors_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Graph Build Errors (errors/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 220
+      },
+      "id": 83,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rgd_deletions_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Deletion Rate (ops/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 220
+      },
+      "id": 84,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(rgd_state_transitions_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "State Transitions (events/s)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 225
+      },
+      "id": 85,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(rgd_graph_build_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rgd_graph_build_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(rgd_graph_build_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Graph Build Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 225
+      },
+      "id": 86,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(rgd_deletion_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rgd_deletion_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(rgd_deletion_duration_seconds_bucket{namespace=\"kro\",service=\"kro-metrics\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Deletion Duration (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 233
+      },
+      "id": 87,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rgd_graph_build_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Graph Builds Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 233
+      },
+      "id": 88,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rgd_graph_build_errors_total{namespace=\"kro\",service=\"kro-metrics\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "Graph Build Errors Total",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 233
+      },
+      "id": 89,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (from, to) (rate(rgd_state_transitions_total{namespace=\"kro\",service=\"kro-metrics\"}[5m]))",
+          "legendFormat": "{{from}}\u2192{{to}}",
+          "refId": "A"
+        }
+      ],
+      "title": "State Transitions (events/s)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": [
+    "kro",
+    "controller",
+    "performance"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timezone": "",
+  "title": "KRO Controller Metrics",
+  "uid": "kro-controller-metrics",
+  "version": 4
+}

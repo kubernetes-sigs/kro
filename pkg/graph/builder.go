@@ -837,6 +837,12 @@ func inspectExpressionRestricted(inspector *ast.Inspector, expr string, allowedI
 	if len(result.UnknownFunctions) > 0 {
 		return ast.ExpressionInspection{}, fmt.Errorf("uses unknown functions: %v", result.UnknownFunctions)
 	}
+	// omit() is registered globally but is only valid in resource template
+	// expressions. Reject it in restricted contexts (includeWhen, readyWhen,
+	// instance status).
+	if result.UsesOmit() {
+		return ast.ExpressionInspection{}, fmt.Errorf("omit() can only be used in resource template expressions")
+	}
 	return result, nil
 }
 
@@ -1041,7 +1047,7 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 	// If this node has forEach iterators, validate and compile them
 	if len(node.ForEach) > 0 {
 		var err error
-		iteratorTypes, err = validateAndCompileForEach(sessionCache, env, node)
+		iteratorTypes, err = validateAndCompileForEach(sessionCache, env, node, inspector)
 		if err != nil {
 			return err
 		}
@@ -1115,7 +1121,14 @@ func validateAndCompileTemplates(
 	typeProvider *krocel.DeclTypeProvider,
 	iteratorTypes map[string]*cel.Type,
 ) error {
-	// If we have iterator types (from forEach), extend the environment with those declarations
+	// NOTE: omit() is allowed in template expressions. Restricted-context
+	// rejection (includeWhen, readyWhen, forEach) is handled by the compiler
+	// in inspectExpressionRestricted and validateAndCompileForEach.
+	//
+	// TODO: Add validation that required resource fields (e.g. metadata.name)
+	// cannot evaluate to null or omit(). Currently nothing prevents a user
+	// from writing `metadata.name: ${omit()}`, which produces an invalid
+	// resource at apply time.
 	compileEnv := env
 	if len(iteratorTypes) > 0 {
 		opts := make([]cel.EnvOption, 0, len(iteratorTypes))
@@ -1249,7 +1262,7 @@ func validateAndCompileReadyWhen(sessionCache *celcache.SessionCache, env *cel.E
 //
 // The inferred element type of each list is used to declare the iterator variable
 // in the CEL environment for validating template expressions.
-func validateAndCompileForEach(sessionCache *celcache.SessionCache, env *cel.Env, node *Node) (map[string]*cel.Type, error) {
+func validateAndCompileForEach(sessionCache *celcache.SessionCache, env *cel.Env, node *Node, inspector *ast.Inspector) (map[string]*cel.Type, error) {
 	if len(node.ForEach) == 0 {
 		return nil, nil
 	}
@@ -1257,6 +1270,17 @@ func validateAndCompileForEach(sessionCache *celcache.SessionCache, env *cel.Env
 	iteratorTypes := make(map[string]*cel.Type, len(node.ForEach))
 
 	for _, iter := range node.ForEach {
+		// Reject omit() in forEach expressions — it's only valid in resource
+		// template expressions. We check the inspection result here to avoid
+		// a redundant inspector.Inspect() call in a separate pass.
+		inspection, inspErr := inspector.Inspect(iter.Expression.Original)
+		if inspErr != nil {
+			return nil, fmt.Errorf("node %q: forEach iterator %q: failed to inspect expression: %w", node.Meta.ID, iter.Name, inspErr)
+		}
+		if inspection.UsesOmit() {
+			return nil, fmt.Errorf("node %q: forEach iterator %q: omit() can only be used in resource template expressions", node.Meta.ID, iter.Name)
+		}
+
 		// Parse, type-check, and compile the forEach expression
 		checkedAST, err := parseCheckAndCompile(sessionCache, env, iter.Expression)
 		if err != nil {

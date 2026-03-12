@@ -119,6 +119,11 @@ func BaseDeclarations() []cel.EnvOption {
 			library.Maps(),
 			library.JSON(),
 			library.Lists(),
+			// Omit() is registered globally so CEL can parse and type-check it
+			// everywhere. The graph builder rejects it in restricted contexts
+			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
+			// and validateAndCompileForEach.
+			library.Omit(),
 		}
 	})
 	return cachedBaseDeclarations

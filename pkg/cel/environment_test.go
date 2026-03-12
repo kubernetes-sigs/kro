@@ -15,6 +15,7 @@
 package cel
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -155,6 +156,70 @@ func TestDefaultEnvironment_KubernetesLibraries(t *testing.T) {
 	expr := `url("https://example.com/foo").getHost()`
 	_, issues := env.Compile(expr)
 	require.NoError(t, issues.Err(), "expected URL expression to compile without errors")
+}
+
+// TestDefaultEnvironment_TwoVarComprehensions verifies that the two-variable
+// comprehension macros (transformMap, transformMapEntry, transformList) from
+// ext.TwoVarComprehensions() work through kro's CEL environment.
+func TestDefaultEnvironment_TwoVarComprehensions(t *testing.T) {
+	env, err := DefaultEnvironment()
+	require.NoError(t, err, "failed to create CEL env")
+
+	tests := []struct {
+		name string
+		expr string
+		want any
+	}{
+		{
+			name: "transformMap on list doubles values",
+			expr: `[10, 20, 30].transformMap(i, v, v * 2)`,
+			want: map[int64]int64{0: 20, 1: 40, 2: 60},
+		},
+		{
+			name: "transformMap on list with filter",
+			expr: `[10, 20, 30].transformMap(i, v, i > 0, v * 2)`,
+			want: map[int64]int64{1: 40, 2: 60},
+		},
+		{
+			name: "transformMap on map adds 10 to values",
+			expr: `{'a': 1, 'b': 2}.transformMap(k, v, v + 10)`,
+			want: map[string]int64{"a": 11, "b": 12},
+		},
+		{
+			name: "transformMapEntry on list swaps key/value",
+			expr: `['x','y'].transformMapEntry(i, v, {v: i})`,
+			want: map[string]int64{"x": 0, "y": 1},
+		},
+		{
+			name: "transformMapEntry on map doubles value",
+			expr: `{'a': 1}.transformMapEntry(k, v, {k: v * 2})`,
+			want: map[string]int64{"a": 2},
+		},
+		{
+			name: "transformList on map extracts keys",
+			expr: `{'a': 1, 'b': 2}.transformList(k, v, k)`,
+			want: []string{"a", "b"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ast, issues := env.Compile(tc.expr)
+			require.NoError(t, issues.Err(), "compile failed")
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err, "program creation failed")
+
+			out, _, err := prog.Eval(cel.NoVars())
+			require.NoError(t, err, "eval failed")
+
+			// Convert CEL ref.Val result to a native Go value for comparison.
+			got, err := out.ConvertToNative(reflect.TypeOf(tc.want))
+			require.NoError(t, err, "native conversion failed")
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestBaseDeclarations_ReturnsSameSlice(t *testing.T) {

@@ -103,6 +103,7 @@ var (
 func BaseDeclarations() []cel.EnvOption {
 	baseDeclarationsOnce.Do(func() {
 		cachedBaseDeclarations = []cel.EnvOption{
+			ext.TwoVarComprehensions(),
 			ext.Lists(),
 			ext.Strings(),
 			cel.OptionalTypes(),

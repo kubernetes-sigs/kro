@@ -318,15 +318,16 @@ The `?` operator prevents kro from validating the field's existence at build tim
 
 ## Available CEL Libraries
 
-| Library | Documentation |
-|---------|---------------|
-| Lists | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists) |
-| Strings | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
-| Encoders | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
-| Random | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go) |
-| JSON | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go) |
-| URLs | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs) |
-| Regex | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
+| Library                     | Documentation                                                                                 |
+|-----------------------------|-----------------------------------------------------------------------------------------------|
+| Lists                       | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists)                           |
+| Strings                     | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings)                         |
+| Encoders                    | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders)                        |
+| Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)            |
+| Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)      |
+| JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)        |
+| URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)  |
+| Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
 
 For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).
 
@@ -464,6 +465,64 @@ allReady: ${schema.spec.services.all(s, s.enabled)}
 # Sort by a field (lexicographic ordering)
 sorted: ${items.sortBy(item, item.data.priority)}
 orderedNames: ${items.sortBy(i, i.data.priority).map(i, i.metadata.name).join(",")}
+```
+
+### Converting Between Lists and Maps
+
+The two-variable comprehension macros let you transform lists into maps, reshape maps, and extract lists from maps. Each macro provides access to both the key/index and the value of each entry.
+
+#### `transformMap` — Transform values, keeping keys
+
+Applies an expression to each value while preserving the original keys (or indices for lists):
+
+```kro
+# Double each value in a map
+scaled: ${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}
+# → {"cpu": 4, "memory": 8}
+
+# Convert a list to a map of {index: transformed_value}
+indexed: ${schema.spec.ports.transformMap(i, v, v + 1000)}
+# [80, 443] → {0: 1080, 1: 1443}
+```
+
+With an optional filter predicate (four-argument form), only entries where the predicate is true are included:
+
+```kro
+# Keep only entries with value > 1
+filtered: ${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}
+# → {"b": 50, "c": 30}
+```
+
+#### `transformMapEntry` — Build new key-value pairs
+
+Each iteration must return a single-entry map `{key: value}`. The results are merged into one map:
+
+```kro
+# Swap keys and values
+swapped: ${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}
+# → {"primary": "us-east-1", "secondary": "eu-west-1"}
+
+# Convert a list of names into a map of {name: index}
+nameIndex: ${schema.spec.items.transformMapEntry(i, v, {v: string(i)})}
+# ["app", "db"] → {"app": "0", "db": "1"}
+```
+
+#### `transformList` — Extract a list from a map
+
+Converts a map to a list by evaluating an expression for each entry:
+
+```kro
+# Extract all keys
+keys: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}
+# → ["app", "version"]
+
+# Extract all values
+values: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, v)}
+# → ["nginx", "1.19"]
+
+# Build formatted strings from key-value pairs
+envVars: ${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
+# → ["APP=nginx", "PORT=8080"]
 ```
 
 ### Aggregating Status

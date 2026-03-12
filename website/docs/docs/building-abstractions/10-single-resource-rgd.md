@@ -261,6 +261,25 @@ Wrapping is usually the wrong fit when:
 In those cases, letting users work with the native resource directly is often
 cleaner than publishing another API surface that adds little real value.
 
+:::warning Limitations and Future Work
+kro currently supports [breaking change detection](/docs/concepts/rgd/overview#breaking-changes)
+for schema fields (field removal, type changes, new required fields, enum
+restrictions, pattern changes) and blocks them by default. However, several
+areas are still evolving:
+
+- **Versioning** — multi-version CRD support and migration paths are not yet
+  available. See [KREP-009](https://github.com/kubernetes-sigs/kro/pull/935).
+- **Resource lifecycle** — fine-grained control over create/update/delete
+  behavior per resource is planned. See
+  [KREP-014](https://github.com/kubernetes-sigs/kro/pull/1091).
+- **Deletion policy** — configurable owner-reference and deletion semantics are
+  under proposal. See
+  [KREP-004](https://github.com/kubernetes-sigs/kro/pull/763).
+
+Keep these gaps in mind when deciding whether to publish a wrapper — you will
+own its API surface and any future migrations.
+:::
+
 ## Single Resource RGD vs. Grouping
 
 Single-resource abstractions and grouping are related, but they solve different

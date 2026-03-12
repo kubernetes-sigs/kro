@@ -163,7 +163,8 @@ func (n *Node) DeepCopy() *Node {
 		cp.Variables = make([]*variable.ResourceField, len(n.Variables))
 		for i, v := range n.Variables {
 			copyVar := *v
-			copyVar.Expressions = slices.Clone(v.Expressions)
+			exprCopy := *v.Expression
+			copyVar.Expression = &exprCopy
 			cp.Variables[i] = &copyVar
 		}
 	}

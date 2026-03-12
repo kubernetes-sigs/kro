@@ -21,35 +21,25 @@ import (
 // FieldDescriptor represents a field in a resource template that contains CEL expressions.
 // It is created by the parser and enriched by the builder:
 //
-//   - Parser: sets Path, StandaloneExpression, and creates Expression objects with only
-//     Original populated (References and Program are nil)
-//   - Builder: inspects expressions to populate References, validates types using
-//     StandaloneExpression to derive expected type from schema, then compiles Program
-//
-// The field may contain multiple expressions for string templates like "prefix-${a}-${b}".
+//   - Parser: sets Path and creates Expression objects with only Original populated
+//     (References and Program are nil)
+//   - Builder: inspects expressions to populate References, validates types by
+//     deriving expected type from schema, then compiles Program
 type FieldDescriptor struct {
 	// Path is the JSONPath-like location of the field in the resource.
 	// Example: spec.template.spec.containers[0].env[0].value
 	Path string
 
-	// Expressions contains the CEL expressions for this field.
+	// Expression is the CEL expression for this field.
 	//
 	// Lifecycle:
 	//   - Parser creates with Expression.Original set (References, Program nil)
 	//   - Builder populates Expression.References during dependency extraction
 	//   - Builder populates Expression.Program during compilation
 	//
-	// For standalone expressions (e.g., "${foo}"), this contains one expression.
-	// For string templates (e.g., "prefix-${a}-${b}"), this contains multiple
-	// expressions that will be evaluated and interpolated into the template.
-	Expressions []*krocel.Expression
-
-	// StandaloneExpression indicates if this is a single CEL expression vs a string template.
-	//
-	// Used by builder to derive expected type:
-	//   - true:  "${foo}" - expected type derived from OpenAPI schema at Path
-	//   - false: "hello-${foo}" - expected type is always string (concatenation)
-	StandaloneExpression bool
+	// String templates like "prefix-${a}-${b}" are compiled into a single CEL
+	// concatenation expression at parse time.
+	Expression *krocel.Expression
 }
 
 // ResourceField represents a variable in a resource template. Variables are fields

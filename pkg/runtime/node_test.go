@@ -915,16 +915,6 @@ func TestNode_UpsertToTemplate(t *testing.T) {
 			values:    map[string]any{"vpc.status.vpcId": "vpc-12345"},
 			wantVpcId: "vpc-12345",
 		},
-		{
-			name: "skips vars without expressions",
-			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
-				withTemplateVar("status.vpcId").build(),
-			base: &unstructured.Unstructured{
-				Object: map[string]any{"metadata": map[string]any{"name": "test"}},
-			},
-			values:      map[string]any{},
-			wantNoVpcId: true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -1680,13 +1670,12 @@ func (b *testNodeBuilder) withTemplateExpr(expr string, kind variable.ResourceVa
 	return b
 }
 
-// withTemplateVar adds a template variable (always standalone).
-func (b *testNodeBuilder) withTemplateVar(path string, exprs ...string) *testNodeBuilder {
+// withTemplateVar adds a template variable.
+func (b *testNodeBuilder) withTemplateVar(path string, expr string) *testNodeBuilder {
 	b.templateVars = append(b.templateVars, &variable.ResourceField{
 		FieldDescriptor: variable.FieldDescriptor{
-			Path:                 path,
-			Expressions:          krocel.NewUncompiledSlice(exprs...),
-			StandaloneExpression: true,
+			Path:       path,
+			Expression: krocel.NewUncompiled(expr),
 		},
 	})
 	return b

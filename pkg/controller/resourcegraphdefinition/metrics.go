@@ -20,7 +20,8 @@ import (
 )
 
 var (
-	rgdLabels = []string{"rgd_kind"}
+	rgdLabels             = []string{"name"}
+	stateTransitionLabels = []string{"name", "from", "to"}
 
 	graphBuildTotal       *prometheus.CounterVec
 	graphBuildDuration    *prometheus.HistogramVec
@@ -61,7 +62,7 @@ func init() {
 			Name: "rgd_state_transitions_total",
 			Help: "Total number of RGD state transitions",
 		},
-		append(rgdLabels, "from", "to"),
+		stateTransitionLabels,
 	)
 
 	deletionsTotal = prometheus.NewCounterVec(

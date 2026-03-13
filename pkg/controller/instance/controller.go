@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -89,6 +90,9 @@ type Controller struct {
 	childResourceLabeler metadata.Labeler
 	reconcileConfig      ReconcileConfig
 	coordinator          *dynamiccontroller.WatchCoordinator
+
+	// eventRecorder emits K8s Events on condition transitions.
+	eventRecorder record.EventRecorder
 }
 
 // NewController constructs a new controller with static RGD.
@@ -101,6 +105,7 @@ func NewController(
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
+	eventRecorder record.EventRecorder,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -111,6 +116,7 @@ func NewController(
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
 		coordinator:          coord,
+		eventRecorder:        eventRecorder,
 	}
 }
 
@@ -138,7 +144,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}()
 
 	//--------------------------------------------------------------
-	// 1. Load instance; if gone, nothing to do
+	// 1. Load instance; snapshot conditions for event diff
 	//--------------------------------------------------------------
 	inst, err := c.client.Dynamic().
 		Resource(c.gvr).
@@ -152,6 +158,8 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		log.Error(err, "failed loading instance")
 		return err
 	}
+
+	initialConditions := conditionsFromInstance(inst)
 
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
@@ -241,9 +249,16 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 8. Persist status/conditions
+	// 8. Persist status/conditions and emit events
 	//--------------------------------------------------------------
-	return c.updateStatus(rcx)
+	statusErr := c.updateStatus(rcx)
+
+	if statusErr == nil {
+		finalConditions := conditionsFromInstance(rcx.Instance)
+		emitConditionEvents(c.eventRecorder, rcx.Instance, initialConditions, finalConditions)
+	}
+
+	return statusErr
 }
 
 func (c *Controller) ensureManaged(rcx *ReconcileContext) error {

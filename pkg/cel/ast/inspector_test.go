@@ -983,6 +983,26 @@ func TestNewInspectorWithEnv_CustomFunctionsNotResources(t *testing.T) {
 			wantUnknownFns: nil,
 			wantUnknownRes: nil,
 		},
+		{
+			name:       "cel.bind variable is not reported as unknown identifier",
+			resources:  []string{"schema"},
+			expression: `cel.bind(n, schema.spec.count * 2, n + n)`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.count"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "nested cel.bind variables are not reported as unknown identifiers",
+			resources:  []string{"schema"},
+			expression: `cel.bind(a, schema.spec.x + 1, cel.bind(b, a * 2, a + b))`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.x"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
 	}
 
 	for _, tt := range tests {

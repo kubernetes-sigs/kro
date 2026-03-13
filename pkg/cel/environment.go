@@ -118,6 +118,7 @@ func BaseDeclarations() []cel.EnvOption {
 			library.Random(),
 			library.Maps(),
 			library.JSON(),
+			library.Lists(),
 		}
 	})
 	return cachedBaseDeclarations

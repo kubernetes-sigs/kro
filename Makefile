@@ -43,6 +43,8 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
         -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)"
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
+PPROF_GOFLAGS ?= -tags=pprof
+PPROF_IMAGE_TAG_SUFFIX ?= -debug
 
 HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds --namespace kro-system
 HELM_STATIC_MANIFEST_IMAGE_FLAGS ?= --set image.tag=${RELEASE_VERSION}
@@ -241,19 +243,27 @@ envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
-.PHONY: image
-build-image: ko ## Build the kro controller images using ko build
-	echo "Building kro image $(RELEASE_VERSION).."
+.PHONY: build-image
+build-image: ko ## Build kro controller image.
+	@echo "Building kro image ${RELEASE_VERSION}..."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		$(if $(filter true,$(KO_LOCAL)),--local,--oci-layout-path rendered/oci/layout) \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
-.PHONY: publish
-publish-image: ko ## Publish the kro controller images
+.PHONY: build-debug-image
+build-debug-image: ## Build kro controller debug image with pprof enabled.
+	$(MAKE) build-image GOFLAGS="$(PPROF_GOFLAGS)" RELEASE_VERSION=${RELEASE_VERSION}${PPROF_IMAGE_TAG_SUFFIX}
+
+.PHONY: publish-image
+publish-image: ko ## Publish kro controller image.
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
+
+.PHONY: publish-debug-image
+publish-debug-image: ## Publish kro controller debug image with pprof enabled.
+	$(MAKE) publish-image GOFLAGS="$(PPROF_GOFLAGS)" RELEASE_VERSION=${RELEASE_VERSION}${PPROF_IMAGE_TAG_SUFFIX}
 
 .PHONY: inject-helm-version
 inject-helm-version:
@@ -282,8 +292,13 @@ render-static-manifests: inject-helm-version
 		rm -f $$tmpfile; \
 	done
 
-.PHONY:
-release: build-image publish-image package-helm publish-helm
+.PHONY: release
+release: ko package-helm ## Full release pipeline (images + pprof images + helm)
+	@echo "Building and publishing standard image..."
+	$(MAKE) build-image publish-image
+	@echo "Building and publishing pprof image..."
+	$(MAKE) build-debug-image publish-debug-image
+	$(MAKE) publish-helm
 
 ##@ Deployment
 
@@ -311,7 +326,7 @@ deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -320,13 +335,17 @@ deploy-kind-%: export KO_DOCKER_REPO=kind.local
 deploy-kind-%: export HELM_STATIC_MANIFEST_IMAGE_FLAGS=--set image.pullPolicy=Never --set image.ko=true
 deploy-kind-%: export RELEASE_VERSION=v0.0.0-dev
 deploy-kind-%: ko start-kind render-static-manifests ## Apply the static manifests for the given variant
-	$(KO) apply -f manifests/rendered/kro-$*.yaml
+	@ko_goflags='$(GOFLAGS)'; \
+	if [[ "$*" == *pprof* ]]; then \
+		ko_goflags="$${ko_goflags:+$${ko_goflags} }$(PPROF_GOFLAGS)"; \
+	fi; \
+	GOFLAGS="$$ko_goflags" $(KO) apply -f manifests/rendered/kro-$*.yaml
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
 .PHONY: ko-apply
 ko-apply: ko
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(WITH_GOFLAGS) $(KO) apply -f -
 
 ## CLI
 .PHONY: cli

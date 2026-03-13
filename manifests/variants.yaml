@@ -12,3 +12,12 @@ variants:
         create: true
       serviceMonitor:
         enabled: true
+- name: kro-core-install-manifests-with-pprof
+  values:
+    rbac:
+      mode: aggregation
+    debug:
+      pprof:
+        enabled: true
+        service:
+          enabled: true

@@ -382,3 +382,55 @@ func TestListsComposition(t *testing.T) {
 		})
 	}
 }
+
+// ── type inference ───────────────────────────────────────────────────────────
+
+// TestListsTypeInference verifies that the compiler infers the concrete element
+// type rather than collapsing to dyn. This catches regressions where TypeParamType
+// is accidentally replaced with DynType in CompileOptions.
+func TestListsTypeInference(t *testing.T) {
+	env := newListsEnv(t)
+	tests := []struct {
+		name     string
+		expr     string
+		wantType string
+	}{
+		{
+			name:     "setIndex on int list returns list(int)",
+			expr:     "lists.setIndex([1, 2, 3], 0, 9)",
+			wantType: "list(int)",
+		},
+		{
+			name:     "setIndex on string list returns list(string)",
+			expr:     `lists.setIndex(["a", "b"], 0, "z")`,
+			wantType: "list(string)",
+		},
+		{
+			name:     "insertAt on int list returns list(int)",
+			expr:     "lists.insertAt([1, 2, 3], 0, 9)",
+			wantType: "list(int)",
+		},
+		{
+			name:     "insertAt on string list returns list(string)",
+			expr:     `lists.insertAt(["a", "b"], 0, "z")`,
+			wantType: "list(string)",
+		},
+		{
+			name:     "removeAt on int list returns list(int)",
+			expr:     "lists.removeAt([1, 2, 3], 0)",
+			wantType: "list(int)",
+		},
+		{
+			name:     "removeAt on string list returns list(string)",
+			expr:     `lists.removeAt(["a", "b", "c"], 0)`,
+			wantType: "list(string)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, iss := env.Compile(tt.expr)
+			require.NoError(t, iss.Err())
+			assert.Equal(t, tt.wantType, ast.OutputType().String())
+		})
+	}
+}

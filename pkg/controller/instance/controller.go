@@ -138,7 +138,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}()
 
 	//--------------------------------------------------------------
-	// 1. Load instance; if gone, nothing to do
+	// 1. Load instance; snapshot conditions for telemetry diff
 	//--------------------------------------------------------------
 	inst, err := c.client.Dynamic().
 		Resource(c.gvr).
@@ -156,12 +156,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		return err
 	}
 
-	// Snapshot initial conditions before reconciliation for diff-based metric emission.
 	var initialConditions []v1alpha1.Condition
 	if c.enableTelemetry {
 		initialConditions = conditionsFromInstance(inst)
 	}
 
+	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
 	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)

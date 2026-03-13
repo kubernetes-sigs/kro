@@ -29,7 +29,7 @@ import (
 // Returns a new list with the element at index replaced by value.
 // Index must be in [0, size(list)).
 //
-//	lists.setIndex(list(dyn), int, dyn) -> list(dyn)
+//	lists.setIndex(list(T), int, T) -> list(T)
 //
 // Examples:
 //
@@ -41,7 +41,7 @@ import (
 // Returns a new list with value inserted before the element at index.
 // Index must be in [0, size(list)]. An index equal to size(list) appends.
 //
-//	lists.insertAt(list(dyn), int, dyn) -> list(dyn)
+//	lists.insertAt(list(T), int, T) -> list(T)
 //
 // Examples:
 //
@@ -54,7 +54,7 @@ import (
 // Returns a new list with the element at index removed.
 // Index must be in [0, size(list)).
 //
-//	lists.removeAt(list(dyn), int) -> list(dyn)
+//	lists.removeAt(list(T), int) -> list(T)
 //
 // Examples:
 //
@@ -72,7 +72,7 @@ func (l *listsLibrary) LibraryName() string {
 }
 
 func (l *listsLibrary) CompileOptions() []cel.EnvOption {
-	listDyn := cel.ListType(cel.DynType)
+	listType := cel.ListType(cel.TypeParamType("T"))
 	return []cel.EnvOption{
 		// lists.set is kept for backwards compatibility with existing RGDs.
 		// It is typed list(int) only. New code should use lists.setIndex.
@@ -84,29 +84,29 @@ func (l *listsLibrary) CompileOptions() []cel.EnvOption {
 			),
 		),
 
-		// lists.setIndex(arr list(dyn), index int, value dyn) -> list(dyn)
+		// lists.setIndex(arr list(T), index int, value T) -> list(T)
 		cel.Function("lists.setIndex",
-			cel.Overload("lists.setIndex_list_int_dyn",
-				[]*cel.Type{listDyn, cel.IntType, cel.DynType},
-				listDyn,
+			cel.Overload("lists.setIndex_list_int_T",
+				[]*cel.Type{listType, cel.IntType, cel.TypeParamType("T")},
+				listType,
 				cel.FunctionBinding(listsSetIndex),
 			),
 		),
 
-		// lists.insertAt(arr list(dyn), index int, value dyn) -> list(dyn)
+		// lists.insertAt(arr list(T), index int, value T) -> list(T)
 		cel.Function("lists.insertAt",
-			cel.Overload("lists.insertAt_list_int_dyn",
-				[]*cel.Type{listDyn, cel.IntType, cel.DynType},
-				listDyn,
+			cel.Overload("lists.insertAt_list_int_T",
+				[]*cel.Type{listType, cel.IntType, cel.TypeParamType("T")},
+				listType,
 				cel.FunctionBinding(listsInsertAt),
 			),
 		),
 
-		// lists.removeAt(arr list(dyn), index int) -> list(dyn)
+		// lists.removeAt(arr list(T), index int) -> list(T)
 		cel.Function("lists.removeAt",
 			cel.Overload("lists.removeAt_list_int",
-				[]*cel.Type{listDyn, cel.IntType},
-				listDyn,
+				[]*cel.Type{listType, cel.IntType},
+				listType,
 				cel.BinaryBinding(listsRemoveAt),
 			),
 		),

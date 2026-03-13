@@ -178,6 +178,7 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 		}
 	}
 
+	c.updateWatchRequestMetrics()
 	gvr := req.GVR
 	c.mu.Unlock()
 
@@ -212,6 +213,7 @@ func (c *WatchCoordinator) abortInstance(key instanceKey) {
 
 	state.current = make(map[string]*WatchRequest)
 
+	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -244,6 +246,7 @@ func (c *WatchCoordinator) doneInstance(key instanceKey) {
 	state.previous = state.current
 	state.current = make(map[string]*WatchRequest)
 
+	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -277,6 +280,7 @@ func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource,
 
 	delete(c.instances, key)
 
+	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -315,6 +319,7 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 		delete(c.instances, key)
 	}
 
+	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -324,6 +329,8 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 // RouteEvent routes a watch event to all matching instances.
 // Called by the watch handler for every event.
 func (c *WatchCoordinator) RouteEvent(event Event) {
+	routeTotal.WithLabelValues(event.GVR.String()).Inc()
+
 	c.mu.RLock()
 	matched := make(map[instanceKey]struct{})
 
@@ -354,6 +361,7 @@ func (c *WatchCoordinator) RouteEvent(event Event) {
 		c.enqueue(key.parentGVR, key.instance)
 	}
 	if len(matched) > 0 {
+		routeMatchTotal.WithLabelValues(event.GVR.String()).Inc()
 		c.log.V(2).Info("Routed event", "gvr", event.GVR, "name", event.Name, "namespace", event.Namespace, "type", event.Type)
 	}
 }
@@ -530,6 +538,36 @@ func (w *instanceWatcher) Done(commit bool) {
 		return
 	}
 	w.coordinator.doneInstance(key)
+}
+
+// updateWatchRequestMetrics recalculates the watch request gauge metrics
+// from the current index state. Must be called with c.mu held (at least RLock).
+func (c *WatchCoordinator) updateWatchRequestMetrics() {
+	// Per-GVR scalar/collection breakdown.
+	gvrs := make(map[schema.GroupVersionResource]struct{})
+	for gvr := range c.scalarIndex {
+		gvrs[gvr] = struct{}{}
+	}
+	for gvr := range c.collectionIndex {
+		gvrs[gvr] = struct{}{}
+	}
+	for gvr := range gvrs {
+		scalar := 0
+		for _, entries := range c.scalarIndex[gvr] {
+			scalar += len(entries)
+		}
+		watchRequestCount.WithLabelValues(gvr.String(), "scalar").Set(float64(scalar))
+		watchRequestCount.WithLabelValues(gvr.String(), "collection").Set(float64(len(c.collectionIndex[gvr])))
+	}
+
+	// Per-parent instance watch count.
+	parentCounts := make(map[schema.GroupVersionResource]int)
+	for key := range c.instances {
+		parentCounts[key.parentGVR]++
+	}
+	for parentGVR, count := range parentCounts {
+		instanceWatchCount.WithLabelValues(parentGVR.String()).Set(float64(count))
+	}
 }
 
 func sameWatchTarget(a, b *WatchRequest) bool {

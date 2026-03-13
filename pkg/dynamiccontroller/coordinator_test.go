@@ -299,9 +299,9 @@ func TestStopOrphanedWatch_RemoveInstance(t *testing.T) {
 	coord.RemoveInstance(testParentGVR, instance)
 	assert.Equal(t, 0, coord.watches.ActiveWatchCount(), "expected 0 active watches after removing last requestor")
 
-	// EnsureWatch can re-create it.
-	assert.NoError(t, coord.watches.EnsureWatch(testDeployGVR))
-	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after EnsureWatch")
+	// ensureWatch can re-create it.
+	assert.NoError(t, coord.watches.ensureWatch(testDeployGVR))
+	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after ensureWatch")
 }
 
 func TestStopOrphanedWatch_DoneCleanup(t *testing.T) {
@@ -863,14 +863,14 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// EnsureWatch will fail sync but addWatch logs and returns nil.
+	// ensureWatch will fail sync but addWatch logs and returns nil.
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deploy",
 		GVR:       testDeployGVR,
 		Name:      "d1",
 		Namespace: "default",
 	})
-	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
+	assert.NoError(t, err) // addWatch does not propagate ensureWatch errors
 
 	wm.Shutdown()
 }

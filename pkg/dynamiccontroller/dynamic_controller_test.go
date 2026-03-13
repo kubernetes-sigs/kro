@@ -595,3 +595,28 @@ func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cache sync timeout")
 }
+
+func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	handlerCalled := false
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		handlerCalled = true
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+
+	// After deregister, handler lookup should fail.
+	_, ok := dc.handlers.Load(parentGVR)
+	assert.False(t, ok, "handler should be removed after deregister")
+	assert.False(t, handlerCalled)
+}

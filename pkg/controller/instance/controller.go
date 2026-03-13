@@ -27,11 +27,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -90,6 +92,9 @@ type Controller struct {
 	childResourceLabeler metadata.Labeler
 	reconcileConfig      ReconcileConfig
 	coordinator          *dynamiccontroller.WatchCoordinator
+
+	// eventRecorder emits K8s Events on condition transitions.
+	eventRecorder record.EventRecorder
 }
 
 // NewController constructs a new controller with static RGD.
@@ -102,6 +107,7 @@ func NewController(
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
+	eventRecorder record.EventRecorder,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -112,6 +118,7 @@ func NewController(
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
 		coordinator:          coord,
+		eventRecorder:        eventRecorder,
 	}
 }
 
@@ -135,7 +142,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}()
 
 	//--------------------------------------------------------------
-	// 1. Load instance; if gone, nothing to do
+	// 1. Load instance; snapshot conditions for event diff
 	//--------------------------------------------------------------
 	ri := c.client.Dynamic().Resource(c.gvr)
 	var inst *unstructured.Unstructured
@@ -153,6 +160,20 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		return err
 	}
 
+	// Emit condition events on every return path (behind feature gate).
+	var rcx *ReconcileContext
+	if features.FeatureGate.Enabled(features.InstanceConditionEvents) {
+		initialConditions := conditionsFromInstance(inst)
+		defer func() {
+			obj := inst
+			if rcx != nil {
+				obj = rcx.Instance
+			}
+			finalConditions := conditionsFromInstance(obj)
+			emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+		}()
+	}
+
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
@@ -165,7 +186,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 3. Build reconciliation context (clients, mapper, labeler, runtime)
 	//--------------------------------------------------------------
-	rcx := NewReconcileContext(
+	rcx = NewReconcileContext(
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),

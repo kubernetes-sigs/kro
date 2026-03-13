@@ -23,6 +23,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -61,6 +62,8 @@ type ResourceGraphDefinitionReconciler struct {
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
 	rgdConfig               graph.RGDConfig
+
+	newEventRecorder func(string) record.EventRecorder
 }
 
 func NewResourceGraphDefinitionReconciler(
@@ -90,6 +93,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	r.Client = mgr.GetClient()
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
+	r.newEventRecorder = mgr.GetEventRecorderFor
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(

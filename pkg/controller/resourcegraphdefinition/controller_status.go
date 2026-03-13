@@ -49,8 +49,8 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
 	}
 
-	if oldState != o.Status.State && oldState != "" && o.Spec.Schema != nil {
-		stateTransitionsTotal.WithLabelValues(o.Spec.Schema.Kind, string(oldState), string(o.Status.State)).Inc()
+	if oldState != o.Status.State && oldState != "" {
+		stateTransitionsTotal.WithLabelValues(o.Name, string(oldState), string(o.Status.State)).Inc()
 	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {

@@ -204,8 +204,8 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
-		deletionDuration.WithLabelValues(o.Spec.Schema.Kind).Observe(time.Since(startTime).Seconds())
-		deletionsTotal.WithLabelValues(o.Spec.Schema.Kind).Inc()
+		deletionDuration.WithLabelValues(o.Name).Observe(time.Since(startTime).Seconds())
+		deletionsTotal.WithLabelValues(o.Name).Inc()
 		return ctrl.Result{}, nil
 	}
 

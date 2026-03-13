@@ -48,14 +48,18 @@ func (c *SessionCache) ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error
 
 	// Check if we already have a full program cached — reuse its AST.
 	if v, ok := c.programs.Load(key); ok {
+		sessionCacheHitsTotal.WithLabelValues("checked_ast").Inc()
 		entry := v.(*ProgramCacheEntry)
 		return entry.Ast, nil
 	}
 
 	// Check the AST-only cache.
 	if v, ok := c.checkedASTs.Load(key); ok {
+		sessionCacheHitsTotal.WithLabelValues("checked_ast").Inc()
 		return v.(*cel.Ast), nil
 	}
+
+	sessionCacheMissesTotal.WithLabelValues("checked_ast").Inc()
 
 	parsedAST, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
@@ -79,13 +83,17 @@ func (c *SessionCache) ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error
 func (c *SessionCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Program, *cel.Ast, error) {
 	key := ProgramCacheKey{Expr: expr, Env: env}
 	if v, ok := c.programs.Load(key); ok {
+		sessionCacheHitsTotal.WithLabelValues("program").Inc()
 		entry := v.(*ProgramCacheEntry)
 		return entry.Program, entry.Ast, nil
 	}
 
+	sessionCacheMissesTotal.WithLabelValues("program").Inc()
+
 	// Try to reuse a previously cached checked AST.
 	var checkedAST *cel.Ast
 	if v, ok := c.checkedASTs.Load(key); ok {
+		sessionCacheASTReuseTotal.Inc()
 		checkedAST = v.(*cel.Ast)
 	} else {
 		parsedAST, issues := env.Parse(expr)
@@ -116,8 +124,11 @@ func (c *SessionCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Prog
 func (c *SessionCache) ExtendWithTypedVar(parent *cel.Env, varName string, schema *spec.Schema, create func() (*cel.Env, error)) (*cel.Env, error) {
 	key := extendedEnvCacheKey{parentEnv: parent, varName: varName, schema: schema}
 	if v, ok := c.extendedEnvs.Load(key); ok {
+		sessionCacheHitsTotal.WithLabelValues("extended_env").Inc()
 		return v.(*cel.Env), nil
 	}
+
+	sessionCacheMissesTotal.WithLabelValues("extended_env").Inc()
 
 	extended, err := create()
 	if err != nil {

@@ -47,11 +47,14 @@ func (c *BuilderCache) SchemaDeclType(schema *spec.Schema, create func(*spec.Sch
 		return nil
 	}
 	if v, ok := c.declTypes.Load(schema); ok {
+		builderCacheHitsTotal.WithLabelValues("decl_type").Inc()
 		return v.(*apiservercel.DeclType)
 	}
+	builderCacheMissesTotal.WithLabelValues("decl_type").Inc()
 	declType := create(schema)
 	if declType != nil {
 		c.declTypes.Store(schema, declType)
+		builderCacheSize.WithLabelValues("decl_type").Inc()
 	}
 	return declType
 }
@@ -62,10 +65,13 @@ func (c *BuilderCache) SchemaDeclType(schema *spec.Schema, create func(*spec.Sch
 func (c *BuilderCache) MaybeAssignTypeName(schema *spec.Schema, declType *apiservercel.DeclType, typeName string) *apiservercel.DeclType {
 	key := namedTypeCacheKey{schema: schema, name: typeName}
 	if v, ok := c.namedTypes.Load(key); ok {
+		builderCacheHitsTotal.WithLabelValues("named_type").Inc()
 		return v.(*apiservercel.DeclType)
 	}
+	builderCacheMissesTotal.WithLabelValues("named_type").Inc()
 	named := declType.MaybeAssignTypeName(typeName)
 	c.namedTypes.Store(key, named)
+	builderCacheSize.WithLabelValues("named_type").Inc()
 	return named
 }
 
@@ -77,14 +83,17 @@ func (c *BuilderCache) TypedEnvironmentWithProvider(schemas map[string]*spec.Sch
 	if len(schemas) > 0 {
 		key := MakeEnvCacheKey(schemas)
 		if v, ok := c.typedEnvs.Load(key); ok {
+			builderCacheHitsTotal.WithLabelValues("typed_env").Inc()
 			entry := v.(*TypedEnvEntry)
 			return entry.Env, entry.Provider, nil
 		}
+		builderCacheMissesTotal.WithLabelValues("typed_env").Inc()
 		env, provider, err := create()
 		if err != nil {
 			return nil, nil, err
 		}
 		c.typedEnvs.Store(key, &TypedEnvEntry{Env: env, Provider: provider})
+		builderCacheSize.WithLabelValues("typed_env").Inc()
 		return env, provider, nil
 	}
 	return create()
@@ -94,9 +103,12 @@ func (c *BuilderCache) TypedEnvironmentWithProvider(schemas map[string]*spec.Sch
 // On cache miss, the create callback is called to build the map.
 func (c *BuilderCache) FieldTypeMap(t *apiservercel.DeclType, create func() map[string]*apiservercel.DeclType) map[string]*apiservercel.DeclType {
 	if v, ok := c.fieldTypeMaps.Load(t); ok {
+		builderCacheHitsTotal.WithLabelValues("field_type_map").Inc()
 		return v.(map[string]*apiservercel.DeclType)
 	}
+	builderCacheMissesTotal.WithLabelValues("field_type_map").Inc()
 	m := create()
 	c.fieldTypeMaps.Store(t, m)
+	builderCacheSize.WithLabelValues("field_type_map").Inc()
 	return m
 }

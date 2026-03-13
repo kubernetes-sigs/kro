@@ -184,7 +184,7 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 	// Ensure an informer is running for this GVR.
 	// Called outside the coordinator lock to avoid holding it while
 	// the WatchManager acquires its own lock.
-	if err := c.watches.EnsureWatch(gvr); err != nil {
+	if err := c.watches.EnsureWatch(gvr, "coordinator"); err != nil {
 		c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
 	}
 
@@ -381,14 +381,6 @@ func (c *WatchCoordinator) WatchRequestCount() (scalar, collection int) {
 	return
 }
 
-// HasRequestsForGVR reports whether any child or external watch requests still
-// exist for the given GVR.
-func (c *WatchCoordinator) HasRequestsForGVR(gvr schema.GroupVersionResource) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.scalarIndex[gvr]) > 0 || len(c.collectionIndex[gvr]) > 0
-}
-
 // --- internal helpers ---
 
 func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchRequest) {
@@ -474,12 +466,13 @@ func (c *WatchCoordinator) findOrphanedGVRsLocked(gvrs []schema.GroupVersionReso
 	return orphaned
 }
 
-// stopWatches stops informers for the given GVRs. Must be called without
+// stopWatches releases the coordinator's ownership of the given GVRs and
+// stops informers that have no remaining owners. Must be called without
 // c.mu held to avoid holding the coordinator lock while the WatchManager
 // acquires its own lock.
 func (c *WatchCoordinator) stopWatches(gvrs []schema.GroupVersionResource) {
 	for _, gvr := range gvrs {
-		c.watches.StopWatch(gvr)
+		c.watches.ReleaseWatch(gvr, "coordinator")
 		c.log.V(1).Info("Stopped orphaned child watch", "gvr", gvr)
 	}
 }

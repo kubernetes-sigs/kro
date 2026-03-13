@@ -85,6 +85,66 @@ As that upstream state changes, the resource may become includable later or be
 pruned later if the condition flips to `false`.
 :::
 
+For example, this `ServiceMonitor` waits for the upstream `deployment` to
+report available replicas before kro includes it:
+
+```kro
+resources:
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+      # ...
+
+  - id: serviceMonitor
+    includeWhen:
+      - ${deployment.status.availableReplicas > 0}
+    template:
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: ${schema.spec.name}
+      # ...
+```
+
+If `deployment.status.availableReplicas` is not populated yet, kro waits and
+re-evaluates the condition on the next reconciliation instead of treating the
+condition as `false`. If the deployment later scales back to zero available
+replicas, kro prunes the `ServiceMonitor`.
+
+:::danger Be careful when referencing upstream resources in includeWhen
+
+`includeWhen` controls whether a resource **exists at all**. If the referenced
+field is volatile (e.g. a `.status` field that fluctuates), the condition can
+flip between `true` and `false` across reconciliations. Each flip creates or
+deletes the resource — and all of its dependents — causing the graph to
+**flip-flop** and producing unnecessary churn, wasted API calls, and
+potentially broken workloads.
+
+Before referencing an upstream resource in `includeWhen`, ask yourself: **can
+this field change back and forth during normal operation?** If yes, you probably
+want `readyWhen` on the upstream resource instead, which gates sequencing
+without toggling existence.
+
+```kro
+# Risky — status fields are volatile; the resource may flip-flop
+- id: monitor
+  includeWhen:
+    - ${deployment.status.availableReplicas > 0}
+
+# Safe — user-controlled toggle, stable across reconciliations
+- id: monitor
+  includeWhen:
+    - ${schema.spec.monitoring.enabled}
+```
+
+Referencing upstream resources is fine when the field is **effectively
+immutable** after creation — for example, a ConfigMap `data` key that is set
+once and never changes. Just be aware of the consequences if it does change.
+:::
+
 ## Dependencies and Skipped Resources
 
 When a resource is skipped (due to `includeWhen` conditions), **all resources that depend on it are also skipped**.

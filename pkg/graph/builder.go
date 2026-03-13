@@ -537,7 +537,7 @@ func (b *Builder) buildDependencyGraph(
 			return nil, err
 		}
 
-		includeWhenDeps, err := extractConditionDependencies(inspector, node.IncludeWhen, nil)
+		includeWhenDeps, err := extractConditionDependencies(inspector, node.IncludeWhen)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract dependencies from includeWhen: %w", err)
 		}
@@ -818,7 +818,7 @@ func buildStatusSchema(
 
 // inspectExpressionRestricted uses the shared inspector to parse an expression,
 // then validates that only the allowed identifiers are referenced.
-// This is used for restricted contexts like forEach (only known resources).
+// This is used for restricted contexts like includeWhen (only schema) or readyWhen (only self).
 func inspectExpressionRestricted(inspector *ast.Inspector, expr string, allowedIdentifiers []string) (ast.ExpressionInspection, error) {
 	result, err := inspector.Inspect(expr)
 	if err != nil {
@@ -905,18 +905,16 @@ func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iter
 }
 
 // extractConditionDependencies extracts resource dependencies from condition
-// expressions such as includeWhen and readyWhen. It also populates
-// expr.References for later validation. iteratorVars can be used for
-// collection-scoped bindings like "each".
+// expressions such as includeWhen. It also populates expr.References for later
+// validation.
 func extractConditionDependencies(
 	inspector *ast.Inspector,
 	expressions []*krocel.Expression,
-	iteratorVars []string,
 ) ([]string, error) {
 	var allDeps []string
 
 	for _, expression := range expressions {
-		nodeDeps, _, err := extractDependencies(inspector, expression, iteratorVars)
+		nodeDeps, _, err := extractDependencies(inspector, expression, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1119,17 +1117,14 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 		// readyWhen expressions can ONLY reference the node itself (or 'each' for collections).
 		// At runtime, IsResourceReady/IsCollectionReady only has the resource in scope.
 		allowedVar := node.Meta.ID
-		var iteratorVars []string
 		if node.Meta.Type == NodeTypeCollection {
 			allowedVar = EachVarName
-			iteratorVars = []string{EachVarName}
 		}
 
-		if _, err := extractConditionDependencies(inspector, node.ReadyWhen, iteratorVars); err != nil {
-			return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
-		}
-		if err := validateConditionReferences(node.ReadyWhen, []string{allowedVar}); err != nil {
-			return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
+		for _, expression := range node.ReadyWhen {
+			if _, err := inspectExpressionRestricted(inspector, expression.Original, []string{allowedVar}); err != nil {
+				return fmt.Errorf("resource %q readyWhen: %w", node.Meta.ID, err)
+			}
 		}
 
 		// For readyWhen on collections, we need "each" variable which isn't in the shared env.

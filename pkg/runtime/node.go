@@ -112,10 +112,11 @@ func (n *Node) IsIgnored() (bool, error) {
 		if !ok {
 			return false, fmt.Errorf("includeWhen dependency %q not wired into runtime", depID)
 		}
-		if err := dep.checkObservedReadiness(); err != nil {
-			if errors.Is(err, ErrWaitingForReadiness) {
-				return false, fmt.Errorf("includeWhen dependency %q not ready: %s (%w)", depID, err.Error(), ErrDataPending)
-			}
+		err := dep.checkObservedReadiness()
+		if errors.Is(err, ErrWaitingForReadiness) {
+			return false, fmt.Errorf("includeWhen dependency %q not ready: %s (%w)", depID, err.Error(), ErrDataPending)
+		}
+		if err != nil {
 			return false, fmt.Errorf("includeWhen dependency %q: %w", depID, err)
 		}
 	}
@@ -178,10 +179,11 @@ func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 			if depID == graph.InstanceNodeID {
 				continue
 			}
-			if err := dep.CheckReadiness(); err != nil {
-				if errors.Is(err, ErrWaitingForReadiness) {
-					return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
-				}
+			err := dep.CheckReadiness()
+			if errors.Is(err, ErrWaitingForReadiness) {
+				return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
 			}
 		}

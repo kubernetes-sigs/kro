@@ -131,6 +131,7 @@ func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	go w.informer.RunWithContext(ctx)
+	watchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Informer started", "gvr", gvr)
 
 	// Release the lock before blocking on cache sync.
@@ -246,6 +247,7 @@ func (m *WatchManager) stopWatchLocked(gvr schema.GroupVersionResource, force bo
 	_ = w.informer.RemoveEventHandler(w.handlerReg)
 	w.cancel()
 	delete(m.watches, gvr)
+	watchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Watch stopped", "gvr", gvr)
 }
 

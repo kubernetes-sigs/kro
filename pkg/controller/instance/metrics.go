@@ -164,11 +164,11 @@ func gvrToKey(gvr schema.GroupVersionResource) string {
 		b.WriteString(gvr.Group)
 	}
 	if gvr.Version != "" {
-		b.WriteByte('/')
+		b.WriteRune('/')
 		b.WriteString(gvr.Version)
 	}
 	if gvr.Resource != "" {
-		b.WriteByte('/')
+		b.WriteRune('/')
 		b.WriteString(gvr.Resource)
 	}
 	return b.String()

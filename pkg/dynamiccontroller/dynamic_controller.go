@@ -129,7 +129,7 @@ type ObjectIdentifiers struct {
 //
 // The DynamicController uses a layered architecture:
 //
-//  1. WatchManager: manages informer lifecycle per GVR (reference-counted).
+//  1. WatchManager: manages informer lifecycle per GVR (owner-set based).
 //
 //  2. WatchCoordinator: aggregates watch requests from all instance reconcilers,
 //     maintains reverse indexes for event routing, and manages shared watches
@@ -354,72 +354,73 @@ func (dc *DynamicController) Register(
 	// Store handler.
 	dc.handlers.Store(parent, instanceHandler)
 
-	// Create parent watch if it doesn't exist.
-	if _, exists := dc.parentWatches[parent]; !exists {
-		// Retain the shared informer for the parent and wait for cache sync.
-		if err := dc.watches.EnsureParentWatch(parent); err != nil {
-			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: %w", parent, err)
-		}
-
-		inf := dc.watches.GetInformer(parent)
-		if inf == nil {
-			dc.watches.ReleaseParentWatch(parent)
-			if !dc.coordinator.HasRequestsForGVR(parent) {
-				dc.watches.StopWatch(parent)
-			}
-			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
-		}
-
-		// Register event handler directly on the parent informer.
-		parentHandler := cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				dc.enqueueFromInformer(parent, obj, EventAdd)
-			},
-			UpdateFunc: func(_, newObj interface{}) {
-				dc.enqueueFromInformer(parent, newObj, EventUpdate)
-			},
-			DeleteFunc: func(obj interface{}) {
-				dc.enqueueFromInformer(parent, obj, EventDelete)
-			},
-		}
-		reg, err := inf.AddEventHandler(parentHandler)
-		if err != nil {
-			dc.watches.ReleaseParentWatch(parent)
-			if !dc.coordinator.HasRequestsForGVR(parent) {
-				dc.watches.StopWatch(parent)
-			}
-			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: %w", parent, err)
-		}
-		dc.parentWatches[parent] = reg
-
-		gvrCount.Inc()
-		handlerAttachTotal.WithLabelValues("parent").Inc()
-		handlerCount.WithLabelValues("parent").Inc()
-		dc.log.V(1).Info("Attached parent watch", "gvr", parent)
+	// Re-registration: just enqueue existing instances.
+	if _, exists := dc.parentWatches[parent]; exists {
+		dc.enqueueExistingInstances(parent)
+		return nil
 	}
+
+	// Retain the shared informer for the parent and wait for cache sync.
+	if err := dc.watches.EnsureWatch(parent, "parent"); err != nil {
+		dc.handlers.Delete(parent)
+		return fmt.Errorf("add parent handler %s: %w", parent, err)
+	}
+
+	// Deferred cleanup on any error below.
+	cleanupWatch := true
+	defer func() {
+		if cleanupWatch {
+			dc.watches.ReleaseWatch(parent, "parent")
+			dc.handlers.Delete(parent)
+		}
+	}()
+
+	// Register event handler directly on the parent informer.
+	reg, err := dc.watches.GetInformer(parent).AddEventHandler(dc.parentEventHandlerFor(parent))
+	if err != nil {
+		return fmt.Errorf("add parent handler %s: %w", parent, err)
+	}
+
+	// Success — cancel deferred cleanup.
+	cleanupWatch = false
+	dc.parentWatches[parent] = reg
+
+	gvrCount.Inc()
+	handlerAttachTotal.WithLabelValues("parent").Inc()
+	handlerCount.WithLabelValues("parent").Inc()
+	dc.log.V(1).Info("Attached parent watch", "gvr", parent)
 
 	// Enqueue existing instances from parent cache.
-	if inf := dc.watches.GetInformer(parent); inf != nil && !inf.IsStopped() {
-		objects := inf.GetStore().List()
-		for _, obj := range objects {
-			mobj, err := meta.Accessor(obj)
-			if err != nil {
-				continue
-			}
-			dc.enqueueParent(parent, Event{
-				Type:      EventUpdate,
-				GVR:       parent,
-				Name:      mobj.GetName(),
-				Namespace: mobj.GetNamespace(),
-			})
-		}
-	}
+	dc.enqueueExistingInstances(parent)
 
 	dc.log.V(1).Info("Successfully registered GVR", "gvr", keyFromGVR(parent))
 	return nil
+}
+
+// parentEventHandlerFor generates a cache handler function set
+// for enqueuing a new event for a given parent gvr
+func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionResource) cache.ResourceEventHandler {
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			dc.enqueueFromInformer(parent, obj, EventAdd)
+		},
+		UpdateFunc: func(_, newObj interface{}) {
+			dc.enqueueFromInformer(parent, newObj, EventUpdate)
+		},
+		DeleteFunc: func(obj interface{}) {
+			dc.enqueueFromInformer(parent, obj, EventDelete)
+		},
+	}
+}
+
+// enqueueExistingInstances enqueues all objects currently in the parent
+// informer's cache store for re-reconciliation.
+func (dc *DynamicController) enqueueExistingInstances(parent schema.GroupVersionResource) {
+	if inf := dc.watches.GetInformer(parent); inf != nil && !inf.IsStopped() {
+		for _, obj := range inf.GetStore().List() {
+			dc.enqueueFromInformer(parent, obj, EventUpdate)
+		}
+	}
 }
 
 // enqueueFromInformer converts a raw informer callback into an enqueue call.
@@ -456,12 +457,9 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 		}
 		delete(dc.parentWatches, parent)
 
-		// Release the parent retention and stop the shared informer only if
-		// no child/external watches still depend on it.
-		dc.watches.ReleaseParentWatch(parent)
-		if !dc.coordinator.HasRequestsForGVR(parent) {
-			dc.watches.StopWatch(parent)
-		}
+		// Release the parent ownership; ReleaseWatch stops the informer
+		// automatically if no other owners remain.
+		dc.watches.ReleaseWatch(parent, "parent")
 
 		gvrCount.Dec()
 		handlerDetachTotal.WithLabelValues("parent").Inc()

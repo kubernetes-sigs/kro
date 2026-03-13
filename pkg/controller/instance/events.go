@@ -22,8 +22,7 @@ import (
 )
 
 // emitConditionEvents fires a K8s Event for every status condition that
-// transitioned between the initial and final snapshots. Events are always
-// emitted — they are not behind a feature gate.
+// transitioned between the initial and final snapshots.
 func emitConditionEvents(
 	recorder record.EventRecorder,
 	inst *unstructured.Unstructured,
@@ -59,7 +58,6 @@ func emitConditionEvents(
 }
 
 // conditionsFromInstance extracts status conditions from an unstructured object.
-// It reuses the unstructuredWrapper already defined in status.go.
 func conditionsFromInstance(inst *unstructured.Unstructured) []v1alpha1.Condition {
 	if inst == nil {
 		return nil

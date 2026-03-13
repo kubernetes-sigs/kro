@@ -250,35 +250,6 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 
 	fn := call.FunctionName()
 
-	// Handle cel.bind(varName, initExpr, bodyExpr) — the variable name in
-	// the first argument must be added to loopVars before inspecting the body
-	// (third argument) so it isn't reported as an unknown identifier.
-	if fn == "bind" && len(call.Args()) == 3 {
-		varArg := call.Args()[0]
-		initArg := call.Args()[1]
-		bodyArg := call.Args()[2]
-
-		// Extract the variable name from the first argument (should be an Ident)
-		if varArg.Kind() == celast.IdentKind {
-			varName := varArg.AsIdent()
-			// Inspect the init expression (no special scoping)
-			out.merge(a.inspectExpr(ast, initArg, ""))
-			// Add bound variable to loop vars for the body
-			_, wasSet := a.loopVars[varName]
-			a.loopVars[varName] = struct{}{}
-			out.merge(a.inspectExpr(ast, bodyArg, ""))
-			if !wasSet {
-				delete(a.loopVars, varName)
-			}
-		} else {
-			// Fallback: inspect all args normally
-			for _, arg := range call.Args() {
-				out.merge(a.inspectExpr(ast, arg, ""))
-			}
-		}
-		return out
-	}
-
 	for _, arg := range call.Args() {
 		out.merge(a.inspectExpr(ast, arg, ""))
 	}

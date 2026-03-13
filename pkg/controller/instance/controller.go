@@ -16,6 +16,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
@@ -118,8 +120,21 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 
 	// Get per-instance watcher from the coordinator.
 	watcher := c.coordinator.ForInstance(c.gvr, req.NamespacedName)
+
+	start := time.Now()
 	defer func() {
 		watcher.Done(err == nil)
+		gvr := c.gvr.String()
+		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
+		instanceReconcileTotal.WithLabelValues(gvr).Inc()
+		if err != nil {
+			var rn *requeue.RequeueNeeded
+			var rna *requeue.RequeueNeededAfter
+			if !errors.As(err, &rn) && !errors.As(err, &rna) {
+				log.V(1).Info("reporting reconcile error metric", "error", err)
+				instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
+			}
+		}
 	}()
 
 	//--------------------------------------------------------------

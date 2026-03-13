@@ -8,7 +8,7 @@ kro exposes Prometheus metrics for monitoring controller health and performance.
 
 :::warning Metrics Stability
 
-kro-specific metrics (Dynamic Controller, Schema Resolver) are in **ALPHA** and subject to change or removal without notice. Metric names, labels, and types may change between releases with no backwards-compatibility guarantees.
+kro-specific metrics (Dynamic Controller, Schema Resolver, REST Client) are in **ALPHA** and subject to change or removal without notice. Metric names, labels, and types may change between releases with no backwards-compatibility guarantees.
 
 Only **controller-runtime** and **workqueue** metrics are considered **STABLE**.
 
@@ -88,6 +88,18 @@ All RGD controller metrics include the label `rgd_kind` (the schema kind of the 
 | `rgd_state_transitions_total` | Counter | Total number of RGD state transitions (additional labels: `from`, `to`) | ALPHA |
 | `rgd_deletions_total` | Counter | Total number of RGD deletions | ALPHA |
 | `rgd_deletion_duration_seconds` | Histogram | Duration of RGD deletions in seconds | ALPHA |
+
+## REST Client Metrics
+
+Registered via `pkg/metrics/clientgo.go`. These fill gaps left by controller-runtime v0.16+, which stopped registering client-go latency, size, and retry histograms.
+
+| Metric | Type | Labels | Description | Stability |
+|--------|------|--------|-------------|-----------|
+| `rest_client_request_duration_seconds` | Histogram | `verb` | Request latency in seconds | ALPHA |
+| `rest_client_rate_limiter_duration_seconds` | Histogram | `verb` | Client-side rate limiter latency in seconds | ALPHA |
+| `rest_client_request_size_bytes` | Histogram | `verb` | Request payload size in bytes | ALPHA |
+| `rest_client_response_size_bytes` | Histogram | `verb` | Response payload size in bytes | ALPHA |
+| `rest_client_request_retries_total` | Counter | `code`, `method` | Total number of request retries | ALPHA |
 
 ## Controller Runtime Metrics
 

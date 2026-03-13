@@ -35,6 +35,7 @@ import (
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -52,6 +53,8 @@ func init() {
 }
 
 func main() {
+	metrics.Register()
+
 	var (
 		metricsAddr                                 string
 		enableLeaderElection                        bool

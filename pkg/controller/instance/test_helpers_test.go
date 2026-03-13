@@ -228,6 +228,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		metadata.NewKROMetaLabeler(),
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
+		nil, // eventRecorder
 	)
 
 	return controller, clientSet

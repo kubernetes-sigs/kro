@@ -124,6 +124,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					crdManager:        manager,
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
+					newEventRecorder:  newFakeEventRecorderFactory(),
 				}, rgd, manager
 			},
 			check: func(t *testing.T, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
@@ -214,6 +215,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					crdManager:        manager,
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
+					newEventRecorder:  newFakeEventRecorderFactory(),
 				}, rgd, manager
 			},
 			check: func(t *testing.T, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -236,6 +238,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					crdManager:        &stubCRDManager{},
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
+					newEventRecorder:  newFakeEventRecorderFactory(),
 				}, rgd, nil
 			},
 			check: func(t *testing.T, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {

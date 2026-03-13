@@ -35,6 +35,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -228,6 +229,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		metadata.NewKROMetaLabeler(),
 		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
+		record.NewFakeRecorder(100),
 	)
 
 	return controller, clientSet

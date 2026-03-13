@@ -3180,6 +3180,7 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
+		celCache:       celcache.NewBuilderCache(),
 	}
 
 	tests := []struct {

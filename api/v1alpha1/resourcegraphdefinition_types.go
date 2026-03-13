@@ -199,7 +199,7 @@ type Resource struct {
 	// IncludeWhen is a list of CEL expressions that determine whether this resource should be created.
 	// All expressions must evaluate to true for the resource to be included.
 	// If not specified, the resource is always included.
-	// Expressions may reference schema fields and upstream resources. They are
+	// Expressions may reference schema fields and/or fields in other resources in the RGD. They are
 	// re-evaluated during reconciliation, so resources may be created later or
 	// pruned later as conditions change.
 	// Example: ["schema.spec.enableMonitoring == true", "network.status.ready == true"]

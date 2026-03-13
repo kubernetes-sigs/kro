@@ -107,6 +107,7 @@ func BaseDeclarations() []cel.EnvOption {
 			ext.TwoVarComprehensions(),
 			ext.Lists(),
 			ext.Strings(),
+			ext.Bindings(),
 			cel.OptionalTypes(),
 			ext.Encoders(),
 			// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.

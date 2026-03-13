@@ -248,11 +248,11 @@ func (a *Inspector) inspectIdent(expr celast.Expr, path string) ExpressionInspec
 func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path string) ExpressionInspection {
 	out := ExpressionInspection{}
 
+	fn := call.FunctionName()
+
 	for _, arg := range call.Args() {
 		out.merge(a.inspectExpr(ast, arg, ""))
 	}
-
-	fn := call.FunctionName()
 
 	// Namespaced (member) function: target.method
 	if call.IsMemberFunction() {

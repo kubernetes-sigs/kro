@@ -226,6 +226,57 @@ func TestDefaultEnvironment_TwoVarComprehensions(t *testing.T) {
 	}
 }
 
+// TestDefaultEnvironment_CelBind verifies that cel.bind() expressions compile
+// and evaluate correctly through kro's default CEL environment. cel.bind()
+// introduces a named local variable scoped to the body expression, avoiding
+// repeated sub-expression evaluation.
+func TestDefaultEnvironment_CelBind(t *testing.T) {
+	env, err := DefaultEnvironment()
+	require.NoError(t, err, "failed to create CEL env")
+
+	tests := []struct {
+		name string
+		expr string
+		want any
+	}{
+		{
+			name: "basic bind",
+			expr: `cel.bind(x, 6, x * x)`,
+			want: int64(36),
+		},
+		{
+			name: "bind reuses value in multiple places",
+			expr: `cel.bind(n, 3, n + n + n)`,
+			want: int64(9),
+		},
+		{
+			name: "nested bind",
+			expr: `cel.bind(a, 2, cel.bind(b, a + 3, a * b))`,
+			want: int64(10),
+		},
+		{
+			name: "bind with string",
+			expr: `cel.bind(s, "hello", s + " world")`,
+			want: "hello world",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ast, issues := env.Compile(tc.expr)
+			require.NoError(t, issues.Err(), "compile failed")
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err, "program creation failed")
+
+			out, _, err := prog.Eval(cel.NoVars())
+			require.NoError(t, err, "eval failed")
+
+			assert.Equal(t, tc.want, out.Value())
+		})
+	}
+}
+
 func TestBaseDeclarations_ReturnsSameSlice(t *testing.T) {
 	a := BaseDeclarations()
 	b := BaseDeclarations()

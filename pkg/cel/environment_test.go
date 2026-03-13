@@ -16,6 +16,7 @@ package cel
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -217,6 +218,9 @@ func TestDefaultEnvironment_TwoVarComprehensions(t *testing.T) {
 			got, err := out.ConvertToNative(reflect.TypeOf(tc.want))
 			require.NoError(t, err, "native conversion failed")
 
+			if s, ok := got.([]string); ok {
+				sort.Strings(s)
+			}
 			assert.Equal(t, tc.want, got)
 		})
 	}

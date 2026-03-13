@@ -24,9 +24,9 @@ import (
 )
 
 // newListsEnv creates a CEL environment with only the Lists library registered.
-func newListsEnv(t *testing.T, opts ...cel.EnvOption) *cel.Env {
+func newListsEnv(t *testing.T) *cel.Env {
 	t.Helper()
-	env, err := cel.NewEnv(append([]cel.EnvOption{Lists()}, opts...)...)
+	env, err := cel.NewEnv(Lists())
 	require.NoError(t, err)
 	return env
 }

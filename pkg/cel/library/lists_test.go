@@ -88,64 +88,7 @@ func toIfaceSlice(t *testing.T, v interface{}) []interface{} {
 	}
 }
 
-// ── lists.set (legacy, list(int) only) ──────────────────────────────────────
-
-func TestListsSet(t *testing.T) {
-	env := newListsEnv(t)
-	tests := []struct {
-		name    string
-		expr    string
-		want    []int64
-		wantErr string
-	}{
-		{
-			name: "replace middle element",
-			expr: "lists.set([10, 20, 30], 1, 99)",
-			want: []int64{10, 99, 30},
-		},
-		{
-			name: "replace first element",
-			expr: "lists.set([10, 20, 30], 0, 0)",
-			want: []int64{0, 20, 30},
-		},
-		{
-			name: "replace last element",
-			expr: "lists.set([10, 20, 30], 2, 50)",
-			want: []int64{10, 20, 50},
-		},
-		{
-			name: "single-element list",
-			expr: "lists.set([7], 0, 42)",
-			want: []int64{42},
-		},
-		{
-			name:    "index out of bounds high",
-			expr:    "lists.set([10, 20], 5, 99)",
-			wantErr: "out of bounds",
-		},
-		{
-			name:    "index out of bounds negative",
-			expr:    "lists.set([10, 20], -1, 99)",
-			wantErr: "out of bounds",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantErr != "" {
-				assert.Contains(t, evalErr(t, env, tt.expr), tt.wantErr)
-				return
-			}
-			raw := evalList(t, env, tt.expr)
-			got := make([]int64, len(raw))
-			for i, e := range raw {
-				got[i] = e.(int64)
-			}
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// ── lists.setIndex (list(dyn)) ───────────────────────────────────────────────
+// ── lists.setIndex ───────────────────────────────────────────────────────────
 
 func TestListsSetIndex(t *testing.T) {
 	env := newListsEnv(t)

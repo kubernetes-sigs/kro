@@ -15,6 +15,8 @@
 package library
 
 import (
+	"math"
+
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -61,11 +63,37 @@ import (
 //	lists.removeAt([1, 2, 3], 1)   // [1, 3]
 //	lists.removeAt([1, 2, 3], 0)   // [2, 3]
 //	lists.removeAt([1, 2, 3], 2)   // [1, 2]
-func Lists() cel.EnvOption {
-	return cel.Lib(&listsLibrary{})
+func Lists(options ...ListsOption) cel.EnvOption {
+	l := &listsLibrary{version: math.MaxUint32}
+	for _, o := range options {
+		l = o(l)
+	}
+	return cel.Lib(l)
 }
 
-type listsLibrary struct{}
+type listsLibrary struct {
+	version uint32
+}
+
+// ListsOption is a functional option for configuring the lists library.
+type ListsOption func(*listsLibrary) *listsLibrary
+
+// ListsVersion configures the version of the lists library.
+//
+// The version limits which functions are available. Only functions introduced
+// below or equal to the given version are included in the library. If this
+// option is not set, all functions are available.
+//
+// See the library documentation to determine which version a function was
+// introduced. If the documentation does not state which version a function was
+// introduced, it can be assumed to be introduced at version 0, when the library
+// was first created.
+func ListsVersion(version uint32) ListsOption {
+	return func(lib *listsLibrary) *listsLibrary {
+		lib.version = version
+		return lib
+	}
+}
 
 func (l *listsLibrary) LibraryName() string {
 	return "kro.lists"
@@ -74,16 +102,6 @@ func (l *listsLibrary) LibraryName() string {
 func (l *listsLibrary) CompileOptions() []cel.EnvOption {
 	listType := cel.ListType(cel.TypeParamType("T"))
 	return []cel.EnvOption{
-		// lists.set is kept for backwards compatibility with existing RGDs.
-		// It is typed list(int) only. New code should use lists.setIndex.
-		cel.Function("lists.set",
-			cel.Overload("lists.set_list_int_int",
-				[]*cel.Type{cel.ListType(cel.IntType), cel.IntType, cel.IntType},
-				cel.ListType(cel.IntType),
-				cel.FunctionBinding(listsSetLegacy),
-			),
-		),
-
 		// lists.setIndex(arr list(T), index int, value T) -> list(T)
 		cel.Function("lists.setIndex",
 			cel.Overload("lists.setIndex_list_int_T",
@@ -117,40 +135,7 @@ func (l *listsLibrary) ProgramOptions() []cel.ProgramOption {
 	return nil
 }
 
-// listsSetLegacy is the original lists.set implementation, typed list(int) only.
-// Kept for backwards compatibility with existing RGDs using lists.set.
-func listsSetLegacy(args ...ref.Val) ref.Val {
-	if len(args) != 3 {
-		return types.NewErr("lists.set: expected 3 arguments (arr, index, value)")
-	}
-	lister, ok := args[0].(traits.Lister)
-	if !ok {
-		return types.NewErr("lists.set: first argument must be a list")
-	}
-	if args[1].Type() != types.IntType {
-		return types.NewErr("lists.set: index must be an integer")
-	}
-	if args[2].Type() != types.IntType {
-		return types.NewErr("lists.set: value must be an integer")
-	}
-	idx := int64(args[1].(types.Int))
-	size := int64(lister.Size().(types.Int))
-	if idx < 0 || idx >= size {
-		return types.NewErr("lists.set: index %d out of bounds [0, %d)", idx, size)
-	}
-	newArr := make([]int64, size)
-	newVal := int64(args[2].(types.Int))
-	for i := int64(0); i < size; i++ {
-		if i == idx {
-			newArr[i] = newVal
-		} else {
-			newArr[i] = int64(lister.Get(types.Int(i)).(types.Int))
-		}
-	}
-	return types.DefaultTypeAdapter.NativeToValue(newArr)
-}
-
-// listsSetIndex returns a new list(dyn) with the element at index replaced by value.
+// listsSetIndex returns a new list(T) with the element at index replaced by value.
 func listsSetIndex(args ...ref.Val) ref.Val {
 	if len(args) != 3 {
 		return types.NewErr("lists.setIndex: expected 3 arguments (arr, index, value)")
@@ -178,7 +163,7 @@ func listsSetIndex(args ...ref.Val) ref.Val {
 	return types.NewRefValList(types.DefaultTypeAdapter, elems)
 }
 
-// listsInsertAt returns a new list(dyn) with value inserted before the element at index.
+// listsInsertAt returns a new list(T) with value inserted before the element at index.
 // An index equal to size(list) appends the value.
 func listsInsertAt(args ...ref.Val) ref.Val {
 	if len(args) != 3 {
@@ -207,7 +192,7 @@ func listsInsertAt(args ...ref.Val) ref.Val {
 	return types.NewRefValList(types.DefaultTypeAdapter, elems)
 }
 
-// listsRemoveAt returns a new list(dyn) with the element at index removed.
+// listsRemoveAt returns a new list(T) with the element at index removed.
 func listsRemoveAt(arrVal, idxVal ref.Val) ref.Val {
 	lister, ok := arrVal.(traits.Lister)
 	if !ok {

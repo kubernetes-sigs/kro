@@ -511,11 +511,11 @@ func keyFromGVR(gvr schema.GroupVersionResource) string {
 		b.WriteString(gvr.Group)
 	}
 	if gvr.Version != "" {
-		b.WriteRune('/')
+		b.WriteByte('/')
 		b.WriteString(gvr.Version)
 	}
 	if gvr.Resource != "" {
-		b.WriteRune('/')
+		b.WriteByte('/')
 		b.WriteString(gvr.Resource)
 	}
 	return b.String()

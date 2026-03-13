@@ -111,6 +111,8 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		instanceLabeler,
 		r.metadataLabeler,
 		r.dynamicController.Coordinator(),
+		r.enableTelemetry,
+		r.eventRecorder,
 	)
 }
 

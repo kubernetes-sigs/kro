@@ -24,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	instancectrl "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -38,6 +39,11 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
+	}
+
+	// Clean up all instance-level telemetry for this GVR.
+	if r.enableTelemetry {
+		instancectrl.DeleteGVRMetrics(gvr)
 	}
 
 	// cleanup CRD

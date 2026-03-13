@@ -27,8 +27,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
@@ -88,6 +90,14 @@ type Controller struct {
 	childResourceLabeler metadata.Labeler
 	reconcileConfig      ReconcileConfig
 	coordinator          *dynamiccontroller.WatchCoordinator
+
+	// eventRecorder emits K8s Events on condition transitions.
+	// nil when telemetry is disabled.
+	eventRecorder record.EventRecorder
+	// enableTelemetry controls whether instance-level condition metrics,
+	// events, and transition logs are emitted. Feature-gated to limit
+	// Prometheus cardinality and memory footprint.
+	enableTelemetry bool
 }
 
 // NewController constructs a new controller with static RGD.
@@ -100,6 +110,8 @@ func NewController(
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
+	enableTelemetry bool,
+	eventRecorder record.EventRecorder,
 ) *Controller {
 	return &Controller{
 		log:                  log,
@@ -110,6 +122,8 @@ func NewController(
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
 		coordinator:          coord,
+		enableTelemetry:      enableTelemetry,
+		eventRecorder:        eventRecorder,
 	}
 }
 
@@ -132,6 +146,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		Get(ctx, req.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		log.Info("instance not found (likely deleted)")
+		if c.enableTelemetry {
+			deleteInstanceMetrics(c.gvr, req.Namespace, req.Name)
+		}
 		return nil
 	}
 	if err != nil {
@@ -139,7 +156,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		return err
 	}
 
-	//--------------------------------------------------------------
+	// Snapshot initial conditions before reconciliation for diff-based metric emission.
+	var initialConditions []v1alpha1.Condition
+	if c.enableTelemetry {
+		initialConditions = conditionsFromInstance(inst)
+	}
+
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
 	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)
@@ -227,9 +249,16 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 
 	//--------------------------------------------------------------
-	// 8. Persist status/conditions
+	// 8. Persist status/conditions and telemetry
 	//--------------------------------------------------------------
-	return c.updateStatus(rcx)
+	statusErr := c.updateStatus(rcx)
+
+	if c.enableTelemetry && statusErr == nil {
+		finalConditions := conditionsFromInstance(rcx.Instance)
+		emitConditionTelemetry(log, c.eventRecorder, c.gvr, rcx.Instance, initialConditions, finalConditions)
+	}
+
+	return statusErr
 }
 
 func (c *Controller) ensureManaged(rcx *ReconcileContext) error {

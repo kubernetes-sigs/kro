@@ -34,6 +34,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	toolscache "k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -156,6 +157,10 @@ func (m *stubManager) GetControllerOptions() config.Controller {
 
 func (m *stubManager) GetCache() cache.Cache {
 	return m.cache
+}
+
+func (m *stubManager) GetEventRecorderFor(_ string) record.EventRecorder {
+	return record.NewFakeRecorder(100)
 }
 
 func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.RGDConfig) (*graph.Graph, error) {

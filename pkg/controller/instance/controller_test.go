@@ -29,6 +29,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
@@ -152,14 +153,14 @@ func TestReconcileStatusPaths(t *testing.T) {
 	}{
 		{
 			name:                "empty graph converges to active",
-			wantState:           string(InstanceStateActive),
+			wantState:           string(v1alpha1.InstanceStateActive),
 			wantConditionType:   Ready,
 			wantConditionStatus: metav1.ConditionTrue,
 		},
 		{
 			name:                "suspended reconciliation sets condition",
 			instanceLabels:      map[string]string{metadata.InstanceReconcileLabel: "disabled"},
-			wantState:           string(InstanceStateActive),
+			wantState:           string(v1alpha1.InstanceStateActive),
 			wantConditionType:   ReconciliationSuspended,
 			wantConditionStatus: metav1.ConditionTrue,
 		},
@@ -300,7 +301,7 @@ func TestReconcileTerminatingManagedResourcesSetDeletingStatus(t *testing.T) {
 			state, found, err := unstructured.NestedString(stored.Object, "status", "state")
 			require.NoError(t, err)
 			require.True(t, found)
-			assert.Equal(t, string(InstanceStateInProgress), state)
+			assert.Equal(t, string(v1alpha1.InstanceStateInProgress), state)
 
 			cond := conditionByType(t, stored, ResourcesReady)
 			assert.Equal(t, metav1.ConditionFalse, cond.Status)

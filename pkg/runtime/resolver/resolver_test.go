@@ -187,6 +187,15 @@ func TestSetValueAtPath(t *testing.T) {
 			},
 		},
 		{
+			name: "set top level field to nil",
+			resource: map[string]interface{}{
+				"name": "${someexpression}",
+			},
+			path:  "name",
+			value: nil,
+			want:  map[string]interface{}{},
+		},
+		{
 			name: "set nested field",
 			resource: map[string]interface{}{
 				"spec": map[string]interface{}{},
@@ -200,6 +209,19 @@ func TestSetValueAtPath(t *testing.T) {
 			},
 		},
 		{
+			name: "set nested field to nil",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"replicas": "${someexpression}",
+				},
+			},
+			path:  `spec.replicas`,
+			value: nil,
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{},
+			},
+		},
+		{
 			name:     "create intermediate structures",
 			resource: map[string]interface{}{},
 			path:     `spec.template.metadata.name`,
@@ -210,6 +232,19 @@ func TestSetValueAtPath(t *testing.T) {
 						"metadata": map[string]interface{}{
 							"name": "my-pod",
 						},
+					},
+				},
+			},
+		},
+		{
+			name:     "create intermediate structures with nil value",
+			resource: map[string]interface{}{},
+			path:     `spec.template.metadata.name`,
+			value:    nil,
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"metadata": map[string]interface{}{},
 					},
 				},
 			},
@@ -248,6 +283,22 @@ func TestSetValueAtPath(t *testing.T) {
 			},
 		},
 		{
+			name: "set array element to nil",
+			resource: map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{"name": "container1"},
+					"${someexpression}",
+				},
+			},
+			path:  "containers[1]",
+			value: nil,
+			want: map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{"name": "container1"},
+				},
+			},
+		},
+		{
 			name:     "create array and set element",
 			resource: map[string]interface{}{},
 			path:     `spec.containers[0].ports[0].containerPort`,
@@ -267,6 +318,23 @@ func TestSetValueAtPath(t *testing.T) {
 			},
 		},
 		{
+			name:     "create array and set element to nil",
+			resource: map[string]interface{}{},
+			path:     `spec.containers[0].ports[0].containerPort`,
+			value:    nil,
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"ports": []interface{}{
+								map[string]interface{}{},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "extend existing array",
 			resource: map[string]interface{}{
 				"args": []interface{}{"arg1"},
@@ -278,6 +346,20 @@ func TestSetValueAtPath(t *testing.T) {
 					"arg1",
 					nil,
 					"arg3",
+				},
+			},
+		},
+		{
+			name: "extend existing array and set to nil",
+			resource: map[string]interface{}{
+				"args": []interface{}{"arg1"},
+			},
+			path:  "args[2]",
+			value: nil,
+			want: map[string]interface{}{
+				"args": []interface{}{
+					"arg1",
+					nil,
 				},
 			},
 		},

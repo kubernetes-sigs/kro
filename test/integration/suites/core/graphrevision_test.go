@@ -78,9 +78,9 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 		Expect(gr.Name).To(HavePrefix(rgdName + "-"))
 		Expect(gr.Name).To(ContainSubstring("-r1-"))
 
-		// Verify labels
+		// Verify labels (UID label is not set on GraphRevisions — lineage is name-based)
 		Expect(gr.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
-		Expect(gr.Labels[metadata.ResourceGraphDefinitionIDLabel]).To(Equal(string(activeRGD.UID)))
+		Expect(gr.Labels).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel))
 
 		// Verify OwnerReference
 		Expect(gr.OwnerReferences).To(HaveLen(1))

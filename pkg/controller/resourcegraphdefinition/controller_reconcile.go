@@ -120,13 +120,13 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	startTime := time.Now()
 	defer func() {
-		graphBuildDuration.WithLabelValues(rgd.Spec.Schema.Kind).Observe(time.Since(startTime).Seconds())
-		graphBuildTotal.WithLabelValues(rgd.Spec.Schema.Kind).Inc()
+		graphBuildDuration.WithLabelValues(rgd.Name).Observe(time.Since(startTime).Seconds())
+		graphBuildTotal.WithLabelValues(rgd.Name).Inc()
 	}()
 
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd, r.rgdConfig)
 	if err != nil {
-		graphBuildErrorsTotal.WithLabelValues(rgd.Spec.Schema.Kind).Inc()
+		graphBuildErrorsTotal.WithLabelValues(rgd.Name).Inc()
 		return nil, nil, newGraphError(err)
 	}
 

@@ -78,7 +78,7 @@ metrics:
 
 ## ResourceGraphDefinition Controller Metrics
 
-All RGD controller metrics include the label `rgd_kind` (the schema kind of the ResourceGraphDefinition).
+All RGD controller metrics include the label `name` (the `metadata.name` of the ResourceGraphDefinition).
 
 | Metric | Type | Description | Stability |
 |--------|------|-------------|-----------|

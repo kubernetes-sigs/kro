@@ -505,7 +505,7 @@ func TestReconcileResourceGraphDefinitionGraphStableOrder(t *testing.T) {
 	reconciler := &ResourceGraphDefinitionReconciler{rgBuilder: newTestBuilder()}
 
 	for i := 0; i < 25; i++ {
-		processed, resourcesInfo, err := reconciler.reconcileResourceGraphDefinitionGraph(context.Background(), newTestRGD("graph-stable"))
+		processed, resourcesInfo, err := reconciler.buildResourceGraphDefinition(context.Background(), newTestRGD("graph-stable"))
 		require.NoError(t, err)
 		assert.Equal(t, []string{"vpc", "subnetA", "subnetB"}, processed.TopologicalOrder)
 		assert.Equal(t, expectedResourcesInfo(), resourcesInfo)
@@ -517,7 +517,7 @@ func TestReconcileResourceGraphDefinitionGraphWrapsBuilderErrors(t *testing.T) {
 
 	reconciler := &ResourceGraphDefinitionReconciler{rgBuilder: newFailingBuilder(errors.New("naming convention violation"))}
 
-	_, _, err := reconciler.reconcileResourceGraphDefinitionGraph(context.Background(), newTestRGD("graph-error"))
+	_, _, err := reconciler.buildResourceGraphDefinition(context.Background(), newTestRGD("graph-error"))
 	require.Error(t, err)
 
 	var graphErr *graphError
@@ -527,6 +527,7 @@ func TestReconcileResourceGraphDefinitionGraphWrapsBuilderErrors(t *testing.T) {
 func TestReconcileResourceGraphDefinition(t *testing.T) {
 	buildReconciler := func(
 		t *testing.T,
+		rgd *v1alpha1.ResourceGraphDefinition,
 	) (*ResourceGraphDefinitionReconciler, *stubCRDManager) {
 		t.Helper()
 
@@ -534,8 +535,11 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 		require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 		require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-		cl := newFakeClientBuilder().WithScheme(scheme).Build()
+		liveRevision, registryEntry := newActiveGraphRevisionFixture(t, rgd, 1)
+		cl := newFakeClientBuilder().WithScheme(scheme).WithObjects(liveRevision).Build()
 		manager := &stubCRDManager{}
+		registry := revisions.NewRegistry()
+		registry.Put(registryEntry)
 
 		return &ResourceGraphDefinitionReconciler{
 			Client:            cl,
@@ -545,7 +549,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			crdManager:        manager,
 			clientSet:         newKROFakeSet(),
 			instanceLogger:    logr.Discard(),
-			revisionsRegistry: revisions.NewRegistry(),
+			revisionsRegistry: registry,
 			maxGraphRevisions: 20,
 		}, manager
 	}
@@ -563,7 +567,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					v1alpha1.AllowBreakingChangesAnnotation: "true",
 				}
 
-				reconciler, manager := buildReconciler(t)
+				reconciler, manager := buildReconciler(t, rgd)
 				return reconciler, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
@@ -644,7 +648,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			name: "returns crd errors and preserves graph output",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-crd-error")
-				reconciler, manager := buildReconciler(t)
+				reconciler, manager := buildReconciler(t, rgd)
 				manager.ensureErr = errors.New("crd boom")
 				return reconciler, rgd, manager
 			},
@@ -663,7 +667,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			name: "continues when the crd fetch fails after ensure",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-crd-get-error")
-				reconciler, manager := buildReconciler(t)
+				reconciler, manager := buildReconciler(t, rgd)
 				manager.getErr = errors.New("crd get boom")
 				return reconciler, rgd, manager
 			},
@@ -681,12 +685,15 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			name: "returns microcontroller registration errors",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-micro-error")
+				liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
 
 				scheme := runtime.NewScheme()
 				require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 				require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-				cl := newFakeClientBuilder().WithScheme(scheme).Build()
+				cl := newFakeClientBuilder().WithScheme(scheme).WithObjects(liveRevision).Build()
+				registry := revisions.NewRegistry()
+				registry.Put(entry)
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
@@ -695,7 +702,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					crdManager:        &stubCRDManager{},
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
-					revisionsRegistry: revisions.NewRegistry(),
+					revisionsRegistry: registry,
 					maxGraphRevisions: 20,
 				}, rgd, nil
 			},
@@ -724,6 +731,7 @@ func TestReconcileResourceGraphDefinitionMarksGCFailureCondition(t *testing.T) {
 	t.Parallel()
 
 	rgd := newTestRGD("rgd-gc-failure")
+	liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
 	listCalls := 0
 	cl := newTestClient(t, interceptor.Funcs{
 		List: func(ctx context.Context, base client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -733,7 +741,9 @@ func TestReconcileResourceGraphDefinitionMarksGCFailureCondition(t *testing.T) {
 			}
 			return base.List(ctx, list, opts...)
 		},
-	})
+	}, liveRevision)
+	registry := revisions.NewRegistry()
+	registry.Put(entry)
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
@@ -743,7 +753,7 @@ func TestReconcileResourceGraphDefinitionMarksGCFailureCondition(t *testing.T) {
 		crdManager:        &stubCRDManager{},
 		clientSet:         newKROFakeSet(),
 		instanceLogger:    logr.Discard(),
-		revisionsRegistry: revisions.NewRegistry(),
+		revisionsRegistry: registry,
 		maxGraphRevisions: 20,
 	}
 
@@ -1017,9 +1027,9 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				t.Helper()
 
 				require.NoError(t, err)
-				assert.Equal(t, ctrl.Result{}, result)
-				assert.Equal(t, []string{"vpc", "subnetA", "subnetB"}, topologicalOrder)
-				assert.Equal(t, expectedResourcesInfo(), resourcesInfo)
+				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+				assert.Nil(t, topologicalOrder)
+				assert.Nil(t, resourcesInfo)
 				assert.Equal(t, int64(10), rgd.Status.LastIssuedRevision)
 
 				revisionList := &internalv1alpha1.GraphRevisionList{}
@@ -1034,6 +1044,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				require.True(t, ok)
 				assert.Equal(t, currentSpecHash, entry.SpecHash)
 				assert.Equal(t, revisions.RevisionStatePending, entry.State)
+				assert.True(t, conditionFor(t, rgd, RevisionLineageResolved).IsUnknown())
 			},
 		},
 	}
@@ -1078,7 +1089,7 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 
 	result, _, _, reconcileErr := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
 	require.NoError(t, reconcileErr)
-	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
 	assert.Equal(t, int64(1), rgd.Status.LastIssuedRevision)
 
 	revisionList := &internalv1alpha1.GraphRevisionList{}
@@ -1139,7 +1150,11 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 			rgd := newTestRGD("rgd-terminating-test")
 
 			// Build GR objects
-			var objects []client.Object
+			objects := make(
+				[]client.Object,
+				0,
+				len(tt.liveRevisions)+len(tt.terminatingRevs),
+			)
 			for _, rev := range tt.liveRevisions {
 				objects = append(objects, newListedGraphRevision(rgd, rev, fmt.Sprintf("hash-%d", rev)))
 			}

@@ -50,6 +50,7 @@ import (
 	krofake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -460,6 +461,26 @@ func newTestRGD(name string) *v1alpha1.ResourceGraphDefinition {
 	return rgd
 }
 
+//nolint:unparam // Keep the helper generic for future multi-revision fixtures.
+func newActiveGraphRevisionFixture(
+	t testing.TB,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	revision int64,
+) (*internalv1alpha1.GraphRevision, revisions.Entry) {
+	t.Helper()
+
+	specHash, err := graphhash.Spec(rgd.Spec)
+	require.NoError(t, err)
+
+	return newListedGraphRevision(rgd, revision, specHash), revisions.Entry{
+		RGDName:       rgd.Name,
+		Revision:      revision,
+		SpecHash:      specHash,
+		State:         revisions.RevisionStateActive,
+		CompiledGraph: newProcessedGraph(),
+	}
+}
+
 func conditionFor(t testing.TB, rgd *v1alpha1.ResourceGraphDefinition, conditionType string) *v1alpha1.Condition {
 	t.Helper()
 
@@ -627,7 +648,8 @@ func TestSetupWithManager(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := newTestRGD("setup-manager")
-			fakeClient := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
+			liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
+			fakeClient := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy(), liveRevision)
 			fakeSet := newKROFakeSet()
 			skipNameValidation := true
 			mapper := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{
@@ -647,13 +669,15 @@ func TestSetupWithManager(t *testing.T) {
 				controllerOptions: config.Controller{SkipNameValidation: &skipNameValidation},
 				addErr:            tt.addErr,
 			}
+			registry := revisions.NewRegistry()
+			registry.Put(entry)
 
 			reconciler := NewResourceGraphDefinitionReconciler(
 				fakeSet,
 				true,
 				newRunningDynamicController(t),
 				nil,
-				revisions.NewRegistry(),
+				registry,
 				3,
 				20,
 				graph.RGDConfig{},
@@ -701,8 +725,11 @@ func TestReconcile(t *testing.T) {
 			name: "reconciles active rgds successfully",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("reconcile-active")
-				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
+				liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
+				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy(), liveRevision)
 				manager := &stubCRDManager{}
+				registry := revisions.NewRegistry()
+				registry.Put(entry)
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
@@ -712,7 +739,7 @@ func TestReconcile(t *testing.T) {
 					crdManager:        manager,
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
-					revisionsRegistry: revisions.NewRegistry(),
+					revisionsRegistry: registry,
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {

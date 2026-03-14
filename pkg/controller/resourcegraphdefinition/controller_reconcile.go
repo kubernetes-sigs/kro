@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"slices"
@@ -49,21 +50,24 @@ const (
 	graphRevisionNameHashLen = 12
 )
 
+var errRevisionLineagePending = errors.New("revision lineage pending")
+
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition.
 //
 // See KREP-013 for the full design.
-//  1. List existing GraphRevisions and ensure the in-memory registry is warmed.
-//  2. Hash the current RGD spec and compare against the latest issued revision.
-//  3. If unchanged, resolve the compiled graph from cache; if changed, compile
-//     and issue a new GraphRevision.
-//  4. Ensure the CRD exists and start/update the micro-controller.
-//  5. Garbage-collect old GraphRevisions per --rgd-max-graph-revisions.
+//  1. Reconcile the GraphRevision lineage to determine whether serving can
+//     continue, must wait, or must issue a new revision.
+//  2. If issuance is required, build and validate the current graph, create a
+//     new GraphRevision, and wait for the GR controller to compile it.
+//  3. Once the latest revision is compiled, ensure the CRD and microcontroller.
+//  4. Garbage-collect old GraphRevisions per --rgd-max-graph-revisions.
 func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	ctx context.Context,
 	rgd *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, []string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
+	mark.InitializeServingConditions(rgd.GetGeneration())
 	defer func() {
 		// Use a dedicated timeout context for GC so it isn't cancelled when
 		// the reconciliation context is done (e.g. during controller shutdown).
@@ -78,133 +82,60 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		mark.GraphRevisionGCHealthy()
 	}()
 
-	// Before making any issuance or serving decision, ensure all live
-	// GraphRevision objects are represented in the in-memory registry.
-	// This guards against stale decisions after a controller restart.
+	currentSpecHash, err := graphhash.Spec(rgd.Spec)
+	if err != nil {
+		mark.InvalidResourceGraph(err.Error())
+		return ctrl.Result{}, nil, nil, err
+	}
+
 	graphRevisions, hasTerminating, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
 		return ctrl.Result{}, nil, nil, fmt.Errorf("listing graph revisions: %w", err)
-	}
-
-	// If any revisions are terminating, defer all decisions until GC completes.
-	// This prevents stale registry entries from being served during the window
-	// between RGD deletion and GR finalization, and avoids name collisions when
-	// issuing new revisions while old ones are still being deleted.
-	if hasTerminating {
-		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
 
 	// If no live revisions exist, clear any stale registry entries from a
 	// previous RGD with the same name. At this point hasTerminating is false,
 	// so all old revisions are fully gone — any remaining registry entries
 	// are orphaned leftovers.
-	if len(graphRevisions) == 0 {
+	if len(graphRevisions) == 0 && !hasTerminating {
 		r.revisionsRegistry.DeleteAll(rgd.Name)
 	}
 
 	latestRevisionView, warmed := r.getLatestGraphRevisionView(rgd.Name, graphRevisions)
-	if !warmed {
-		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+	if err := r.reconcileRevisionLineage(rgd, currentSpecHash, latestRevisionView, hasTerminating, warmed, mark); err != nil {
+		if errors.Is(err, errRevisionLineagePending) {
+			return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+		}
+		return ctrl.Result{}, rgd.Status.TopologicalOrder, rgd.Status.Resources, err
 	}
 
-	currentSpecHash, err := graphhash.Spec(rgd.Spec)
-	if err != nil {
-		mark.ResourceGraphInvalid(err.Error())
-		return ctrl.Result{}, nil, nil, err
-	}
 	latestRevision := latestRevisionView.Revision
-
-	var processedRGD *graph.Graph
-	var resourcesInfo []v1alpha1.ResourceInformation
-
-	// A new GraphRevision is issued only when the spec hash changes.
-	// Otherwise we resolve the compiled graph from the existing revision.
-	if latestRevision != nil && latestRevision.Spec.Snapshot.SpecHash == currentSpecHash {
-		rgd.Status.LastIssuedRevision = max(rgd.Status.LastIssuedRevision, latestRevision.Spec.Revision)
-
-		if latestRevisionView.RuntimeEntry == nil {
-			return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
-		}
-
-		// Hash match only answers issuance ("should we create another GR?").
-		// Serving behavior is decided by the revision state in cache.
-		switch latestRevisionView.RuntimeEntry.State {
-		case revisions.RevisionStateActive:
-			// Active means GR compilation succeeded and the compiled graph is
-			// available by invariant.
-			processedRGD = latestRevisionView.RuntimeEntry.CompiledGraph
-			resourcesInfo = resourcesInfoFromGraph(processedRGD)
-			mark.ResourceGraphValid()
-		case revisions.RevisionStatePending:
-			// Same spec hash, but compilation is still in-flight.
-			return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
-		case revisions.RevisionStateFailed:
-			// Same spec hash, but the latest issued revision failed compilation.
-			// Return an error to trigger exponential backoff requeue — the failure
-			// may be transient (e.g. a dependency CRD was temporarily missing).
-			failErr := fmt.Errorf("latest graph revision %d failed", latestRevision.Spec.Revision)
-			mark.ResourceGraphInvalid(failErr.Error())
-			return ctrl.Result{}, rgd.Status.TopologicalOrder, rgd.Status.Resources, failErr
-		default:
-			return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
-		}
-	} else {
-		log.V(1).Info("reconciling resource graph definition graph")
-		processedRGD, resourcesInfo, err = r.reconcileResourceGraphDefinitionGraph(ctx, rgd)
-		if err != nil {
-			mark.ResourceGraphInvalid(err.Error())
+	if latestRevision == nil || latestRevision.Spec.Snapshot.SpecHash != currentSpecHash {
+		log.V(1).Info("building resource graph definition")
+		if _, _, err := r.buildResourceGraphDefinition(ctx, rgd); err != nil {
+			mark.InvalidResourceGraph(err.Error())
 			return ctrl.Result{}, nil, nil, err
 		}
 		mark.ResourceGraphValid()
 
-		// Watermark recovery: use the higher of the persisted high-water mark
-		// and the highest observed revision from live GraphRevisions. This
-		// handles status update failures and RGD recreation (where status is
-		// reset but orphaned revisions may still exist).
-		//
-		// Edge case: if both LastIssuedRevision status update failed AND all
-		// GRs were GC'd, revision resets to 1. A name collision with a
-		// still-terminating old r1 would fail with AlreadyExists and requeue.
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {
+			mark.RevisionLineageFailed(createErr.Error())
 			return ctrl.Result{}, nil, nil, createErr
 		}
 		rgd.Status.LastIssuedRevision = createdGR.Spec.Revision
+		mark.GraphRevisionIssuedPendingCompilation(createdGR.Spec.Revision)
+		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
 
-	// Build instance labeler: kro metadata + RGD-specific labels.
-	// This is applied to CRDs and instances. Child resources only get r.metadataLabeler.
-	rgdLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
-	instanceLabeler, err := r.metadataLabeler.Merge(rgdLabeler)
-	if err != nil {
-		mark.FailedLabelerSetup(err.Error())
-		return ctrl.Result{}, nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
-	}
-
-	crd := processedRGD.CRD
-	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
-
-	// Ensure CRD exists and is up to date
-	log.V(1).Info("reconciling resource graph definition CRD")
-	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
-	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
-		mark.KindUnready(err.Error())
-		return ctrl.Result{}, processedRGD.TopologicalOrder, resourcesInfo, err
-	}
-	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
-		mark.KindUnready(err.Error())
-	} else {
-		mark.KindReady(crd.Status.AcceptedNames.Kind)
-	}
-
-	if err := r.reconcileResourceGraphDefinitionMicroController(ctx, rgd, processedRGD, instanceLabeler); err != nil {
-		mark.ControllerFailedToStart(err.Error())
-		return ctrl.Result{}, processedRGD.TopologicalOrder, resourcesInfo, err
-	}
-	mark.ControllerRunning()
-
-	return ctrl.Result{}, processedRGD.TopologicalOrder, resourcesInfo, nil
+	topologicalOrder, resourcesInfo, err := r.ensureServingState(
+		ctx,
+		rgd,
+		latestRevisionView.RuntimeEntry.CompiledGraph,
+		mark,
+	)
+	return ctrl.Result{}, topologicalOrder, resourcesInfo, err
 }
 
 // setupMicroController creates a new controller instance with the required configuration
@@ -237,10 +168,60 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	)
 }
 
-// reconcileResourceGraphDefinitionGraph processes the resource graph definition to build a dependency graph
-// and extract resource information. It skips the expensive build pipeline when the
-// RGD's .metadata.generation has not changed since the last successful build.
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionGraph(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
+func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
+	rgd *v1alpha1.ResourceGraphDefinition,
+	currentSpecHash string,
+	latestRevisionView latestGraphRevisionView,
+	hasTerminating bool,
+	warmed bool,
+	mark *ConditionsMarker,
+) error {
+	if hasTerminating {
+		mark.WaitingForGraphRevisionSettlement()
+		return errRevisionLineagePending
+	}
+
+	if !warmed {
+		mark.WaitingForGraphRevisionWarmup()
+		return errRevisionLineagePending
+	}
+
+	latestRevision := latestRevisionView.Revision
+	if latestRevision == nil {
+		return nil
+	}
+
+	rgd.Status.LastIssuedRevision = max(rgd.Status.LastIssuedRevision, latestRevision.Spec.Revision)
+	if latestRevision.Spec.Snapshot.SpecHash != currentSpecHash {
+		return nil
+	}
+
+	if latestRevisionView.RuntimeEntry == nil {
+		mark.WaitingForGraphRevisionWarmup()
+		return errRevisionLineagePending
+	}
+
+	switch latestRevisionView.RuntimeEntry.State {
+	case revisions.RevisionStateActive:
+		mark.ResourceGraphValid()
+		mark.RevisionLineageResolved(latestRevision.Spec.Revision)
+		return nil
+	case revisions.RevisionStatePending:
+		mark.ResourceGraphValid()
+		mark.WaitingForGraphRevisionCompilation(latestRevision.Spec.Revision)
+		return errRevisionLineagePending
+	case revisions.RevisionStateFailed:
+		failErr := fmt.Errorf("latest graph revision %d failed", latestRevision.Spec.Revision)
+		mark.InvalidResourceGraph(failErr.Error())
+		return failErr
+	default:
+		mark.WaitingForGraphRevisionState(latestRevision.Spec.Revision)
+		return errRevisionLineagePending
+	}
+}
+
+// buildResourceGraphDefinition compiles the desired graph from the current RGD spec.
+func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	startTime := time.Now()
 	defer func() {
 		graphBuildDuration.WithLabelValues(rgd.Spec.Schema.Kind).Observe(time.Since(startTime).Seconds())
@@ -280,18 +261,18 @@ func resourcesInfoFromGraph(processedRGD *graph.Graph) []v1alpha1.ResourceInform
 	return resourcesInfo
 }
 
-// reconcileResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, allowBreakingChanges bool) error {
+// ensureResourceGraphDefinitionCRD ensures the CRD is present and up to date in the cluster.
+func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionCRD(ctx context.Context, crd *v1.CustomResourceDefinition, allowBreakingChanges bool) error {
 	if err := r.crdManager.Ensure(ctx, *crd, allowBreakingChanges); err != nil {
 		return newCRDError(err)
 	}
 	return nil
 }
 
-// reconcileResourceGraphDefinitionMicroController starts the microcontroller for handling the resources.
+// ensureResourceGraphDefinitionController starts the microcontroller for handling the resources.
 // Child/external resource watches are discovered dynamically by the coordinator from
 // Watch() calls made by instance reconcilers -- no GVR list needed here.
-func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicroController(
+func (r *ResourceGraphDefinitionReconciler) ensureResourceGraphDefinitionController(
 	ctx context.Context,
 	rgd *v1alpha1.ResourceGraphDefinition,
 	processedRGD *graph.Graph,
@@ -307,6 +288,47 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinitionMicr
 		return newMicroControllerError(err)
 	}
 	return nil
+}
+
+func (r *ResourceGraphDefinitionReconciler) ensureServingState(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	processedRGD *graph.Graph,
+	mark *ConditionsMarker,
+) ([]string, []v1alpha1.ResourceInformation, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	resourcesInfo := resourcesInfoFromGraph(processedRGD)
+
+	rgdLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
+	instanceLabeler, err := r.metadataLabeler.Merge(rgdLabeler)
+	if err != nil {
+		mark.FailedLabelerSetup(err.Error())
+		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
+	}
+
+	crd := processedRGD.CRD
+	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
+
+	log.V(1).Info("ensuring resource graph definition CRD")
+	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+	if err := r.ensureResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
+		mark.KindUnready(err.Error())
+		return processedRGD.TopologicalOrder, resourcesInfo, err
+	}
+	if crd, err = r.crdManager.Get(ctx, crd.Name); err != nil {
+		mark.KindUnready(err.Error())
+	} else {
+		mark.KindReady(crd.Status.AcceptedNames.Kind)
+	}
+
+	if err := r.ensureResourceGraphDefinitionController(ctx, rgd, processedRGD, instanceLabeler); err != nil {
+		mark.ControllerFailedToStart(err.Error())
+		return processedRGD.TopologicalOrder, resourcesInfo, err
+	}
+	mark.ControllerRunning()
+
+	return processedRGD.TopologicalOrder, resourcesInfo, nil
 }
 
 // Error types for the resourcegraphdefinition controller

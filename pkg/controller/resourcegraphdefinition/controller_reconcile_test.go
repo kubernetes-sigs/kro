@@ -39,6 +39,28 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
+// newFakeClientBuilder returns a fake client builder with the field indexer
+// for spec.resourceGraphDefinitionName pre-registered, matching the indexer
+// registered in SetupWithManager.
+func newFakeClientBuilder() *fake.ClientBuilder {
+	scheme := runtime.NewScheme()
+	_ = internalv1alpha1.AddToScheme(scheme)
+	_ = v1alpha1.AddToScheme(scheme)
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithIndex(
+			&internalv1alpha1.GraphRevision{},
+			"spec.resourceGraphDefinitionName",
+			func(obj client.Object) []string {
+				gr, ok := obj.(*internalv1alpha1.GraphRevision)
+				if !ok {
+					return nil
+				}
+				return []string{gr.Spec.ResourceGraphDefinitionName}
+			},
+		)
+}
+
 func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 	t.Parallel()
 
@@ -89,7 +111,7 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 		},
 	}
 
-	cl := fake.NewClientBuilder().
+	cl := newFakeClientBuilder().
 		WithScheme(scheme).
 		WithObjects(revisionWithOldUID, revisionWithNewUID, otherRGDRevision).
 		Build()
@@ -131,7 +153,7 @@ func TestListGraphRevisions_SkipsTerminatingRevisions(t *testing.T) {
 	terminatingRevision.DeletionTimestamp = &now
 	terminatingRevision.Finalizers = []string{"test.kro.run/finalizer"}
 
-	cl := fake.NewClientBuilder().
+	cl := newFakeClientBuilder().
 		WithScheme(scheme).
 		WithObjects(liveRevision, terminatingRevision).
 		Build()
@@ -151,7 +173,7 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 	require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	cl := newFakeClientBuilder().WithScheme(scheme).Build()
 	registry := revisions.NewRegistry()
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
@@ -183,7 +205,7 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	assert.Equal(t, rgd.Name, stored.OwnerReferences[0].Name)
 	assert.Equal(t, rgd.UID, stored.OwnerReferences[0].UID)
 	assert.Equal(t, "demo", stored.Labels[metadata.ResourceGraphDefinitionNameLabel])
-	assert.Equal(t, "new-uid", stored.Labels[metadata.ResourceGraphDefinitionIDLabel])
+	assert.Empty(t, stored.Labels[metadata.ResourceGraphDefinitionIDLabel])
 	assert.Equal(t, "hash-3", stored.Labels[metadata.GraphRevisionHashLabel])
 
 	entry, ok := registry.Get("demo", 3)
@@ -207,7 +229,7 @@ func TestCreateGraphRevision_AlreadyExistsReturnsError(t *testing.T) {
 		},
 	}
 
-	cl := fake.NewClientBuilder().
+	cl := newFakeClientBuilder().
 		WithScheme(scheme).
 		WithObjects(existing).
 		Build()
@@ -398,7 +420,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 		require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 		require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-		cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+		cl := newFakeClientBuilder().WithScheme(scheme).Build()
 		manager := &stubCRDManager{}
 
 		return &ResourceGraphDefinitionReconciler{
@@ -455,7 +477,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 				require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-				cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+				cl := newFakeClientBuilder().WithScheme(scheme).Build()
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
@@ -484,7 +506,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 				require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-				cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+				cl := newFakeClientBuilder().WithScheme(scheme).Build()
 				return &ResourceGraphDefinitionReconciler{
 					Client: cl,
 					metadataLabeler: metadata.GenericLabeler{
@@ -550,7 +572,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 				require.NoError(t, v1alpha1.AddToScheme(scheme))
 
-				cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+				cl := newFakeClientBuilder().WithScheme(scheme).Build()
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
@@ -1025,7 +1047,6 @@ func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int6
 			Name: graphRevisionName(rgd.Name, revision),
 			Labels: map[string]string{
 				metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
-				metadata.ResourceGraphDefinitionIDLabel:   string(rgd.UID),
 				metadata.GraphRevisionHashLabel:           metadata.NewGraphRevisionHashLabeler(specHash)[metadata.GraphRevisionHashLabel],
 			},
 		},

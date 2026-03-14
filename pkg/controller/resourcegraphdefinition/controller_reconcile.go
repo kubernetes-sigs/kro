@@ -24,7 +24,6 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -314,12 +313,10 @@ func newMicroControllerError(err error) error { return &microControllerError{err
 // Revisions already marked for deletion are excluded so retention GC does not
 // block cache warmup or issuance decisions while old objects are terminating.
 func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]internalv1alpha1.GraphRevision, error) {
-	labelSelector := labels.SelectorFromSet(map[string]string{
-		metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
-	})
-
 	revisionList := &internalv1alpha1.GraphRevisionList{}
-	if err := r.List(ctx, revisionList, &client.ListOptions{LabelSelector: labelSelector}); err != nil {
+	if err := r.List(ctx, revisionList, client.MatchingFields{
+		"spec.resourceGraphDefinitionName": rgd.Name,
+	}); err != nil {
 		return nil, err
 	}
 
@@ -389,8 +386,12 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	revision int64,
 	specHash string,
 ) (*internalv1alpha1.GraphRevision, error) {
-	rgdLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
-	graphRevisionLabeler, err := r.metadataLabeler.Merge(rgdLabeler)
+	// GraphRevisions use name-based lineage, so the UID label is not needed.
+	// The spec hash label is kept for user-facing queries (kubectl).
+	rgdNameLabeler := metadata.GenericLabeler{
+		metadata.ResourceGraphDefinitionNameLabel: rgd.Name,
+	}
+	graphRevisionLabeler, err := r.metadataLabeler.Merge(rgdNameLabeler)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup graph revision labels: %w", err)
 	}

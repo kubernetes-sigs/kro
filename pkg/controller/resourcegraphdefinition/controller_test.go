@@ -160,6 +160,16 @@ func (m *stubManager) GetCache() cache.Cache {
 	return m.cache
 }
 
+func (m *stubManager) GetFieldIndexer() client.FieldIndexer {
+	return &stubFieldIndexer{}
+}
+
+type stubFieldIndexer struct{}
+
+func (s *stubFieldIndexer) IndexField(_ context.Context, _ client.Object, _ string, _ client.IndexerFunc) error {
+	return nil
+}
+
 func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.RGDConfig) (*graph.Graph, error) {
 	return s.build(rgd, config)
 }
@@ -264,6 +274,13 @@ func newTestClient(t testing.TB, funcs interceptor.Funcs, objs ...client.Object)
 	builder := clientfake.NewClientBuilder().
 		WithScheme(testScheme(t)).
 		WithStatusSubresource(&v1alpha1.ResourceGraphDefinition{}).
+		WithIndex(&internalv1alpha1.GraphRevision{}, "spec.resourceGraphDefinitionName", func(obj client.Object) []string {
+			gr, ok := obj.(*internalv1alpha1.GraphRevision)
+			if !ok {
+				return nil
+			}
+			return []string{gr.Spec.ResourceGraphDefinitionName}
+		}).
 		WithInterceptorFuncs(funcs)
 	if len(objs) > 0 {
 		builder = builder.WithObjects(objs...)

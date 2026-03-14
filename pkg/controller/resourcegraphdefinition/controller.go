@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -32,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
@@ -97,6 +99,25 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	r.Client = mgr.GetClient()
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
+
+	// Index GraphRevisions by RGD name so listGraphRevisions can use a field
+	// selector on the immutable spec field instead of a label selector. Labels
+	// are kept for kubectl/informational purposes but are not trusted for
+	// functional lookups since they can be modified externally.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&internalv1alpha1.GraphRevision{},
+		"spec.resourceGraphDefinitionName",
+		func(obj client.Object) []string {
+			gr, ok := obj.(*internalv1alpha1.GraphRevision)
+			if !ok {
+				return nil
+			}
+			return []string{gr.Spec.ResourceGraphDefinitionName}
+		},
+	); err != nil {
+		return fmt.Errorf("failed to index GraphRevision by spec.resourceGraphDefinitionName: %w", err)
+	}
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(

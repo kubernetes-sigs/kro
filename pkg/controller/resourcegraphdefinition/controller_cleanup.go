@@ -30,7 +30,8 @@ import (
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
 // microcontroller and cleaning up the CRD if enabled. It executes cleanup operations in order:
 // 1. Shuts down the microcontroller
-// 2. Deletes the associated CRD (if CRD deletion is enabled)
+// 2. Evicts all cached graph revisions from the in-memory registry
+// 3. Deletes the associated CRD (if CRD deletion is enabled)
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
@@ -39,6 +40,11 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 	}
+
+	// Eagerly evict all cached revisions for this RGD so that a recreated RGD
+	// with the same name cannot resolve stale compiled graphs while Kubernetes
+	// GC is still deleting the old GraphRevision objects.
+	r.revisionsRegistry.DeleteAll(rgd.Name)
 
 	// cleanup CRD
 	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)

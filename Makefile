@@ -99,10 +99,11 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
-	@echo "Copying CRD to website docs..."
+	@echo "Copying CRDs to website docs..."
 	@mkdir -p website/docs/api/crds
 	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/docs/api/crds/kro.run_resourcegraphdefinitions.yaml
-	@echo "CRD copied successfully"
+	@cp helm/crds/internal.kro.run_graphrevisions.yaml website/docs/api/crds/internal.kro.run_graphrevisions.yaml
+	@echo "CRDs copied successfully"
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

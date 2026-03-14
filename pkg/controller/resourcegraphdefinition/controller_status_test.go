@@ -83,6 +83,24 @@ func TestConditionsMarker(t *testing.T) {
 				m.ControllerFailedToStart("register failed")
 			},
 		},
+		{
+			name:      "gc condition is informational only",
+			condition: GraphRevisionGCHealthy,
+			reason:    "GarbageCollectionFailed",
+			rootReady: true,
+			apply: func(m *ConditionsMarker) {
+				m.ResourceGraphValid()
+				m.KindReady("Network")
+				m.ControllerRunning()
+				m.GraphRevisionGCUnhealthy("gc boom")
+			},
+			check: func(t *testing.T, rgd *v1alpha1.ResourceGraphDefinition) {
+				assert.True(t, conditionFor(t, rgd, ResourceGraphAccepted).IsTrue())
+				assert.True(t, conditionFor(t, rgd, KindReady).IsTrue())
+				assert.True(t, conditionFor(t, rgd, ControllerReady).IsTrue())
+				assert.True(t, conditionFor(t, rgd, GraphRevisionGCHealthy).IsFalse())
+			},
+		},
 	}
 
 	for _, tt := range tests {

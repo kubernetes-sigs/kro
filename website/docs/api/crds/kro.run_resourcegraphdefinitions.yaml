@@ -403,6 +403,12 @@ spec:
                   - type
                   type: object
                 type: array
+              lastIssuedRevision:
+                description: |-
+                  LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.
+                  It is a persisted high-water mark used to keep revision allocation monotonic across GC.
+                format: int64
+                type: integer
               resources:
                 description: |-
                   Resources provides detailed information about each resource in the graph,

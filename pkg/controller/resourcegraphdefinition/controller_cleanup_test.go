@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -120,6 +121,7 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 				allowCRDDeletion:  tt.allowCRDDeletion,
 				dynamicController: dc,
 				crdManager:        manager,
+				revisionsRegistry: revisions.NewRegistry(),
 			}
 
 			err := reconciler.cleanupResourceGraphDefinition(context.Background(), rgd)
@@ -133,6 +135,34 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 			assert.Equal(t, tt.wantDeleted, manager.deleted)
 		})
 	}
+}
+
+func TestCleanupEvictsRegistryEntries(t *testing.T) {
+	rgd := newTestRGD("evict")
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+	dc := newRunningDynamicController(t)
+	require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
+
+	registry := revisions.NewRegistry()
+	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 1, SpecHash: "aaa", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 2, SpecHash: "bbb", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{RGDName: "other-rgd", Revision: 1, SpecHash: "ccc", State: revisions.RevisionStateActive})
+
+	reconciler := &ResourceGraphDefinitionReconciler{
+		dynamicController: dc,
+		crdManager:        &stubCRDManager{},
+		revisionsRegistry: registry,
+	}
+
+	require.NoError(t, reconciler.cleanupResourceGraphDefinition(context.Background(), rgd))
+
+	_, found := registry.Get(rgd.Name, 1)
+	assert.False(t, found, "revision 1 should be evicted")
+	_, found = registry.Get(rgd.Name, 2)
+	assert.False(t, found, "revision 2 should be evicted")
+
+	_, found = registry.Get("other-rgd", 1)
+	assert.True(t, found, "unrelated RGD entries must be preserved")
 }
 
 func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {

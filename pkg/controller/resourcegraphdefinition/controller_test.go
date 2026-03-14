@@ -45,10 +45,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krofake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
@@ -249,6 +251,7 @@ func testScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
+	require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 	require.NoError(t, v1alpha1.AddToScheme(scheme))
 	require.NoError(t, extv1.AddToScheme(scheme))
 
@@ -471,7 +474,9 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 		true,
 		nil,
 		nil,
+		revisions.NewRegistry(),
 		7,
+		20,
 		graph.RGDConfig{MaxCollectionSize: 32},
 	)
 
@@ -626,7 +631,16 @@ func TestSetupWithManager(t *testing.T) {
 				addErr:            tt.addErr,
 			}
 
-			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 3, graph.RGDConfig{})
+			reconciler := NewResourceGraphDefinitionReconciler(
+				fakeSet,
+				true,
+				newRunningDynamicController(t),
+				nil,
+				revisions.NewRegistry(),
+				3,
+				20,
+				graph.RGDConfig{},
+			)
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
 			err := reconciler.SetupWithManager(mgr)
@@ -681,6 +695,7 @@ func TestReconcile(t *testing.T) {
 					crdManager:        manager,
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -705,10 +720,11 @@ func TestReconcile(t *testing.T) {
 				}, rgd.DeepCopy())
 
 				return &ResourceGraphDefinitionReconciler{
-					Client:          c,
-					metadataLabeler: metadata.NewKROMetaLabeler(),
-					rgBuilder:       newFailingBuilder(errors.New("naming convention violation")),
-					clientSet:       newKROFakeSet(),
+					Client:            c,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newFailingBuilder(errors.New("naming convention violation")),
+					clientSet:         newKROFakeSet(),
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, _ client.WithWatch, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -737,6 +753,7 @@ func TestReconcile(t *testing.T) {
 					allowCRDDeletion:  true,
 					dynamicController: dc,
 					crdManager:        manager,
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
@@ -765,6 +782,7 @@ func TestReconcile(t *testing.T) {
 					allowCRDDeletion:  true,
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -796,6 +814,7 @@ func TestReconcile(t *testing.T) {
 					Client:            c,
 					dynamicController: dc,
 					crdManager:        &stubCRDManager{},
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {

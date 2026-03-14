@@ -42,8 +42,23 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 
 	oldState := o.Status.State
 
-	// Set status.state.
-	if rgdConditionTypes.For(o).IsRootReady() {
+	conditions := rgdConditionTypes.For(o)
+	kindReady := isConditionTrueForObservedGeneration(conditions.Get(KindReady), o.GetGeneration())
+	controllerReady := isConditionTrueForObservedGeneration(conditions.Get(ControllerReady), o.GetGeneration())
+
+	// ResourceGraphAccepted indicates whether the current spec compiles,
+	// while RGD serving state is about whether traffic can flow through the
+	// infra path (CRD established + dynamic controller running). We keep these
+	// concerns separate so graph validity and serving availability can evolve
+	// independently.
+	//
+	// An RGD can be Active while only a subset of revisions are valid, and that
+	// is expected.
+	//
+	// This can happen after restarts: older GraphRevisions may be re-evaluated
+	// against a different cluster shape (for example, a referenced CRD was
+	// deleted or changed).
+	if kindReady && controllerReady {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
@@ -66,6 +81,7 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		dc.Status.State = o.Status.State
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
+		dc.Status.LastIssuedRevision = o.Status.LastIssuedRevision
 
 		log.V(1).Info("updating resource graph definition status",
 			"state", dc.Status.State,
@@ -79,6 +95,13 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 
 		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
 	})
+}
+
+func isConditionTrueForObservedGeneration(cond *v1alpha1.Condition, generation int64) bool {
+	if cond == nil {
+		return false
+	}
+	return cond.IsTrue() && cond.ObservedGeneration == generation
 }
 
 // setManaged sets the resourcegraphdefinition as managed, by adding the
@@ -112,10 +135,11 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 }
 
 const (
-	Ready                 = "Ready"
-	ResourceGraphAccepted = "ResourceGraphAccepted"
-	KindReady             = "KindReady"
-	ControllerReady       = "ControllerReady"
+	Ready                  = "Ready"
+	ResourceGraphAccepted  = "ResourceGraphAccepted"
+	KindReady              = "KindReady"
+	ControllerReady        = "ControllerReady"
+	GraphRevisionGCHealthy = "GraphRevisionGCHealthy"
 )
 
 var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady)
@@ -127,6 +151,9 @@ var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady
 //	├─ ResourceGraphAccepted - This controller has accepted the spec.schema and spec.resources.
 //	├─ KindReady - The CRD status created on behalf of this RGD.
 //	└─ ControllerReady - The status of the controller thread reconciling this resource.
+//
+// GraphRevisionGCHealthy is an informational condition and does not participate
+// in Ready calculation.
 // ```
 
 func NewConditionsMarkerFor(o apis.Object) *ConditionsMarker {
@@ -173,4 +200,14 @@ func (m *ConditionsMarker) ControllerFailedToStart(msg string) {
 // ControllerRunning signals the microcontroller is up and running for this RGD-Kind.
 func (m *ConditionsMarker) ControllerRunning() {
 	m.cs.SetTrueWithReason(ControllerReady, "Running", "controller is running")
+}
+
+// GraphRevisionGCHealthy signals retention GC completed without error.
+func (m *ConditionsMarker) GraphRevisionGCHealthy() {
+	m.cs.SetTrueWithReason(GraphRevisionGCHealthy, "Succeeded", "graph revision garbage collection is healthy")
+}
+
+// GraphRevisionGCUnhealthy signals retention GC failed.
+func (m *ConditionsMarker) GraphRevisionGCUnhealthy(msg string) {
+	m.cs.SetFalse(GraphRevisionGCHealthy, "GarbageCollectionFailed", msg)
 }

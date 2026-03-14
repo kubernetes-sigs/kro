@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 )
 
@@ -234,6 +235,25 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 			ResourceGraphDefinitionNameLabel: name,
 			ResourceGraphDefinitionIDLabel:   string(uid),
 		}, labeler)
+	})
+}
+
+func TestNewGraphRevisionHashLabeler(t *testing.T) {
+	t.Run("preserves already label-safe hashes", func(t *testing.T) {
+		labeler := NewGraphRevisionHashLabeler("hash-1")
+		assert.Equal(t, GenericLabeler{
+			GraphRevisionHashLabel: "hash-1",
+		}, labeler)
+	})
+
+	t.Run("encodes sha256 hex digests into label-safe values", func(t *testing.T) {
+		specHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		labeler := NewGraphRevisionHashLabeler(specHash)
+		value := labeler[GraphRevisionHashLabel]
+
+		assert.NotEqual(t, specHash, value)
+		assert.LessOrEqual(t, len(value), 63)
+		assert.Empty(t, validation.IsValidLabelValue(value))
 	})
 }
 

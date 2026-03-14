@@ -36,6 +36,7 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -59,7 +60,9 @@ type ResourceGraphDefinitionReconciler struct {
 	metadataLabeler         metadata.Labeler
 	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
+	revisionsRegistry       *revisions.Registry
 	maxConcurrentReconciles int
+	maxGraphRevisions       int
 	rgdConfig               graph.RGDConfig
 }
 
@@ -68,7 +71,9 @@ func NewResourceGraphDefinitionReconciler(
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
+	revisionsRegistry *revisions.Registry,
 	maxConcurrentReconciles int,
+	maxGraphRevisions int,
 	rgdConfig graph.RGDConfig,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
@@ -78,9 +83,11 @@ func NewResourceGraphDefinitionReconciler(
 		allowCRDDeletion:        allowCRDDeletion,
 		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
+		revisionsRegistry:       revisionsRegistry,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,
+		maxGraphRevisions:       maxGraphRevisions,
 		rgdConfig:               rgdConfig,
 	}
 }
@@ -213,11 +220,11 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
+	reconcileResult, topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
 	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
 	}
 
-	return ctrl.Result{}, reconcileErr
+	return reconcileResult, reconcileErr
 }

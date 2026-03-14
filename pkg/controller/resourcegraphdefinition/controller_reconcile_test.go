@@ -130,8 +130,9 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 		},
 	}
 
-	got, err := reconciler.listGraphRevisions(context.Background(), recreatedRGD)
+	got, hasTerminating, err := reconciler.listGraphRevisions(context.Background(), recreatedRGD)
 	require.NoError(t, err)
+	assert.False(t, hasTerminating)
 	require.Len(t, got, 2)
 
 	byRevision := map[int64]internalv1alpha1.GraphRevision{}
@@ -166,8 +167,9 @@ func TestListGraphRevisions_SkipsTerminatingRevisions(t *testing.T) {
 
 	reconciler := &ResourceGraphDefinitionReconciler{Client: cl}
 
-	got, err := reconciler.listGraphRevisions(context.Background(), rgd)
+	got, hasTerminating, err := reconciler.listGraphRevisions(context.Background(), rgd)
 	require.NoError(t, err)
+	assert.True(t, hasTerminating)
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(2), got[0].Spec.Revision)
 }
@@ -311,6 +313,45 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 		assert.Equal(t, revisions.RevisionStatePending, view.RuntimeEntry.State)
 	})
 
+	t.Run("warmed when only latest is in registry", func(t *testing.T) {
+		// Only revision 3 (the latest) is in the registry. Revision 1 is
+		// missing. Warmup should still return true because only the latest
+		// matters for serving.
+		reg := revisions.NewRegistry()
+		reg.Put(revisions.Entry{
+			RGDName:  "demo",
+			Revision: 3,
+			SpecHash: "hash-3",
+			State:    revisions.RevisionStateActive,
+		})
+		reconciler := &ResourceGraphDefinitionReconciler{
+			revisionsRegistry: reg,
+		}
+
+		view, warmed := reconciler.getLatestGraphRevisionView("demo", graphRevisions)
+		assert.True(t, warmed, "should be warmed when latest revision is in registry")
+		assert.Equal(t, int64(3), view.RevisionNumber)
+		require.NotNil(t, view.RuntimeEntry)
+		assert.Equal(t, revisions.RevisionStateActive, view.RuntimeEntry.State)
+	})
+
+	t.Run("not warmed when latest is missing but older exists", func(t *testing.T) {
+		// Revision 1 is in the registry but revision 3 (the latest) is not.
+		reg := revisions.NewRegistry()
+		reg.Put(revisions.Entry{
+			RGDName:  "demo",
+			Revision: 1,
+			SpecHash: "hash-1",
+			State:    revisions.RevisionStateActive,
+		})
+		reconciler := &ResourceGraphDefinitionReconciler{
+			revisionsRegistry: reg,
+		}
+
+		_, warmed := reconciler.getLatestGraphRevisionView("demo", graphRevisions)
+		assert.False(t, warmed, "should not be warmed when latest revision is missing")
+	})
+
 	t.Run("returns not warmed when cache is cold", func(t *testing.T) {
 		reconciler := &ResourceGraphDefinitionReconciler{
 			revisionsRegistry: revisions.NewRegistry(),
@@ -325,11 +366,11 @@ func TestGraphRevisionName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		rgdName   string
-		revision  int64
-		wantExact string // if set, assert exact match
-		wantMax   int    // max length (0 = no check)
+		name        string
+		rgdName     string
+		revision    int64
+		wantExact   string // if set, assert exact match
+		wantMax     int    // max length (0 = no check)
 		notContains []string
 	}{
 		{
@@ -345,16 +386,16 @@ func TestGraphRevisionName(t *testing.T) {
 			wantExact: "demo-r1234-695b6c57ca75",
 		},
 		{
-			name:    "long name truncates to 253",
-			rgdName: strings.Repeat("a", 260),
+			name:     "long name truncates to 253",
+			rgdName:  strings.Repeat("a", 260),
 			revision: 1,
-			wantMax: 253,
+			wantMax:  253,
 		},
 		{
-			name:    "different long names produce different hashes",
-			rgdName: strings.Repeat("a", 250) + "bbbbbbbbbb",
+			name:     "different long names produce different hashes",
+			rgdName:  strings.Repeat("a", 250) + "bbbbbbbbbb",
 			revision: 1,
-			wantMax: 253,
+			wantMax:  253,
 		},
 		{
 			name:        "truncation at dot boundary trims trailing dot",
@@ -1002,6 +1043,182 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 			reconciler, rgd := tt.build(t)
 			result, topologicalOrder, resourcesInfo, err := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
 			tt.check(t, result, topologicalOrder, resourcesInfo, err, reconciler, rgd)
+		})
+	}
+}
+
+func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRegistry(t *testing.T) {
+	t.Parallel()
+
+	rgd := newTestRGD("rgd-recreate")
+	currentSpecHash, err := graphhash.Spec(rgd.Spec)
+	require.NoError(t, err)
+
+	cl := newTestClient(t, interceptor.Funcs{})
+	registry := revisions.NewRegistry()
+	registry.Put(revisions.Entry{
+		RGDName:       rgd.Name,
+		Revision:      2,
+		SpecHash:      "old-hash",
+		State:         revisions.RevisionStateActive,
+		CompiledGraph: newProcessedGraph(),
+	})
+
+	reconciler := &ResourceGraphDefinitionReconciler{
+		Client:            cl,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		rgBuilder:         newTestBuilder(),
+		dynamicController: newRunningDynamicController(t),
+		crdManager:        &stubCRDManager{},
+		clientSet:         newKROFakeSet(),
+		instanceLogger:    logr.Discard(),
+		revisionsRegistry: registry,
+		maxGraphRevisions: 20,
+	}
+
+	result, _, _, reconcileErr := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
+	require.NoError(t, reconcileErr)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, int64(1), rgd.Status.LastIssuedRevision)
+
+	revisionList := &internalv1alpha1.GraphRevisionList{}
+	require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+	require.Len(t, revisionList.Items, 1)
+	assert.Equal(t, int64(1), revisionList.Items[0].Spec.Revision)
+	assert.Equal(t, currentSpecHash, revisionList.Items[0].Spec.Snapshot.SpecHash)
+
+	latest, ok := reconciler.revisionsRegistry.Latest(rgd.Name)
+	require.True(t, ok)
+	assert.Equal(t, int64(1), latest.Revision)
+}
+
+func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		liveRevisions       []int64
+		terminatingRevs     []int64
+		staleRegistry       []int64 // revision numbers pre-populated in registry
+		wantRequeue         bool
+		wantNewRevision     bool
+		wantRegistryCleared bool
+	}{
+		{
+			name:            "all revisions terminating causes requeue",
+			terminatingRevs: []int64{1, 2},
+			staleRegistry:   []int64{1, 2},
+			wantRequeue:     true,
+		},
+		{
+			name:            "mix of live and terminating causes requeue",
+			liveRevisions:   []int64{3},
+			terminatingRevs: []int64{1, 2},
+			staleRegistry:   []int64{1, 2, 3},
+			wantRequeue:     true,
+		},
+		{
+			name:            "only terminating with stale registry causes requeue and preserves registry",
+			terminatingRevs: []int64{1},
+			staleRegistry:   []int64{1, 2, 3},
+			wantRequeue:     true,
+		},
+		{
+			name:                "no live no terminating clears stale registry and issues fresh revision",
+			staleRegistry:       []int64{1, 2},
+			wantRequeue:         false,
+			wantNewRevision:     true,
+			wantRegistryCleared: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rgd := newTestRGD("rgd-terminating-test")
+
+			// Build GR objects
+			var objects []client.Object
+			for _, rev := range tt.liveRevisions {
+				objects = append(objects, newListedGraphRevision(rgd, rev, fmt.Sprintf("hash-%d", rev)))
+			}
+			for _, rev := range tt.terminatingRevs {
+				gr := newListedGraphRevision(rgd, rev, fmt.Sprintf("hash-%d", rev))
+				now := metav1.Now()
+				gr.DeletionTimestamp = &now
+				gr.Finalizers = []string{"test.kro.run/finalizer"}
+				objects = append(objects, gr)
+			}
+
+			cl := newFakeClientBuilder().WithObjects(objects...).Build()
+
+			registry := revisions.NewRegistry()
+			for _, rev := range tt.staleRegistry {
+				registry.Put(revisions.Entry{
+					RGDName:       rgd.Name,
+					Revision:      rev,
+					SpecHash:      fmt.Sprintf("hash-%d", rev),
+					State:         revisions.RevisionStateActive,
+					CompiledGraph: newProcessedGraph(),
+				})
+			}
+
+			reconciler := &ResourceGraphDefinitionReconciler{
+				Client:            cl,
+				metadataLabeler:   metadata.NewKROMetaLabeler(),
+				rgBuilder:         newTestBuilder(),
+				dynamicController: newRunningDynamicController(t),
+				crdManager:        &stubCRDManager{},
+				clientSet:         newKROFakeSet(),
+				instanceLogger:    logr.Discard(),
+				revisionsRegistry: registry,
+				maxGraphRevisions: 20,
+			}
+
+			result, _, _, reconcileErr := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
+
+			if tt.wantRequeue {
+				require.NoError(t, reconcileErr)
+				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter,
+					"should requeue when terminating revisions exist")
+
+				// Registry should NOT be cleared during requeue — GR controller
+				// handles eviction as each revision finalizes.
+				for _, rev := range tt.staleRegistry {
+					_, ok := registry.Get(rgd.Name, rev)
+					assert.True(t, ok, "registry entry %d should survive during requeue", rev)
+				}
+				return
+			}
+
+			require.NoError(t, reconcileErr)
+
+			if tt.wantRegistryCleared {
+				// Stale entries above the new revision should be gone.
+				// Revision 1 may exist as the newly issued revision.
+				for _, rev := range tt.staleRegistry {
+					if rev == 1 && tt.wantNewRevision {
+						continue // revision 1 was re-created by the new issuance
+					}
+					_, ok := registry.Get(rgd.Name, rev)
+					assert.False(t, ok, "stale registry entry %d should be cleared", rev)
+				}
+			}
+
+			if tt.wantNewRevision {
+				revisionList := &internalv1alpha1.GraphRevisionList{}
+				require.NoError(t, cl.List(context.Background(), revisionList))
+				require.Len(t, revisionList.Items, 1, "should issue exactly one new revision")
+				assert.Equal(t, int64(1), revisionList.Items[0].Spec.Revision,
+					"new revision should start from 1 after stale cleanup")
+
+				// The new revision 1 should be in the registry as Pending
+				// (the GR controller will compile and promote it to Active).
+				entry, ok := registry.Get(rgd.Name, 1)
+				require.True(t, ok, "new revision 1 should be in registry")
+				assert.Equal(t, revisions.RevisionStatePending, entry.State)
+			}
 		})
 	}
 }

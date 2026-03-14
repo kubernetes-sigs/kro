@@ -81,10 +81,27 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// Before making any issuance or serving decision, ensure all live
 	// GraphRevision objects are represented in the in-memory registry.
 	// This guards against stale decisions after a controller restart.
-	graphRevisions, err := r.listGraphRevisions(ctx, rgd)
+	graphRevisions, hasTerminating, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
 		return ctrl.Result{}, nil, nil, fmt.Errorf("listing graph revisions: %w", err)
 	}
+
+	// If any revisions are terminating, defer all decisions until GC completes.
+	// This prevents stale registry entries from being served during the window
+	// between RGD deletion and GR finalization, and avoids name collisions when
+	// issuing new revisions while old ones are still being deleted.
+	if hasTerminating {
+		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+	}
+
+	// If no live revisions exist, clear any stale registry entries from a
+	// previous RGD with the same name. At this point hasTerminating is false,
+	// so all old revisions are fully gone — any remaining registry entries
+	// are orphaned leftovers.
+	if len(graphRevisions) == 0 {
+		r.revisionsRegistry.DeleteAll(rgd.Name)
+	}
+
 	latestRevisionView, warmed := r.getLatestGraphRevisionView(rgd.Name, graphRevisions)
 	if !warmed {
 		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
@@ -314,29 +331,30 @@ func newGraphError(err error) error           { return &graphError{err} }
 func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
 
-// listGraphRevisions returns the live revision lineage for an RGD by its name label.
+// listGraphRevisions returns the revision lineage for an RGD, split into live
+// and terminating sets.
 //
-// This is an intentional policy choice: GraphRevisions are grouped by RGD name
-// so an RGD deleted and recreated with the same name can adopt the existing
-// revision lineage instead of starting from scratch due only to a new object UID.
-// Revisions already marked for deletion are excluded so retention GC does not
-// block cache warmup or issuance decisions while old objects are terminating.
-func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]internalv1alpha1.GraphRevision, error) {
+// GraphRevisions are grouped by RGD name (not UID) so a recreated RGD with the
+// same name can adopt the existing lineage. The caller uses the terminating
+// flag to defer decisions while GC is in flight.
+func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, err error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
 	if err := r.List(ctx, revisionList, client.MatchingFields{
 		"spec.snapshot.name": rgd.Name,
 	}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	liveRevisions := make([]internalv1alpha1.GraphRevision, 0, len(revisionList.Items))
+	live = make([]internalv1alpha1.GraphRevision, 0, len(revisionList.Items))
 	for i := range revisionList.Items {
 		if revisionList.Items[i].GetDeletionTimestamp().IsZero() {
-			liveRevisions = append(liveRevisions, revisionList.Items[i])
+			live = append(live, revisionList.Items[i])
+		} else {
+			hasTerminating = true
 		}
 	}
 
-	return liveRevisions, nil
+	return live, hasTerminating, nil
 }
 
 type latestGraphRevisionView struct {
@@ -346,11 +364,11 @@ type latestGraphRevisionView struct {
 }
 
 // getLatestGraphRevisionView returns the latest revision view and whether the
-// in-memory registry is fully warmed for this RGD lineage.
+// latest revision is present in the in-memory registry.
 //
-// Warmup is a membership check: all listed GR numbers must be present in memory
-// before any issuance or serving decision. State handling (Pending/Failed/Active)
-// is separate and happens per latest GR.
+// Only the latest revision needs to be warmed because the reconcile loop only
+// ever serves the latest compiled graph. Older revisions may still be compiling
+// in the GR controller — that's fine, they don't block serving or issuance.
 func (r *ResourceGraphDefinitionReconciler) getLatestGraphRevisionView(
 	rgdName string,
 	graphRevisions []internalv1alpha1.GraphRevision,
@@ -359,24 +377,23 @@ func (r *ResourceGraphDefinitionReconciler) getLatestGraphRevisionView(
 		return latestGraphRevisionView{}, true
 	}
 
-	revisionNumbers := make([]int64, len(graphRevisions))
 	latestIdx := 0
 	for i := range graphRevisions {
-		revisionNumbers[i] = graphRevisions[i].Spec.Revision
 		if graphRevisions[i].Spec.Revision > graphRevisions[latestIdx].Spec.Revision {
 			latestIdx = i
 		}
 	}
 
-	if !r.revisionsRegistry.HasAll(rgdName, revisionNumbers) {
+	latestRevision := graphRevisions[latestIdx].Spec.Revision
+	if _, ok := r.revisionsRegistry.Get(rgdName, latestRevision); !ok {
 		return latestGraphRevisionView{}, false
 	}
 
 	view := latestGraphRevisionView{
-		RevisionNumber: graphRevisions[latestIdx].Spec.Revision,
+		RevisionNumber: latestRevision,
 		Revision:       &graphRevisions[latestIdx],
 	}
-	if entry, ok := r.revisionsRegistry.Get(rgdName, view.Revision.Spec.Revision); ok {
+	if entry, ok := r.revisionsRegistry.Get(rgdName, latestRevision); ok {
 		view.RuntimeEntry = &entry
 	}
 
@@ -486,7 +503,7 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		return nil
 	}
 
-	graphRevisions, err := r.listGraphRevisions(ctx, rgd)
+	graphRevisions, _, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
 		return fmt.Errorf("listing graph revisions for gc: %w", err)
 	}

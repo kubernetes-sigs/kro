@@ -137,7 +137,7 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 	}
 }
 
-func TestCleanupEvictsRegistryEntries(t *testing.T) {
+func TestCleanupPreservesRegistryEntries(t *testing.T) {
 	rgd := newTestRGD("evict")
 	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 	dc := newRunningDynamicController(t)
@@ -156,10 +156,12 @@ func TestCleanupEvictsRegistryEntries(t *testing.T) {
 
 	require.NoError(t, reconciler.cleanupResourceGraphDefinition(context.Background(), rgd))
 
+	// RGD cleanup no longer evicts registry entries. The GraphRevision
+	// controller handles eviction as each revision is deleted by GC.
 	_, found := registry.Get(rgd.Name, 1)
-	assert.False(t, found, "revision 1 should be evicted")
+	assert.True(t, found, "revision 1 should be preserved")
 	_, found = registry.Get(rgd.Name, 2)
-	assert.False(t, found, "revision 2 should be evicted")
+	assert.True(t, found, "revision 2 should be preserved")
 
 	_, found = registry.Get("other-rgd", 1)
 	assert.True(t, found, "unrelated RGD entries must be preserved")

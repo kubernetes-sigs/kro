@@ -139,6 +139,14 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		}
 		mark.ResourceGraphValid()
 
+		// Watermark recovery: use the higher of the persisted high-water mark
+		// and the highest observed revision from live GraphRevisions. This
+		// handles status update failures and RGD recreation (where status is
+		// reset but orphaned revisions may still exist).
+		//
+		// Edge case: if both LastIssuedRevision status update failed AND all
+		// GRs were GC'd, revision resets to 1. A name collision with a
+		// still-terminating old r1 would fail with AlreadyExists and requeue.
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {

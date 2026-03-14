@@ -41,10 +41,18 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 	}
 
-	// Eagerly evict all cached revisions for this RGD so that a recreated RGD
-	// with the same name cannot resolve stale compiled graphs while Kubernetes
-	// GC is still deleting the old GraphRevision objects.
-	r.revisionsRegistry.DeleteAll(rgd.Name)
+	// Registry eviction is NOT done here. The GraphRevision controller evicts
+	// individual entries as each revision is deleted by GC, and the bucket is
+	// automatically removed when the last entry is evicted.
+	//
+	// This is safe because:
+	// - The micro-controller is already stopped above, so no instance
+	//   reconciles can read from the registry for this RGD.
+	// - listGraphRevisions filters out terminating revisions.
+	// - New revision numbers are always higher than existing ones.
+	//
+	// Not evicting here allows orphaned revisions (cascade=orphan) to remain
+	// in the registry and be re-adopted by a recreated RGD with the same name.
 
 	// cleanup CRD
 	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)

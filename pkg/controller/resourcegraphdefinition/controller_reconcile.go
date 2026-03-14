@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"slices"
+	"strings"
 	"time"
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -447,6 +448,10 @@ func graphRevisionName(rgdName string, revision int64) string {
 	if len(rgdName) > maxPrefixLen {
 		rgdName = rgdName[:maxPrefixLen]
 	}
+	// Trim trailing dots/hyphens so the joined name stays DNS-1123 valid.
+	// RGD names can contain dots (DNS-1123 subdomains allow them), so
+	// truncation can land on a dot, producing "name.-r1-hash" which is invalid.
+	rgdName = strings.TrimRight(rgdName, ".-")
 	return rgdName + suffix
 }
 

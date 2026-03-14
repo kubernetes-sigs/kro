@@ -324,19 +324,80 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 func TestGraphRevisionName(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "demo-r1-695b6c57ca75", graphRevisionName("demo", 1))
-	assert.Equal(t, "demo-r1234-695b6c57ca75", graphRevisionName("demo", 1234))
-	assert.Contains(t, graphRevisionName("demo", 1), "-r1-")
+	tests := []struct {
+		name      string
+		rgdName   string
+		revision  int64
+		wantExact string // if set, assert exact match
+		wantMax   int    // max length (0 = no check)
+		notContains []string
+	}{
+		{
+			name:      "simple name",
+			rgdName:   "demo",
+			revision:  1,
+			wantExact: "demo-r1-695b6c57ca75",
+		},
+		{
+			name:      "larger revision number",
+			rgdName:   "demo",
+			revision:  1234,
+			wantExact: "demo-r1234-695b6c57ca75",
+		},
+		{
+			name:    "long name truncates to 253",
+			rgdName: strings.Repeat("a", 260),
+			revision: 1,
+			wantMax: 253,
+		},
+		{
+			name:    "different long names produce different hashes",
+			rgdName: strings.Repeat("a", 250) + "bbbbbbbbbb",
+			revision: 1,
+			wantMax: 253,
+		},
+		{
+			name:        "truncation at dot boundary trims trailing dot",
+			rgdName:     strings.Repeat("a", 240) + "." + strings.Repeat("b", 20),
+			revision:    1,
+			wantMax:     253,
+			notContains: []string{".-", "--"},
+		},
+		{
+			name:        "truncation at hyphen boundary trims trailing hyphen",
+			rgdName:     strings.Repeat("a", 240) + "-" + strings.Repeat("b", 20),
+			revision:    1,
+			wantMax:     253,
+			notContains: []string{"--r"},
+		},
+		{
+			name:        "truncation trims multiple trailing dots and hyphens",
+			rgdName:     strings.Repeat("a", 238) + ".-." + strings.Repeat("b", 20),
+			revision:    1,
+			wantMax:     253,
+			notContains: []string{".-", "--"},
+		},
+	}
 
-	// Long names can truncate, but hash keeps them unique even when prefixes
-	// collide.
-	longNameA := strings.Repeat("a", 260)
-	longNameB := strings.Repeat("a", 250) + "bbbbbbbbbb"
-	nameA := graphRevisionName(longNameA, 1)
-	nameB := graphRevisionName(longNameB, 1)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := graphRevisionName(tt.rgdName, tt.revision)
+			if tt.wantExact != "" {
+				assert.Equal(t, tt.wantExact, result)
+			}
+			if tt.wantMax > 0 {
+				assert.LessOrEqual(t, len(result), tt.wantMax)
+			}
+			for _, s := range tt.notContains {
+				assert.NotContains(t, result, s)
+			}
+		})
+	}
+
+	// Verify different long names produce different results (hash collision guard).
+	nameA := graphRevisionName(strings.Repeat("a", 260), 1)
+	nameB := graphRevisionName(strings.Repeat("a", 250)+"bbbbbbbbbb", 1)
 	assert.NotEqual(t, nameA, nameB)
-	assert.Len(t, nameA, 253)
-	assert.Len(t, nameB, 253)
 }
 
 func TestBuildResourceInfo(t *testing.T) {

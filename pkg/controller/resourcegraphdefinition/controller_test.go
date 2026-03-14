@@ -495,7 +495,6 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	assert.Equal(t, 9*time.Second, r.instanceRequeueInterval)
 	assert.Equal(t, 7, r.maxConcurrentReconciles)
 	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.rgdConfig)
-	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
 }
 
 func TestNewResourceGraphDefinitionReconcilerPreservesZeroInstanceRequeueInterval(t *testing.T) {
@@ -705,7 +704,6 @@ func TestReconcile(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
-					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
@@ -736,10 +734,9 @@ func TestReconcile(t *testing.T) {
 				}, rgd.DeepCopy())
 
 				return &ResourceGraphDefinitionReconciler{
-					Client:          c,
-					metadataLabeler: metadata.NewKROMetaLabeler(),
-					rgBuilder:       newFailingBuilder(errors.New("naming convention violation")),
-					clientSet:       newKROFakeSet(),
+					Client:    c,
+					rgBuilder: newFailingBuilder(errors.New("naming convention violation")),
+					clientSet: newKROFakeSet(),
 				}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, _ client.WithWatch, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {

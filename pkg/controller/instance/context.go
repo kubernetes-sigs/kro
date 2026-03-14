@@ -24,7 +24,6 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
@@ -36,7 +35,6 @@ type ReconcileContext struct {
 	GVR        schema.GroupVersionResource
 	Client     dynamic.Interface
 	RestMapper meta.RESTMapper
-	Labeler    metadata.Labeler
 
 	Runtime  runtime.Interface
 	Instance *unstructured.Unstructured
@@ -53,7 +51,6 @@ type ReconcileContext struct {
 // NewReconcileContext constructs a ReconcileContext for a single reconciliation cycle.
 // It bundles all dependencies needed to reconcile an instance's resources:
 //   - client/restMapper: for Kubernetes API operations
-//   - labeler: for applying kro metadata labels to resources
 //   - rt: the runtime containing resolved resource templates, and helpers to figure out
 //     readiness, inclusion etc...
 //   - instance: the instance CR being reconciled
@@ -65,7 +62,6 @@ func NewReconcileContext(
 	gvr schema.GroupVersionResource,
 	client dynamic.Interface,
 	restMapper meta.RESTMapper,
-	labeler metadata.Labeler,
 	rt runtime.Interface,
 	config ReconcileConfig,
 	instance *unstructured.Unstructured,
@@ -76,7 +72,6 @@ func NewReconcileContext(
 		GVR:          gvr,
 		Client:       client,
 		RestMapper:   restMapper,
-		Labeler:      labeler,
 		Runtime:      rt,
 		Instance:     instance,
 		Config:       config,

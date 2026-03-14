@@ -227,7 +227,6 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 		g,
 		clientSet,
 		metadata.NewKROMetaLabeler(),
-		metadata.NewKROMetaLabeler(),
 		newControllerTestCoordinator(t),
 		record.NewFakeRecorder(100),
 	)
@@ -256,7 +255,6 @@ func newControllerAndContext(
 		controllerTestParentGVR,
 		clientSet.Dynamic(),
 		clientSet.RESTMapper(),
-		controller.childResourceLabeler,
 		rt,
 		controller.reconcileConfig,
 		instance.DeepCopy(),

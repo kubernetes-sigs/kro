@@ -145,11 +145,13 @@ func (w *CRDWrapper) Ensure(ctx context.Context, desired v1.CustomResourceDefini
 		}
 
 		if nameMatch && !idMatch {
+			existingRGDID := existing.Labels[metadata.ResourceGraphDefinitionIDLabel]
+			newRGDID := desired.Labels[metadata.ResourceGraphDefinitionIDLabel]
 			log.Info(
 				"Adopting CRD with different RGD ID - RGD may have been deleted and recreated",
 				"crd", desired.Name,
-				"existingRGDID", existing.Labels[metadata.ResourceGraphDefinitionIDLabel],
-				"newRGDID", desired.Labels[metadata.ResourceGraphDefinitionIDLabel],
+				"existingRGDID", existingRGDID,
+				"newRGDID", newRGDID,
 			)
 		}
 

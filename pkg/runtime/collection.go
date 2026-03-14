@@ -132,6 +132,8 @@ func setCollectionIndexLabel(obj *unstructured.Unstructured, index int) {
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[metadata.CollectionIndexLabel] = fmt.Sprintf("%d", index)
+	idx := fmt.Sprintf("%d", index)
+	labels[metadata.CollectionIndexLabel] = idx
+	labels[metadata.InternalCollectionIndexLabel] = idx
 	obj.SetLabels(labels)
 }

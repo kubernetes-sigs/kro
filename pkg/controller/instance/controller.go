@@ -85,10 +85,9 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	instanceLabeler      metadata.Labeler
-	childResourceLabeler metadata.Labeler
-	reconcileConfig      ReconcileConfig
-	coordinator          *dynamiccontroller.WatchCoordinator
+	instanceLabeler metadata.Labeler
+	reconcileConfig ReconcileConfig
+	coordinator     *dynamiccontroller.WatchCoordinator
 }
 
 // NewController constructs a new controller with static RGD.
@@ -99,18 +98,16 @@ func NewController(
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
-	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 ) *Controller {
 	return &Controller{
-		log:                  log,
-		client:               client,
-		gvr:                  gvr,
-		rgd:                  rgd,
-		instanceLabeler:      instanceLabeler,
-		childResourceLabeler: childResourceLabeler,
-		reconcileConfig:      reconcileConfig,
-		coordinator:          coord,
+		log:             log,
+		client:          client,
+		gvr:             gvr,
+		rgd:             rgd,
+		instanceLabeler: instanceLabeler,
+		reconcileConfig: reconcileConfig,
+		coordinator:     coord,
 	}
 }
 
@@ -169,7 +166,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,
@@ -205,8 +201,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
 	//--------------------------------------------------------------
 	labels := inst.GetLabels()
-	reconcileState, ok := labels[metadata.InstanceReconcileLabel]
-	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+	var reconcileLabel string
+	if strings.EqualFold(labels[metadata.InstanceReconcileLabel], "disabled") {
+		reconcileLabel = metadata.InstanceReconcileLabel
+	} else if strings.EqualFold(labels[metadata.InternalInstanceReconcileLabel], "disabled") {
+		reconcileLabel = metadata.InternalInstanceReconcileLabel
+	}
+	if reconcileLabel == "" {
 		rcx.Mark.ReconciliationActive()
 		if err := c.reconcileNodes(rcx); err != nil {
 			var deletingErr *resourceDeletingError
@@ -220,7 +221,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			return err
 		}
 	} else {
-		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceReconcileLabel, reconcileState)
+		rcx.Mark.ReconciliationSuspended("label %s is set to disabled", reconcileLabel)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,

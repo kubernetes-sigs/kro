@@ -68,8 +68,11 @@ All `kro.run/`-prefixed identifiers set by the controller or CLI.
 | `kro.run/reconcile`                           | `internal.kro.run/reconcile`                           |
 | `kro.run/resource-graph-definition-id`        | `internal.kro.run/resource-graph-definition-id`        |
 | `kro.run/resource-graph-definition-name`      | `internal.kro.run/resource-graph-definition-name`      |
-| `kro.run/resource-graph-definition-namespace` | `internal.kro.run/resource-graph-definition-namespace` |
-| `kro.run/resource-graph-definition-version`   | `internal.kro.run/resource-graph-definition-version`   |
+
+`kro.run/resource-graph-definition-namespace` and
+`kro.run/resource-graph-definition-version` were originally listed here but
+removed during implementation — the constants were declared but never written
+by any labeler, so they are dead code and excluded from the migration.
 
 #### Controller-Read Annotations
 
@@ -85,17 +88,23 @@ In Phase 1 we will accept both prefixes, and Phase 2 drops the old key.
 
 **Goal**: Every managed resource carries both label sets. No behavioral change.
 
-- **Writes**: All labeler constructors (`NewInstanceLabeler`,
-  `NewResourceGraphDefinitionLabeler`, `NewKROMetaLabeler`) will write both the
-  deprecated `kro.run/` label and the corresponding `internal.kro.run/` label.
-- **Reads (point lookups)**: No change. Continue reading `kro.run/` keys
-  directly. Every resource has `kro.run/` labels during Phase 1 — either from
-  before the migration (only `kro.run/`) or from the dual-write (both). There
-  is no scenario where a resource has `internal.kro.run/` but not `kro.run/`,
-  so a fallback helper is unnecessary. **Constraint**: Phase 1 code MUST NOT
-  write `internal.kro.run/` labels without also writing `kro.run/` labels.
-  This invariant guarantees that `kro.run/` point lookups are always valid
-  during Phase 1.
+- **Writes**: All labeler constructors (`InstanceLabels`, `NodeLabels`,
+  `baseLabels`) will write both the deprecated `kro.run/` label and the
+  corresponding `internal.kro.run/` label.
+- **Reads (point lookups)**: Continue reading `kro.run/` keys directly for
+  controller-written labels (`IsKROOwned`, `CompareRGDOwnership`,
+  `findRGDsForCRD`). Every resource has `kro.run/` labels during Phase 1 —
+  either from before the migration (only `kro.run/`) or from the dual-write
+  (both). There is no scenario where a resource has `internal.kro.run/` but
+  not `kro.run/`, so a fallback helper is unnecessary for controller-written
+  labels. **Constraint**: Phase 1 code MUST NOT write `internal.kro.run/`
+  labels without also writing `kro.run/` labels. This invariant guarantees
+  that `kro.run/` point lookups are always valid during Phase 1.
+- **Reads (user-set labels)**: The `kro.run/reconcile` label is set by users
+  on instance objects to pause reconciliation — it is not controller-written,
+  so the dual-write invariant does not apply. During Phase 1, the controller
+  accepts both `kro.run/reconcile` and `internal.kro.run/reconcile` via an
+  inline check, allowing users to begin using the new prefix immediately.
 - **Reads (label selectors)**: All server-side label selectors (e.g., `List`
   with `LabelSelector`) **must continue to use the deprecated `kro.run/` keys**.
   Label selectors have no fallback mechanism, they match or they don't.

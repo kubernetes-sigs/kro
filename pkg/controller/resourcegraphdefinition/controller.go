@@ -56,7 +56,6 @@ type ResourceGraphDefinitionReconciler struct {
 	clientSet  kroclient.SetInterface
 	crdManager kroclient.CRDClient
 
-	metadataLabeler         metadata.Labeler
 	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
 	maxConcurrentReconciles int
@@ -78,7 +77,6 @@ func NewResourceGraphDefinitionReconciler(
 		allowCRDDeletion:        allowCRDDeletion,
 		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
-		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,
 		rgdConfig:               rgdConfig,

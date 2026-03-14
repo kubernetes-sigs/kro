@@ -207,6 +207,30 @@ var _ = Describe("DeploymentService", func() {
 			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
 		}, 20*time.Second, 5*time.Second).WithContext(ctx).Should(Succeed())
 
+		// Switch from deprecated to internal reconcile label and verify suspension still holds
+		err = env.Client.Get(ctx, types.NamespacedName{
+			Name:      "test-instance",
+			Namespace: namespace,
+		}, instance)
+		Expect(err).ToNot(HaveOccurred())
+
+		currentLabels = instance.GetLabels()
+		delete(currentLabels, metadata.InstanceReconcileLabel)
+		currentLabels[metadata.InternalInstanceReconcileLabel] = "disabled"
+		instance.SetLabels(currentLabels)
+		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+
+		// deployment should still stay at 1 replica with internal label
+		Consistently(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      "test-instance",
+				Namespace: namespace,
+			}, deployment)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(deployment.Spec.Replicas).ToNot(BeNil())
+			g.Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
 		// Delete instance
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 

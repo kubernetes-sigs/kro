@@ -15,6 +15,9 @@
 package metadata
 
 import (
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -59,6 +62,8 @@ const (
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// GraphRevisionHashLabel stores a label-safe representation of the GraphRevision spec hash.
+	GraphRevisionHashLabel = LabelKROPrefix + "graph-revision-hash"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -160,6 +165,14 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	}
 }
 
+// NewGraphRevisionHashLabeler returns a new labeler that sets a label-safe
+// representation of the GraphRevision spec hash on a resource.
+func NewGraphRevisionHashLabeler(specHash string) GenericLabeler {
+	return map[string]string{
+		GraphRevisionHashLabel: safeHashLabelValue(specHash),
+	}
+}
+
 // NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
 // InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
 // and name of the instance that was reconciled to create the resource.
@@ -214,6 +227,22 @@ func safeVersion(version string) string {
 	// The script we use might add '+dirty' to development branches,
 	// so let's try replacing '+' with '-'.
 	return strings.ReplaceAll(version, "+", "-")
+}
+
+func safeHashLabelValue(specHash string) string {
+	if validation.IsValidLabelValue(specHash) == nil {
+		return specHash
+	}
+
+	if raw, err := hex.DecodeString(specHash); err == nil {
+		encoded := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw))
+		if validation.IsValidLabelValue(encoded) == nil {
+			return encoded
+		}
+	}
+
+	sum := sha256.Sum256([]byte(specHash))
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
 }
 
 func booleanFromString(s string) bool {

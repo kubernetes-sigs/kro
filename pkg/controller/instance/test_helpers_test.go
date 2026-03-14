@@ -44,6 +44,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	krt "github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -212,6 +213,13 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 
 	clientSet := clientfake.NewFakeSet(raw)
 	clientSet.SetRESTMapper(buildControllerTestRESTMapper())
+	registry := revisions.NewRegistry()
+	registry.Put(revisions.Entry{
+		RGDName:       controllerTestParentGVR.Resource,
+		Revision:      1,
+		State:         revisions.RevisionStateActive,
+		CompiledGraph: g,
+	})
 
 	controller := NewController(
 		zap.New(zap.UseDevMode(true)),
@@ -223,7 +231,7 @@ func newControllerUnderTest(t *testing.T, raw *dynamicfake.FakeDynamicClient, g 
 			},
 		},
 		controllerTestParentGVR,
-		g,
+		registry.ResolverForRGD(controllerTestParentGVR.Resource),
 		clientSet,
 		metadata.NewKROMetaLabeler(),
 		metadata.NewKROMetaLabeler(),

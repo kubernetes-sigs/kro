@@ -26,17 +26,21 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	ctrlgraphrevision "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 )
 
 type Environment struct {
@@ -54,9 +58,10 @@ type Environment struct {
 }
 
 type ControllerConfig struct {
-	AllowCRDDeletion bool
-	ReconcileConfig  ctrlinstance.ReconcileConfig
-	LogWriter        io.Writer
+	AllowCRDDeletion  bool
+	ReconcileConfig   ctrlinstance.ReconcileConfig
+	MaxGraphRevisions int
+	LogWriter         io.Writer
 }
 
 func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
@@ -102,6 +107,9 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 	env.ClientSet = clientSet
 
 	// Setup scheme
+	if err := internalv1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, fmt.Errorf("adding internal kro scheme: %w", err)
+	}
 	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
 		return nil, fmt.Errorf("adding kro scheme: %w", err)
 	}
@@ -141,8 +149,20 @@ func (e *Environment) initializeClients() error {
 
 func (e *Environment) setupController() error {
 	var err error
+	rgdConfig := graph.RGDConfig{
+		MaxCollectionSize:          1000,
+		MaxCollectionDimensionSize: 10,
+	}
+	maxGraphRevisions := e.ControllerConfig.MaxGraphRevisions
+	if maxGraphRevisions <= 0 {
+		maxGraphRevisions = 20
+	}
+
 	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
+		Controller: config.Controller{
+			SkipNameValidation: ptr.To(true),
+		},
 		Metrics: server.Options{
 			// Disable the metrics server
 			BindAddress: "0",
@@ -167,16 +187,22 @@ func (e *Environment) setupController() error {
 		},
 		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
 
+	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
-		40,
-		graph.RGDConfig{
-			MaxCollectionSize:          1000,
-			MaxCollectionDimensionSize: 10,
-		},
+		graphRevisionRegistry,
+		10,
+		maxGraphRevisions,
+		rgdConfig,
+	)
+	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(
+		e.GraphBuilder,
+		graphRevisionRegistry,
+		10,
+		rgdConfig,
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {
@@ -186,12 +212,30 @@ func (e *Environment) setupController() error {
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
 	}
+	if err = gvReconciler.SetupWithManager(e.CtrlManager); err != nil {
+		return fmt.Errorf("setting up graph revision reconciler: %w", err)
+	}
 
 	e.ManagerResult = make(chan error, 1)
 	go func() {
 		e.ManagerResult <- e.CtrlManager.Start(e.context)
 	}()
 
+	return nil
+}
+
+func (e *Environment) RestartControllers() error {
+	e.cancel()
+	if err := <-e.ManagerResult; err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("stopping manager: %w", err)
+	}
+
+	e.context, e.cancel = context.WithCancel(context.Background())
+	if err := e.setupController(); err != nil {
+		return fmt.Errorf("restarting controller: %w", err)
+	}
+
+	time.Sleep(1 * time.Second)
 	return nil
 }
 

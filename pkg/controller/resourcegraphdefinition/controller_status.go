@@ -42,8 +42,23 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 
 	oldState := o.Status.State
 
-	// Set status.state.
-	if rgdConditionTypes.For(o).IsRootReady() {
+	conditions := rgdConditionTypes.For(o)
+	kindReady := isConditionTrueForObservedGeneration(conditions.Get(KindReady), o.GetGeneration())
+	controllerReady := isConditionTrueForObservedGeneration(conditions.Get(ControllerReady), o.GetGeneration())
+
+	// ResourceGraphAccepted indicates whether the current spec compiles,
+	// while RGD serving state is about whether traffic can flow through the
+	// infra path (CRD established + dynamic controller running). We keep these
+	// concerns separate so graph validity and serving availability can evolve
+	// independently.
+	//
+	// An RGD can be Active while only a subset of revisions are valid, and that
+	// is expected.
+	//
+	// This can happen after restarts: older GraphRevisions may be re-evaluated
+	// against a different cluster shape (for example, a referenced CRD was
+	// deleted or changed).
+	if kindReady && controllerReady {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateActive
 	} else {
 		o.Status.State = v1alpha1.ResourceGraphDefinitionStateInactive
@@ -66,6 +81,7 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 		dc.Status.State = o.Status.State
 		dc.Status.TopologicalOrder = topologicalOrder
 		dc.Status.Resources = resources
+		dc.Status.LastIssuedRevision = o.Status.LastIssuedRevision
 
 		log.V(1).Info("updating resource graph definition status",
 			"state", dc.Status.State,
@@ -79,6 +95,13 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 
 		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
 	})
+}
+
+func isConditionTrueForObservedGeneration(cond *v1alpha1.Condition, generation int64) bool {
+	if cond == nil {
+		return false
+	}
+	return cond.IsTrue() && cond.ObservedGeneration == generation
 }
 
 // setManaged sets the resourcegraphdefinition as managed, by adding the
@@ -112,21 +135,29 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 }
 
 const (
-	Ready                 = "Ready"
-	ResourceGraphAccepted = "ResourceGraphAccepted"
-	KindReady             = "KindReady"
-	ControllerReady       = "ControllerReady"
+	Ready                   = "Ready"
+	ResourceGraphAccepted   = "ResourceGraphAccepted"
+	RevisionLineageResolved = "RevisionLineageResolved"
+	KindReady               = "KindReady"
+	ControllerReady         = "ControllerReady"
+	GraphRevisionGCHealthy  = "GraphRevisionGCHealthy"
+
+	waitingForGraphRevisionSettlementReason  = "WaitingForGraphRevisionSettlement"
+	waitingForGraphRevisionWarmupReason      = "WaitingForGraphRevisionWarmup"
+	waitingForGraphRevisionCompilationReason = "WaitingForGraphRevisionCompilation"
 )
 
-var rgdConditionTypes = apis.NewReadyConditions(ResourceGraphAccepted, KindReady, ControllerReady)
+var rgdConditionTypes = apis.NewReadyConditions(KindReady, ControllerReady)
 
 // NewConditionsMarkerFor creates a marker to manage conditions and sub-conditions for ResourceGraphDefinitions.
 //
 // ```
 // Ready
-//	├─ ResourceGraphAccepted - This controller has accepted the spec.schema and spec.resources.
 //	├─ KindReady - The CRD status created on behalf of this RGD.
 //	└─ ControllerReady - The status of the controller thread reconciling this resource.
+//
+// ResourceGraphAccepted, RevisionLineageResolved, and GraphRevisionGCHealthy are
+// informational conditions and do not participate in Ready calculation.
 // ```
 
 func NewConditionsMarkerFor(o apis.Object) *ConditionsMarker {
@@ -138,6 +169,17 @@ type ConditionsMarker struct {
 	cs apis.ConditionSet
 }
 
+// InitializeServingConditions marks serving conditions as reconciling for a
+// new generation unless they have already been observed for this generation.
+func (m *ConditionsMarker) InitializeServingConditions(generation int64) {
+	if cond := m.cs.Get(KindReady); cond == nil || cond.ObservedGeneration != generation {
+		m.cs.SetUnknownWithReason(KindReady, "Reconciling", "waiting for CRD to reconcile")
+	}
+	if cond := m.cs.Get(ControllerReady); cond == nil || cond.ObservedGeneration != generation {
+		m.cs.SetUnknownWithReason(ControllerReady, "Reconciling", "waiting for dynamic controller to reconcile")
+	}
+}
+
 // ResourceGraphValid signals the rgd.spec.schema and rgd.spec.resources fields have been accepted.
 func (m *ConditionsMarker) ResourceGraphValid() {
 	m.cs.SetTrueWithReason(ResourceGraphAccepted, "Valid", "resource graph and schema are valid")
@@ -146,6 +188,92 @@ func (m *ConditionsMarker) ResourceGraphValid() {
 // ResourceGraphInvalid signals there is something wrong with the rgd.spec.schema or rgd.spec.resources fields.
 func (m *ConditionsMarker) ResourceGraphInvalid(msg string) {
 	m.cs.SetFalse(ResourceGraphAccepted, "InvalidResourceGraph", msg)
+}
+
+// InvalidResourceGraph signals the current spec or latest revision cannot be served.
+func (m *ConditionsMarker) InvalidResourceGraph(msg string) {
+	m.ResourceGraphInvalid(msg)
+	m.RevisionLineageFailed(msg)
+	m.ServingUnavailable("InvalidResourceGraph", msg)
+}
+
+// RevisionLineageResolved signals the latest GraphRevision lineage is settled
+// and the selected revision is ready to serve.
+func (m *ConditionsMarker) RevisionLineageResolved(revision int64) {
+	m.cs.SetTrueWithReason(
+		RevisionLineageResolved,
+		"Resolved",
+		fmt.Sprintf("graph revision lineage resolved at revision %d", revision),
+	)
+}
+
+// RevisionLineagePending signals lineage reconciliation is still converging.
+func (m *ConditionsMarker) RevisionLineagePending(reason, msg string) {
+	m.cs.SetUnknownWithReason(RevisionLineageResolved, reason, msg)
+}
+
+// RevisionLineageFailed signals lineage reconciliation could not converge.
+func (m *ConditionsMarker) RevisionLineageFailed(msg string) {
+	m.cs.SetFalse(RevisionLineageResolved, "ResolutionFailed", msg)
+}
+
+// ServingUnknown signals the current generation has not converged to a known
+// serving state yet.
+func (m *ConditionsMarker) ServingUnknown(reason, msg string) {
+	m.cs.SetUnknownWithReason(KindReady, reason, msg)
+	m.cs.SetUnknownWithReason(ControllerReady, reason, msg)
+}
+
+// ServingPending signals the current generation is not yet serving because
+// CRD/controller reconciliation is still in flight.
+func (m *ConditionsMarker) ServingPending(reason, msg string) {
+	m.ServingUnknown(reason, msg)
+}
+
+// WaitingForGraphRevisionSettlement signals deletion/settlement is blocking convergence.
+func (m *ConditionsMarker) WaitingForGraphRevisionSettlement() {
+	const msg = "waiting for terminating graph revisions to settle"
+
+	m.RevisionLineagePending(waitingForGraphRevisionSettlementReason, msg)
+	m.ServingPending(waitingForGraphRevisionSettlementReason, msg)
+}
+
+// WaitingForGraphRevisionWarmup signals the latest revision is not yet present in the runtime registry.
+func (m *ConditionsMarker) WaitingForGraphRevisionWarmup() {
+	const msg = "waiting for the latest graph revision to warm the in-memory registry"
+
+	m.RevisionLineagePending(waitingForGraphRevisionWarmupReason, msg)
+	m.ServingPending(waitingForGraphRevisionWarmupReason, msg)
+}
+
+// GraphRevisionIssuedPendingCompilation signals a new revision was issued and is awaiting compilation.
+func (m *ConditionsMarker) GraphRevisionIssuedPendingCompilation(revision int64) {
+	msg := fmt.Sprintf("graph revision %d issued and awaiting compilation", revision)
+
+	m.RevisionLineagePending(waitingForGraphRevisionCompilationReason, msg)
+	m.ServingPending(waitingForGraphRevisionCompilationReason, msg)
+}
+
+// WaitingForGraphRevisionCompilation signals the latest revision is still compiling.
+func (m *ConditionsMarker) WaitingForGraphRevisionCompilation(revision int64) {
+	msg := fmt.Sprintf("waiting for graph revision %d to compile", revision)
+
+	m.RevisionLineagePending(waitingForGraphRevisionCompilationReason, msg)
+	m.ServingPending(waitingForGraphRevisionCompilationReason, msg)
+}
+
+// WaitingForGraphRevisionState signals the latest revision has not yet settled.
+func (m *ConditionsMarker) WaitingForGraphRevisionState(revision int64) {
+	msg := fmt.Sprintf("waiting for graph revision %d to settle", revision)
+
+	m.RevisionLineagePending(waitingForGraphRevisionCompilationReason, msg)
+	m.ServingPending(waitingForGraphRevisionCompilationReason, msg)
+}
+
+// ServingUnavailable signals the current generation cannot be served.
+func (m *ConditionsMarker) ServingUnavailable(reason, msg string) {
+	m.cs.SetFalse(KindReady, reason, msg)
+	m.cs.SetFalse(ControllerReady, reason, msg)
 }
 
 // FailedLabelerSetup signals that the controller was unable to start the resource labeler and failed to continue.
@@ -173,4 +301,14 @@ func (m *ConditionsMarker) ControllerFailedToStart(msg string) {
 // ControllerRunning signals the microcontroller is up and running for this RGD-Kind.
 func (m *ConditionsMarker) ControllerRunning() {
 	m.cs.SetTrueWithReason(ControllerReady, "Running", "controller is running")
+}
+
+// GraphRevisionGCHealthy signals retention GC completed without error.
+func (m *ConditionsMarker) GraphRevisionGCHealthy() {
+	m.cs.SetTrueWithReason(GraphRevisionGCHealthy, "Succeeded", "graph revision garbage collection is healthy")
+}
+
+// GraphRevisionGCUnhealthy signals retention GC failed.
+func (m *ConditionsMarker) GraphRevisionGCUnhealthy(msg string) {
+	m.cs.SetFalse(GraphRevisionGCHealthy, "GarbageCollectionFailed", msg)
 }

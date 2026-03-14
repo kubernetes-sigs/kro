@@ -68,11 +68,11 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 		gr := grs[0]
 
 		// Verify spec fields
-		Expect(gr.Spec.ResourceGraphDefinitionName).To(Equal(rgdName))
+		Expect(gr.Spec.Snapshot.Name).To(Equal(rgdName))
 		Expect(gr.Spec.Revision).To(Equal(int64(1)))
-		Expect(gr.Spec.SpecHash).ToNot(BeEmpty())
-		Expect(gr.Spec.DefinitionSpec.Schema).ToNot(BeNil())
-		Expect(gr.Spec.DefinitionSpec.Schema.Kind).To(Equal(kind))
+		Expect(gr.Spec.Snapshot.SpecHash).ToNot(BeEmpty())
+		Expect(gr.Spec.Snapshot.Spec.Schema).ToNot(BeNil())
+		Expect(gr.Spec.Snapshot.Spec.Schema.Kind).To(Equal(kind))
 
 		// Verify naming convention
 		Expect(gr.Name).To(HavePrefix(rgdName + "-"))
@@ -343,7 +343,7 @@ var _ = Describe("GraphRevision Bumping", func() {
 			gvs := listGraphRevisions(ctx, rgdName)
 			g.Expect(gvs).To(HaveLen(1))
 			g.Expect(gvs[0].Spec.Revision).To(Equal(int64(1)))
-			firstHash = gvs[0].Spec.SpecHash
+			firstHash = gvs[0].Spec.Snapshot.SpecHash
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Update the RGD spec: change the schema default to produce a different hash
@@ -370,12 +370,12 @@ var _ = Describe("GraphRevision Bumping", func() {
 			// Revision 1 should still exist
 			rev1, ok := revisionMap[1]
 			g.Expect(ok).To(BeTrue(), "revision 1 should still exist")
-			g.Expect(rev1.Spec.SpecHash).To(Equal(firstHash))
+			g.Expect(rev1.Spec.Snapshot.SpecHash).To(Equal(firstHash))
 
 			// Revision 2 should exist with a different hash
 			rev2, ok := revisionMap[2]
 			g.Expect(ok).To(BeTrue(), "revision 2 should exist")
-			g.Expect(rev2.Spec.SpecHash).ToNot(Equal(firstHash))
+			g.Expect(rev2.Spec.Snapshot.SpecHash).ToNot(Equal(firstHash))
 			g.Expect(rev2.Spec.Revision).To(Equal(int64(2)))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
@@ -792,7 +792,7 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		// Try to mutate the GraphRevision spec
-		gv.Spec.SpecHash = "tampered-hash"
+		gv.Spec.Snapshot.SpecHash = "tampered-hash"
 		err := env.Client.Update(ctx, &gv)
 		Expect(err).To(HaveOccurred(), "GraphRevision spec should be immutable")
 		Expect(err.Error()).To(ContainSubstring("immutable"),

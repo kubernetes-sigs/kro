@@ -274,12 +274,12 @@ func newTestClient(t testing.TB, funcs interceptor.Funcs, objs ...client.Object)
 	builder := clientfake.NewClientBuilder().
 		WithScheme(testScheme(t)).
 		WithStatusSubresource(&v1alpha1.ResourceGraphDefinition{}).
-		WithIndex(&internalv1alpha1.GraphRevision{}, "spec.resourceGraphDefinitionName", func(obj client.Object) []string {
+		WithIndex(&internalv1alpha1.GraphRevision{}, "spec.snapshot.name", func(obj client.Object) []string {
 			gr, ok := obj.(*internalv1alpha1.GraphRevision)
 			if !ok {
 				return nil
 			}
-			return []string{gr.Spec.ResourceGraphDefinitionName}
+			return []string{gr.Spec.Snapshot.Name}
 		}).
 		WithInterceptorFuncs(funcs)
 	if len(objs) > 0 {

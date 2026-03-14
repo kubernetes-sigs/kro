@@ -93,7 +93,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 		}
 		// Evict only after finalizer removal succeeds. If patching fails, the GR is
 		// still present in the API and must remain visible in cache for warmup paths.
-		r.registry.Delete(obj.Spec.ResourceGraphDefinitionName, obj.Spec.Revision)
+		r.registry.Delete(obj.Spec.Snapshot.Name, obj.Spec.Revision)
 		return ctrl.Result{}, nil
 	}
 
@@ -109,9 +109,9 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 			// persist the corresponding API status update.
 			NewConditionsMarkerFor(obj).GraphInvalid(err.Error())
 			r.registry.Put(revisions.Entry{
-				RGDName:  obj.Spec.ResourceGraphDefinitionName,
+				RGDName:  obj.Spec.Snapshot.Name,
 				Revision: obj.Spec.Revision,
-				SpecHash: obj.Spec.SpecHash,
+				SpecHash: obj.Spec.Snapshot.SpecHash,
 				State:    revisions.RevisionStateFailed,
 			})
 		}
@@ -128,11 +128,11 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	mark := NewConditionsMarkerFor(revision)
 	// Only initialize Pending the first time this revision enters the registry.
 	// Re-reconcile should preserve the existing runtime state until compile finishes.
-	if _, exists := r.registry.Get(revision.Spec.ResourceGraphDefinitionName, revision.Spec.Revision); !exists {
+	if _, exists := r.registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision); !exists {
 		r.registry.Put(revisions.Entry{
-			RGDName:  revision.Spec.ResourceGraphDefinitionName,
+			RGDName:  revision.Spec.Snapshot.Name,
 			Revision: revision.Spec.Revision,
-			SpecHash: revision.Spec.SpecHash,
+			SpecHash: revision.Spec.Snapshot.SpecHash,
 			State:    revisions.RevisionStatePending,
 		})
 	}
@@ -143,9 +143,9 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 		// Keep failed state in-memory for this revision number so callers stop
 		// waiting on it and can surface a terminal result.
 		r.registry.Put(revisions.Entry{
-			RGDName:  revision.Spec.ResourceGraphDefinitionName,
+			RGDName:  revision.Spec.Snapshot.Name,
 			Revision: revision.Spec.Revision,
-			SpecHash: revision.Spec.SpecHash,
+			SpecHash: revision.Spec.Snapshot.SpecHash,
 			State:    revisions.RevisionStateFailed,
 		})
 		return nil, nil, err
@@ -155,9 +155,9 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	// Active is the invariant used by other controllers to mean compiled graph
 	// is present and safe to use directly.
 	r.registry.Put(revisions.Entry{
-		RGDName:       revision.Spec.ResourceGraphDefinitionName,
+		RGDName:       revision.Spec.Snapshot.Name,
 		Revision:      revision.Spec.Revision,
-		SpecHash:      revision.Spec.SpecHash,
+		SpecHash:      revision.Spec.Snapshot.SpecHash,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: compiledGraph,
 	})
@@ -171,9 +171,9 @@ func (r *GraphRevisionReconciler) compileGraphRevision(
 ) (*graph.Graph, []krov1alpha1.ResourceInformation, error) {
 	snapshotRGD := &krov1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: revision.Spec.ResourceGraphDefinitionName,
+			Name: revision.Spec.Snapshot.Name,
 		},
-		Spec: revision.Spec.DefinitionSpec,
+		Spec: revision.Spec.Snapshot.Spec,
 	}
 
 	compiledGraph, err := r.compileGraph(snapshotRGD, r.rgdConfig)

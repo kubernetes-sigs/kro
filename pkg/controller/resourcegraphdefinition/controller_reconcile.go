@@ -101,7 +101,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	// A new GraphRevision is issued only when the spec hash changes.
 	// Otherwise we resolve the compiled graph from the existing revision.
-	if latestRevision != nil && latestRevision.Spec.SpecHash == currentSpecHash {
+	if latestRevision != nil && latestRevision.Spec.Snapshot.SpecHash == currentSpecHash {
 		rgd.Status.LastIssuedRevision = max(rgd.Status.LastIssuedRevision, latestRevision.Spec.Revision)
 
 		if latestRevisionView.RuntimeEntry == nil {
@@ -315,7 +315,7 @@ func newMicroControllerError(err error) error { return &microControllerError{err
 func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) ([]internalv1alpha1.GraphRevision, error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
 	if err := r.List(ctx, revisionList, client.MatchingFields{
-		"spec.resourceGraphDefinitionName": rgd.Name,
+		"spec.snapshot.name": rgd.Name,
 	}); err != nil {
 		return nil, err
 	}
@@ -408,10 +408,14 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: rgd.Name,
-			Revision:                    revision,
-			SpecHash:                    specHash,
-			DefinitionSpec:              *rgd.Spec.DeepCopy(),
+			Revision: revision,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:       rgd.Name,
+				UID:        rgd.UID,
+				Generation: rgd.Generation,
+				SpecHash:   specHash,
+				Spec:       *rgd.Spec.DeepCopy(),
+			},
 		},
 	}
 	graphRevisionLabeler.ApplyLabels(&graphRevision.ObjectMeta)

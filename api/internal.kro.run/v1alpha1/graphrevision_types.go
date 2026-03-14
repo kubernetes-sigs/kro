@@ -16,30 +16,51 @@ package v1alpha1
 import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // GraphRevisionSpec defines the desired state of GraphRevision.
-// It captures an immutable snapshot of the source ResourceGraphDefinition spec.
+// It captures an immutable snapshot of the source ResourceGraphDefinition.
 type GraphRevisionSpec struct {
-	// ResourceGraphDefinitionName identifies the source ResourceGraphDefinition by name.
-	// This field is the authoritative identity for matching/adoption decisions.
-	//
-	// +kubebuilder:validation:Required
-	ResourceGraphDefinitionName string `json:"resourceGraphDefinitionName"`
 	// Revision is a monotonic revision number assigned per ResourceGraphDefinition name.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	Revision int64 `json:"revision"`
+	// Snapshot is an immutable capture of the source ResourceGraphDefinition
+	// identity and spec at the time this revision was issued.
+	//
+	// +kubebuilder:validation:Required
+	Snapshot ResourceGraphDefinitionSnapshot `json:"snapshot"`
+}
+
+// ResourceGraphDefinitionSnapshot captures the identity and spec of a
+// ResourceGraphDefinition at a point in time.
+type ResourceGraphDefinitionSnapshot struct {
+	// Name identifies the source ResourceGraphDefinition by name.
+	// This is the authoritative identity for lineage/adoption decisions.
+	//
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// UID is the UID of the source ResourceGraphDefinition when this revision
+	// was issued. Informational only — lineage is name-based, not UID-based.
+	//
+	// +kubebuilder:validation:Required
+	UID types.UID `json:"uid"`
+	// Generation is the metadata.generation of the source ResourceGraphDefinition
+	// when this revision was issued. Informational only.
+	//
+	// +kubebuilder:validation:Required
+	Generation int64 `json:"generation"`
 	// SpecHash is the canonical hash of the source ResourceGraphDefinition spec.
 	//
 	// +kubebuilder:validation:Required
 	SpecHash string `json:"specHash"`
-	// DefinitionSpec is an immutable snapshot of the source ResourceGraphDefinition spec.
+	// Spec is an immutable copy of the source ResourceGraphDefinition spec.
 	// This includes user-authored schema and resource templates.
 	//
 	// +kubebuilder:validation:Required
-	DefinitionSpec krov1alpha1.ResourceGraphDefinitionSpec `json:"definitionSpec"`
+	Spec krov1alpha1.ResourceGraphDefinitionSpec `json:"spec"`
 }
 
 // GraphRevisionStatus defines the observed state of GraphRevision.
@@ -54,9 +75,9 @@ type GraphRevisionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="RGD",type=string,priority=1,JSONPath=`.spec.resourceGraphDefinitionName`
+// +kubebuilder:printcolumn:name="RGD",type=string,priority=1,JSONPath=`.spec.snapshot.name`
 // +kubebuilder:printcolumn:name="REVISION",type=integer,priority=0,JSONPath=`.spec.revision`
-// +kubebuilder:printcolumn:name="HASH",type=string,priority=1,JSONPath=`.spec.specHash`
+// +kubebuilder:printcolumn:name="HASH",type=string,priority=1,JSONPath=`.spec.snapshot.specHash`
 // +kubebuilder:printcolumn:name="READY",type=string,priority=0,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:shortName=gr,scope=Cluster

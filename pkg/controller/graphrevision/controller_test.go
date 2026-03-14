@@ -119,7 +119,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.ResourceGraphDefinitionName,
+					RGDName:       revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -142,7 +142,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.ResourceGraphDefinitionName,
+					RGDName:       revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: &graph.Graph{},
@@ -195,9 +195,9 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			name: "recompile failure downgrades an active revision to failed",
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
-					RGDName:       revision.Spec.ResourceGraphDefinitionName,
+					RGDName:       revision.Spec.Snapshot.Name,
 					Revision:      revision.Spec.Revision,
-					SpecHash:      revision.Spec.SpecHash,
+					SpecHash:      revision.Spec.Snapshot.SpecHash,
 					State:         revisions.RevisionStateActive,
 					CompiledGraph: compiled,
 				})
@@ -458,7 +458,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			registry:  registry,
 			rgdConfig: graph.RGDConfig{},
 			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
-				entry, ok := registry.Get(revision.Spec.ResourceGraphDefinitionName, revision.Spec.Revision)
+				entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 				require.True(t, ok)
 				assert.Equal(t, revisions.RevisionStatePending, entry.State)
 				return compiled, nil
@@ -468,7 +468,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 		_, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
 
-		entry, ok := registry.Get(revision.Spec.ResourceGraphDefinitionName, revision.Spec.Revision)
+		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 		require.True(t, ok)
 		assert.Equal(t, revisions.RevisionStateActive, entry.State)
 	})
@@ -478,9 +478,9 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 		registry := revisions.NewRegistry()
 		compiled := testCompiledGraph()
 		registry.Put(revisions.Entry{
-			RGDName:       revision.Spec.ResourceGraphDefinitionName,
+			RGDName:       revision.Spec.Snapshot.Name,
 			Revision:      revision.Spec.Revision,
-			SpecHash:      revision.Spec.SpecHash,
+			SpecHash:      revision.Spec.Snapshot.SpecHash,
 			State:         revisions.RevisionStateActive,
 			CompiledGraph: compiled,
 		})
@@ -489,7 +489,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			registry:  registry,
 			rgdConfig: graph.RGDConfig{},
 			compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
-				entry, ok := registry.Get(revision.Spec.ResourceGraphDefinitionName, revision.Spec.Revision)
+				entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 				require.True(t, ok)
 				assert.Equal(t, revisions.RevisionStateActive, entry.State)
 				return compiled, nil
@@ -499,7 +499,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 		_, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
 
-		entry, ok := registry.Get(revision.Spec.ResourceGraphDefinitionName, revision.Spec.Revision)
+		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 		require.True(t, ok)
 		assert.Equal(t, revisions.RevisionStateActive, entry.State)
 	})
@@ -591,14 +591,16 @@ func newTestGraphRevision(name string) *internalv1alpha1.GraphRevision {
 			Name: name,
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: "demo-rgd",
-			Revision:                    1,
-			SpecHash:                    "hash-1",
-			DefinitionSpec: v1alpha1.ResourceGraphDefinitionSpec{
-				Schema: &v1alpha1.Schema{
-					Kind:       "Demo",
-					APIVersion: "v1alpha1",
-					Group:      "kro.run",
+			Revision: 1,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     "demo-rgd",
+				SpecHash: "hash-1",
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{
+						Kind:       "Demo",
+						APIVersion: "v1alpha1",
+						Group:      "kro.run",
+					},
 				},
 			},
 		},

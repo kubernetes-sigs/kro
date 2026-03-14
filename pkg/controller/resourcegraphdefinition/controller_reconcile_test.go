@@ -40,8 +40,8 @@ import (
 )
 
 // newFakeClientBuilder returns a fake client builder with the field indexer
-// for spec.resourceGraphDefinitionName pre-registered, matching the indexer
-// registered in SetupWithManager.
+// for spec.snapshot.name pre-registered, matching the indexer registered in
+// SetupWithManager.
 func newFakeClientBuilder() *fake.ClientBuilder {
 	scheme := runtime.NewScheme()
 	_ = internalv1alpha1.AddToScheme(scheme)
@@ -50,13 +50,13 @@ func newFakeClientBuilder() *fake.ClientBuilder {
 		WithScheme(scheme).
 		WithIndex(
 			&internalv1alpha1.GraphRevision{},
-			"spec.resourceGraphDefinitionName",
+			"spec.snapshot.name",
 			func(obj client.Object) []string {
 				gr, ok := obj.(*internalv1alpha1.GraphRevision)
 				if !ok {
 					return nil
 				}
-				return []string{gr.Spec.ResourceGraphDefinitionName}
+				return []string{gr.Spec.Snapshot.Name}
 			},
 		)
 }
@@ -77,9 +77,11 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: "demo",
-			Revision:                    1,
-			SpecHash:                    "hash-1",
+			Revision: 1,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     "demo",
+				SpecHash: "hash-1",
+			},
 		},
 	}
 	revisionWithNewUID := &internalv1alpha1.GraphRevision{
@@ -91,9 +93,11 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: "demo",
-			Revision:                    2,
-			SpecHash:                    "hash-2",
+			Revision: 2,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     "demo",
+				SpecHash: "hash-2",
+			},
 		},
 	}
 	otherRGDRevision := &internalv1alpha1.GraphRevision{
@@ -105,9 +109,11 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: "other",
-			Revision:                    1,
-			SpecHash:                    "other-hash",
+			Revision: 1,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     "other",
+				SpecHash: "other-hash",
+			},
 		},
 	}
 
@@ -223,9 +229,11 @@ func TestCreateGraphRevision_AlreadyExistsReturnsError(t *testing.T) {
 	existing := &internalv1alpha1.GraphRevision{
 		ObjectMeta: metav1.ObjectMeta{Name: graphRevisionName("demo", 3)},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: "demo",
-			Revision:                    3,
-			SpecHash:                    "hash-3",
+			Revision: 3,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     "demo",
+				SpecHash: "hash-3",
+			},
 		},
 	}
 
@@ -265,16 +273,20 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 	graphRevisions := []internalv1alpha1.GraphRevision{
 		{
 			Spec: internalv1alpha1.GraphRevisionSpec{
-				ResourceGraphDefinitionName: "demo",
-				Revision:                    1,
-				SpecHash:                    "hash-1",
+				Revision: 1,
+				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+					Name:     "demo",
+					SpecHash: "hash-1",
+				},
 			},
 		},
 		{
 			Spec: internalv1alpha1.GraphRevisionSpec{
-				ResourceGraphDefinitionName: "demo",
-				Revision:                    3,
-				SpecHash:                    "hash-3",
+				Revision: 3,
+				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+					Name:     "demo",
+					SpecHash: "hash-3",
+				},
 			},
 		},
 	}
@@ -1051,10 +1063,12 @@ func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int6
 			},
 		},
 		Spec: internalv1alpha1.GraphRevisionSpec{
-			ResourceGraphDefinitionName: rgd.Name,
-			Revision:                    revision,
-			SpecHash:                    specHash,
-			DefinitionSpec:              *rgd.Spec.DeepCopy(),
+			Revision: revision,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:     rgd.Name,
+				SpecHash: specHash,
+				Spec:     *rgd.Spec.DeepCopy(),
+			},
 		},
 	}
 

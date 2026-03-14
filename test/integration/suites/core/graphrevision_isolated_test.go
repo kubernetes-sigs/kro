@@ -230,7 +230,7 @@ var _ = Describe("GraphRevision Isolated Integration", Serial, func() {
 			for _, gv := range gvs {
 				seen[gv.Spec.Revision] = struct{}{}
 				if gv.Spec.Revision == latest {
-					latestHash = gv.Spec.SpecHash
+					latestHash = gv.Spec.Snapshot.SpecHash
 				}
 			}
 			for revision := int64(1); revision <= latest; revision++ {

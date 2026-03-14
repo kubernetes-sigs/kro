@@ -107,16 +107,16 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&internalv1alpha1.GraphRevision{},
-		"spec.resourceGraphDefinitionName",
+		"spec.snapshot.name",
 		func(obj client.Object) []string {
 			gr, ok := obj.(*internalv1alpha1.GraphRevision)
 			if !ok {
 				return nil
 			}
-			return []string{gr.Spec.ResourceGraphDefinitionName}
+			return []string{gr.Spec.Snapshot.Name}
 		},
 	); err != nil {
-		return fmt.Errorf("failed to index GraphRevision by spec.resourceGraphDefinitionName: %w", err)
+		return fmt.Errorf("failed to index GraphRevision by spec.snapshot.name: %w", err)
 	}
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {

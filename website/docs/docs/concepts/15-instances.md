@@ -113,7 +113,7 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/instance-version` | API version of the instance |
 | `kro.run/instance-kind` | Kind of the instance |
 | `app.kubernetes.io/managed-by` | Set to `"kro"` |
-| `kro.run/node-id` | Resource ID from the RGD |
+| `kro.run/node-id` | FNV-64a hash of the resource ID from the RGD, encoded as a 16-character hex string. The human-readable ID is stored in the `kro.run/node` annotation. |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
 **Collection-specific labels** (only on resources created via `forEach`):
@@ -123,7 +123,13 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/collection-index` | Position in the collection (0-indexed) |
 | `kro.run/collection-size` | Total number of items in the collection |
 
-These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
+**Annotations:**
+
+| Annotation | Description |
+|------------|-------------|
+| `kro.run/node` | The human-readable node identifier based on the RGD (e.g., `workerPods`). This preserves a readable identifier since `kro.run/node-id` stores a fixed-length hash to comply with the Kubernetes 63-character label value limit. |
+
+These labels and annotations allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>

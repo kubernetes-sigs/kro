@@ -92,12 +92,50 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	// includeWhen only allows schema references; restrict context to schema.
-	ctx := n.buildContext(graph.InstanceNodeID)
+	needed := make(map[string]struct{})
+	resourceRefs := make(map[string]struct{})
+	for _, expr := range n.includeWhenExprs {
+		for _, ref := range expr.Expression.References {
+			needed[ref] = struct{}{}
+			if ref != graph.InstanceNodeID {
+				resourceRefs[ref] = struct{}{}
+			}
+		}
+	}
+
+	// Resource-backed includeWhen conditions evaluate against observed upstream
+	// state, so they must wait until those dependencies are ready. The caller
+	// already checked contagious ignore propagation above, so only inspect the
+	// dependency's observed readiness here.
+	for depID := range resourceRefs {
+		dep, ok := n.deps[depID]
+		if !ok {
+			return false, fmt.Errorf("includeWhen dependency %q not wired into runtime", depID)
+		}
+		err := dep.checkObservedReadiness()
+		if errors.Is(err, ErrWaitingForReadiness) {
+			return false, fmt.Errorf("includeWhen dependency %q not ready: %s (%w)", depID, err.Error(), ErrDataPending)
+		}
+		if err != nil {
+			return false, fmt.Errorf("includeWhen dependency %q: %w", depID, err)
+		}
+	}
+
+	ctx := n.buildContext(slices.Collect(maps.Keys(needed))...)
 
 	for _, expr := range n.includeWhenExprs {
+		hasResourceRef := false
+		for _, ref := range expr.Expression.References {
+			if ref != graph.InstanceNodeID {
+				hasResourceRef = true
+				break
+			}
+		}
 		val, err := evalBoolExpr(expr, ctx)
 		if err != nil {
+			if hasResourceRef && isCELDataPending(err) {
+				return false, fmt.Errorf("includeWhen %q: %w (%w)", expr.Expression.UserExpression(), err, ErrDataPending)
+			}
 			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
@@ -141,10 +179,11 @@ func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 			if depID == graph.InstanceNodeID {
 				continue
 			}
-			if err := dep.CheckReadiness(); err != nil {
-				if errors.Is(err, ErrWaitingForReadiness) {
-					return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
-				}
+			err := dep.CheckReadiness()
+			if errors.Is(err, ErrWaitingForReadiness) {
+				return nil, fmt.Errorf("node %q: dependent node %q not ready: %s (%w)", n.Spec.Meta.ID, dep.Spec.Meta.ID, err.Error(), ErrDataPending)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("node %q: failed to check readiness of dependent node %q: %w", n.Spec.Meta.ID, dep.Spec.Meta.ID, err)
 			}
 		}
@@ -537,6 +576,7 @@ func (n *Node) SetObserved(observed []*unstructured.Unstructured) {
 // Ignored nodes are treated as ready for dependency gating purposes.
 func (n *Node) CheckReadiness() error {
 	nodeReadyCheckTotal.Inc()
+
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
 	if err != nil {
@@ -546,17 +586,21 @@ func (n *Node) CheckReadiness() error {
 		return nil
 	}
 
-	if n.Spec.Meta.Type == graph.NodeTypeCollection || n.Spec.Meta.Type == graph.NodeTypeExternalCollection {
-		err = n.checkCollectionReadiness()
-	} else {
-		err = n.checkSingleResourceReadiness()
-	}
-
+	err = n.checkObservedReadiness()
 	if err != nil && errors.Is(err, ErrWaitingForReadiness) {
 		nodeNotReadyTotal.Inc()
 	}
 
 	return err
+}
+
+// checkObservedReadiness evaluates readiness from the node's own observed and
+// desired state. Callers that need ignore semantics must handle them first.
+func (n *Node) checkObservedReadiness() error {
+	if n.Spec.Meta.Type == graph.NodeTypeCollection || n.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		return n.checkCollectionReadiness()
+	}
+	return n.checkSingleResourceReadiness()
 }
 
 func (n *Node) checkSingleResourceReadiness() error {

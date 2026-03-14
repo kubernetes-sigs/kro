@@ -6,7 +6,7 @@ sidebar_position: 2
 
 Not all resources in a ResourceGraphDefinition need to be created for every instance. Sometimes you want to create resources conditionally based on user configuration - like enabling monitoring, backups, or TLS only when requested.
 
-kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions when an instance is created and only includes the resource if all conditions are true.
+kro provides the `includeWhen` field to make resources optional. When you add `includeWhen` to a resource, kro evaluates the conditions during reconciliation and only includes the resource if all conditions are true.
 
 ## Basic Example
 
@@ -38,7 +38,7 @@ spec:
     enabled: true  # Ingress will be created
 ```
 
-If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped entirely.
+If `ingress.enabled` is `false`, the Ingress resource is skipped entirely. If the field may be omitted, give it a default or guard the expression so a missing field does not raise an evaluation error.
 
 ## How includeWhen Works
 
@@ -46,12 +46,14 @@ If `ingress.enabled` is `false` or not provided, the Ingress resource is skipped
 
 - If **all** expressions evaluate to `true`, the resource is included
 - If **any** expression evaluates to `false`, the resource is skipped
+- Conditions are re-evaluated on later reconciliations; if a previously included resource starts evaluating to `false`, kro prunes it
 - Each expression must evaluate to a **boolean** value (`true` or `false`)
 - For [collections](./04-collections.md), `includeWhen` applies to the entire collection
 
 ## What You Can Reference
 
-Currently, `includeWhen` expressions can only reference `schema.spec` fields:
+`includeWhen` expressions can reference `schema.spec` fields and upstream
+resources:
 
 ```kro
 # ✓ Valid - references schema.spec and returns boolean
@@ -59,6 +61,12 @@ includeWhen:
   - ${schema.spec.ingress.enabled}
   - ${schema.spec.environment == "production"}
   - ${schema.spec.replicas > 3}
+```
+
+```kro
+# ✓ Valid - references an upstream resource
+includeWhen:
+  - ${deployment.status.availableReplicas > 0}
 ```
 
 ```kro
@@ -70,7 +78,71 @@ includeWhen:
 kro validates `includeWhen` expressions when you create the ResourceGraphDefinition, ensuring they reference valid fields and return boolean values.
 
 :::note
-Currently, `includeWhen` can only reference `schema.spec` because conditions are evaluated before any resources are created. Support for conditional inclusion based on other resources' states is planned for future releases.
+When `includeWhen` references other resources, kro treats them as dependencies.
+The condition is evaluated against the observed upstream state, and reconciliation
+waits until the referenced resources have enough data to evaluate safely.
+As that upstream state changes, the resource may become includable later or be
+pruned later if the condition flips to `false`.
+:::
+
+For example, this `ServiceMonitor` waits for the upstream `deployment` to
+report available replicas before kro includes it:
+
+```kro
+resources:
+  - id: deployment
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}
+      # ...
+
+  - id: serviceMonitor
+    includeWhen:
+      - ${deployment.status.availableReplicas > 0}
+    template:
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: ${schema.spec.name}
+      # ...
+```
+
+If `deployment.status.availableReplicas` is not populated yet, kro waits and
+re-evaluates the condition on the next reconciliation instead of treating the
+condition as `false`. If the deployment later scales back to zero available
+replicas, kro prunes the `ServiceMonitor`.
+
+:::danger Be careful when referencing upstream resources in includeWhen
+
+`includeWhen` controls whether a resource **exists at all**. If the referenced
+field is volatile (e.g. a `.status` field that fluctuates), the condition can
+flip between `true` and `false` across reconciliations. Each flip creates or
+deletes the resource — and all of its dependents — causing the graph to
+**flip-flop** and producing unnecessary churn, wasted API calls, and
+potentially broken workloads.
+
+Before referencing an upstream resource in `includeWhen`, ask yourself: **can
+this field change back and forth during normal operation?** If yes, you probably
+want `readyWhen` on the upstream resource instead, which gates sequencing
+without toggling existence.
+
+```kro
+# Risky — status fields are volatile; the resource may flip-flop
+- id: monitor
+  includeWhen:
+    - ${deployment.status.availableReplicas > 0}
+
+# Safe — user-controlled toggle, stable across reconciliations
+- id: monitor
+  includeWhen:
+    - ${schema.spec.monitoring.enabled}
+```
+
+Referencing upstream resources is fine when the field is **effectively
+immutable** after creation — for example, a ConfigMap `data` key that is set
+once and never changes. Just be aware of the consequences if it does change.
 :::
 
 ## Dependencies and Skipped Resources

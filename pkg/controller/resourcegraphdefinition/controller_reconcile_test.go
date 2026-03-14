@@ -290,9 +290,9 @@ func TestGetLatestGraphRevisionView(t *testing.T) {
 func TestGraphRevisionName(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "demo-2a97516c-r000001", graphRevisionName("demo", 1))
-	assert.Equal(t, "demo-2a97516c-r001234", graphRevisionName("demo", 1234))
-	assert.Regexp(t, `-r000001$`, graphRevisionName("demo", 1))
+	assert.Equal(t, "demo-r1-695b6c57ca75", graphRevisionName("demo", 1))
+	assert.Equal(t, "demo-r1234-695b6c57ca75", graphRevisionName("demo", 1234))
+	assert.Contains(t, graphRevisionName("demo", 1), "-r1-")
 
 	// Long names can truncate, but hash keeps them unique even when prefixes
 	// collide.

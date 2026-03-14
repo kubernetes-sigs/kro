@@ -142,7 +142,7 @@ instead of a separate state enum.
 apiVersion: kro.run/v1alpha1
 kind: GraphRevision
 metadata:
-  name: my-webapp-r000003
+  name: my-webapp-r3-a1b2c3d4e5f6
   labels:
     kro.run/rgd-name: my-webapp
     kro.run/rgd-uid: "abc-123"
@@ -195,11 +195,11 @@ Status conditions follow the established kro pattern (KREP status-conditions):
 ```yaml
 status:
   latestObservedGR:
-    name: my-webapp-r000003
+    name: my-webapp-r3-a1b2c3d4e5f6
     revision: 3
     specHash: "a1b2c3d4..."
   latestActiveGR:
-    name: my-webapp-r000003
+    name: my-webapp-r3-a1b2c3d4e5f6
     revision: 3
     specHash: "a1b2c3d4..."
   lastIssuedRevision: 3

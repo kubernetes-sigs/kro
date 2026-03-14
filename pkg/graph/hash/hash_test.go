@@ -97,7 +97,36 @@ func TestSpecCases(t *testing.T) {
 			},
 		},
 		{
-			name: "resource list order affects the hash",
+			name: "readyWhen/includeWhen order does not affect the hash",
+			run: func(t *testing.T) {
+				specA := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:          "svc",
+						Template:    raw(`{"apiVersion":"v1","kind":"Service"}`),
+						ReadyWhen:   []string{"a", "b", "c"},
+						IncludeWhen: []string{"x", "y"},
+					}},
+				}
+				specB := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:          "svc",
+						Template:    raw(`{"apiVersion":"v1","kind":"Service"}`),
+						ReadyWhen:   []string{"c", "a", "b"},
+						IncludeWhen: []string{"y", "x"},
+					}},
+				}
+
+				hashA, err := Spec(specA)
+				require.NoError(t, err)
+				hashB, err := Spec(specB)
+				require.NoError(t, err)
+				assert.Equal(t, hashA, hashB)
+			},
+		},
+		{
+			name: "resource list order does not affect the hash",
 			run: func(t *testing.T) {
 				first := v1alpha1.ResourceGraphDefinitionSpec{
 					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
@@ -114,7 +143,11 @@ func TestSpecCases(t *testing.T) {
 					},
 				}
 
-				assertDifferentHashes(t, first, second)
+				hashA, err := Spec(first)
+				require.NoError(t, err)
+				hashB, err := Spec(second)
+				require.NoError(t, err)
+				assert.Equal(t, hashA, hashB)
 			},
 		},
 		{
@@ -209,7 +242,7 @@ func TestNormalizeSpecCases(t *testing.T) {
 				Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
 				Resources: []*v1alpha1.Resource{
 					nil,
-					{ID: "service", Template: raw("apiVersion: v1\nkind: Service\nmetadata:\n  name: my-svc\n")},
+					{ID: "service", Template: raw(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"my-svc"}}`)},
 				},
 			},
 			assertResult: func(t *testing.T, normalized v1alpha1.ResourceGraphDefinitionSpec) {
@@ -316,7 +349,7 @@ func equivalentOrderingSpecs() (v1alpha1.ResourceGraphDefinitionSpec, v1alpha1.R
 			},
 			Resources: []*v1alpha1.Resource{{
 				ID:       "service",
-				Template: raw("apiVersion: v1\nkind: Service\nmetadata:\n  labels:\n    \"y\": \"2\"\n    \"x\": \"1\"\n  name: my-svc\nspec:\n  ports:\n  - port: 80\n"),
+				Template: raw(`{"apiVersion":"v1","kind":"Service","metadata":{"labels":{"y":"2","x":"1"},"name":"my-svc"},"spec":{"ports":[{"port":80}]}}`),
 			}},
 		}, v1alpha1.ResourceGraphDefinitionSpec{
 			Schema: &v1alpha1.Schema{

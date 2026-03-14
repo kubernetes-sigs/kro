@@ -16,9 +16,9 @@ package resourcegraphdefinition
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"slices"
 	"time"
 
@@ -46,7 +46,7 @@ const (
 	defaultRequeueDelay = 3 * time.Second
 	// graphRevisionNameHashLen is the short hash suffix length in the GraphRevision
 	// name. This balances readability with collision resistance after truncation.
-	graphRevisionNameHashLen = 8
+	graphRevisionNameHashLen = 12
 )
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition.
@@ -429,7 +429,7 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 
 func graphRevisionName(rgdName string, revision int64) string {
 	hash := graphRevisionNameHash(rgdName)
-	suffix := fmt.Sprintf("-%s-r%06d", hash, revision)
+	suffix := fmt.Sprintf("-r%d-%s", revision, hash)
 	maxPrefixLen := 253 - len(suffix)
 	if len(rgdName) > maxPrefixLen {
 		rgdName = rgdName[:maxPrefixLen]
@@ -437,9 +437,25 @@ func graphRevisionName(rgdName string, revision int64) string {
 	return rgdName + suffix
 }
 
+// graphRevisionNameHash computes a short FNV-128a hash of the RGD name for use
+// in GraphRevision object names.
+//
+// This hash exists solely as a collision guard for truncated RGD names. When an
+// RGD name exceeds the Kubernetes 253-char name limit minus the suffix length,
+// the name is truncated. Two different RGD names that truncate to the same
+// prefix would produce identical revision names without this hash.
+//
+// The hash is based on the full, untruncated RGD name, so even truncated
+// prefixes produce unique revision names. It is NOT a content hash — the same
+// RGD always produces the same hash regardless of spec changes, giving
+// consistent naming across revisions (e.g. my-webapp-r1-aabb, my-webapp-r2-aabb).
+//
+// FNV-128a is used instead of a cryptographic hash because this is a naming
+// concern, not a security boundary. FNV is fast and well-distributed.
 func graphRevisionNameHash(rgdName string) string {
-	sum := sha256.Sum256([]byte(rgdName))
-	return hex.EncodeToString(sum[:])[:graphRevisionNameHashLen]
+	h := fnv.New128a()
+	h.Write([]byte(rgdName))
+	return hex.EncodeToString(h.Sum(nil))[:graphRevisionNameHashLen]
 }
 
 // garbageCollectGraphRevisions deletes old GraphRevision objects exceeding the

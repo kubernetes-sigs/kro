@@ -76,7 +76,7 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 
 		// Verify naming convention
 		Expect(gr.Name).To(HavePrefix(rgdName + "-"))
-		Expect(gr.Name).To(HaveSuffix("-r000001"))
+		Expect(gr.Name).To(ContainSubstring("-r1-"))
 
 		// Verify labels
 		Expect(gr.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))

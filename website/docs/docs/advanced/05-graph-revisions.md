@@ -81,24 +81,24 @@ List all GraphRevisions:
 
 ```bash
 $ kubectl get graphrevisions
-NAME                REVISION   READY   AGE
-my-webapp-r000001   1          True    2d
-my-webapp-r000002   2          True    1d
-my-webapp-r000003   3          True    5m
+NAME                             REVISION   READY   AGE
+my-webapp-r1-a1b2c3d4e5f6        1          True    2d
+my-webapp-r2-a1b2c3d4e5f6        2          True    1d
+my-webapp-r3-a1b2c3d4e5f6        3          True    5m
 ```
 
 Inspect a specific revision:
 
 ```bash
-$ kubectl get graphrevision my-webapp-r000003 -o wide
-NAME                RGD        REVISION   HASH              READY   AGE
-my-webapp-r000003   my-webapp  3          a1b2c3d4e5f6...   True    5m
+$ kubectl get graphrevision my-webapp-r3-a1b2c3d4e5f6 -o wide
+NAME                             RGD        REVISION   HASH              READY   AGE
+my-webapp-r3-a1b2c3d4e5f6        my-webapp  3          a1b2c3d4e5f6...   True    5m
 ```
 
 Check revision conditions:
 
 ```bash
-$ kubectl describe graphrevision my-webapp-r000003
+$ kubectl describe graphrevision my-webapp-r3-a1b2c3d4e5f6
 ```
 
 Key fields in a GraphRevision:

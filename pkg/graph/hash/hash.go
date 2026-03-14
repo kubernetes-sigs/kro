@@ -20,9 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
@@ -73,6 +73,25 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 		}
 	}
 
+	slices.SortFunc(normalized.Resources, func(a, b *v1alpha1.Resource) int {
+		if a == nil && b == nil {
+			return 0
+		}
+		if a == nil {
+			return -1
+		}
+		if b == nil {
+			return 1
+		}
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+
 	for i := range normalized.Resources {
 		if normalized.Resources[i] == nil {
 			continue
@@ -82,6 +101,22 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 			return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize resources[%d].template: %w", i, err)
 		}
 		normalized.Resources[i].Template = normalizedTemplate
+		slices.Sort(normalized.Resources[i].ReadyWhen)
+		slices.Sort(normalized.Resources[i].IncludeWhen)
+		slices.SortFunc(normalized.Resources[i].ForEach, func(a, b v1alpha1.ForEachDimension) int {
+			for k := range a {
+				for k2 := range b {
+					if k < k2 {
+						return -1
+					}
+					if k > k2 {
+						return 1
+					}
+					return 0
+				}
+			}
+			return 0
+		})
 	}
 
 	return *normalized, nil
@@ -102,7 +137,7 @@ func normalizeRawExtension(ext runtime.RawExtension) (runtime.RawExtension, erro
 	}
 
 	var canonical any
-	if err := yaml.Unmarshal(source, &canonical); err != nil {
+	if err := json.Unmarshal(source, &canonical); err != nil {
 		return runtime.RawExtension{}, fmt.Errorf("parse raw extension payload: %w", err)
 	}
 

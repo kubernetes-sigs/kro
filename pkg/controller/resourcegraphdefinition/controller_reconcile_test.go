@@ -118,7 +118,6 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 
 				manager := &stubCRDManager{}
 				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
@@ -145,8 +144,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-graph-error")
 				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler: metadata.NewKROMetaLabeler(),
-					rgBuilder:       newFailingBuilder(errors.New("naming convention violation")),
+					rgBuilder: newFailingBuilder(errors.New("naming convention violation")),
 				}, rgd, nil
 			},
 			check: func(t *testing.T, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -160,31 +158,11 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			},
 		},
 		{
-			name: "returns labeler setup errors",
-			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
-				rgd := newTestRGD("rgd-labeler-error")
-				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler: metadata.GenericLabeler{
-						metadata.ResourceGraphDefinitionNameLabel: "conflict",
-					},
-					rgBuilder: newTestBuilder(),
-				}, rgd, nil
-			},
-			check: func(t *testing.T, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
-				require.Error(t, err)
-				assert.Nil(t, topologicalOrder)
-				assert.Nil(t, resourcesInfo)
-				assert.Contains(t, err.Error(), "failed to setup labeler")
-				assert.True(t, conditionFor(t, rgd, ControllerReady).IsFalse())
-			},
-		},
-		{
 			name: "returns crd errors and preserves graph output",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-crd-error")
 				manager := &stubCRDManager{ensureErr: errors.New("crd boom")}
 				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
@@ -208,7 +186,6 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				rgd := newTestRGD("rgd-crd-get-error")
 				manager := &stubCRDManager{getErr: errors.New("crd get boom")}
 				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
@@ -230,7 +207,6 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("rgd-micro-error")
 				return &ResourceGraphDefinitionReconciler{
-					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newDynamicController(t),
 					crdManager:        &stubCRDManager{},

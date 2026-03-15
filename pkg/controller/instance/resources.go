@@ -411,7 +411,7 @@ func (c *Controller) processCollectionNode(
 	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels with collection info
-		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
+		collectionInfo := &metadata.CollectionInfo{Index: i, Size: collectionSize}
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
 
 		// Look up current revision from LIST results
@@ -458,52 +458,14 @@ func (c *Controller) listCollectionItems(
 	return items, nil
 }
 
-// CollectionInfo holds collection item metadata for decorator.
-type CollectionInfo struct {
-	Index int
-	Size  int
-}
-
-// applyDecoratorLabels merges tool labels and adds node/collection identifiers.
+// applyDecoratorLabels stamps all kro-managed labels onto a child resource.
 func (c *Controller) applyDecoratorLabels(
 	rcx *ReconcileContext,
 	obj *unstructured.Unstructured,
 	nodeID string,
-	collectionInfo *CollectionInfo,
+	collectionInfo *metadata.CollectionInfo,
 ) {
-	labels := obj.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-
-	// Merge tool labels from labeler. On conflict (duplicate keys), log and use
-	// instance labels only - this avoids panic from nil dereference.
-	instanceLabeler := metadata.NewInstanceLabeler(rcx.Instance)
-	nodeLabeler := metadata.NewNodeLabeler()
-	merged, err := instanceLabeler.Merge(nodeLabeler)
-	if err != nil {
-		rcx.Log.V(1).Info("label merge conflict between instance and node labeler, using instance labels only", "error", err)
-		merged = instanceLabeler
-	}
-	toolLabels, err := merged.Merge(rcx.Labeler)
-	if err != nil {
-		rcx.Log.V(1).Info("label merge conflict, using instance labels only", "error", err)
-		toolLabels = instanceLabeler
-	}
-	for k, v := range toolLabels.Labels() {
-		labels[k] = v
-	}
-
-	// Add node ID label
-	labels[metadata.NodeIDLabel] = nodeID
-
-	// Add collection labels if applicable
-	if collectionInfo != nil {
-		labels[metadata.CollectionIndexLabel] = fmt.Sprintf("%d", collectionInfo.Index)
-		labels[metadata.CollectionSizeLabel] = fmt.Sprintf("%d", collectionInfo.Size)
-	}
-
-	obj.SetLabels(labels)
+	metadata.NodeLabeler(rcx.Instance, nodeID, collectionInfo).ApplyLabels(obj)
 }
 
 // patchInstanceWithApplySetMetadata applies applyset metadata to the parent instance.

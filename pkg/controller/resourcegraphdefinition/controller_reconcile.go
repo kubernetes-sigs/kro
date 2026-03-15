@@ -48,21 +48,16 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	}
 	mark.ResourceGraphValid()
 
-	// Build instance labeler: kro metadata + RGD-specific labels.
-	// This is applied to CRDs and instances. Child resources only get r.metadataLabeler.
-	rgdLabeler := metadata.NewResourceGraphDefinitionLabeler(rgd)
-	instanceLabeler, err := r.metadataLabeler.Merge(rgdLabeler)
-	if err != nil {
-		mark.FailedLabelerSetup(err.Error())
-		return nil, nil, fmt.Errorf("failed to setup labeler: %w", err)
-	}
+	// Build instance labeler — applied to both the generated CRD and instances.
+	instanceLabeler := metadata.InstanceLabeler(rgd)
 
 	crd := processedRGD.CRD
 	instanceLabeler.ApplyLabels(&crd.ObjectMeta)
 
 	// Ensure CRD exists and is up to date
 	log.V(1).Info("reconciling resource graph definition CRD")
-	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+	allowBreakingChanges := rgd.Annotations[v1alpha1.AllowBreakingChangesAnnotation] == "true" ||
+		rgd.Annotations[v1alpha1.InternalAllowBreakingChangesAnnotation] == "true"
 	if err := r.reconcileResourceGraphDefinitionCRD(ctx, crd, allowBreakingChanges); err != nil {
 		mark.KindUnready(err.Error())
 		return processedRGD.TopologicalOrder, resourcesInfo, err
@@ -109,7 +104,6 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 		processedRGD,
 		r.clientSet,
 		instanceLabeler,
-		r.metadataLabeler,
 		r.dynamicController.Coordinator(),
 	)
 }

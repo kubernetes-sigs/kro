@@ -27,10 +27,18 @@ const (
 
 // Annotations for ResourceGraphDefinitions
 const (
+	// Deprecated: v0.9.0
+	// Use InternalAllowBreakingChangesAnnotation instead.
+	// Removal timeline: TBD.
+	//
 	// AllowBreakingChangesAnnotation allows RGD updates that would otherwise be
 	// blocked due to breaking schema changes. Use with caution - breaking changes
 	// can invalidate existing instances.
 	AllowBreakingChangesAnnotation = KRODomainName + "/allow-breaking-changes"
+
+	// InternalAllowBreakingChangesAnnotation is the internal equivalent of
+	// AllowBreakingChangesAnnotation under the internal.kro.run/ prefix.
+	InternalAllowBreakingChangesAnnotation = "internal." + KRODomainName + "/allow-breaking-changes"
 )
 
 var (

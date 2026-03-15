@@ -17,6 +17,7 @@ package metadata
 import (
 	"testing"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,6 +45,11 @@ func TestIsKROOwned(t *testing.T) {
 		{
 			name:     "owned by kro",
 			labels:   map[string]string{OwnedLabel: "true"},
+			expected: true,
+		},
+		{
+			name:     "owned by kro (both labels)",
+			labels:   map[string]string{OwnedLabel: "true", InternalOwnedLabel: "true"},
 			expected: true,
 		},
 		{
@@ -139,6 +145,28 @@ func TestCompareRGDOwnership(t *testing.T) {
 			expectedNameMatch: true,
 			expectedIDMatch:   false,
 		},
+		{
+			name: "same RGD - both label sets (dual-write)",
+			existingLabels: map[string]string{
+				OwnedLabel:                               "true",
+				ResourceGraphDefinitionNameLabel:         "test-rgd",
+				ResourceGraphDefinitionIDLabel:           "test-id",
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			desiredLabels: map[string]string{
+				OwnedLabel:                               "true",
+				ResourceGraphDefinitionNameLabel:         "test-rgd",
+				ResourceGraphDefinitionIDLabel:           "test-id",
+				InternalOwnedLabel:                       "true",
+				InternalResourceGraphDefinitionNameLabel: "test-rgd",
+				InternalResourceGraphDefinitionIDLabel:   "test-id",
+			},
+			expectedKROOwned:  true,
+			expectedNameMatch: true,
+			expectedIDMatch:   true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -186,103 +214,99 @@ func TestGenericLabeler(t *testing.T) {
 		}
 	})
 
-	t.Run("Merge", func(t *testing.T) {
-		cases := []struct {
-			name           string
-			labeler1       GenericLabeler
-			labeler2       GenericLabeler
-			expectedMerged GenericLabeler
-			expectError    bool
-		}{
-			{
-				name:           "Merge non-overlapping labelers",
-				labeler1:       GenericLabeler{"key1": "value1", "key2": "value2"},
-				labeler2:       GenericLabeler{"key3": "value3", "key4": "value4"},
-				expectedMerged: GenericLabeler{"key1": "value1", "key2": "value2", "key3": "value3", "key4": "value4"},
-				expectError:    false,
-			},
-			{
-				name:        "Merge with duplicate keys",
-				labeler1:    GenericLabeler{"key1": "value1", "key2": "value2"},
-				labeler2:    GenericLabeler{"key2": "value3", "key3": "value4"},
-				expectError: true,
-			},
-		}
+	t.Run("merge non-overlapping", func(t *testing.T) {
+		l1 := GenericLabeler{"key1": "value1", "key2": "value2"}
+		l2 := GenericLabeler{"key3": "value3", "key4": "value4"}
+		merged := l1.merge(l2)
+		assert.Equal(t, GenericLabeler{"key1": "value1", "key2": "value2", "key3": "value3", "key4": "value4"}, merged)
+	})
 
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				merged, err := tc.labeler1.Merge(tc.labeler2)
-				if tc.expectError {
-					assert.Error(t, err)
-					assert.Contains(t, err.Error(), "duplicate labels")
-				} else {
-					assert.NoError(t, err)
-					assert.Equal(t, tc.expectedMerged, merged)
-				}
-			})
-		}
+	t.Run("merge with duplicate keys panics", func(t *testing.T) {
+		l1 := GenericLabeler{"key1": "value1", "key2": "value2"}
+		l2 := GenericLabeler{"key2": "value3", "key3": "value4"}
+		assert.Panics(t, func() { l1.merge(l2) })
 	})
 }
 
-func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
-	t.Run("NewResourceGraphDefinitionLabeler", func(t *testing.T) {
-		name := "rgd-name"
-		uid := types.UID("rgd-uid")
-		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
-		labeler := NewResourceGraphDefinitionLabeler(obj)
-		assert.Equal(t, GenericLabeler{
-			ResourceGraphDefinitionNameLabel: name,
-			ResourceGraphDefinitionIDLabel:   string(uid),
-		}, labeler)
-	})
+func TestInstanceLabels(t *testing.T) {
+	name := "rgd-name"
+	uid := types.UID("rgd-uid")
+	rgd := &v1alpha1.ResourceGraphDefinition{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}}
+	labeler := InstanceLabeler(rgd)
+
+	v := version.GetVersionInfo().GitVersion
+
+	assert.Equal(t, GenericLabeler{
+		OwnedLabel:              "true",
+		KROVersionLabel:         v,
+		InternalOwnedLabel:      "true",
+		InternalKROVersionLabel: v,
+
+		ResourceGraphDefinitionIDLabel:           string(uid),
+		ResourceGraphDefinitionNameLabel:         name,
+		InternalResourceGraphDefinitionIDLabel:   string(uid),
+		InternalResourceGraphDefinitionNameLabel: name,
+	}, labeler)
 }
 
-func TestNewInstanceLabeler(t *testing.T) {
-	t.Run("NewInstanceLabeler", func(t *testing.T) {
-		name := "instance-name"
-		namespace := "instance-namespace"
-		uid := types.UID("instance-uid")
-		group := "apps.example.com"
-		version := "v1"
-		kind := "MyApp"
+func TestNodeLabels(t *testing.T) {
+	instName := "instance-name"
+	instNamespace := "instance-namespace"
+	instUID := types.UID("instance-uid")
+	group := "apps.example.com"
+	instVersion := "v1"
+	kind := "MyApp"
 
-		obj := &unstructured.Unstructured{}
-		obj.SetName(name)
-		obj.SetNamespace(namespace)
-		obj.SetUID(uid)
-		obj.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   group,
-			Version: version,
-			Kind:    kind,
-		})
-
-		labeler := NewInstanceLabeler(obj)
-		assert.Equal(t, GenericLabeler{
-			InstanceLabel:          name,
-			InstanceNamespaceLabel: namespace,
-			InstanceIDLabel:        string(uid),
-			InstanceGroupLabel:     group,
-			InstanceVersionLabel:   version,
-			InstanceKindLabel:      kind,
-		}, labeler)
+	instance := &unstructured.Unstructured{}
+	instance.SetName(instName)
+	instance.SetNamespace(instNamespace)
+	instance.SetUID(instUID)
+	instance.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   group,
+		Version: instVersion,
+		Kind:    kind,
 	})
-}
 
-func TestNewKROMetaLabeler(t *testing.T) {
-	t.Run("NewKROMetaLabeler", func(t *testing.T) {
-		labeler := NewKROMetaLabeler()
-		assert.Equal(t, GenericLabeler{
-			OwnedLabel:      "true",
-			KROVersionLabel: version.GetVersionInfo().GitVersion,
-		}, labeler)
-	})
-}
+	v := version.GetVersionInfo().GitVersion
 
-func TestNewNodeLabeler(t *testing.T) {
-	t.Run("NewNodeLabeler", func(t *testing.T) {
-		labeler := NewNodeLabeler()
+	t.Run("without collection", func(t *testing.T) {
+		labeler := NodeLabeler(instance, "my-node", nil)
 		assert.Equal(t, GenericLabeler{
+			OwnedLabel:              "true",
+			KROVersionLabel:         v,
+			InternalOwnedLabel:      "true",
+			InternalKROVersionLabel: v,
+
 			ManagedByLabelKey: ManagedByKROValue,
+
+			InstanceIDLabel:                string(instUID),
+			InstanceLabel:                  instName,
+			InstanceNamespaceLabel:         instNamespace,
+			InstanceGroupLabel:             group,
+			InstanceVersionLabel:           instVersion,
+			InstanceKindLabel:              kind,
+			InternalInstanceIDLabel:        string(instUID),
+			InternalInstanceLabel:          instName,
+			InternalInstanceNamespaceLabel: instNamespace,
+			InternalInstanceGroupLabel:     group,
+			InternalInstanceVersionLabel:   instVersion,
+			InternalInstanceKindLabel:      kind,
+
+			NodeIDLabel:         "my-node",
+			InternalNodeIDLabel: "my-node",
 		}, labeler)
+	})
+
+	t.Run("with collection", func(t *testing.T) {
+		labeler := NodeLabeler(instance, "my-node", &CollectionInfo{Index: 2, Size: 5})
+
+		assert.Equal(t, "my-node", labeler[NodeIDLabel])
+		assert.Equal(t, "my-node", labeler[InternalNodeIDLabel])
+		assert.Equal(t, "2", labeler[CollectionIndexLabel])
+		assert.Equal(t, "5", labeler[CollectionSizeLabel])
+		assert.Equal(t, "2", labeler[InternalCollectionIndexLabel])
+		assert.Equal(t, "5", labeler[InternalCollectionSizeLabel])
+		assert.Equal(t, string(instUID), labeler[InstanceIDLabel])
+		assert.Equal(t, "true", labeler[OwnedLabel])
 	})
 }

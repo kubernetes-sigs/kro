@@ -638,26 +638,21 @@ func TestApplyDecoratorLabelsAndPatchMetadata(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
 
-	conflictingLabeler := metadata.GenericLabeler{
-		metadata.InstanceIDLabel: "conflict",
-	}
-	rcx.Labeler = conflictingLabeler
-
 	obj := newConfigMapObject("demo", "default")
 	obj.SetLabels(map[string]string{"keep": "yes"})
-	controller.applyDecoratorLabels(rcx, obj, "configs", &CollectionInfo{Index: 1, Size: 3})
+	controller.applyDecoratorLabels(rcx, obj, "configs", &metadata.CollectionInfo{Index: 1, Size: 3})
 
 	assert.Equal(t, "yes", obj.GetLabels()["keep"])
 	assert.Equal(t, "configs", obj.GetLabels()[metadata.NodeIDLabel])
 	assert.Equal(t, "1", obj.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, string(instance.GetUID()), obj.GetLabels()[metadata.InstanceIDLabel])
-	assert.Empty(t, obj.GetLabels()[metadata.ManagedByLabelKey])
+	assert.Equal(t, metadata.ManagedByKROValue, obj.GetLabels()[metadata.ManagedByLabelKey])
 
 	require.NoError(t, controller.patchInstanceWithApplySetMetadata(rcx, applyset.Metadata{
 		ID:                   "demo",
 		Tooling:              "tests",
-		GroupKinds:           sets.New[schema.GroupKind](controllerTestDeployGVK.GroupKind()),
-		AdditionalNamespaces: sets.New[string]("other"),
+		GroupKinds:           sets.New(controllerTestDeployGVK.GroupKind()),
+		AdditionalNamespaces: sets.New("other"),
 	}))
 	stored := getStoredParentObject(t, raw)
 	assert.Equal(t, "demo", stored.GetLabels()[applyset.ApplySetParentIDLabel])

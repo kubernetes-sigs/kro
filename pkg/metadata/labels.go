@@ -15,8 +15,8 @@
 package metadata
 
 import (
-	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -29,45 +29,115 @@ import (
 )
 
 const (
+	// Deprecated: v0.9.0
+	// Use InternalLabelKROPrefix instead.
+	// Removal timeline: TBD
 	// LabelKROPrefix is the label key prefix used to identify KRO owned resources.
 	LabelKROPrefix = v1alpha1.KRODomainName + "/"
+
+	// InternalLabelKROPrefix is the label key prefix used to identify KRO owned resources.
+	InternalLabelKROPrefix = "internal." + v1alpha1.KRODomainName + "/"
 )
 
 const (
+	// Deprecated: v0.9.0
+	// Use InternalNodeIDLabel instead.
+	// Removal timeline: TBD
 	NodeIDLabel = LabelKROPrefix + "node-id"
 
+	// Deprecated: v0.9.0
+	// Use InternalCollectionIndexLabel instead.
+	// Removal timeline: TBD
 	// Collection labels for tracking collection membership and position.
 	// These enable querying collection resources and understanding their position.
 	CollectionIndexLabel = LabelKROPrefix + "collection-index"
-	CollectionSizeLabel  = LabelKROPrefix + "collection-size"
+	// Deprecated: v0.9.0
+	// Use InternalCollectionSizeLabel instead.
+	// Removal timeline: TBD
+	CollectionSizeLabel = LabelKROPrefix + "collection-size"
 
-	OwnedLabel      = LabelKROPrefix + "owned"
+	// Deprecated: v0.9.0
+	// Use InternalOwnedLabel instead.
+	// Removal timeline: TBD
+	OwnedLabel = LabelKROPrefix + "owned"
+	// Deprecated: v0.9.0
+	// Use InternalKROVersionLabel instead.
+	// Removal timeline: TBD
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
 	ManagedByLabelKey = "app.kubernetes.io/managed-by"
 	ManagedByKROValue = "kro"
 
-	InstanceIDLabel        = LabelKROPrefix + "instance-id"
-	InstanceLabel          = LabelKROPrefix + "instance-name"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceIDLabel instead.
+	// Removal timeline: TBD
+	InstanceIDLabel = LabelKROPrefix + "instance-id"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceLabel instead.
+	// Removal timeline: TBD
+	InstanceLabel = LabelKROPrefix + "instance-name"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceNamespaceLabel instead.
+	// Removal timeline: TBD
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
-	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
-	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
-	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceGroupLabel instead.
+	// Removal timeline: TBD
+	InstanceGroupLabel = LabelKROPrefix + "instance-group"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceVersionLabel instead.
+	// Removal timeline: TBD
+	InstanceVersionLabel = LabelKROPrefix + "instance-version"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceKindLabel instead.
+	// Removal timeline: TBD
+	InstanceKindLabel = LabelKROPrefix + "instance-kind"
+	// Deprecated: v0.9.0
+	// Use InternalInstanceReconcileLabel instead.
+	// Removal timeline: TBD
 	InstanceReconcileLabel = LabelKROPrefix + "reconcile"
 
-	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
-	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
-	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
-	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionIDLabel instead.
+	// Removal timeline: TBD
+	ResourceGraphDefinitionIDLabel = LabelKROPrefix + "resource-graph-definition-id"
+	// Deprecated: v0.9.0
+	// Use InternalResourceGraphDefinitionNameLabel instead.
+	// Removal timeline: TBD
+	ResourceGraphDefinitionNameLabel = LabelKROPrefix + "resource-graph-definition-name"
+)
+
+// Internal labels
+const (
+	InternalNodeIDLabel = InternalLabelKROPrefix + "node-id"
+
+	// Collection labels for tracking collection membership and position.
+	// These enable querying collection resources and understanding their position.
+	InternalCollectionIndexLabel = InternalLabelKROPrefix + "collection-index"
+	InternalCollectionSizeLabel  = InternalLabelKROPrefix + "collection-size"
+
+	InternalOwnedLabel      = InternalLabelKROPrefix + "owned"
+	InternalKROVersionLabel = InternalLabelKROPrefix + "kro-version"
+
+	InternalInstanceIDLabel        = InternalLabelKROPrefix + "instance-id"
+	InternalInstanceLabel          = InternalLabelKROPrefix + "instance-name"
+	InternalInstanceNamespaceLabel = InternalLabelKROPrefix + "instance-namespace"
+	InternalInstanceGroupLabel     = InternalLabelKROPrefix + "instance-group"
+	InternalInstanceVersionLabel   = InternalLabelKROPrefix + "instance-version"
+	InternalInstanceKindLabel      = InternalLabelKROPrefix + "instance-kind"
+	InternalInstanceReconcileLabel = InternalLabelKROPrefix + "reconcile"
+
+	InternalResourceGraphDefinitionIDLabel   = InternalLabelKROPrefix + "resource-graph-definition-id"
+	InternalResourceGraphDefinitionNameLabel = InternalLabelKROPrefix + "resource-graph-definition-name"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
 func IsKROOwned(meta metav1.Object) bool {
-	v, ok := meta.GetLabels()[OwnedLabel]
-	if !ok {
-		return meta.GetLabels()[ManagedByLabelKey] == ManagedByKROValue
+	labels := meta.GetLabels()
+	if v, ok := labels[OwnedLabel]; ok {
+		return booleanFromString(v)
 	}
-	return ok && booleanFromString(v)
+	return labels[ManagedByLabelKey] == ManagedByKROValue
 }
 
 // CompareRGDOwnership compares RGD ownership labels between two resources.
@@ -99,10 +169,6 @@ func CompareRGDOwnership(existing, desired metav1.ObjectMeta) (kroOwned, nameMat
 	return kroOwned, nameMatch, idMatch
 }
 
-var (
-	ErrDuplicatedLabels = errors.New("duplicate labels")
-)
-
 var _ Labeler = GenericLabeler{}
 
 // Labeler is an interface that defines a set of labels that can be
@@ -110,7 +176,6 @@ var _ Labeler = GenericLabeler{}
 type Labeler interface {
 	Labels() map[string]string
 	ApplyLabels(metav1.Object)
-	Merge(Labeler) (Labeler, error)
 }
 
 // GenericLabeler is a map of labels that can be applied to a resource.
@@ -124,22 +189,28 @@ func (gl GenericLabeler) Labels() map[string]string {
 
 // ApplyLabels applies the labels to the resource.
 func (gl GenericLabeler) ApplyLabels(meta metav1.Object) {
-	for k, v := range gl {
-		setLabel(meta, k, v)
+	labels := meta.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string, len(gl))
 	}
+	maps.Copy(labels, gl)
+	meta.SetLabels(labels)
 }
 
-// Merge merges the labels from the other labeler into the current
-// labeler. If there are any duplicate keys, an error is returned.
-func (gl GenericLabeler) Merge(other Labeler) (Labeler, error) {
-	newLabels := gl.Copy()
-	for k, v := range other.Labels() {
-		if _, ok := newLabels[k]; ok {
-			return nil, fmt.Errorf("%v: found key '%s' in both maps", ErrDuplicatedLabels, k)
+// merge merges the labels from other into a copy of gl.
+// Panics on duplicate keys — callers must ensure key sets are disjoint.
+// When adding new label keys to any labeler constructor (MetaLabeler,
+// InstanceLabeler, NodeLabeler), verify the key does not already appear
+// in the other set being merged, or the controller will panic at runtime.
+func (gl GenericLabeler) merge(other GenericLabeler) GenericLabeler {
+	result := gl.Copy()
+	for k, v := range other {
+		if _, ok := result[k]; ok {
+			panic(fmt.Sprintf("label key collision: %q exists in both labelers", k))
 		}
-		newLabels[k] = v
+		result[k] = v
 	}
-	return GenericLabeler(newLabels), nil
+	return GenericLabeler(result)
 }
 
 // Copy returns a copy of the labels.
@@ -151,60 +222,68 @@ func (gl GenericLabeler) Copy() map[string]string {
 	return newGenericLabeler
 }
 
-// NewResourceGraphDefinitionLabeler returns a new labeler that sets the
-// ResourceGraphDefinitionLabel and ResourceGraphDefinitionIDLabel labels on a resource.
-func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
-	return map[string]string{
-		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
-		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
+// CollectionInfo holds collection item metadata for labeling.
+type CollectionInfo struct {
+	Index int
+	Size  int
+}
+
+// MetaLabeler returns the KRO ownership labels common to all managed resources.
+func MetaLabeler() GenericLabeler {
+	v := safeVersion(version.GetVersionInfo().GitVersion)
+	return GenericLabeler{
+		OwnedLabel:              "true",
+		KROVersionLabel:         v,
+		InternalOwnedLabel:      "true",
+		InternalKROVersionLabel: v,
 	}
 }
 
-// NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
-// InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
-// and name of the instance that was reconciled to create the resource.
-// It also includes the instance's GVK to allow child
-// resource handlers to filter events by parent instance type.
-func NewInstanceLabeler(instance *unstructured.Unstructured) GenericLabeler {
+// InstanceLabeler returns the complete label set for an instance CR and its
+// generated CRD. Includes KRO ownership, version, and RGD identity.
+func InstanceLabeler(rgd *v1alpha1.ResourceGraphDefinition) GenericLabeler {
+	return MetaLabeler().merge(GenericLabeler{
+		// RGD identity
+		ResourceGraphDefinitionIDLabel:           string(rgd.GetUID()),
+		ResourceGraphDefinitionNameLabel:         rgd.GetName(),
+		InternalResourceGraphDefinitionIDLabel:   string(rgd.GetUID()),
+		InternalResourceGraphDefinitionNameLabel: rgd.GetName(),
+	})
+}
+
+// NodeLabeler returns the complete label set for a managed child resource (node).
+// Includes KRO ownership, version, managed-by marker, instance identity, node
+// identity, and optionally collection position.
+func NodeLabeler(instance *unstructured.Unstructured, nodeID string, collection *CollectionInfo) GenericLabeler {
 	gvk := instance.GroupVersionKind()
-	return map[string]string{
-		InstanceIDLabel:        string(instance.GetUID()),
-		InstanceLabel:          instance.GetName(),
-		InstanceNamespaceLabel: instance.GetNamespace(),
-		InstanceGroupLabel:     gvk.Group,
-		InstanceVersionLabel:   gvk.Version,
-		InstanceKindLabel:      gvk.Kind,
-	}
-}
-
-// NewNodeLabeler returns a new labeler for child resources
-// Only includes app.kubernetes.io/managed-by label, as other labels come from the parent labeler.
-func NewNodeLabeler() GenericLabeler {
-	return map[string]string{
+	nodeLabels := GenericLabeler{
+		// Managed-by marker
 		ManagedByLabelKey: ManagedByKROValue,
+		// Instance identity
+		InstanceIDLabel:                string(instance.GetUID()),
+		InstanceLabel:                  instance.GetName(),
+		InstanceNamespaceLabel:         instance.GetNamespace(),
+		InstanceGroupLabel:             gvk.Group,
+		InstanceVersionLabel:           gvk.Version,
+		InstanceKindLabel:              gvk.Kind,
+		InternalInstanceIDLabel:        string(instance.GetUID()),
+		InternalInstanceLabel:          instance.GetName(),
+		InternalInstanceNamespaceLabel: instance.GetNamespace(),
+		InternalInstanceGroupLabel:     gvk.Group,
+		InternalInstanceVersionLabel:   gvk.Version,
+		InternalInstanceKindLabel:      gvk.Kind,
+		// Node identity
+		NodeIDLabel:         nodeID,
+		InternalNodeIDLabel: nodeID,
 	}
-}
-
-// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel, and
-// KROVersion labels on a resource.
-func NewKROMetaLabeler() GenericLabeler {
-	return map[string]string{
-		OwnedLabel:      "true",
-		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
+	// Collection position
+	if collection != nil {
+		nodeLabels[CollectionIndexLabel] = strconv.Itoa(collection.Index)
+		nodeLabels[CollectionSizeLabel] = strconv.Itoa(collection.Size)
+		nodeLabels[InternalCollectionIndexLabel] = strconv.Itoa(collection.Index)
+		nodeLabels[InternalCollectionSizeLabel] = strconv.Itoa(collection.Size)
 	}
-}
-
-// NewCollectionItemLabeler returns a new labeler that sets collection-specific
-// labels on a resource that is part of a collection (forEach expansion).
-// - node-id: the resource ID from the RGD (e.g "workerPods")
-// - collection-index: the position in the collection (e.g "0", "1", "2")
-// - collection-size: the total number of items in the collection (e.g "3")
-func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
-	return map[string]string{
-		NodeIDLabel:          nodeID,
-		CollectionIndexLabel: strconv.Itoa(index),
-		CollectionSizeLabel:  strconv.Itoa(size),
-	}
+	return MetaLabeler().merge(nodeLabels)
 }
 
 func safeVersion(version string) string {
@@ -221,14 +300,4 @@ func booleanFromString(s string) bool {
 	// of parsing here. Since those labels are set by the controller
 	// it self. We'll expect the same values back.
 	return s == "true"
-}
-
-// Helper function to set a label
-func setLabel(meta metav1.Object, key, value string) {
-	labels := meta.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-	labels[key] = value
-	meta.SetLabels(labels)
 }

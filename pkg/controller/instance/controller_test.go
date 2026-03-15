@@ -61,7 +61,7 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 				metadata.SetInstanceFinalizer(instance)
 			}
 			if tt.presetLabels {
-				metadata.NewKROMetaLabeler().ApplyLabels(instance)
+				metadata.MetaLabeler().ApplyLabels(instance)
 			}
 
 			controller, rcx, raw := newControllerAndContext(t, instance, newTestGraph())
@@ -71,7 +71,7 @@ func TestApplyManagedFinalizerAndLabels(t *testing.T) {
 			assert.Equal(t, tt.wantActions, len(raw.Actions()))
 			assert.Equal(t, tt.wantSameObject, patched == rcx.Instance)
 			assert.True(t, metadata.HasInstanceFinalizer(patched))
-			for key, value := range metadata.NewKROMetaLabeler().Labels() {
+			for key, value := range metadata.MetaLabeler().Labels() {
 				assert.Equal(t, value, patched.GetLabels()[key])
 			}
 		})

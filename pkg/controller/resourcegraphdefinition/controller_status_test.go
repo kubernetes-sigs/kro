@@ -60,14 +60,6 @@ func TestConditionsMarker(t *testing.T) {
 			},
 		},
 		{
-			name:      "labeler failed",
-			condition: ControllerReady,
-			reason:    "FailedLabelerSetup",
-			apply: func(m *ConditionsMarker) {
-				m.FailedLabelerSetup("duplicate labels")
-			},
-		},
-		{
 			name:      "kind unready",
 			condition: KindReady,
 			reason:    "Failed",

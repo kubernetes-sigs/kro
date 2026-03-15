@@ -3954,7 +3954,8 @@ func TestBuilderHelperCases(t *testing.T) {
 		{
 			name: "validateAndCompileForEach handles empty and invalid expressions",
 			run: func(t *testing.T) {
-				iteratorTypes, err := validateAndCompileForEach(sessionCache, plainEnv, &Node{})
+				inspector := newUnitInspector(t, "schema")
+				iteratorTypes, err := validateAndCompileForEach(sessionCache, plainEnv, &Node{}, inspector)
 				require.NoError(t, err)
 				assert.Nil(t, iteratorTypes)
 
@@ -3963,7 +3964,7 @@ func TestBuilderHelperCases(t *testing.T) {
 					ForEach: []ForEachDimension{
 						{Name: "item", Expression: expr("items +")},
 					},
-				})
+				}, inspector)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), `node "resource": forEach iterator "item"`)
 			},
@@ -4001,6 +4002,33 @@ func TestBuilderHelperCases(t *testing.T) {
 			},
 		},
 		{
+			name: "extractDependencies accepts omit as a known function",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				deps, _, err := extractDependencies(inspector, expr("schema.spec.x != '' ? schema.spec.x : omit()"), nil)
+				require.NoError(t, err)
+				assert.Empty(t, deps, "omit() should not produce resource dependencies")
+			},
+		},
+		{
+			name: "extractDependencies accepts standalone omit call",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema")
+				deps, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				require.NoError(t, err)
+				assert.Empty(t, deps)
+			},
+		},
+		{
+			name: "inspectExpressionRestricted rejects omit in restricted context",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				_, err := inspectExpressionRestricted(inspector, "schema.spec.x != '' ? schema.spec.x : omit()", []string{"schema"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+		{
 			name: "buildDependencyGraph rejects duplicate node IDs",
 			run: func(t *testing.T) {
 				builder := &Builder{}
@@ -4027,6 +4055,47 @@ func TestBuilderHelperCases(t *testing.T) {
 				_, err := extractForEachDependencies(inspector, node, []string{"item"})
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "failed to extract dependencies from forEach iterator")
+			},
+		},
+		{
+			name: "includeWhen rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
+					IncludeWhen: []*krocel.Expression{expr("omit()")},
+				}
+				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "includeWhen")
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+		{
+			name: "readyWhen rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta:      NodeMeta{ID: "resource", Type: NodeTypeResource},
+					ReadyWhen: []*krocel.Expression{expr("omit()")},
+				}
+				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "readyWhen")
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+		{
+			name: "forEach rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta: NodeMeta{ID: "resource", Type: NodeTypeCollection},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("omit()")},
+					},
+				}
+				err := validateAndCompileNode(builderCache, sessionCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "forEach")
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
 			},
 		},
 	}

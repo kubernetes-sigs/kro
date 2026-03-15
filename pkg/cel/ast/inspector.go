@@ -83,6 +83,16 @@ type ExpressionInspection struct {
 	UnknownFunctions []UnknownFunction
 }
 
+// UsesOmit reports whether the inspected expression contains a call to omit().
+func (e *ExpressionInspection) UsesOmit() bool {
+	for _, fc := range e.FunctionCalls {
+		if fc.Name == "omit" {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *ExpressionInspection) merge(other ExpressionInspection) {
 	e.ResourceDependencies = append(e.ResourceDependencies, other.ResourceDependencies...)
 	e.FunctionCalls = append(e.FunctionCalls, other.FunctionCalls...)

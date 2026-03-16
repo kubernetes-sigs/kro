@@ -140,10 +140,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do
 	//--------------------------------------------------------------
-	inst, err := c.client.Dynamic().
-		Resource(c.gvr).
-		Namespace(req.Namespace).
-		Get(ctx, req.Name, metav1.GetOptions{})
+	var inst *unstructured.Unstructured
+	if c.rgd.IsNamespacedInstance() {
+		inst, err = c.client.Dynamic().Resource(c.gvr).Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
+	} else {
+		inst, err = c.client.Dynamic().Resource(c.gvr).Get(ctx, req.Name, metav1.GetOptions{})
+	}
 	if apierrors.IsNotFound(err) {
 		log.Info("instance not found (likely deleted)")
 		return nil

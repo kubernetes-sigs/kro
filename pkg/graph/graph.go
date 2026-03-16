@@ -48,3 +48,10 @@ type Graph struct {
 	// (keyed by InstanceNodeID). Used at runtime for schema-aware CEL value conversion.
 	ResourceSchemas map[string]*spec.Schema
 }
+
+// IsNamespacedInstance returns true when the generated instance CRD is namespace-scoped,
+// and false when it is cluster-scoped. Controllers use this to decide whether to include
+// a namespace when interacting with the Kubernetes API server.
+func (rgd *Graph) IsNamespacedInstance() bool {
+	return rgd.Instance.IsNamespaced()
+}

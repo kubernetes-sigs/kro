@@ -326,6 +326,22 @@ spec:
                         description: Labels to apply to the generated CRD
                         type: object
                     type: object
+                  scope:
+                    allOf:
+                    - enum:
+                      - Namespaced
+                      - Cluster
+                    - enum:
+                      - Namespaced
+                      - Cluster
+                    default: Namespaced
+                    description: |-
+                      Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
+                      Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: scope is immutable
+                      rule: self == oldSelf
                   spec:
                     description: |-
                       Spec defines the schema for the instance's spec section using SimpleSchema syntax.

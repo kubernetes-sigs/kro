@@ -3689,6 +3689,7 @@ func TestBuildInstanceNode(t *testing.T) {
 				"example.com",
 				"v1alpha1",
 				"Test",
+				true, // namespaced (default)
 				tt.variables,
 				tt.template,
 				inspector,

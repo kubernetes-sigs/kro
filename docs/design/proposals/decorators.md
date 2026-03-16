@@ -27,27 +27,39 @@ leverage existing and heterogeneous tooling. Further, all policies must be bundl
 single monolithic RGD. This requires cluster administrators to centralize all application guardrails
 into a single monolithic configuration. Decorators provide a solution to these problems.
 
-## Proposed API and Behavior Changes
+## API and Behavior Changes
 
-1. Introduce `Selector` and `NamespaceSelector` to `ExternalRef`
-2. Make `Metadata` optional and mutually exclusive with `Selector` and `NamespaceSelector`
-3. `Kind` must refer to a `ListKind` when `Metadata` is not defined (e.g. `DeploymentList`)
-4. If `Metadata` is defined, `ExternalRef` refers to a single resource, otherwise it refers to a
-   collection of resources
-5. Both `Selector` and `NamespaceSelector` are optional, and if omitted, all resources are included
+1. Introduce `Selector` to `ExternalRefMetadata`, mutually exclusive with `Name`
+2. If `Name` is set, `ExternalRef` refers to a single resource (scalar)
+3. If `Selector` is set, `ExternalRef` refers to a collection of matching resources
+4. `Kind` uses the standard resource kind (e.g. `Deployment`, not `DeploymentList`)
+5. `NamespaceSelector` is out of scope for this KREP — ordering items across multiple namespaces
+   into a single collection is undefined
 
 ```
+type ExternalRefMetadata struct {
+    // Name is the name of the external resource to reference.
+    // Mutually exclusive with Selector.
+    // +kubebuilder:validation:Optional
+    Name string `json:"name,omitempty"`
+    // Namespace is the namespace of the external resource.
+    // If empty, the instance's namespace will be used.
+    // +kubebuilder:validation:Optional
+    Namespace string `json:"namespace,omitempty"`
+    // Selector is a label selector for collection external references.
+    // When set, all resources matching the selector are included.
+    // Mutually exclusive with Name.
+    // +kubebuilder:validation:Optional
+    Selector *metav1.LabelSelector `json:"selector,omitempty"`
+}
+
 type ExternalRef struct {
     // +kubebuilder:validation:Required
     APIVersion string `json:"apiVersion"`
     // +kubebuilder:validation:Required
     Kind string `json:"kind"`
-    // +kubebuilder:validation:Optional # <---- Mutually exclusive with Selector, NamespaceSelector
+    // +kubebuilder:validation:Required
     Metadata ExternalRefMetadata `json:"metadata"`
-    // +kubebuilder:validation:Optional # <---- Mutually exclusive with Selector, NamespaceSelector
-    NamespaceSelector metav1.LabelSelector
-    // +kubebuilder:validation:Optional # <---- Mutually exclusive with Metadata
-    Selector metav1.LabelSelector
 }
 ```
 
@@ -59,7 +71,7 @@ The power of the decorator pattern is best understood through concrete examples.
 
 As a cluster administrator, I want to configure VPA in recommender mode for existing deployments in
 my cluster to see whether or not widespread rollout of VPA would provide significant cost savings.
-I’m going to start with an opt-in approach at the namespace level, though I plan to reduce scoping
+I'm going to start with an opt-in approach by labeling deployments, though I plan to reduce scoping
 as I gain confidence. Eventually, I plan to flip VPA into auto mode.
 
 ```
@@ -76,10 +88,11 @@ spec:
     - id: deployments
       externalRef:
         apiVersion: apps/v1
-        kind: DeploymentList # Use the ListKind for Deployment
-        namespaceSelector: # New field that allows scoping
-          matchLabels:
-            enable-vpa-recommendation: "true"
+        kind: Deployment
+        metadata:
+          selector:
+            matchLabels:
+              enable-vpa-recommendation: "true"
     - id: vpas
       forEach: ${ deployments.filter(d, d.spec.replicas > 0) } # Optional filtering
       template:
@@ -126,7 +139,9 @@ spec:
     - id: namespaces
       externalRef:
         apiVersion: v1
-        kind: NamespaceList
+        kind: Namespace
+        metadata:
+          selector: {} # Empty selector matches all namespaces
     - id: limitranges
       forEach: ${ namespaces }
       template:
@@ -163,7 +178,9 @@ spec:
     - id: services
       externalRef:
         apiVersion: v1
-        kind: ServiceList
+        kind: Service
+        metadata:
+          selector: {} # Empty selector matches all services
     - id: ingress
       template:
         apiVersion: networking.k8s.io/v1

@@ -884,7 +884,47 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "annotation-only change triggers reconcile",
+			name: "allow-breaking-changes annotation added triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "true"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "allow-breaking-changes annotation changed triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "false"}
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "true"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "allow-breaking-changes annotation removed triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "true"}
+				new := newPredicateTestRGD(1, nil)
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "unrelated annotation change does not trigger reconcile",
 			run: func(pred predicate.Predicate) bool {
 				old := newPredicateTestRGD(1, nil)
 				new := newPredicateTestRGD(1, nil)
@@ -894,34 +934,7 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 					ObjectNew: new,
 				})
 			},
-			want: true,
-		},
-		{
-			name: "annotation change with same generation triggers reconcile",
-			run: func(pred predicate.Predicate) bool {
-				old := newPredicateTestRGD(1, nil)
-				old.Annotations = map[string]string{"a": "1"}
-				new := newPredicateTestRGD(1, nil)
-				new.Annotations = map[string]string{"a": "2"}
-				return pred.Update(event.UpdateEvent{
-					ObjectOld: old,
-					ObjectNew: new,
-				})
-			},
-			want: true,
-		},
-		{
-			name: "annotation removal triggers reconcile",
-			run: func(pred predicate.Predicate) bool {
-				old := newPredicateTestRGD(1, nil)
-				old.Annotations = map[string]string{"a": "1"}
-				new := newPredicateTestRGD(1, nil)
-				return pred.Update(event.UpdateEvent{
-					ObjectOld: old,
-					ObjectNew: new,
-				})
-			},
-			want: true,
+			want: false,
 		},
 	}
 

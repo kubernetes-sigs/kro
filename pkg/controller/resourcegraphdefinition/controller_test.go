@@ -936,6 +936,32 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "allow-breaking-changes set to false does not trigger reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "false"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: false,
+		},
+		{
+			name: "allow-breaking-changes removed from false does not trigger reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{v1alpha1.AllowBreakingChangesAnnotation: "false"}
+				new := newPredicateTestRGD(1, nil)
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: false,
+		},
 	}
 
 	for _, tc := range testCases {

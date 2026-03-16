@@ -172,15 +172,16 @@ func resourceGraphDefinitionPrimaryWatchPredicate() predicate.Predicate {
 	}
 }
 
-// annotationChangedPredicate a implements an update predicate function only on the
-// the allow-breaking-changes annotation, while suppressing delete events.
-// The default `predicate.AnnotationChangedPredicate` will not skip delete events
-// using it along with predicate.Or will not suppress delete events
+// annotationChangedPredicate triggers a reconcile only when the
+// allow-breaking-changes annotation is changed between "true" and "false"
+// Adding the annotation as "false" from no annotation or vice versa, is the same
+// and we do not trigger a reconcile.
+// Delete events are suppressed to avoid redundant reconciles
 func annotationChangedPredicate() predicate.Predicate {
 	return predicate.TypedFuncs[client.Object]{
 		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
-			oldVal := e.ObjectOld.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation]
-			newVal := e.ObjectNew.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation]
+			oldVal := e.ObjectOld.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+			newVal := e.ObjectNew.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation] == "true"
 			return oldVal != newVal
 		},
 		DeleteFunc: func(event.TypedDeleteEvent[client.Object]) bool {

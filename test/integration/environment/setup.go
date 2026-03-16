@@ -87,6 +87,8 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 		ControlPlaneStopTimeout: 2 * time.Minute,
 	}
 
+	env.TestEnv.ControlPlane.GetAPIServer().Configure().Append("enable-admission-plugins", "ValidatingAdmissionPolicy")
+
 	// Start the test environment
 	cfg, err := env.TestEnv.Start()
 	if err != nil {

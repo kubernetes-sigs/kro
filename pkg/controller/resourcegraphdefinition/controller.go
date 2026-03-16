@@ -105,7 +105,15 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
-		For(&v1alpha1.ResourceGraphDefinition{}, builder.WithPredicates(resourceGraphDefinitionPrimaryWatchPredicate())).
+		For(
+			&v1alpha1.ResourceGraphDefinition{},
+			builder.WithPredicates(
+				predicate.Or(
+					resourceGraphDefinitionPrimaryWatchPredicate(),
+					predicate.AnnotationChangedPredicate{},
+				),
+			),
+		).
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,

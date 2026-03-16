@@ -26,12 +26,16 @@ import (
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind
 // with the provided spec and status schemas.
-func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
-	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), rgSchema.AdditionalPrinterColumns, rgSchema.Metadata)
+// scope must be either extv1.NamespaceScoped or extv1.ClusterScoped; defaults to NamespaceScoped.
+func SynthesizeCRD(group, apiVersion, kind string, spec, status extv1.JSONSchemaProps, statusFieldsOverride bool, scope extv1.ResourceScope, rgSchema *v1alpha1.Schema) *extv1.CustomResourceDefinition {
+	return newCRD(group, apiVersion, kind, newCRDSchema(spec, status, statusFieldsOverride), scope, rgSchema.AdditionalPrinterColumns, rgSchema.Metadata)
 }
 
-func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, metadata *v1alpha1.CRDMetadata) *extv1.CustomResourceDefinition {
+func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, scope extv1.ResourceScope, additionalPrinterColumns []extv1.CustomResourceColumnDefinition, metadata *v1alpha1.CRDMetadata) *extv1.CustomResourceDefinition {
 	pluralKind := flect.Pluralize(strings.ToLower(kind))
+	if scope == "" {
+		scope = extv1.NamespaceScoped
+	}
 
 	objectMeta := metav1.ObjectMeta{
 		Name:            fmt.Sprintf("%s.%s", pluralKind, group),
@@ -56,7 +60,7 @@ func newCRD(group, apiVersion, kind string, schema *extv1.JSONSchemaProps, addit
 				Plural:   pluralKind,
 				Singular: strings.ToLower(kind),
 			},
-			Scope: extv1.NamespaceScoped,
+			Scope: scope,
 			Versions: []extv1.CustomResourceDefinitionVersion{
 				{
 					Name:    apiVersion,

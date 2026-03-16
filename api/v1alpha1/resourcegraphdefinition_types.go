@@ -87,6 +87,15 @@ type Schema struct {
 	// Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"}
 	Status runtime.RawExtension `json:"status,omitempty"`
 
+	// Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
+	// Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="Namespaced"
+	// +kubebuilder:validation:Enum=Namespaced;Cluster
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="scope is immutable"
+	Scope ResourceScope `json:"scope,omitempty"`
+
 	// AdditionalPrinterColumns defines additional printer columns
 	// that will be passed down to the created CRD. If set, no
 	// default printer columns will be added to the created CRD,
@@ -216,6 +225,19 @@ type Resource struct {
 	// +kubebuilder:validation:Optional
 	ForEach []ForEachDimension `json:"forEach,omitempty"`
 }
+
+// ResourceScope defines whether the generated instance CRD is Namespaced or Cluster scoped.
+//
+// +kubebuilder:validation:Enum=Namespaced;Cluster
+type ResourceScope string
+
+const (
+	// ResourceScopeNamespaced means the generated instance CRD will be namespace-scoped.
+	// This is the default.
+	ResourceScopeNamespaced ResourceScope = "Namespaced"
+	// ResourceScopeCluster means the generated instance CRD will be cluster-scoped.
+	ResourceScopeCluster ResourceScope = "Cluster"
+)
 
 // ResourceGraphDefinitionState defines the state of the resource graph definition.
 type ResourceGraphDefinitionState string

@@ -159,18 +159,12 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	inst.Object["status"] = status
 
 	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cur, err := c.client.Dynamic().
-			Resource(c.gvr).
-			Namespace(inst.GetNamespace()).
-			Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
+		cur, err := rcx.InstanceClient().Get(rcx.Ctx, inst.GetName(), metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
 		cur.Object["status"] = status
-		_, err = c.client.Dynamic().
-			Resource(c.gvr).
-			Namespace(inst.GetNamespace()).
-			UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
+		_, err = rcx.InstanceClient().UpdateStatus(rcx.Ctx, cur, metav1.UpdateOptions{})
 		return err
 	})
 	if err != nil {

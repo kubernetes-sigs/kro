@@ -33,13 +33,15 @@ func TestSynthesizeCRD(t *testing.T) {
 		status               extv1.JSONSchemaProps
 		statusFieldsOverride bool
 		schema               *v1alpha1.Schema
+		scope                extv1.ResourceScope
 		expectedName         string
 		expectedGroup        string
+		expectedScope        extv1.ResourceScope
 		expectedLabels       map[string]string
 		expectedAnnotations  map[string]string
 	}{
 		{
-			name:                 "standard group and kind",
+			name:                 "standard group and kind - namespaced",
 			group:                "kro.com",
 			apiVersion:           "v1",
 			kind:                 "Widget",
@@ -47,11 +49,13 @@ func TestSynthesizeCRD(t *testing.T) {
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
 			schema:               &v1alpha1.Schema{},
+			scope:                extv1.NamespaceScoped,
 			expectedName:         "widgets.kro.com",
 			expectedGroup:        "kro.com",
+			expectedScope:        extv1.NamespaceScoped,
 		},
 		{
-			name:                 "mixes case kind",
+			name:                 "mixes case kind - namespaced",
 			group:                "kro.com",
 			apiVersion:           "v2",
 			kind:                 "DataBase",
@@ -59,8 +63,24 @@ func TestSynthesizeCRD(t *testing.T) {
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
 			schema:               &v1alpha1.Schema{},
+			scope:                extv1.NamespaceScoped,
 			expectedName:         "databases.kro.com",
 			expectedGroup:        "kro.com",
+			expectedScope:        extv1.NamespaceScoped,
+		},
+		{
+			name:                 "cluster-scoped kind",
+			group:                "kro.com",
+			apiVersion:           "v1alpha1",
+			kind:                 "ClusterPolicy",
+			spec:                 extv1.JSONSchemaProps{Type: "object"},
+			status:               extv1.JSONSchemaProps{Type: "object"},
+			statusFieldsOverride: true,
+			schema:               &v1alpha1.Schema{},
+			scope:                extv1.ClusterScoped,
+			expectedName:         "clusterpolicies.kro.com",
+			expectedGroup:        "kro.com",
+			expectedScope:        extv1.ClusterScoped,
 		},
 		{
 			name:                 "with labels and annotations",
@@ -70,6 +90,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			spec:                 extv1.JSONSchemaProps{Type: "object"},
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
+			scope:                extv1.NamespaceScoped,
 			schema: &v1alpha1.Schema{
 				Metadata: &v1alpha1.CRDMetadata{
 					Labels: map[string]string{
@@ -82,6 +103,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			},
 			expectedName:  "widgets.kro.com",
 			expectedGroup: "kro.com",
+			expectedScope: extv1.NamespaceScoped,
 			expectedLabels: map[string]string{
 				"environment": "test",
 			},
@@ -97,6 +119,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			spec:                 extv1.JSONSchemaProps{Type: "object"},
 			status:               extv1.JSONSchemaProps{Type: "object"},
 			statusFieldsOverride: true,
+			scope:                extv1.NamespaceScoped,
 			schema: &v1alpha1.Schema{
 				Metadata: &v1alpha1.CRDMetadata{
 					Labels:      map[string]string{},
@@ -105,12 +128,13 @@ func TestSynthesizeCRD(t *testing.T) {
 			},
 			expectedName:  "widgets.kro.com",
 			expectedGroup: "kro.com",
+			expectedScope: extv1.NamespaceScoped,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, tt.schema)
+			crd := SynthesizeCRD(tt.group, tt.apiVersion, tt.kind, tt.spec, tt.status, tt.statusFieldsOverride, tt.scope, tt.schema)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.expectedGroup, crd.Spec.Group)
@@ -129,6 +153,7 @@ func TestSynthesizeCRD(t *testing.T) {
 			require.NotNil(t, version.Subresources)
 			require.NotNil(t, version.Subresources.Status)
 
+			assert.Equal(t, tt.expectedScope, crd.Spec.Scope)
 			assert.Equal(t, defaultAdditionalPrinterColumns, version.AdditionalPrinterColumns)
 
 			if tt.expectedLabels == nil {
@@ -154,22 +179,39 @@ func TestNewCRD(t *testing.T) {
 		group                  string
 		apiVersion             string
 		kind                   string
+		scope                  extv1.ResourceScope
 		printerColumns         []extv1.CustomResourceColumnDefinition
 		expectedName           string
 		expectedKind           string
 		expectedPlural         string
 		expectedSingular       string
+		expectedScope          extv1.ResourceScope
 		expectedPrinterColumns []extv1.CustomResourceColumnDefinition
 	}{
 		{
-			name:                   "basic example",
+			name:                   "basic example - namespaced",
 			group:                  "kro.com",
 			apiVersion:             "v1",
 			kind:                   "Test",
+			scope:                  extv1.NamespaceScoped,
 			expectedName:           "tests.kro.com",
 			expectedKind:           "Test",
 			expectedPlural:         "tests",
 			expectedSingular:       "test",
+			expectedScope:          extv1.NamespaceScoped,
+			expectedPrinterColumns: defaultAdditionalPrinterColumns,
+		},
+		{
+			name:                   "cluster-scoped kind",
+			group:                  "kro.com",
+			apiVersion:             "v1",
+			kind:                   "ClusterPolicy",
+			scope:                  extv1.ClusterScoped,
+			expectedName:           "clusterpolicies.kro.com",
+			expectedKind:           "ClusterPolicy",
+			expectedPlural:         "clusterpolicies",
+			expectedSingular:       "clusterpolicy",
+			expectedScope:          extv1.ClusterScoped,
 			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
@@ -177,10 +219,12 @@ func TestNewCRD(t *testing.T) {
 			group:                  "kro.com",
 			apiVersion:             "v2beta1",
 			kind:                   "CONFIG",
+			scope:                  extv1.NamespaceScoped,
 			expectedName:           "configs.kro.com",
 			expectedKind:           "CONFIG",
 			expectedPlural:         "configs",
 			expectedSingular:       "config",
+			expectedScope:          extv1.NamespaceScoped,
 			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
@@ -188,10 +232,12 @@ func TestNewCRD(t *testing.T) {
 			group:                  "kro.com",
 			apiVersion:             "v2beta1",
 			kind:                   "WebHook",
+			scope:                  extv1.NamespaceScoped,
 			expectedName:           "webhooks.kro.com",
 			expectedKind:           "WebHook",
 			expectedPlural:         "webhooks",
 			expectedSingular:       "webhook",
+			expectedScope:          extv1.NamespaceScoped,
 			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
@@ -199,11 +245,13 @@ func TestNewCRD(t *testing.T) {
 			group:                  "kro.com",
 			apiVersion:             "v2beta1",
 			kind:                   "WebHook",
+			scope:                  extv1.NamespaceScoped,
 			printerColumns:         []extv1.CustomResourceColumnDefinition{},
 			expectedName:           "webhooks.kro.com",
 			expectedKind:           "WebHook",
 			expectedPlural:         "webhooks",
 			expectedSingular:       "webhook",
+			expectedScope:          extv1.NamespaceScoped,
 			expectedPrinterColumns: defaultAdditionalPrinterColumns,
 		},
 		{
@@ -211,6 +259,7 @@ func TestNewCRD(t *testing.T) {
 			group:      "kro.com",
 			apiVersion: "v2beta1",
 			kind:       "WebHook",
+			scope:      extv1.NamespaceScoped,
 			printerColumns: []extv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Available replicas",
@@ -227,6 +276,7 @@ func TestNewCRD(t *testing.T) {
 			expectedKind:     "WebHook",
 			expectedPlural:   "webhooks",
 			expectedSingular: "webhook",
+			expectedScope:    extv1.NamespaceScoped,
 			expectedPrinterColumns: []extv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Available replicas",
@@ -245,7 +295,7 @@ func TestNewCRD(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := &extv1.JSONSchemaProps{Type: "object"}
-			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.printerColumns, nil)
+			crd := newCRD(tt.group, tt.apiVersion, tt.kind, schema, tt.scope, tt.printerColumns, nil)
 
 			assert.Equal(t, tt.expectedName, crd.Name)
 			assert.Equal(t, tt.group, crd.Spec.Group)
@@ -254,7 +304,7 @@ func TestNewCRD(t *testing.T) {
 			assert.Equal(t, tt.expectedPlural, crd.Spec.Names.Plural)
 			assert.Equal(t, tt.expectedSingular, crd.Spec.Names.Singular)
 
-			assert.Equal(t, extv1.NamespaceScoped, crd.Spec.Scope)
+			assert.Equal(t, tt.expectedScope, crd.Spec.Scope)
 
 			require.Len(t, crd.Spec.Versions, 1)
 			assert.Equal(t, tt.apiVersion, crd.Spec.Versions[0].Name)

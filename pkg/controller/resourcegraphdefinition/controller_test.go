@@ -819,7 +819,10 @@ func TestReconcile(t *testing.T) {
 func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 	t.Parallel()
 
-	pred := resourceGraphDefinitionPrimaryWatchPredicate()
+	pred := predicate.Or(
+		resourceGraphDefinitionPrimaryWatchPredicate(),
+		annotationChangedPredicate(),
+	)
 	deletionTime := metav1.NewTime(time.Unix(123, 0))
 	testCases := []struct {
 		name string
@@ -879,6 +882,46 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 				return pred.Delete(event.DeleteEvent{Object: newPredicateTestRGD(1, nil)})
 			},
 			want: false,
+		},
+		{
+			name: "annotation-only change triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{"foo": "bar"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "annotation change with same generation triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{"a": "1"}
+				new := newPredicateTestRGD(1, nil)
+				new.Annotations = map[string]string{"a": "2"}
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
+		},
+		{
+			name: "annotation removal triggers reconcile",
+			run: func(pred predicate.Predicate) bool {
+				old := newPredicateTestRGD(1, nil)
+				old.Annotations = map[string]string{"a": "1"}
+				new := newPredicateTestRGD(1, nil)
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: old,
+					ObjectNew: new,
+				})
+			},
+			want: true,
 		},
 	}
 

@@ -110,7 +110,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			builder.WithPredicates(
 				predicate.Or(
 					resourceGraphDefinitionPrimaryWatchPredicate(),
-					predicate.AnnotationChangedPredicate{},
+					annotationChangedPredicate(),
 				),
 			),
 		).
@@ -168,6 +168,19 @@ func resourceGraphDefinitionPrimaryWatchPredicate() predicate.Predicate {
 		},
 		DeleteFunc: func(event.DeleteEvent) bool {
 			return false
+		},
+	}
+}
+
+// annotationChangedPredicate a implements a default update predicate function on annotation change
+// while suppressing delete events, the default `predicate.AnnotationChangedPredicate` will not skip delete events
+// using it along with predicate.Or will not suppress delete events
+func annotationChangedPredicate() predicate.Predicate {
+	return predicate.TypedAnnotationChangedPredicate[client.Object]{
+		TypedFuncs: predicate.TypedFuncs[client.Object]{
+			DeleteFunc: func(event.TypedDeleteEvent[client.Object]) bool {
+				return false
+			},
 		},
 	}
 }

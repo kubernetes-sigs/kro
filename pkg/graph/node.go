@@ -134,11 +134,6 @@ type Node struct {
 	ForEach []ForEachDimension
 }
 
-// IsNamespaced returns true when the node is namespace-scoped.
-func (n *Node) IsNamespaced() bool {
-	return n.Meta.Namespaced
-}
-
 // DeepCopy creates a deep copy of the Node.
 // Use this when runtime needs a per-runtime clone to avoid shared slices/maps.
 func (n *Node) DeepCopy() *Node {

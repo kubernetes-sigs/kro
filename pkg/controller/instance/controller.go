@@ -137,11 +137,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 1. Load instance; if gone, nothing to do
 	//--------------------------------------------------------------
+	ri := c.client.Dynamic().Resource(c.gvr)
 	var inst *unstructured.Unstructured
-	if c.rgd.IsNamespacedInstance() {
-		inst, err = c.client.Dynamic().Resource(c.gvr).Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
+	if c.rgd.Instance.Meta.Namespaced {
+		inst, err = ri.Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
 	} else {
-		inst, err = c.client.Dynamic().Resource(c.gvr).Get(ctx, req.Name, metav1.GetOptions{})
+		inst, err = ri.Get(ctx, req.Name, metav1.GetOptions{})
 	}
 	if apierrors.IsNotFound(err) {
 		log.Info("instance not found (likely deleted)")
@@ -284,16 +285,7 @@ func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*uns
 	//-------------------------------------------
 	// Build a minimal patch object (SSA apply)
 	//-------------------------------------------
-	patch := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": obj.GetAPIVersion(),
-			"kind":       obj.GetKind(),
-			"metadata": map[string]interface{}{
-				"name":      obj.GetName(),
-				"namespace": obj.GetNamespace(),
-			},
-		},
-	}
+	patch := instanceSSAPatch(obj)
 
 	// Label + finalizers patch
 	// we patch together here because otherwise we could revert a previous patch

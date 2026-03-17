@@ -151,6 +151,13 @@ func WithTypes(types map[string]interface{}) SchemaOption {
 	}
 }
 
+// WithScope returns a SchemaOption that sets the CRD scope (Namespaced or Cluster).
+func WithScope(scope krov1alpha1.ResourceScope) SchemaOption {
+	return func(schema *krov1alpha1.Schema) {
+		schema.Scope = scope
+	}
+}
+
 // WithResourceCollection adds a collection resource with forEach iterators to the ResourceGraphDefinition.
 func WithResourceCollection(
 	id string,

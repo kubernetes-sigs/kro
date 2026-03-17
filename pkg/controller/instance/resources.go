@@ -515,16 +515,7 @@ func (c *Controller) patchInstanceWithApplySetMetadata(rcx *ReconcileContext, me
 	inst := rcx.Instance
 
 	// SSA is idempotent - just apply, server handles no-op if unchanged
-	patchObj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": inst.GetAPIVersion(),
-			"kind":       inst.GetKind(),
-			"metadata": map[string]interface{}{
-				"name":      inst.GetName(),
-				"namespace": inst.GetNamespace(),
-			},
-		},
-	}
+	patchObj := instanceSSAPatch(inst)
 	patchObj.SetLabels(meta.Labels())
 	patchObj.SetAnnotations(meta.Annotations())
 

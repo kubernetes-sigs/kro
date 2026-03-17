@@ -48,4 +48,3 @@ type Graph struct {
 	// (keyed by InstanceNodeID). Used at runtime for schema-aware CEL value conversion.
 	ResourceSchemas map[string]*spec.Schema
 }
-

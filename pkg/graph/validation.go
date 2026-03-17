@@ -268,14 +268,28 @@ func validateCombinableResourceFields(res *v1alpha1.Resource) error {
 
 // validateTemplateConstraints enforces template-level constraints before parsing expressions.
 // Keep this small and focused on invariants that must hold regardless of CEL.
-func validateTemplateConstraints(rgResource *v1alpha1.Resource, resourceObject map[string]interface{}, namespaced bool) error {
-	if !namespaced {
-		_, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "namespace")
-		if err != nil {
-			return fmt.Errorf("resource %q has invalid metadata.namespace: %w", rgResource.ID, err)
-		}
+func validateTemplateConstraints(
+	rgResource *v1alpha1.Resource,
+	resourceObject map[string]interface{},
+	resourceNamespaced bool,
+	instanceNamespaced bool,
+) error {
+	namespaceValue, found, err := unstructured.NestedFieldNoCopy(resourceObject, "metadata", "namespace")
+	if err != nil {
+		return fmt.Errorf("resource %q has invalid metadata.namespace: %w", rgResource.ID, err)
+	}
+
+	if !resourceNamespaced {
 		if found {
 			return fmt.Errorf("resource %q is cluster-scoped and must not set metadata.namespace", rgResource.ID)
+		}
+	}
+	if resourceNamespaced && !instanceNamespaced {
+		if !found {
+			return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+		}
+		if ns, ok := namespaceValue.(string); !ok || strings.TrimSpace(ns) == "" {
+			return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
 		}
 	}
 

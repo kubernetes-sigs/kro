@@ -130,6 +130,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to validate resourcegraphdefinition: %w", err)
 	}
 
+	// Determine CRD scope from the schema definition. Defaults to NamespaceScoped
+	// to preserve backward compatibility.
+	crdScope := extv1.NamespaceScoped
+	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
+		crdScope = extv1.ClusterScoped
+	}
+	instanceNamespaced := crdScope == extv1.NamespaceScoped
+
 	// Now that we did a basic validation of the resource graph definition, we can start understanding
 	// the resources that are part of the resource graph definition.
 
@@ -147,7 +155,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	schemas := make(map[string]*spec.Schema)
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
-		node, nodeSchema, err := b.buildRGResource(rgResource, i)
+		node, nodeSchema, err := b.buildRGResource(rgResource, i, instanceNamespaced)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
 		}
@@ -203,14 +211,6 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
 	}
-
-	// Determine CRD scope from the schema definition. Defaults to NamespaceScoped
-	// to preserve backward compatibility.
-	crdScope := extv1.NamespaceScoped
-	if rgd.Spec.Schema.Scope == v1alpha1.ResourceScopeCluster {
-		crdScope = extv1.ClusterScoped
-	}
-	instanceNamespaced := crdScope == extv1.NamespaceScoped
 
 	// Synthesize CRD early with empty status.
 	// We'll update the status later after inferring it from CEL expressions.
@@ -368,6 +368,7 @@ func (b *Builder) buildExternalRefResource(
 func (b *Builder) buildRGResource(
 	rgResource *v1alpha1.Resource,
 	order int,
+	instanceNamespaced bool,
 ) (*Node, *spec.Schema, error) {
 	// 1. Validate resource field combinations.
 	if err := validateCombinableResourceFields(rgResource); err != nil {
@@ -410,7 +411,12 @@ func (b *Builder) buildRGResource(
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get REST mapping for resource %s: %w", rgResource.ID, err)
 	}
-	if err := validateTemplateConstraints(rgResource, resourceObject, mapping.Scope.Name() == meta.RESTScopeNameNamespace); err != nil {
+	if err := validateTemplateConstraints(
+		rgResource,
+		resourceObject,
+		mapping.Scope.Name() == meta.RESTScopeNameNamespace,
+		instanceNamespaced,
+	); err != nil {
 		return nil, nil, err
 	}
 
@@ -1334,7 +1340,9 @@ func validateAndCompileForEach(sessionCache *celcache.SessionCache, env *cel.Env
 
 // getSchemaWithoutStatus extracts a spec.Schema from a CRD for CEL validation.
 // It includes spec and metadata but excludes status, since status references
-// are not allowed in RGD expressions.
+// are not allowed in RGD expressions. Cluster-scoped instance CRDs also omit
+// metadata.namespace so CEL cannot type-check references to a field that does
+// not exist at runtime.
 func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, error) {
 	if len(crd.Spec.Versions) != 1 {
 		return nil, fmt.Errorf("expected CRD to have exactly one version, got %d versions", len(crd.Spec.Versions))
@@ -1356,7 +1364,11 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	if specSchema.Properties == nil {
 		specSchema.Properties = make(map[string]spec.Schema)
 	}
-	specSchema.Properties["metadata"] = schema.ObjectMetaSchema
+	metadataSchema := schema.ObjectMetaSchema
+	if crd.Spec.Scope == extv1.ClusterScoped {
+		metadataSchema = schema.NamespacelessObjectMetaSchema
+	}
+	specSchema.Properties["metadata"] = metadataSchema
 
 	return specSchema, nil
 }

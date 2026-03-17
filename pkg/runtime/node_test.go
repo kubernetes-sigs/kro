@@ -2114,6 +2114,7 @@ func TestNormalizeNamespaces(t *testing.T) {
 		instanceNS     string
 		objs           []*unstructured.Unstructured
 		wantNamespaces []string
+		wantErr        string
 	}{
 		{
 			name:           "inherits instance namespace",
@@ -2126,7 +2127,7 @@ func TestNormalizeNamespaces(t *testing.T) {
 			wantNamespaces: []string{"tenant-a", "explicit"},
 		},
 		{
-			name:           "cluster-scoped instance leaves empty namespace alone",
+			name:           "cluster-scoped instance rejects empty namespace on namespaced child",
 			nodeNamespaced: true,
 			instanceNS:     "",
 			objs: []*unstructured.Unstructured{
@@ -2134,6 +2135,16 @@ func TestNormalizeNamespaces(t *testing.T) {
 				newUnstructured("v1", "ConfigMap", "explicit", "has-ns"),
 			},
 			wantNamespaces: []string{"", "explicit"},
+			wantErr:        "must resolve metadata.namespace",
+		},
+		{
+			name:           "cluster-scoped instance allows explicit namespace on namespaced child",
+			nodeNamespaced: true,
+			instanceNS:     "",
+			objs: []*unstructured.Unstructured{
+				newUnstructured("v1", "ConfigMap", "target-ns", "explicit"),
+			},
+			wantNamespaces: []string{"target-ns"},
 		},
 		{
 			name:           "cluster-scoped child is a no-op",
@@ -2150,7 +2161,13 @@ func TestNormalizeNamespaces(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			node := makeNode(tt.instanceNS)
 			node.Spec.Meta.Namespaced = tt.nodeNamespaced
-			node.normalizeNamespaces(tt.objs)
+			err := node.normalizeNamespaces(tt.objs)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
 			for i, obj := range tt.objs {
 				assert.Equal(t, tt.wantNamespaces[i], obj.GetNamespace())
 			}

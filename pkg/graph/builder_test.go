@@ -3627,6 +3627,7 @@ func newUnitTestBuilder() *Builder {
 	return &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
+		celCache:       celcache.NewBuilderCache(),
 	}
 }
 
@@ -3668,7 +3669,7 @@ func TestBuildRGResourceErrorPaths(t *testing.T) {
 		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
 			ID:       "bad",
 			Template: rawExt("["),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unmarshal resource")
 	})
@@ -3683,7 +3684,7 @@ kind: ConfigMap
 metadata:
   name: test
 `),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to extract GVK")
 	})
@@ -3703,7 +3704,7 @@ kind: ConfigMap
 metadata:
   name: test
 `),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get REST mapping")
 	})
@@ -3719,7 +3720,7 @@ metadata:
 					Name: "${outer(${inner})}",
 				},
 			},
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse external ref resource")
 	})
@@ -3736,7 +3737,7 @@ metadata:
 spec:
   group: tests.kro.run
 `),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
 	})
@@ -3753,7 +3754,7 @@ metadata:
 spec:
   group: ${schema.spec.group}
 `),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "only supported for metadata fields")
 	})
@@ -3770,7 +3771,7 @@ metadata:
 spec:
   unknownField: ${schema.spec.name}
 `),
-		}, 0)
+		}, 0, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to extract CEL expressions from schema")
 	})
@@ -3788,10 +3789,67 @@ spec:
 					},
 				},
 			},
-		}, 0)
+		}, 0, true)
 		require.NoError(t, err)
 		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
 	})
+
+	t.Run("cluster-scoped instance requires namespace on namespaced resource", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "cm",
+			Template: rawExt(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
+	})
+
+	t.Run("cluster-scoped instance requires namespace on namespaced external ref", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Name: "test",
+				},
+			},
+		}, 0, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
+	})
+}
+
+func TestClusterScopedInstanceRejectsSchemaMetadataNamespace(t *testing.T) {
+	builder := newUnitTestBuilder()
+	rgd := generator.NewResourceGraphDefinition("test-rgd",
+		generator.WithSchema(
+			"ClusterPolicy", "v1alpha1",
+			map[string]interface{}{
+				"name": "string",
+			},
+			nil,
+			generator.WithScope(krov1alpha1.ResourceScopeCluster),
+		),
+		generator.WithResource("config", map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "${schema.spec.name}",
+				"namespace": "${schema.metadata.namespace}",
+			},
+		}, nil, nil),
+	)
+
+	_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema.metadata.namespace")
 }
 
 func TestBuildInstanceNode(t *testing.T) {
@@ -3934,11 +3992,12 @@ func TestBuildStatusSchema(t *testing.T) {
 
 func TestGetSchemaWithoutStatus(t *testing.T) {
 	tests := []struct {
-		name          string
-		crd           *extv1.CustomResourceDefinition
-		wantErr       string
-		wantHasStatus bool
-		wantHasMeta   bool
+		name             string
+		crd              *extv1.CustomResourceDefinition
+		wantErr          string
+		wantHasStatus    bool
+		wantHasMeta      bool
+		wantHasNamespace bool
 	}{
 		{
 			name: "requires exactly one version",
@@ -3974,8 +4033,9 @@ func TestGetSchemaWithoutStatus(t *testing.T) {
 					}},
 				},
 			},
-			wantHasStatus: false,
-			wantHasMeta:   true,
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: true,
 		},
 		{
 			name: "injects metadata when properties map is nil",
@@ -3988,8 +4048,25 @@ func TestGetSchemaWithoutStatus(t *testing.T) {
 					}},
 				},
 			},
-			wantHasStatus: false,
-			wantHasMeta:   true,
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: true,
+		},
+		{
+			name: "cluster-scoped instances omit metadata namespace from injected schema",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Scope: extv1.ClusterScoped,
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{Type: "object"},
+						},
+					}},
+				},
+			},
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: false,
 		},
 	}
 
@@ -4005,8 +4082,13 @@ func TestGetSchemaWithoutStatus(t *testing.T) {
 			require.NoError(t, err)
 			_, hasStatus := schemaWithoutStatus.Properties["status"]
 			_, hasMetadata := schemaWithoutStatus.Properties["metadata"]
+			hasNamespace := false
+			if metadata, ok := schemaWithoutStatus.Properties["metadata"]; ok {
+				_, hasNamespace = metadata.Properties["namespace"]
+			}
 			assert.Equal(t, tt.wantHasStatus, hasStatus)
 			assert.Equal(t, tt.wantHasMeta, hasMetadata)
+			assert.Equal(t, tt.wantHasNamespace, hasNamespace)
 		})
 	}
 }

@@ -26,6 +26,12 @@ import (
 // ObjectMeta holds the k8s ObjectMeta schema, populated once at startup.
 var ObjectMetaSchema spec.Schema
 
+// NamespacelessObjectMetaSchema is ObjectMeta without metadata.namespace.
+// Cluster-scoped instance CRDs use this when building the typed CEL schema for
+// the "schema" variable, so expressions cannot type-check against a field that
+// does not exist at runtime.
+var NamespacelessObjectMetaSchema spec.Schema
+
 func init() {
 	// Populate ObjectMeta schema once at startup to avoid repeated query operations.
 	var err error
@@ -36,6 +42,7 @@ func init() {
 		// critical build/dependency issue.
 		panic(fmt.Sprintf("failed to initialize ObjectMeta schema: %v", err))
 	}
+	NamespacelessObjectMetaSchema = buildNamespacelessObjectMetaSchema(ObjectMetaSchema)
 }
 
 // getObjectMetaSchema extracts the ObjectMeta schema from Kubernetes OpenAPI definitions.
@@ -56,6 +63,26 @@ func getObjectMetaSchema() (spec.Schema, error) {
 		return spec.Schema{}, fmt.Errorf("failed to populate refs for ObjectMeta: %w", err)
 	}
 	return *populatedSchema, nil
+}
+
+func buildNamespacelessObjectMetaSchema(metaSchema spec.Schema) spec.Schema {
+	cloned := metaSchema
+	if metaSchema.Properties != nil {
+		cloned.Properties = make(map[string]spec.Schema, len(metaSchema.Properties))
+		for key, value := range metaSchema.Properties {
+			cloned.Properties[key] = value
+		}
+		delete(cloned.Properties, "namespace")
+	}
+	if metaSchema.Required != nil {
+		cloned.Required = make([]string, 0, len(metaSchema.Required))
+		for _, field := range metaSchema.Required {
+			if field != "namespace" {
+				cloned.Required = append(cloned.Required, field)
+			}
+		}
+	}
+	return cloned
 }
 
 // WrapSchemaAsList wraps an OpenAPI schema as an array schema.

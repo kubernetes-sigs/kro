@@ -170,7 +170,9 @@ func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 
 	if err == nil {
 		if n.Spec.Meta.Type != graph.NodeTypeInstance {
-			n.normalizeNamespaces(result)
+			if err = n.normalizeNamespaces(result); err != nil {
+				return nil, err
+			}
 		}
 		n.desired = result
 	}
@@ -201,14 +203,18 @@ func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err er
 		if err != nil {
 			return nil, err
 		}
-		n.normalizeNamespaces(result)
+		if err := n.normalizeNamespaces(result); err != nil {
+			return nil, err
+		}
 		return result, nil
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
 		result, err = n.hardResolveSingleResource(vars)
 		if err != nil {
 			return nil, err
 		}
-		n.normalizeNamespaces(result)
+		if err := n.normalizeNamespaces(result); err != nil {
+			return nil, err
+		}
 		return result, nil
 	case graph.NodeTypeExternalCollection:
 		// External collections have no identity to resolve; they use selectors.
@@ -221,17 +227,29 @@ func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err er
 }
 
 // normalizeNamespaces inherits the instance namespace onto namespaced children
-// that don't specify one. No-op for cluster-scoped nodes or empty instance namespace.
-func (n *Node) normalizeNamespaces(objs []*unstructured.Unstructured) {
+// that don't specify one. Cluster-scoped instances must resolve an explicit
+// namespace for namespaced children, otherwise reconciliation cannot safely
+// address them.
+func (n *Node) normalizeNamespaces(objs []*unstructured.Unstructured) error {
 	if !n.Spec.Meta.Namespaced {
-		return
+		return nil
 	}
 	ns := n.deps[graph.InstanceNodeID].observed[0].GetNamespace()
 	for _, obj := range objs {
-		if obj.GetNamespace() == "" && ns != "" {
+		if obj.GetNamespace() != "" {
+			continue
+		}
+		if ns == "" {
+			return fmt.Errorf(
+				"node %q is namespaced and must resolve metadata.namespace when the instance is cluster-scoped",
+				n.Spec.Meta.ID,
+			)
+		}
+		if obj.GetNamespace() == "" {
 			obj.SetNamespace(ns)
 		}
 	}
+	return nil
 }
 
 // DeleteTargets returns the ordered list of objects this node should delete now.

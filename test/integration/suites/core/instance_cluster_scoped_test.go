@@ -57,7 +57,7 @@ var _ = Describe("ClusterScopedInstance", func() {
 		})).To(Succeed())
 	})
 
-	It("should reconcile a cluster-scoped instance with collections, external refs, and normal resources", func(ctx SpecContext) {
+	It("should reconcile a cluster-scoped instance with child resources and external refs", func(ctx SpecContext) {
 		By("creating pre-existing resources for external refs")
 
 		// External ref target: a ConfigMap looked up by name/namespace

@@ -783,11 +783,12 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 
 func TestValidateTemplateConstraints(t *testing.T) {
 	tests := []struct {
-		name       string
-		resource   *v1alpha1.Resource
-		object     map[string]interface{}
-		namespaced bool
-		wantErr    string
+		name               string
+		resource           *v1alpha1.Resource
+		object             map[string]interface{}
+		namespaced         bool
+		instanceNamespaced bool
+		wantErr            string
 	}{
 		{
 			name: "invalid metadata namespace shape",
@@ -797,7 +798,8 @@ func TestValidateTemplateConstraints(t *testing.T) {
 			object: map[string]interface{}{
 				"metadata": "not-a-map",
 			},
-			wantErr: "invalid metadata.namespace",
+			instanceNamespaced: true,
+			wantErr:            "invalid metadata.namespace",
 		},
 		{
 			name: "cluster scoped resource must not set namespace",
@@ -809,7 +811,34 @@ func TestValidateTemplateConstraints(t *testing.T) {
 					"namespace": "default",
 				},
 			},
-			wantErr: "cluster-scoped and must not set metadata.namespace",
+			instanceNamespaced: true,
+			wantErr:            "cluster-scoped and must not set metadata.namespace",
+		},
+		{
+			name: "cluster-scoped instance requires explicit namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
+			wantErr:            "namespaced and must set metadata.namespace when the instance CRD is cluster-scoped",
+		},
+		{
+			name: "cluster-scoped instance rejects empty namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "",
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
+			wantErr:            "namespaced and must set metadata.namespace when the instance CRD is cluster-scoped",
 		},
 		{
 			name: "reserved kro label bubbles up",
@@ -823,8 +852,9 @@ func TestValidateTemplateConstraints(t *testing.T) {
 					},
 				},
 			},
-			namespaced: true,
-			wantErr:    "reserved for internal use",
+			namespaced:         true,
+			instanceNamespaced: true,
+			wantErr:            "reserved for internal use",
 		},
 		{
 			name: "valid namespaced object",
@@ -839,13 +869,27 @@ func TestValidateTemplateConstraints(t *testing.T) {
 					},
 				},
 			},
-			namespaced: true,
+			namespaced:         true,
+			instanceNamespaced: true,
+		},
+		{
+			name: "cluster-scoped instance allows explicit namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "${schema.spec.targetNamespace}",
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced)
+			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced, tt.instanceNamespaced)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return

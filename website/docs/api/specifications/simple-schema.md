@@ -18,6 +18,7 @@ spec:
   schema:
     apiVersion: v1alpha1
     kind: WebApplication
+    scope: Namespaced  # or "Cluster" for cluster-scoped instances
     spec:
       # Basic types
       name: string | required=true immutable=true description="My Name"

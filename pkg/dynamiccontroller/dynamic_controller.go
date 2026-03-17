@@ -376,7 +376,11 @@ func (dc *DynamicController) Register(
 	}()
 
 	// Register event handler directly on the parent informer.
-	reg, err := dc.watches.GetInformer(parent).AddEventHandler(dc.parentEventHandlerFor(parent))
+	inf := dc.watches.GetInformer(parent)
+	if inf == nil {
+		return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
+	}
+	reg, err := inf.AddEventHandler(dc.parentEventHandlerFor(parent))
 	if err != nil {
 		return fmt.Errorf("add parent handler %s: %w", parent, err)
 	}

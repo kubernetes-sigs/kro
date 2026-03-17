@@ -148,13 +148,13 @@ func TestEnsureWatch_Idempotent(t *testing.T) {
 	wm := newTestWatchManager(t)
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	assert.NoError(t, wm.ensureWatch(gvr))
+	assert.NoError(t, wm.EnsureWatch(gvr, "test"))
 	inf1 := wm.GetInformer(gvr)
 	assert.NotNil(t, inf1)
 	assert.Equal(t, 1, wm.ActiveWatchCount())
 
 	// Second call is a no-op; same informer, same count.
-	assert.NoError(t, wm.ensureWatch(gvr))
+	assert.NoError(t, wm.EnsureWatch(gvr, "test"))
 	inf2 := wm.GetInformer(gvr)
 	assert.Same(t, inf1, inf2)
 	assert.Equal(t, 1, wm.ActiveWatchCount())
@@ -165,8 +165,8 @@ func TestShutdown(t *testing.T) {
 	gvr1 := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	gvr2 := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
 
-	assert.NoError(t, wm.ensureWatch(gvr1))
-	assert.NoError(t, wm.ensureWatch(gvr2))
+	assert.NoError(t, wm.EnsureWatch(gvr1, "test"))
+	assert.NoError(t, wm.EnsureWatch(gvr2, "test"))
 	assert.Equal(t, 2, wm.ActiveWatchCount())
 
 	wm.Shutdown()
@@ -278,7 +278,7 @@ func TestNewWatch_WatchErrorHandler(t *testing.T) {
 
 	wm := NewWatchManager(failClient, 1*time.Hour, func(e Event) {}, noopLogger())
 	wm.SyncTimeout = 500 * time.Millisecond
-	_ = wm.ensureWatch(gvr)
+	_ = wm.EnsureWatch(gvr, "test")
 
 	// Give the informer goroutine time to hit the error handler.
 	time.Sleep(200 * time.Millisecond)
@@ -366,11 +366,11 @@ func TestEnsureWatch_SyncTimeout(t *testing.T) {
 	wm.SyncTimeout = 200 * time.Millisecond
 
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	err := wm.ensureWatch(gvr)
+	err := wm.EnsureWatch(gvr, "test")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cache sync timeout")
 
-	// Broken watch should be cleaned up so a future ensureWatch can retry.
+	// Broken watch should be cleaned up so a future EnsureWatch can retry.
 	assert.Equal(t, 0, wm.ActiveWatchCount())
 }
 
@@ -394,14 +394,14 @@ func TestEnsureWatch_SyncTimeout_RetrySucceeds(t *testing.T) {
 
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	err := wm.ensureWatch(gvr)
+	err := wm.EnsureWatch(gvr, "test")
 	assert.Error(t, err)
 	assert.Equal(t, 0, wm.ActiveWatchCount(), "broken watch should be removed")
 
 	// Second call: lists succeed → should create fresh informer and sync.
 	failList.Store(false)
 	wm.SyncTimeout = 5 * time.Second
-	err = wm.ensureWatch(gvr)
+	err = wm.EnsureWatch(gvr, "test")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, wm.ActiveWatchCount(), "retry should succeed with fresh informer")
 	wm.Shutdown()
@@ -412,7 +412,7 @@ func TestEnsureWatch_SyncSuccess(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	wm.SyncTimeout = 5 * time.Second
 
-	err := wm.ensureWatch(gvr)
+	err := wm.EnsureWatch(gvr, "test")
 	assert.NoError(t, err)
 	assert.Equal(t, 1, wm.ActiveWatchCount())
 	wm.Shutdown()
@@ -422,11 +422,11 @@ func TestEnsureWatch_ConcurrentCalls(t *testing.T) {
 	wm := newTestWatchManager(t)
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 
-	// Launch multiple concurrent ensureWatch calls.
+	// Launch multiple concurrent EnsureWatch calls.
 	errs := make(chan error, 10)
 	for i := 0; i < 10; i++ {
 		go func() {
-			errs <- wm.ensureWatch(gvr)
+			errs <- wm.EnsureWatch(gvr, "test")
 		}()
 	}
 	for i := 0; i < 10; i++ {
@@ -461,6 +461,101 @@ func TestConcurrentRetainWatch_ReleaseWatch(t *testing.T) {
 	<-done
 
 	// Should not panic. Final state: 0 watches (all owners released).
+	assert.Equal(t, 0, wm.ActiveWatchCount())
+}
+
+func TestEnsureWatch_RaceCondition_ReleaseBeforeInformerCreated(t *testing.T) {
+	// Regression test: EnsureWatch must hold the lock through both owner
+	// registration and informer creation. Without this, a concurrent
+	// ReleaseWatch between AddOwner and EnsureWatch could remove the owner,
+	// leaving a leaked watch with zero owners.
+	//
+	// With the fix, ReleaseWatch blocks until EnsureWatch releases the
+	// lock (after informer creation but before cache sync). ReleaseWatch
+	// then removes the owner and stops the watch, which cancels the
+	// informer context and causes cache sync to fail.
+	scheme := runtime.NewScheme()
+	_ = v1.AddMetaToScheme(scheme)
+	client := fake.NewSimpleMetadataClient(scheme)
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	wm := NewWatchManager(client, 1*time.Hour, func(Event) {}, noopLogger())
+	wm.SyncTimeout = 1 * time.Second
+
+	// Use a slow createInformer so the lock is held longer, giving
+	// ReleaseWatch time to block on the mutex.
+	wm.createInformer = func(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
+		time.Sleep(50 * time.Millisecond)
+		return wm.defaultCreateInformer(gvr)
+	}
+
+	// Start EnsureWatch in a goroutine.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- wm.EnsureWatch(gvr, "owner-a")
+	}()
+
+	// Give EnsureWatch time to acquire the lock. The slow createInformer
+	// means the lock is held for ~50ms, during which ReleaseWatch blocks.
+	time.Sleep(10 * time.Millisecond)
+
+	// ReleaseWatch while EnsureWatch holds the lock for informer creation.
+	// With the fix, ReleaseWatch blocks until the lock is released (after
+	// informer start but before cache sync), then removes the owner and
+	// stops the informer — causing cache sync to fail in EnsureWatch.
+	wm.ReleaseWatch(gvr, "owner-a")
+
+	// EnsureWatch may return an error (cache sync timeout because the
+	// informer was stopped) or succeed (if cache synced before ReleaseWatch
+	// ran). Either way, the key invariant holds: no leaked watches.
+	<-errCh
+
+	// The key invariant: no leaked watch with zero owners.
+	assert.Equal(t, 0, wm.ActiveWatchCount(), "watch should be stopped after sole owner released")
+}
+
+func TestEnsureWatch_AtomicOwnerAndWatch(t *testing.T) {
+	// Verify that after EnsureWatch returns successfully, both the owner
+	// and the watch exist — i.e., they were created atomically.
+	wm := newTestWatchManager(t)
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	assert.NoError(t, wm.EnsureWatch(gvr, "owner-a"))
+
+	// Both owner and watch should exist.
+	assert.Equal(t, 1, wm.ActiveWatchCount())
+	assert.NotNil(t, wm.GetInformer(gvr))
+
+	// ReleaseWatch should be able to clean up properly.
+	wm.ReleaseWatch(gvr, "owner-a")
+	assert.Equal(t, 0, wm.ActiveWatchCount())
+	assert.Nil(t, wm.GetInformer(gvr))
+}
+
+func TestEnsureWatch_SyncTimeout_CleansUpOwner(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = v1.AddMetaToScheme(scheme)
+	client := fake.NewSimpleMetadataClient(scheme)
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
+
+	wm := NewWatchManager(client, 1*time.Hour, func(Event) {}, noopLogger())
+	wm.SyncTimeout = 200 * time.Millisecond
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	err := wm.EnsureWatch(gvr, "owner-a")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cache sync timeout")
+
+	// Both the watch and the owner should be cleaned up.
+	assert.Equal(t, 0, wm.ActiveWatchCount())
+
+	// Verify owner was removed by checking that a new EnsureWatch + Release
+	// doesn't leave stale state.
+	wm.ReleaseWatch(gvr, "owner-a")
 	assert.Equal(t, 0, wm.ActiveWatchCount())
 }
 
@@ -509,7 +604,7 @@ func TestShutdown_HandlerRemoved(t *testing.T) {
 		noopLogger(),
 	)
 
-	assert.NoError(t, wm.ensureWatch(gvr))
+	assert.NoError(t, wm.EnsureWatch(gvr, "test"))
 	wm.Shutdown()
 	assert.Equal(t, 0, wm.ActiveWatchCount())
 }

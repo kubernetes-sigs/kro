@@ -596,6 +596,24 @@ func TestRegister_EnsureWatchSyncError(t *testing.T) {
 	assert.Contains(t, err.Error(), "cache sync timeout")
 }
 
+func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
+	// Verify that GetInformer returns nil when no watch exists, and
+	// non-nil when a watch is active. This is the condition the nil
+	// guard in Register protects against.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	wm := NewWatchManager(fake.NewSimpleMetadataClient(scheme), 1*time.Hour, func(Event) {}, noopLogger())
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil for unwatched GVR")
+
+	require.NoError(t, wm.EnsureWatch(gvr, "owner"))
+	assert.NotNil(t, wm.GetInformer(gvr))
+
+	wm.forceStopWatch(gvr)
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after forceStopWatch")
+}
+
 func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)

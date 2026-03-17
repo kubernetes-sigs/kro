@@ -122,6 +122,10 @@ func (c *Controller) planNodesForDeletion(
 				state.SetDeleted()
 				continue
 			}
+			// Watch collection items so we get notified when they're deleted.
+			for _, item := range items {
+				requestWatch(rcx, rid, nodeMeta.GVR, item.GetName(), item.GetNamespace())
+			}
 			node.SetObserved(items)
 			state.SetInProgress()
 			deletionNode = node
@@ -140,6 +144,8 @@ func (c *Controller) planNodesForDeletion(
 				state.SetError(err)
 				return nil, err
 			}
+			// Watch so we get notified when the resource is deleted.
+			requestWatch(rcx, rid, nodeMeta.GVR, obj.GetName(), obj.GetNamespace())
 			node.SetObserved([]*unstructured.Unstructured{observed})
 			state.SetInProgress()
 			deletionNode = node

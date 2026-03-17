@@ -101,7 +101,7 @@ func TestPlanNodesForDeletionSkipsIgnoredExternalAndMissingNodes(t *testing.T) {
 		},
 		Template: newConfigMapObject("external", ""),
 	}
-	collectionNode := newDeletionCollectionNode(t, "configs")
+	collectionNode := newDeletionCollectionNode(t)
 	missingNode := &graph.Node{
 		Meta: graph.NodeMeta{
 			ID:         "missing",
@@ -139,7 +139,7 @@ func TestPlanNodesForDeletionErrors(t *testing.T) {
 	}{
 		{
 			name: "list errors bubble up for collection nodes",
-			node: newDeletionCollectionNode(t, "configs"),
+			node: newDeletionCollectionNode(t),
 			configure: func(instance *unstructured.Unstructured) {
 				_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
 			},
@@ -339,12 +339,128 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, rcx.Instance, InstanceManaged).Status)
 }
 
-func newDeletionCollectionNode(t *testing.T, id string) *graph.Node {
+func TestPlanNodesForDeletionRegistersWatchForResource(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "deploy",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestDeployGVR,
+			Namespaced: true,
+		},
+		Template: newDeploymentObject("demo", ""),
+	}
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node), newDeploymentObject("demo", "default"))
+	watcher := &mockWatcher{}
+	rcx.Watcher = watcher
+
+	deletionNode, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+	require.NotNil(t, deletionNode)
+	assert.Equal(t, "deploy", deletionNode.Spec.Meta.ID)
+
+	reqs := watcher.getRequests()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, "deploy", reqs[0].NodeID)
+	assert.Equal(t, controllerTestDeployGVR, reqs[0].GVR)
+	assert.Equal(t, "demo", reqs[0].Name)
+	assert.Equal(t, "default", reqs[0].Namespace)
+}
+
+func TestPlanNodesForDeletionSkipsWatchForNotFoundResource(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	node := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "deploy",
+			Type:       graph.NodeTypeResource,
+			GVR:        controllerTestDeployGVR,
+			Namespaced: true,
+		},
+		Template: newDeploymentObject("demo", ""),
+	}
+
+	// No existing deployment — GET will return NotFound.
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node))
+	watcher := &mockWatcher{}
+	rcx.Watcher = watcher
+
+	deletionNode, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+	assert.Nil(t, deletionNode)
+	assert.Equal(t, v1alpha1.NodeStateDeleted, rcx.StateManager.NodeStates["deploy"].State)
+
+	// No watch registered — resource is already gone.
+	reqs := watcher.getRequests()
+	assert.Empty(t, reqs)
+}
+
+func TestPlanNodesForDeletionRegistersWatchesForCollectionItems(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one", "two"}, "spec", "items")
+
+	collectionNode := newDeletionCollectionNode(t)
+
+	item1 := newConfigMapObject("one", "default")
+	item1.SetLabels(map[string]string{
+		metadata.InstanceIDLabel: string(instance.GetUID()),
+		metadata.NodeIDLabel:     "configs",
+	})
+	item2 := newConfigMapObject("two", "default")
+	item2.SetLabels(map[string]string{
+		metadata.InstanceIDLabel: string(instance.GetUID()),
+		metadata.NodeIDLabel:     "configs",
+	})
+
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode), item1, item2)
+	watcher := &mockWatcher{}
+	rcx.Watcher = watcher
+
+	deletionNode, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+	require.NotNil(t, deletionNode)
+	assert.Equal(t, "configs", deletionNode.Spec.Meta.ID)
+
+	reqs := watcher.getRequests()
+	require.Len(t, reqs, 2)
+	// Both items should have watches registered with the collection node ID.
+	names := []string{reqs[0].Name, reqs[1].Name}
+	assert.Contains(t, names, "one")
+	assert.Contains(t, names, "two")
+	for _, req := range reqs {
+		assert.Equal(t, "configs", req.NodeID)
+		assert.Equal(t, controllerTestCMGVR, req.GVR)
+		assert.Equal(t, "default", req.Namespace)
+	}
+}
+
+func TestPlanNodesForDeletionNoWatchForEmptyCollection(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedSlice(instance.Object, []interface{}{"one"}, "spec", "items")
+
+	collectionNode := newDeletionCollectionNode(t)
+
+	// No existing items — collection is already empty.
+	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(collectionNode))
+	watcher := &mockWatcher{}
+	rcx.Watcher = watcher
+
+	deletionNode, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+	assert.Nil(t, deletionNode)
+	assert.Equal(t, v1alpha1.NodeStateDeleted, rcx.StateManager.NodeStates["configs"].State)
+
+	// No watches registered since there are no items.
+	reqs := watcher.getRequests()
+	assert.Empty(t, reqs)
+}
+
+func newDeletionCollectionNode(t *testing.T) *graph.Node {
 	t.Helper()
 
 	return &graph.Node{
 		Meta: graph.NodeMeta{
-			ID:         id,
+			ID:         "configs",
 			Type:       graph.NodeTypeCollection,
 			GVR:        controllerTestCMGVR,
 			Namespaced: true,

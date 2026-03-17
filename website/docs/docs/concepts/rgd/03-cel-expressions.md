@@ -326,8 +326,33 @@ The `?` operator prevents kro from validating the field's existence at build tim
 | Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)            |
 | Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)      |
 | JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)        |
+| Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)       |
 | URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)  |
 | Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
+
+The kro **Index Mutation** library adds three pure list functions (they return a new list and do not modify the input):
+
+| Function | Signature | Description |
+|---|---|---|
+| `lists.setAtIndex` | `list(T), int, T → list(T)` | Replace the element at `index` with `value`. Index must be in `[0, size(list))`. |
+| `lists.insertAtIndex` | `list(T), int, T → list(T)` | Insert `value` before `index`. Use `index == size(list)` to append. Index must be in `[0, size(list)]`. |
+| `lists.removeAtIndex` | `list(T), int → list(T)` | Remove the element at `index`. Index must be in `[0, size(list))`. |
+
+**Examples:**
+
+```kro
+# Replace the second tag
+tags: ${lists.setAtIndex(schema.spec.tags, 1, "new-tag")}
+
+# Prepend an environment variable
+envVars: ${lists.insertAtIndex(schema.spec.envVars, 0, "DEBUG=true")}
+
+# Remove the first port
+ports: ${lists.removeAtIndex(schema.spec.ports, 0)}
+
+# Chain operations: swap first two elements
+swapped: ${lists.setAtIndex(lists.setAtIndex(schema.spec.items, 0, schema.spec.items[1]), 1, schema.spec.items[0])}
+```
 
 For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).
 

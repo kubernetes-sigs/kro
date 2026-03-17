@@ -41,7 +41,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "instance_reconcile_duration_seconds",
 			Help:    "Duration of instance reconciliation in seconds per GVR",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60, 120},
 		},
 		[]string{"gvr"},
 	)

@@ -88,9 +88,9 @@ func toIfaceSlice(t *testing.T, v interface{}) []interface{} {
 	}
 }
 
-// ── lists.setIndex ───────────────────────────────────────────────────────────
+// ── lists.setAtIndex ─────────────────────────────────────────────────────────
 
-func TestListsSetIndex(t *testing.T) {
+func TestListsSetAtIndex(t *testing.T) {
 	env := newListsEnv(t)
 	tests := []struct {
 		name    string
@@ -100,47 +100,47 @@ func TestListsSetIndex(t *testing.T) {
 	}{
 		{
 			name: "replace middle int",
-			expr: "lists.setIndex([1, 2, 3], 1, 99)",
+			expr: "lists.setAtIndex([1, 2, 3], 1, 99)",
 			want: []interface{}{int64(1), int64(99), int64(3)},
 		},
 		{
 			name: "replace first int",
-			expr: "lists.setIndex([1, 2, 3], 0, 0)",
+			expr: "lists.setAtIndex([1, 2, 3], 0, 0)",
 			want: []interface{}{int64(0), int64(2), int64(3)},
 		},
 		{
 			name: "replace last int",
-			expr: "lists.setIndex([1, 2, 3], 2, 7)",
+			expr: "lists.setAtIndex([1, 2, 3], 2, 7)",
 			want: []interface{}{int64(1), int64(2), int64(7)},
 		},
 		{
 			name: "replace string element",
-			expr: `lists.setIndex(["a", "b", "c"], 1, "z")`,
+			expr: `lists.setAtIndex(["a", "b", "c"], 1, "z")`,
 			want: []interface{}{"a", "z", "c"},
 		},
 		{
 			name: "replace first string",
-			expr: `lists.setIndex(["x", "y"], 0, "replaced")`,
+			expr: `lists.setAtIndex(["x", "y"], 0, "replaced")`,
 			want: []interface{}{"replaced", "y"},
 		},
 		{
 			name: "single-element list",
-			expr: "lists.setIndex([42], 0, 0)",
+			expr: "lists.setAtIndex([42], 0, 0)",
 			want: []interface{}{int64(0)},
 		},
 		{
 			name:    "index out of bounds high",
-			expr:    "lists.setIndex([1, 2], 5, 9)",
+			expr:    "lists.setAtIndex([1, 2], 5, 9)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "index out of bounds negative",
-			expr:    "lists.setIndex([1, 2], -1, 9)",
+			expr:    "lists.setAtIndex([1, 2], -1, 9)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "index equal to size is out of bounds",
-			expr:    "lists.setIndex([1, 2], 2, 9)",
+			expr:    "lists.setAtIndex([1, 2], 2, 9)",
 			wantErr: "out of bounds",
 		},
 	}
@@ -155,9 +155,9 @@ func TestListsSetIndex(t *testing.T) {
 	}
 }
 
-// ── lists.insertAt ───────────────────────────────────────────────────────────
+// ── lists.insertAtIndex ──────────────────────────────────────────────────────
 
-func TestListsInsertAt(t *testing.T) {
+func TestListsInsertAtIndex(t *testing.T) {
 	env := newListsEnv(t)
 	tests := []struct {
 		name    string
@@ -167,42 +167,42 @@ func TestListsInsertAt(t *testing.T) {
 	}{
 		{
 			name: "insert in middle",
-			expr: "lists.insertAt([1, 2, 3], 1, 99)",
+			expr: "lists.insertAtIndex([1, 2, 3], 1, 99)",
 			want: []interface{}{int64(1), int64(99), int64(2), int64(3)},
 		},
 		{
 			name: "insert at front",
-			expr: "lists.insertAt([1, 2, 3], 0, 99)",
+			expr: "lists.insertAtIndex([1, 2, 3], 0, 99)",
 			want: []interface{}{int64(99), int64(1), int64(2), int64(3)},
 		},
 		{
 			name: "insert at end (append)",
-			expr: "lists.insertAt([1, 2, 3], 3, 99)",
+			expr: "lists.insertAtIndex([1, 2, 3], 3, 99)",
 			want: []interface{}{int64(1), int64(2), int64(3), int64(99)},
 		},
 		{
 			name: "insert into empty list",
-			expr: "lists.insertAt([], 0, 42)",
+			expr: "lists.insertAtIndex([], 0, 42)",
 			want: []interface{}{int64(42)},
 		},
 		{
 			name: "insert string element",
-			expr: `lists.insertAt(["a", "c"], 1, "b")`,
+			expr: `lists.insertAtIndex(["a", "c"], 1, "b")`,
 			want: []interface{}{"a", "b", "c"},
 		},
 		{
 			name: "insert into single-element list at front",
-			expr: "lists.insertAt([2], 0, 1)",
+			expr: "lists.insertAtIndex([2], 0, 1)",
 			want: []interface{}{int64(1), int64(2)},
 		},
 		{
 			name:    "index out of bounds high",
-			expr:    "lists.insertAt([1, 2], 5, 9)",
+			expr:    "lists.insertAtIndex([1, 2], 5, 9)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "index out of bounds negative",
-			expr:    "lists.insertAt([1, 2], -1, 9)",
+			expr:    "lists.insertAtIndex([1, 2], -1, 9)",
 			wantErr: "out of bounds",
 		},
 	}
@@ -217,9 +217,9 @@ func TestListsInsertAt(t *testing.T) {
 	}
 }
 
-// ── lists.removeAt ───────────────────────────────────────────────────────────
+// ── lists.removeAtIndex ──────────────────────────────────────────────────────
 
-func TestListsRemoveAt(t *testing.T) {
+func TestListsRemoveAtIndex(t *testing.T) {
 	env := newListsEnv(t)
 	tests := []struct {
 		name    string
@@ -229,52 +229,52 @@ func TestListsRemoveAt(t *testing.T) {
 	}{
 		{
 			name: "remove middle element",
-			expr: "lists.removeAt([1, 2, 3], 1)",
+			expr: "lists.removeAtIndex([1, 2, 3], 1)",
 			want: []interface{}{int64(1), int64(3)},
 		},
 		{
 			name: "remove first element",
-			expr: "lists.removeAt([1, 2, 3], 0)",
+			expr: "lists.removeAtIndex([1, 2, 3], 0)",
 			want: []interface{}{int64(2), int64(3)},
 		},
 		{
 			name: "remove last element",
-			expr: "lists.removeAt([1, 2, 3], 2)",
+			expr: "lists.removeAtIndex([1, 2, 3], 2)",
 			want: []interface{}{int64(1), int64(2)},
 		},
 		{
 			name: "remove from two-element list",
-			expr: "lists.removeAt([10, 20], 0)",
+			expr: "lists.removeAtIndex([10, 20], 0)",
 			want: []interface{}{int64(20)},
 		},
 		{
 			name: "remove only element yields empty list",
-			expr: "lists.removeAt([42], 0)",
+			expr: "lists.removeAtIndex([42], 0)",
 			want: []interface{}{},
 		},
 		{
 			name: "remove string element",
-			expr: `lists.removeAt(["a", "b", "c"], 1)`,
+			expr: `lists.removeAtIndex(["a", "b", "c"], 1)`,
 			want: []interface{}{"a", "c"},
 		},
 		{
 			name:    "index out of bounds high",
-			expr:    "lists.removeAt([1, 2], 5)",
+			expr:    "lists.removeAtIndex([1, 2], 5)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "index out of bounds negative",
-			expr:    "lists.removeAt([1, 2], -1)",
+			expr:    "lists.removeAtIndex([1, 2], -1)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "index equal to size is out of bounds",
-			expr:    "lists.removeAt([1, 2], 2)",
+			expr:    "lists.removeAtIndex([1, 2], 2)",
 			wantErr: "out of bounds",
 		},
 		{
 			name:    "empty list",
-			expr:    "lists.removeAt([], 0)",
+			expr:    "lists.removeAtIndex([], 0)",
 			wantErr: "out of bounds",
 		},
 	}
@@ -299,23 +299,23 @@ func TestListsComposition(t *testing.T) {
 		want []interface{}
 	}{
 		{
-			name: "insertAt then removeAt round-trips",
-			expr: "lists.removeAt(lists.insertAt([1, 2, 3], 1, 99), 1)",
+			name: "insertAtIndex then removeAtIndex round-trips",
+			expr: "lists.removeAtIndex(lists.insertAtIndex([1, 2, 3], 1, 99), 1)",
 			want: []interface{}{int64(1), int64(2), int64(3)},
 		},
 		{
-			name: "setIndex then setIndex",
-			expr: "lists.setIndex(lists.setIndex([1, 2, 3], 0, 9), 2, 7)",
+			name: "setAtIndex then setAtIndex",
+			expr: "lists.setAtIndex(lists.setAtIndex([1, 2, 3], 0, 9), 2, 7)",
 			want: []interface{}{int64(9), int64(2), int64(7)},
 		},
 		{
-			name: "chain insertAt twice builds ordered list",
-			expr: "lists.insertAt(lists.insertAt([2, 3], 0, 1), 3, 4)",
+			name: "chain insertAtIndex twice builds ordered list",
+			expr: "lists.insertAtIndex(lists.insertAtIndex([2, 3], 0, 1), 3, 4)",
 			want: []interface{}{int64(1), int64(2), int64(3), int64(4)},
 		},
 		{
-			name: "removeAt front then setIndex",
-			expr: "lists.setIndex(lists.removeAt([0, 1, 2, 3], 0), 0, 99)",
+			name: "removeAtIndex front then setAtIndex",
+			expr: "lists.setAtIndex(lists.removeAtIndex([0, 1, 2, 3], 0), 0, 99)",
 			want: []interface{}{int64(99), int64(2), int64(3)},
 		},
 	}
@@ -339,33 +339,33 @@ func TestListsTypeInference(t *testing.T) {
 		wantType string
 	}{
 		{
-			name:     "setIndex on int list returns list(int)",
-			expr:     "lists.setIndex([1, 2, 3], 0, 9)",
+			name:     "setAtIndex on int list returns list(int)",
+			expr:     "lists.setAtIndex([1, 2, 3], 0, 9)",
 			wantType: "list(int)",
 		},
 		{
-			name:     "setIndex on string list returns list(string)",
-			expr:     `lists.setIndex(["a", "b"], 0, "z")`,
+			name:     "setAtIndex on string list returns list(string)",
+			expr:     `lists.setAtIndex(["a", "b"], 0, "z")`,
 			wantType: "list(string)",
 		},
 		{
-			name:     "insertAt on int list returns list(int)",
-			expr:     "lists.insertAt([1, 2, 3], 0, 9)",
+			name:     "insertAtIndex on int list returns list(int)",
+			expr:     "lists.insertAtIndex([1, 2, 3], 0, 9)",
 			wantType: "list(int)",
 		},
 		{
-			name:     "insertAt on string list returns list(string)",
-			expr:     `lists.insertAt(["a", "b"], 0, "z")`,
+			name:     "insertAtIndex on string list returns list(string)",
+			expr:     `lists.insertAtIndex(["a", "b"], 0, "z")`,
 			wantType: "list(string)",
 		},
 		{
-			name:     "removeAt on int list returns list(int)",
-			expr:     "lists.removeAt([1, 2, 3], 0)",
+			name:     "removeAtIndex on int list returns list(int)",
+			expr:     "lists.removeAtIndex([1, 2, 3], 0)",
 			wantType: "list(int)",
 		},
 		{
-			name:     "removeAt on string list returns list(string)",
-			expr:     `lists.removeAt(["a", "b", "c"], 0)`,
+			name:     "removeAtIndex on string list returns list(string)",
+			expr:     `lists.removeAtIndex(["a", "b", "c"], 0)`,
 			wantType: "list(string)",
 		},
 	}

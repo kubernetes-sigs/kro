@@ -26,43 +26,43 @@ import (
 // Lists returns a CEL library that provides index-mutation functions for lists.
 // All functions are pure — they return a new list and do not modify the input.
 //
-// # SetIndex
+// # SetAtIndex
 //
 // Returns a new list with the element at index replaced by value.
 // Index must be in [0, size(list)).
 //
-//	lists.setIndex(list(T), int, T) -> list(T)
+//	lists.setAtIndex(list(T), int, T) -> list(T)
 //
 // Examples:
 //
-//	lists.setIndex([1, 2, 3], 1, 99)          // [1, 99, 3]
-//	lists.setIndex(["a", "b", "c"], 0, "z")   // ["z", "b", "c"]
+//	lists.setAtIndex([1, 2, 3], 1, 99)          // [1, 99, 3]
+//	lists.setAtIndex(["a", "b", "c"], 0, "z")   // ["z", "b", "c"]
 //
-// # InsertAt
+// # InsertAtIndex
 //
 // Returns a new list with value inserted before the element at index.
 // Index must be in [0, size(list)]. An index equal to size(list) appends.
 //
-//	lists.insertAt(list(T), int, T) -> list(T)
+//	lists.insertAtIndex(list(T), int, T) -> list(T)
 //
 // Examples:
 //
-//	lists.insertAt([1, 2, 3], 1, 99)   // [1, 99, 2, 3]
-//	lists.insertAt([1, 2, 3], 0, 99)   // [99, 1, 2, 3]
-//	lists.insertAt([1, 2, 3], 3, 99)   // [1, 2, 3, 99]
+//	lists.insertAtIndex([1, 2, 3], 1, 99)   // [1, 99, 2, 3]
+//	lists.insertAtIndex([1, 2, 3], 0, 99)   // [99, 1, 2, 3]
+//	lists.insertAtIndex([1, 2, 3], 3, 99)   // [1, 2, 3, 99]
 //
-// # RemoveAt
+// # RemoveAtIndex
 //
 // Returns a new list with the element at index removed.
 // Index must be in [0, size(list)).
 //
-//	lists.removeAt(list(T), int) -> list(T)
+//	lists.removeAtIndex(list(T), int) -> list(T)
 //
 // Examples:
 //
-//	lists.removeAt([1, 2, 3], 1)   // [1, 3]
-//	lists.removeAt([1, 2, 3], 0)   // [2, 3]
-//	lists.removeAt([1, 2, 3], 2)   // [1, 2]
+//	lists.removeAtIndex([1, 2, 3], 1)   // [1, 3]
+//	lists.removeAtIndex([1, 2, 3], 0)   // [2, 3]
+//	lists.removeAtIndex([1, 2, 3], 2)   // [1, 2]
 func Lists(options ...ListsOption) cel.EnvOption {
 	l := &listsLibrary{version: math.MaxUint32}
 	for _, o := range options {
@@ -102,30 +102,30 @@ func (l *listsLibrary) LibraryName() string {
 func (l *listsLibrary) CompileOptions() []cel.EnvOption {
 	listType := cel.ListType(cel.TypeParamType("T"))
 	return []cel.EnvOption{
-		// lists.setIndex(arr list(T), index int, value T) -> list(T)
-		cel.Function("lists.setIndex",
-			cel.Overload("lists.setIndex_list_int_T",
+		// lists.setAtIndex(arr list(T), index int, value T) -> list(T)
+		cel.Function("lists.setAtIndex",
+			cel.Overload("lists.setAtIndex_list_int_T",
 				[]*cel.Type{listType, cel.IntType, cel.TypeParamType("T")},
 				listType,
-				cel.FunctionBinding(listsSetIndex),
+				cel.FunctionBinding(listsSetAtIndex),
 			),
 		),
 
-		// lists.insertAt(arr list(T), index int, value T) -> list(T)
-		cel.Function("lists.insertAt",
-			cel.Overload("lists.insertAt_list_int_T",
+		// lists.insertAtIndex(arr list(T), index int, value T) -> list(T)
+		cel.Function("lists.insertAtIndex",
+			cel.Overload("lists.insertAtIndex_list_int_T",
 				[]*cel.Type{listType, cel.IntType, cel.TypeParamType("T")},
 				listType,
-				cel.FunctionBinding(listsInsertAt),
+				cel.FunctionBinding(listsInsertAtIndex),
 			),
 		),
 
-		// lists.removeAt(arr list(T), index int) -> list(T)
-		cel.Function("lists.removeAt",
-			cel.Overload("lists.removeAt_list_int",
+		// lists.removeAtIndex(arr list(T), index int) -> list(T)
+		cel.Function("lists.removeAtIndex",
+			cel.Overload("lists.removeAtIndex_list_int",
 				[]*cel.Type{listType, cel.IntType},
 				listType,
-				cel.BinaryBinding(listsRemoveAt),
+				cel.BinaryBinding(listsRemoveAtIndex),
 			),
 		),
 	}
@@ -135,22 +135,22 @@ func (l *listsLibrary) ProgramOptions() []cel.ProgramOption {
 	return nil
 }
 
-// listsSetIndex returns a new list(T) with the element at index replaced by value.
-func listsSetIndex(args ...ref.Val) ref.Val {
+// listsSetAtIndex returns a new list(T) with the element at index replaced by value.
+func listsSetAtIndex(args ...ref.Val) ref.Val {
 	if len(args) != 3 {
-		return types.NewErr("lists.setIndex: expected 3 arguments (arr, index, value)")
+		return types.NewErr("lists.setAtIndex: expected 3 arguments (arr, index, value)")
 	}
 	lister, ok := args[0].(traits.Lister)
 	if !ok {
-		return types.NewErr("lists.setIndex: first argument must be a list")
+		return types.NewErr("lists.setAtIndex: first argument must be a list")
 	}
 	if args[1].Type() != types.IntType {
-		return types.NewErr("lists.setIndex: index must be an integer")
+		return types.NewErr("lists.setAtIndex: index must be an integer")
 	}
 	idx := int64(args[1].(types.Int))
 	size := int64(lister.Size().(types.Int))
 	if idx < 0 || idx >= size {
-		return types.NewErr("lists.setIndex: index %d out of bounds [0, %d)", idx, size)
+		return types.NewErr("lists.setAtIndex: index %d out of bounds [0, %d)", idx, size)
 	}
 	elems := make([]ref.Val, size)
 	for i := int64(0); i < size; i++ {
@@ -163,23 +163,23 @@ func listsSetIndex(args ...ref.Val) ref.Val {
 	return types.NewRefValList(types.DefaultTypeAdapter, elems)
 }
 
-// listsInsertAt returns a new list(T) with value inserted before the element at index.
+// listsInsertAtIndex returns a new list(T) with value inserted before the element at index.
 // An index equal to size(list) appends the value.
-func listsInsertAt(args ...ref.Val) ref.Val {
+func listsInsertAtIndex(args ...ref.Val) ref.Val {
 	if len(args) != 3 {
-		return types.NewErr("lists.insertAt: expected 3 arguments (arr, index, value)")
+		return types.NewErr("lists.insertAtIndex: expected 3 arguments (arr, index, value)")
 	}
 	lister, ok := args[0].(traits.Lister)
 	if !ok {
-		return types.NewErr("lists.insertAt: first argument must be a list")
+		return types.NewErr("lists.insertAtIndex: first argument must be a list")
 	}
 	if args[1].Type() != types.IntType {
-		return types.NewErr("lists.insertAt: index must be an integer")
+		return types.NewErr("lists.insertAtIndex: index must be an integer")
 	}
 	idx := int64(args[1].(types.Int))
 	size := int64(lister.Size().(types.Int))
 	if idx < 0 || idx > size {
-		return types.NewErr("lists.insertAt: index %d out of bounds [0, %d]", idx, size)
+		return types.NewErr("lists.insertAtIndex: index %d out of bounds [0, %d]", idx, size)
 	}
 	elems := make([]ref.Val, size+1)
 	for i := int64(0); i < idx; i++ {
@@ -192,19 +192,19 @@ func listsInsertAt(args ...ref.Val) ref.Val {
 	return types.NewRefValList(types.DefaultTypeAdapter, elems)
 }
 
-// listsRemoveAt returns a new list(T) with the element at index removed.
-func listsRemoveAt(arrVal, idxVal ref.Val) ref.Val {
+// listsRemoveAtIndex returns a new list(T) with the element at index removed.
+func listsRemoveAtIndex(arrVal, idxVal ref.Val) ref.Val {
 	lister, ok := arrVal.(traits.Lister)
 	if !ok {
-		return types.NewErr("lists.removeAt: first argument must be a list")
+		return types.NewErr("lists.removeAtIndex: first argument must be a list")
 	}
 	if idxVal.Type() != types.IntType {
-		return types.NewErr("lists.removeAt: index must be an integer")
+		return types.NewErr("lists.removeAtIndex: index must be an integer")
 	}
 	idx := int64(idxVal.(types.Int))
 	size := int64(lister.Size().(types.Int))
 	if idx < 0 || idx >= size {
-		return types.NewErr("lists.removeAt: index %d out of bounds [0, %d)", idx, size)
+		return types.NewErr("lists.removeAtIndex: index %d out of bounds [0, %d)", idx, size)
 	}
 	elems := make([]ref.Val, size-1)
 	for i := int64(0); i < idx; i++ {

@@ -124,17 +124,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 
 	start := time.Now()
 	defer func() {
-		watcher.Done(err == nil)
+		watcher.Done(err == nil || requeue.IsRequeueError(err))
 		gvr := c.gvr.String()
 		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
 		instanceReconcileTotal.WithLabelValues(gvr).Inc()
-		if err != nil {
-			var rn *requeue.RequeueNeeded
-			var rna *requeue.RequeueNeededAfter
-			if !errors.As(err, &rn) && !errors.As(err, &rna) {
-				log.V(1).Info("reporting reconcile error metric", "error", err)
-				instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
-			}
+		if err != nil && !requeue.IsRequeueError(err) {
+			log.V(1).Info("reporting reconcile error metric", "error", err)
+			instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
 		}
 	}()
 

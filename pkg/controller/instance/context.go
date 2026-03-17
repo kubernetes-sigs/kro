@@ -96,3 +96,22 @@ func (rcx *ReconcileContext) InstanceClient() dynamic.ResourceInterface {
 	}
 	return base
 }
+
+// instanceSSAPatch returns a minimal unstructured object for SSA patches
+// targeting the instance. For cluster-scoped instances the namespace key is
+// omitted so the API server does not receive an empty string.
+func instanceSSAPatch(obj *unstructured.Unstructured) *unstructured.Unstructured {
+	md := map[string]interface{}{
+		"name": obj.GetName(),
+	}
+	if ns := obj.GetNamespace(); ns != "" {
+		md["namespace"] = ns
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": obj.GetAPIVersion(),
+			"kind":       obj.GetKind(),
+			"metadata":   md,
+		},
+	}
+}

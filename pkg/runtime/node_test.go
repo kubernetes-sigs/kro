@@ -2025,26 +2025,58 @@ func TestFilterContext(t *testing.T) {
 }
 
 func TestNormalizeNamespaces(t *testing.T) {
+	makeNode := func(instanceNS string) *Node {
+		inst := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			withObservedUnstructured(newUnstructured("v1", "Instance", instanceNS, "my-inst")).
+			build()
+		return newTestNode("child", graph.NodeTypeResource).
+			withDep(inst).
+			build()
+	}
+
 	tests := []struct {
 		name           string
+		nodeNamespaced bool
+		instanceNS     string
 		objs           []*unstructured.Unstructured
-		namespace      string
 		wantNamespaces []string
 	}{
 		{
-			name: "fills missing namespace and preserves explicit namespace",
+			name:           "inherits instance namespace",
+			nodeNamespaced: true,
+			instanceNS:     "tenant-a",
 			objs: []*unstructured.Unstructured{
 				newUnstructured("v1", "ConfigMap", "", "generated"),
 				newUnstructured("v1", "ConfigMap", "explicit", "existing"),
 			},
-			namespace:      "tenant-a",
 			wantNamespaces: []string{"tenant-a", "explicit"},
+		},
+		{
+			name:           "cluster-scoped instance leaves empty namespace alone",
+			nodeNamespaced: true,
+			instanceNS:     "",
+			objs: []*unstructured.Unstructured{
+				newUnstructured("v1", "ConfigMap", "", "no-ns"),
+				newUnstructured("v1", "ConfigMap", "explicit", "has-ns"),
+			},
+			wantNamespaces: []string{"", "explicit"},
+		},
+		{
+			name:           "cluster-scoped child is a no-op",
+			nodeNamespaced: false,
+			instanceNS:     "tenant-a",
+			objs: []*unstructured.Unstructured{
+				newUnstructured("v1", "ClusterRole", "", "cr"),
+			},
+			wantNamespaces: []string{""},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			normalizeNamespaces(tt.objs, tt.namespace)
+			node := makeNode(tt.instanceNS)
+			node.Spec.Meta.Namespaced = tt.nodeNamespaced
+			node.normalizeNamespaces(tt.objs)
 			for i, obj := range tt.objs {
 				assert.Equal(t, tt.wantNamespaces[i], obj.GetNamespace())
 			}

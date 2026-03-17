@@ -235,8 +235,7 @@ func (c *Controller) setUnmanaged(rcx *ReconcileContext, obj *unstructured.Unstr
 		return obj, nil
 	}
 	rcx.Log.Info("Removing managed state", "name", obj.GetName(), "namespace", obj.GetNamespace())
-	instancePatch := &unstructured.Unstructured{}
-	instancePatch.SetUnstructuredContent(map[string]interface{}{"apiVersion": obj.GetAPIVersion(), "kind": obj.GetKind(), "metadata": map[string]interface{}{"name": obj.GetName(), "namespace": obj.GetNamespace()}})
+	instancePatch := instanceSSAPatch(obj)
 	instancePatch.SetFinalizers(obj.GetFinalizers())
 	metadata.RemoveInstanceFinalizer(instancePatch)
 	updated, err := rcx.InstanceClient().Apply(rcx.Ctx, instancePatch.GetName(), instancePatch, metav1.ApplyOptions{FieldManager: FieldManagerForLabeler, Force: true})

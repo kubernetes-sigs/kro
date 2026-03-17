@@ -169,9 +169,8 @@ func (n *Node) GetDesired() (result []*unstructured.Unstructured, err error) {
 	}
 
 	if err == nil {
-		if n.Spec.Meta.Namespaced && n.Spec.Meta.Type != graph.NodeTypeInstance {
-			inst := n.deps[graph.InstanceNodeID]
-			normalizeNamespaces(result, inst.observed[0].GetNamespace())
+		if n.Spec.Meta.Type != graph.NodeTypeInstance {
+			n.normalizeNamespaces(result)
 		}
 		n.desired = result
 	}
@@ -202,20 +201,14 @@ func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err er
 		if err != nil {
 			return nil, err
 		}
-		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
-			normalizeNamespaces(result, inst.observed[0].GetNamespace())
-		}
+		n.normalizeNamespaces(result)
 		return result, nil
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
 		result, err = n.hardResolveSingleResource(vars)
 		if err != nil {
 			return nil, err
 		}
-		if n.Spec.Meta.Namespaced {
-			inst := n.deps[graph.InstanceNodeID]
-			normalizeNamespaces(result, inst.observed[0].GetNamespace())
-		}
+		n.normalizeNamespaces(result)
 		return result, nil
 	case graph.NodeTypeExternalCollection:
 		// External collections have no identity to resolve; they use selectors.
@@ -227,14 +220,17 @@ func (n *Node) GetDesiredIdentity() (result []*unstructured.Unstructured, err er
 	}
 }
 
-func normalizeNamespaces(objs []*unstructured.Unstructured, namespace string) {
-	// TODO: When cluster-scoped instances are supported, either default to
-	// metav1.NamespaceDefault here or enforce namespace presence in graphbuilder.
+// normalizeNamespaces inherits the instance namespace onto namespaced children
+// that don't specify one. No-op for cluster-scoped nodes or empty instance namespace.
+func (n *Node) normalizeNamespaces(objs []*unstructured.Unstructured) {
+	if !n.Spec.Meta.Namespaced {
+		return
+	}
+	ns := n.deps[graph.InstanceNodeID].observed[0].GetNamespace()
 	for _, obj := range objs {
-		if obj.GetNamespace() != "" {
-			continue
+		if obj.GetNamespace() == "" && ns != "" {
+			obj.SetNamespace(ns)
 		}
-		obj.SetNamespace(namespace)
 	}
 }
 

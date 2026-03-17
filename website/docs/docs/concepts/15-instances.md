@@ -108,7 +108,7 @@ Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive label
 | `kro.run/kro-version` | Version of kro managing the resource |
 | `kro.run/instance-id` | UID of the instance that created this resource |
 | `kro.run/instance-name` | Name of the instance |
-| `kro.run/instance-namespace` | Namespace of the instance |
+| `kro.run/instance-namespace` | Namespace of the instance (only for namespaced instances) |
 | `kro.run/instance-group` | API group of the instance |
 | `kro.run/instance-version` | API version of the instance |
 | `kro.run/instance-kind` | Kind of the instance |
@@ -138,7 +138,7 @@ kro does not set Kubernetes owner references on managed resources by default. Th
 
 1. **Ordered deletion** - kro deletes resources in reverse topological order, respecting dependencies between resources. Owner references trigger Kubernetes garbage collection, which deletes resources without ordering guarantees.
 
-2. **Cross-scope limitations** - Namespaced resources cannot own cluster-scoped resources. Since kro instances are namespaced but can manage cluster-scoped resources (like ClusterRoles or Namespaces), owner references cannot express this relationship.
+2. **Cross-scope limitations** - Namespaced resources cannot own cluster-scoped resources. When a namespaced kro instance manages cluster-scoped resources (like ClusterRoles or Namespaces), owner references cannot express this relationship.
 
 Instead, kro uses labels and the ApplySet specification for ownership tracking and resource cleanup.
 

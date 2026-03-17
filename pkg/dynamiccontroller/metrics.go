@@ -63,7 +63,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "dynamic_controller_reconcile_duration_seconds",
 			Help:    "Duration of reconciliations per GVR",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60, 120},
 		},
 		[]string{"gvr"},
 	)
@@ -102,7 +102,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "dynamic_controller_informer_sync_duration_seconds",
 			Help:    "Duration of informer cache sync per GVR",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60, 120},
 		},
 		[]string{"gvr"},
 	)

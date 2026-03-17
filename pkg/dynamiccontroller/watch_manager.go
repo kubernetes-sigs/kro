@@ -47,7 +47,7 @@ type WatchManager struct {
 	// Set at construction time; never nil.
 	onEvent EventHandler
 
-	// SyncTimeout is the maximum time to wait for cache sync in ensureWatch.
+	// SyncTimeout is the maximum time to wait for cache sync in EnsureWatch.
 	// Zero means use the default (30s).
 	SyncTimeout time.Duration
 
@@ -89,12 +89,38 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID stri
 		m.owners[gvr] = make(map[string]struct{})
 	}
 	m.owners[gvr][ownerID] = struct{}{}
+
+	// Check if watch already exists while still holding the lock.
+	if _, ok := m.watches[gvr]; ok {
+		m.mu.Unlock()
+		return nil
+	}
+
+	// Create and start the informer while still holding the lock,
+	// so no ReleaseWatch can remove our owner before the watch exists.
+	w := m.newWatch(gvr)
+	m.watches[gvr] = w
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	go w.informer.RunWithContext(ctx)
+	watchCount.Set(float64(len(m.watches)))
+	m.log.V(1).Info("Informer started", "gvr", gvr)
+
+	// Release the lock before blocking on cache sync.
 	m.mu.Unlock()
 
-	if err := m.ensureWatch(gvr); err != nil {
+	// Wait for initial list/sync with a timeout so callers get a usable cache.
+	syncStart := time.Now()
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), m.syncTimeout())
+	defer syncCancel()
+
+	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
+		informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
+		m.forceStopWatch(gvr)
 		m.ReleaseWatch(gvr, ownerID)
-		return err
+		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
+	informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 	return nil
 }
 
@@ -111,47 +137,6 @@ func (m *WatchManager) ReleaseWatch(gvr schema.GroupVersionResource, ownerID str
 		}
 	}
 	m.stopWatchLocked(gvr, false)
-}
-
-// ensureWatch idempotently ensures an informer is running for the given GVR.
-// If the informer is already running, this is a no-op. After starting the
-// informer it waits for the initial cache sync with a timeout and returns an
-// error if the sync does not complete.
-func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource) error {
-	m.mu.Lock()
-
-	if _, ok := m.watches[gvr]; ok {
-		m.mu.Unlock()
-		return nil
-	}
-
-	w := m.newWatch(gvr)
-	m.watches[gvr] = w
-
-	ctx, cancel := context.WithCancel(context.Background())
-	w.cancel = cancel
-	go w.informer.RunWithContext(ctx)
-	watchCount.Set(float64(len(m.watches)))
-	m.log.V(1).Info("Informer started", "gvr", gvr)
-
-	// Release the lock before blocking on cache sync.
-	m.mu.Unlock()
-
-	// Wait for initial list/sync with a timeout so callers get a usable cache.
-	syncStart := time.Now()
-	syncCtx, cancel := context.WithTimeout(context.Background(), m.syncTimeout())
-	defer cancel()
-
-	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
-		informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
-		// Stop and remove the broken watch so a future ensureWatch can retry
-		// with a fresh informer instead of returning early for a registered
-		// but non-functional watch.
-		m.forceStopWatch(gvr)
-		return fmt.Errorf("cache sync timeout for %s", gvr)
-	}
-	informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
-	return nil
 }
 
 // GetInformer returns the SharedIndexInformer for the given GVR, or nil

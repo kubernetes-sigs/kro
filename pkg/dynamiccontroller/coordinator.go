@@ -153,6 +153,7 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 			previous: make(map[string]*WatchRequest),
 		}
 		c.instances[key] = state
+		instanceWatchCount.WithLabelValues(key.parentGVR.String()).Inc()
 	}
 
 	// Fix reverse index orphaning on nodeID reuse: if an existing entry
@@ -178,7 +179,6 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 		}
 	}
 
-	c.updateWatchRequestMetrics()
 	gvr := req.GVR
 	c.mu.Unlock()
 
@@ -213,7 +213,6 @@ func (c *WatchCoordinator) abortInstance(key instanceKey) {
 
 	state.current = make(map[string]*WatchRequest)
 
-	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -246,7 +245,6 @@ func (c *WatchCoordinator) doneInstance(key instanceKey) {
 	state.previous = state.current
 	state.current = make(map[string]*WatchRequest)
 
-	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -279,8 +277,8 @@ func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource,
 	}
 
 	delete(c.instances, key)
+	c.decInstanceWatchCount(parentGVR)
 
-	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -318,8 +316,8 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 		}
 		delete(c.instances, key)
 	}
+	c.decInstanceWatchCount(parentGVR)
 
-	c.updateWatchRequestMetrics()
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
 
@@ -407,6 +405,7 @@ func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchReques
 		nodeID: req.NodeID,
 		key:    key,
 	})
+	watchRequestCount.WithLabelValues(req.GVR.String(), "scalar").Inc()
 }
 
 func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRequest) {
@@ -425,6 +424,7 @@ func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRe
 		namespace: req.Namespace,
 		key:       key,
 	})
+	watchRequestCount.WithLabelValues(req.GVR.String(), "collection").Inc()
 }
 
 func (c *WatchCoordinator) removeRequestFromIndexesLocked(key instanceKey, req *WatchRequest) {
@@ -445,9 +445,11 @@ func (c *WatchCoordinator) removeScalarIndexLocked(key instanceKey, req *WatchRe
 	if !ok {
 		return
 	}
+	removed := 0
 	filtered := entries[:0]
 	for _, entry := range entries {
 		if entry.key == key && entry.nodeID == req.NodeID {
+			removed++
 			continue
 		}
 		filtered = append(filtered, entry)
@@ -457,8 +459,16 @@ func (c *WatchCoordinator) removeScalarIndexLocked(key instanceKey, req *WatchRe
 	} else {
 		byName[nn] = filtered
 	}
+	gvrStr := req.GVR.String()
 	if len(byName) == 0 {
 		delete(c.scalarIndex, req.GVR)
+		// If this GVR is also gone from collectionIndex, delete its gauge labels.
+		if len(c.collectionIndex[req.GVR]) == 0 {
+			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
+			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
+		}
+	} else if removed > 0 {
+		watchRequestCount.WithLabelValues(gvrStr, "scalar").Sub(float64(removed))
 	}
 }
 
@@ -487,21 +497,45 @@ func (c *WatchCoordinator) stopWatches(gvrs []schema.GroupVersionResource) {
 
 func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *WatchRequest) {
 	entries := c.collectionIndex[req.GVR]
+	removed := 0
 	filtered := entries[:0]
 	for _, e := range entries {
 		if e.key == key &&
 			e.nodeID == req.NodeID &&
 			e.namespace == req.Namespace &&
 			e.selector.String() == req.Selector.String() {
+			removed++
 			continue
 		}
 		filtered = append(filtered, e)
 	}
+	gvrStr := req.GVR.String()
 	if len(filtered) == 0 {
 		delete(c.collectionIndex, req.GVR)
+		// If this GVR is also gone from scalarIndex, delete its gauge labels.
+		if len(c.scalarIndex[req.GVR]) == 0 {
+			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
+			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
+		}
 	} else {
 		c.collectionIndex[req.GVR] = filtered
+		if removed > 0 {
+			watchRequestCount.WithLabelValues(gvrStr, "collection").Sub(float64(removed))
+		}
 	}
+}
+
+// decInstanceWatchCount decrements the instanceWatchCount gauge for the given
+// parent GVR, deleting the label set entirely when no instances remain.
+// Must be called with c.mu held, after the instance has been deleted.
+func (c *WatchCoordinator) decInstanceWatchCount(parentGVR schema.GroupVersionResource) {
+	for key := range c.instances {
+		if key.parentGVR == parentGVR {
+			instanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
+			return
+		}
+	}
+	instanceWatchCount.DeleteLabelValues(parentGVR.String())
 }
 
 // NoopInstanceWatcher is a no-op implementation of InstanceWatcher for use
@@ -538,36 +572,6 @@ func (w *instanceWatcher) Done(commit bool) {
 		return
 	}
 	w.coordinator.doneInstance(key)
-}
-
-// updateWatchRequestMetrics recalculates the watch request gauge metrics
-// from the current index state. Must be called with c.mu held (at least RLock).
-func (c *WatchCoordinator) updateWatchRequestMetrics() {
-	// Per-GVR scalar/collection breakdown.
-	gvrs := make(map[schema.GroupVersionResource]struct{})
-	for gvr := range c.scalarIndex {
-		gvrs[gvr] = struct{}{}
-	}
-	for gvr := range c.collectionIndex {
-		gvrs[gvr] = struct{}{}
-	}
-	for gvr := range gvrs {
-		scalar := 0
-		for _, entries := range c.scalarIndex[gvr] {
-			scalar += len(entries)
-		}
-		watchRequestCount.WithLabelValues(gvr.String(), "scalar").Set(float64(scalar))
-		watchRequestCount.WithLabelValues(gvr.String(), "collection").Set(float64(len(c.collectionIndex[gvr])))
-	}
-
-	// Per-parent instance watch count.
-	parentCounts := make(map[schema.GroupVersionResource]int)
-	for key := range c.instances {
-		parentCounts[key.parentGVR]++
-	}
-	for parentGVR, count := range parentCounts {
-		instanceWatchCount.WithLabelValues(parentGVR.String()).Set(float64(count))
-	}
 }
 
 func sameWatchTarget(a, b *WatchRequest) bool {

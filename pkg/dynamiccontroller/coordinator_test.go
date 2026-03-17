@@ -299,9 +299,9 @@ func TestStopOrphanedWatch_RemoveInstance(t *testing.T) {
 	coord.RemoveInstance(testParentGVR, instance)
 	assert.Equal(t, 0, coord.watches.ActiveWatchCount(), "expected 0 active watches after removing last requestor")
 
-	// ensureWatch can re-create it.
-	assert.NoError(t, coord.watches.ensureWatch(testDeployGVR))
-	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after ensureWatch")
+	// EnsureWatch can re-create it.
+	assert.NoError(t, coord.watches.EnsureWatch(testDeployGVR, "test"))
+	assert.Equal(t, 1, coord.watches.ActiveWatchCount(), "expected watch to be re-created after EnsureWatch")
 }
 
 func TestStopOrphanedWatch_DoneCleanup(t *testing.T) {
@@ -863,14 +863,14 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// ensureWatch will fail sync but addWatch logs and returns nil.
+	// EnsureWatch will fail sync but addWatch logs and returns nil.
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deploy",
 		GVR:       testDeployGVR,
 		Name:      "d1",
 		Namespace: "default",
 	})
-	assert.NoError(t, err) // addWatch does not propagate ensureWatch errors
+	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
 
 	wm.Shutdown()
 }
@@ -889,6 +889,82 @@ func TestRemoveInstance_ScalarIndexCleanup(t *testing.T) {
 	scalar, collection := coord.WatchRequestCount()
 	assert.Equal(t, 0, scalar)
 	assert.Equal(t, 0, collection)
+}
+
+func TestUpdateWatchRequestMetrics_ClearsStaleGauges(t *testing.T) {
+	// Regression test: when a GVR is fully removed, its gauge value must
+	// not persist in Prometheus forever. Gauge labels should be deleted
+	// when a GVR is removed from the indexes.
+	coord, _ := newTestCoordinator(t)
+	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
+
+	// Watch a deployment and a configmap collection.
+	watcher := coord.ForInstance(testParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "deploy",
+		GVR:       testDeployGVR,
+		Name:      "d1",
+		Namespace: "default",
+	}))
+	selector, _ := labels.Parse("app=test")
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "configs",
+		GVR:       testCmGVR,
+		Namespace: "default",
+		Selector:  selector,
+	}))
+	watcher.Done(true)
+
+	// Verify gauges are set.
+	scalar, collection := coord.WatchRequestCount()
+	assert.Equal(t, 1, scalar)
+	assert.Equal(t, 1, collection)
+
+	// Remove the instance — all watches should be cleaned up.
+	coord.RemoveInstance(testParentGVR, instance)
+	assert.Equal(t, 0, coord.InstanceWatchCount())
+
+	// After removal, both watch request counts should be zero.
+	// Before the fix, the gauges for the removed GVRs would retain
+	// their last non-zero values.
+	scalar, collection = coord.WatchRequestCount()
+	assert.Equal(t, 0, scalar, "scalar gauge should be zero after GVR removal")
+	assert.Equal(t, 0, collection, "collection gauge should be zero after GVR removal")
+}
+
+func TestUpdateWatchRequestMetrics_PartialRemoval(t *testing.T) {
+	// Verify that removing one GVR's watches doesn't affect another's gauges.
+	coord, _ := newTestCoordinator(t)
+	inst1 := types.NamespacedName{Name: "app1", Namespace: "default"}
+	inst2 := types.NamespacedName{Name: "app2", Namespace: "default"}
+
+	// inst1 watches deployments, inst2 watches configmaps.
+	w1 := coord.ForInstance(testParentGVR, inst1)
+	require.NoError(t, w1.Watch(WatchRequest{
+		NodeID:    "deploy",
+		GVR:       testDeployGVR,
+		Name:      "d1",
+		Namespace: "default",
+	}))
+	w1.Done(true)
+
+	w2 := coord.ForInstance(testParentGVR, inst2)
+	require.NoError(t, w2.Watch(WatchRequest{
+		NodeID:    "service",
+		GVR:       testServiceGVR,
+		Name:      "s1",
+		Namespace: "default",
+	}))
+	w2.Done(true)
+
+	scalar, _ := coord.WatchRequestCount()
+	assert.Equal(t, 2, scalar, "should have 2 scalar watch requests")
+
+	// Remove only inst1 — inst2's watches should remain.
+	coord.RemoveInstance(testParentGVR, inst1)
+
+	scalar, _ = coord.WatchRequestCount()
+	assert.Equal(t, 1, scalar, "should have 1 scalar watch request after partial removal")
 }
 
 func TestRemoveParentGVR_NonExistent(t *testing.T) {

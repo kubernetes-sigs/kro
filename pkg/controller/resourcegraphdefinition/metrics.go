@@ -43,7 +43,7 @@ func init() {
 		prometheus.HistogramOpts{
 			Name:    "rgd_graph_build_duration_seconds",
 			Help:    "Duration of resource graph builds in seconds",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60, 120},
 		},
 		rgdLabels,
 	)
@@ -76,7 +76,7 @@ func init() {
 		prometheus.HistogramOpts{
 			Name:    "rgd_deletion_duration_seconds",
 			Help:    "Duration of RGD deletions in seconds",
-			Buckets: prometheus.DefBuckets,
+			Buckets: []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 15, 20, 25, 30, 45, 60, 120},
 		},
 		rgdLabels,
 	)

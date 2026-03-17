@@ -332,17 +332,13 @@ spec:
                         type: object
                     type: object
                   scope:
-                    allOf:
-                    - enum:
-                      - Namespaced
-                      - Cluster
-                    - enum:
-                      - Namespaced
-                      - Cluster
                     default: Namespaced
                     description: |-
                       Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
                       Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation.
+                    enum:
+                    - Namespaced
+                    - Cluster
                     type: string
                     x-kubernetes-validations:
                     - message: scope is immutable
@@ -374,6 +370,7 @@ spec:
                 required:
                 - apiVersion
                 - kind
+                - scope
                 type: object
             required:
             - schema

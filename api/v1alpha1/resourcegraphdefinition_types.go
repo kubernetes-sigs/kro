@@ -90,9 +90,8 @@ type Schema struct {
 	// Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
 	// Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation.
 	//
-	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Required
 	// +kubebuilder:default="Namespaced"
-	// +kubebuilder:validation:Enum=Namespaced;Cluster
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="scope is immutable"
 	Scope ResourceScope `json:"scope,omitempty"`
 

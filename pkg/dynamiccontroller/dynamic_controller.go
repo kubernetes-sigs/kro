@@ -375,7 +375,11 @@ func (dc *DynamicController) Register(
 	}()
 
 	// Register event handler directly on the parent informer.
-	reg, err := dc.watches.GetInformer(parent).AddEventHandler(dc.parentEventHandlerFor(parent))
+	inf := dc.watches.GetInformer(parent)
+	if inf == nil {
+		return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
+	}
+	reg, err := inf.AddEventHandler(dc.parentEventHandlerFor(parent))
 	if err != nil {
 		return fmt.Errorf("add parent handler %s: %w", parent, err)
 	}
@@ -400,14 +404,14 @@ func (dc *DynamicController) Register(
 // for enqueuing a new event for a given parent gvr
 func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionResource) cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			dc.enqueueFromInformer(parent, obj, EventAdd)
+		AddFunc: func(obj any) {
+			dc.enqueueFromInformer(parent, nil, obj, EventAdd)
 		},
-		UpdateFunc: func(_, newObj interface{}) {
-			dc.enqueueFromInformer(parent, newObj, EventUpdate)
+		UpdateFunc: func(oldObj, newObj any) {
+			dc.enqueueFromInformer(parent, oldObj, newObj, EventUpdate)
 		},
-		DeleteFunc: func(obj interface{}) {
-			dc.enqueueFromInformer(parent, obj, EventDelete)
+		DeleteFunc: func(obj any) {
+			dc.enqueueFromInformer(parent, nil, obj, EventDelete)
 		},
 	}
 }
@@ -417,7 +421,7 @@ func (dc *DynamicController) parentEventHandlerFor(parent schema.GroupVersionRes
 func (dc *DynamicController) enqueueExistingInstances(parent schema.GroupVersionResource) {
 	if inf := dc.watches.GetInformer(parent); inf != nil && !inf.IsStopped() {
 		for _, obj := range inf.GetStore().List() {
-			dc.enqueueFromInformer(parent, obj, EventUpdate)
+			dc.enqueueFromInformer(parent, nil, obj, EventUpdate)
 		}
 	}
 }

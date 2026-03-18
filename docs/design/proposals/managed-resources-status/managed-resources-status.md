@@ -38,9 +38,11 @@ and `conditions` defaults and follows the same opt-out pattern.
 #### Status schema
 
 The `managedResources` field is an array of objects, one per graph node
-(excluding the instance node itself). Each entry contains the node's identity,
-its current reconciliation state, and references to the actual Kubernetes
-resources it manages:
+(excluding the instance node itself and external reference nodes). Each entry
+contains the node's identity, its current reconciliation state, and references
+to the actual Kubernetes resources it manages. External nodes (`External`,
+`ExternalCollection`) are excluded because they are read-only references, not
+resources managed by the instance:
 
 ```yaml
 status:
@@ -52,6 +54,7 @@ status:
       kind: "Deployment"
       nodeType: "Resource"
       state: "SYNCED"
+      graphRevision: 3
       resources:
         - name: "myapp-deploy"
           namespace: "default"
@@ -60,20 +63,13 @@ status:
       kind: "Pod"
       nodeType: "Collection"
       state: "SYNCED"
+      graphRevision: 3
       resources:
         - name: "myapp-worker-0"
           namespace: "default"
         - name: "myapp-worker-1"
           namespace: "default"
         - name: "myapp-worker-2"
-          namespace: "default"
-    - nodeID: "external-config"
-      apiVersion: "v1"
-      kind: "ConfigMap"
-      nodeType: "External"
-      state: "SYNCED"
-      resources:
-        - name: "shared-config"
           namespace: "default"
 ```
 
@@ -84,8 +80,9 @@ status:
 | `nodeID` | string | The graph node identifier from the RGD `resources[].id` |
 | `apiVersion` | string | API group and version (e.g. `apps/v1`, `v1` for core) |
 | `kind` | string | Resource kind |
-| `nodeType` | string | One of: Resource, Collection, External, ExternalCollection |
-| `state` | string | Node reconciliation state: SYNCED, IN_PROGRESS, ERROR, SKIPPED, DELETING, DELETED, WAITING_FOR_READINESS |
+| `nodeType` | string | One of: Resource, Collection |
+| `state` | string | Node reconciliation state: SYNCED, IN_PROGRESS, ERROR, SKIPPED, DELETING, DELETED, WAITING_FOR_READINESS, INCLUDED, EXCLUDED |
+| `graphRevision` | integer | RGD generation this node was last reconciled against (optional; allows visibility into rolling updates between RGD revisions) |
 | `total` | integer | Total observed resource count for this node (omitted when not truncated) |
 | `truncated` | boolean | Whether the `resources` list was capped (omitted when false) |
 | `resources` | array | List of concrete resource references (may be truncated) |
@@ -115,13 +112,17 @@ The `managedResources` field is populated in `initialStatus()` during every
 status update, using data already available in the reconciliation context:
 
 1. **Node list**: `rcx.Runtime.Nodes()` returns all graph nodes in topological
-   order (instance node excluded).
+   order (instance node and external nodes excluded).
 2. **Node metadata**: `node.Spec.Meta` provides ID, GVR (group/version/resource),
-   Type (Resource, Collection, External, etc.), and Namespaced flag.
+   Type (Resource, Collection), and Namespaced flag.
 3. **Node state**: `rcx.StateManager.NodeStates[nodeID]` provides the current
    reconciliation state (SYNCED, ERROR, etc.).
 4. **Resource references**: `node.GetObserved()` returns the observed
    `[]*unstructured.Unstructured` from which name and namespace are extracted.
+5. **Graph revision**: `rcx.Runtime.GraphRevision()` (or equivalent) provides the
+   RGD generation the graph was built from. This value is set on each managed
+   resource entry, making it visible when different nodes are at different
+   revisions during a rolling update.
 
 A new `GetObserved()` getter is added to `runtime.Node` to expose the private
 `observed` field. GVK is derived from `node.Spec.Template.GroupVersionKind()`.
@@ -144,18 +145,29 @@ count, so consumers know the list is incomplete.
   kind: "Pod"
   nodeType: "Collection"
   state: "SYNCED"
+  graphRevision: 3
   total: 500
   truncated: true
   resources:
     - name: "myapp-worker-0"
       namespace: "default"
-    # ... up to maxManagedResourcesPerNode entries
+    # ... up to MaxManagedResourceEntriesPerNode entries
 ```
 
-The limit is configured via `RGDConfig.MaxManagedResourcesPerNode`, which
+The limit is configured via `RGDConfig.MaxManagedResourceEntriesPerNode`, which
 defaults to 100. This can be tuned per controller deployment. When the observed
 count for a node is within the limit, `truncated` and `total` are omitted to
 keep the common case clean.
+
+**Note:** `MaxManagedResourceEntriesPerNode` is distinct from
+`RGDConfig.MaxCollectionSize`. `MaxCollectionSize` limits how many resources
+are *actually created* by a collection node (a runtime concern), while
+`MaxManagedResourceEntriesPerNode` limits how many resource references are
+*reported in status* (a display concern). A collection could have 50 items
+(within `MaxCollectionSize`) but status might truncate to 20 entries if
+configured lower. In practice, if `MaxCollectionSize` is already bounded,
+truncation may rarely trigger — but the safeguard is still needed for future
+changes or very large bounded collections.
 
 The `total` field is always an integer representing the full count of observed
 resources for that node, regardless of truncation. This allows tooling to show
@@ -250,8 +262,9 @@ Events are complementary but not a replacement.
 2. `pkg/controller/instance/status_test.go`:
    - Test `buildManagedResources()` with single-resource nodes
    - Test with collection nodes (multiple observed objects)
-   - Test with external ref nodes
+   - Test that external ref nodes are excluded from output
    - Test with skipped/errored nodes (empty resources list)
+   - Test `graphRevision` is set correctly on each entry
    - Verify `initialStatus()` includes `managedResources` key
    - Verify `updateStatus()` does not overwrite `managedResources` from user CEL
 
@@ -272,6 +285,12 @@ Events are complementary but not a replacement.
 - The `managedResources` field name was chosen over alternatives like
   `ownedResources` (implies ownership semantics that may conflict with
   OwnerReferences from KREP-004) and `resourceInventory` (too generic).
-- External nodes are included in the list even though they are read-only,
-  because they are part of the graph and users benefit from seeing all
-  resources the instance interacts with.
+- External nodes (`External`, `ExternalCollection`) are excluded from
+  `managedResources` because they are read-only references, not resources
+  managed by the instance. Including them would be misleading — the instance
+  does not create, update, or delete external resources. Users who need
+  visibility into external references can inspect the RGD definition directly.
+- `INCLUDED` and `EXCLUDED` states reflect `includeWhen` evaluation outcomes,
+  giving users visibility into conditional resource inclusion. `EXCLUDED`
+  indicates a node whose `includeWhen` condition evaluated to false and was
+  therefore not created.

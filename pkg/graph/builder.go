@@ -254,6 +254,11 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		return nil, fmt.Errorf("failed to get topological order: %w", err)
 	}
 
+	// Validate that omit() is not used on resource identity fields.
+	if err := validateIdentityFields(nodes, inspector, instanceNamespaced); err != nil {
+		return nil, err
+	}
+
 	// Collect all schemas for CEL validation:
 	// - Resource schemas (wrapped as lists for collections)
 	// - Instance spec schema as "schema" variable (extracted from CRD, without status)
@@ -1185,11 +1190,8 @@ func validateAndCompileTemplates(
 	// NOTE: omit() is allowed in template expressions. Restricted-context
 	// rejection (includeWhen, readyWhen, forEach) is handled by the compiler
 	// in inspectExpressionRestricted and validateAndCompileForEach.
-	//
-	// TODO: Add validation that required resource fields (e.g. metadata.name)
-	// cannot evaluate to null or omit(). Currently nothing prevents a user
-	// from writing `metadata.name: ${omit()}`, which produces an invalid
-	// resource at apply time.
+	// Identity-field rejection (metadata.name, metadata.namespace) is handled
+	// by validateIdentityFields earlier in the build pipeline.
 	compileEnv := env
 	if len(iteratorTypes) > 0 {
 		opts := make([]cel.EnvOption, 0, len(iteratorTypes))

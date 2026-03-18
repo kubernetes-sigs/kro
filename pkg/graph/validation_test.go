@@ -27,6 +27,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
@@ -890,6 +891,104 @@ func TestValidateTemplateConstraints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced, tt.instanceNamespaced)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateIdentityFields(t *testing.T) {
+	inspector := newUnitInspector(t, "schema")
+
+	makeNode := func(id, path, expression string, namespaced bool) *Node {
+		return &Node{
+			Meta: NodeMeta{ID: id, Namespaced: namespaced},
+			Variables: []*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:       path,
+						Expression: expr(expression),
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                 string
+		nodes                map[string]*Node
+		isInstanceNamespaced bool
+		wantErr              string
+	}{
+		{
+			name: "omit on metadata.name is rejected",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, "omit()", true),
+			},
+			isInstanceNamespaced: true,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "conditional omit on metadata.name is rejected",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, `schema.spec.name != "" ? schema.spec.name : omit()`, true),
+			},
+			isInstanceNamespaced: true,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "omit on metadata.namespace rejected for namespaced resource with cluster-scoped instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamespacePath, "omit()", true),
+			},
+			isInstanceNamespaced: false,
+			wantErr:              "omit() cannot be used at path \"metadata.namespace\"",
+		},
+		{
+			name: "omit on metadata.namespace allowed for namespaced instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamespacePath, "omit()", true),
+			},
+			isInstanceNamespaced: true,
+		},
+		{
+			name: "omit on metadata.namespace allowed for cluster-scoped resource",
+			nodes: map[string]*Node{
+				"crb": makeNode("crb", MetadataNamespacePath, "omit()", false),
+			},
+			isInstanceNamespaced: false,
+		},
+		{
+			name: "omit on non-required field is allowed",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", "spec.someField", "omit()", true),
+			},
+			isInstanceNamespaced: true,
+		},
+		{
+			name: "omit on metadata.name rejected for cluster-scoped instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, "omit()", true),
+			},
+			isInstanceNamespaced: false,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "non-omit expression on metadata.name is allowed",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, `"my-resource"`, true),
+			},
+			isInstanceNamespaced: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentityFields(tt.nodes, inspector, tt.isInstanceNamespaced)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return

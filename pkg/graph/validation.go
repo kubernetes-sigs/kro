@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -299,6 +300,48 @@ func validateTemplateConstraints(
 	}
 
 	return nil
+}
+
+// validateIdentityFields checks that omit() is not used on resource identity
+// fields. These fields are special to kro's ownership model — omitting them
+// silently breaks SSA ownership and resource tracking, unlike schema-required
+// fields which fail loudly on server-side apply.
+//
+// Identity fields:
+//   - metadata.name: always required for any Kubernetes resource
+//   - metadata.namespace: required when the instance is cluster-scoped and the
+//     resource itself is namespaced (no instance namespace to inherit)
+func validateIdentityFields(nodes map[string]*Node, inspector *ast.Inspector, isInstanceNamespaced bool) error {
+	for _, node := range nodes {
+		for _, v := range node.Variables {
+			if !isRequiredIdentityField(v.Path, node.Meta.Namespaced, isInstanceNamespaced) {
+				continue
+			}
+			result, err := inspector.Inspect(v.Expression.Original)
+			if err != nil {
+				return fmt.Errorf("resource %q: failed to inspect expression at path %q: %w", node.Meta.ID, v.Path, err)
+			}
+			if result.UsesOmit() {
+				return fmt.Errorf("resource %q: omit() cannot be used at path %q — the field is required and must resolve to a concrete value", node.Meta.ID, v.Path)
+			}
+		}
+	}
+	return nil
+}
+
+// isRequiredIdentityField reports whether the given field path is a resource
+// identity field that must resolve to a concrete value. metadata.name is always
+// required. metadata.namespace is required only when the resource is namespaced
+// and the instance is cluster-scoped (no namespace to inherit).
+func isRequiredIdentityField(path string, resourceNamespaced, instanceNamespaced bool) bool {
+	switch path {
+	case MetadataNamePath:
+		return true
+	case MetadataNamespacePath:
+		return resourceNamespaced && !instanceNamespaced
+	default:
+		return false
+	}
 }
 
 // validateNoKROOwnedLabels enforces that the resource template doesn't define any label with

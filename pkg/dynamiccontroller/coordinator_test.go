@@ -109,7 +109,7 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// Watch a deployment.
+	// Watch a deployment and commit.
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deployment",
 		GVR:       testDeployGVR,
@@ -117,6 +117,7 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 		Namespace: "default",
 	})
 	require.NoError(t, err)
+	watcher.Done(true)
 
 	// Verify instance is tracked.
 	assert.Equal(t, 1, coord.InstanceWatchCount())
@@ -138,8 +139,6 @@ func TestWatchAndDone_ScalarWatch(t *testing.T) {
 		Namespace: "default",
 	})
 	assert.Equal(t, 1, recorder.count())
-
-	watcher.Done(true)
 }
 
 func TestWatchAndDone_CleanupStaleRequests(t *testing.T) {
@@ -722,7 +721,7 @@ func TestAbortInstance_RollsBackFailedCycleTargetChange(t *testing.T) {
 	assert.Equal(t, 1, recorder.count(), "previous committed watch should remain active after abort")
 
 	assert.NotNil(t, coord.watches.GetInformer(testDeployGVR), "previous informer should stay running")
-	assert.Nil(t, coord.watches.GetInformer(testServiceGVR), "orphaned failed-cycle informer should be stopped")
+	assert.Nil(t, coord.watches.GetInformer(testServiceGVR), "aborted cycle informer should never have started")
 
 	scalar, collection := coord.WatchRequestCount()
 	assert.Equal(t, 1, scalar)
@@ -843,7 +842,7 @@ func TestAbortInstance_RollsBackCollectionSelectorChange(t *testing.T) {
 	assert.Equal(t, 1, recorder.count(), "previous committed selector should remain active after abort")
 }
 
-func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
+func TestEnsureWatch_SyncError(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true))
 
 	scheme := runtime.NewScheme()
@@ -863,26 +862,30 @@ func TestAddWatch_EnsureWatchSyncError(t *testing.T) {
 
 	watcher := coord.ForInstance(testParentGVR, instance)
 
-	// EnsureWatch will fail sync but addWatch logs and returns nil.
+	// Watch always returns nil (local append only).
 	err := watcher.Watch(WatchRequest{
 		NodeID:    "deploy",
 		GVR:       testDeployGVR,
 		Name:      "d1",
 		Namespace: "default",
 	})
-	assert.NoError(t, err) // addWatch does not propagate EnsureWatch errors
+	assert.NoError(t, err)
+
+	// Done(true) calls EnsureWatch internally — should not panic even on sync error.
+	watcher.Done(true)
 
 	wm.Shutdown()
 }
 
-func TestRemoveInstance_ScalarIndexCleanup(t *testing.T) {
+func TestRemoveInstance_UncommittedWatchesIgnored(t *testing.T) {
 	coord, _ := newTestCoordinator(t)
 	instance := types.NamespacedName{Name: "my-app", Namespace: "default"}
 
-	// Watch, Done, then remove.
+	// Watch without Done — pending watches are local to the instanceWatcher.
 	watcher := coord.ForInstance(testParentGVR, instance)
 	require.NoError(t, watcher.Watch(WatchRequest{NodeID: "deploy", GVR: testDeployGVR, Name: "d1", Namespace: "default"}))
-	// Don't call Done — tests that RemoveInstance cleans up current entries too.
+
+	// RemoveInstance has nothing to clean up (nothing committed).
 	coord.RemoveInstance(testParentGVR, instance)
 
 	assert.Equal(t, 0, coord.InstanceWatchCount())
@@ -925,8 +928,6 @@ func TestUpdateWatchRequestMetrics_ClearsStaleGauges(t *testing.T) {
 	assert.Equal(t, 0, coord.InstanceWatchCount())
 
 	// After removal, both watch request counts should be zero.
-	// Before the fix, the gauges for the removed GVRs would retain
-	// their last non-zero values.
 	scalar, collection = coord.WatchRequestCount()
 	assert.Equal(t, 0, scalar, "scalar gauge should be zero after GVR removal")
 	assert.Equal(t, 0, collection, "collection gauge should be zero after GVR removal")
@@ -938,7 +939,7 @@ func TestUpdateWatchRequestMetrics_PartialRemoval(t *testing.T) {
 	inst1 := types.NamespacedName{Name: "app1", Namespace: "default"}
 	inst2 := types.NamespacedName{Name: "app2", Namespace: "default"}
 
-	// inst1 watches deployments, inst2 watches configmaps.
+	// inst1 watches deployments, inst2 watches services.
 	w1 := coord.ForInstance(testParentGVR, inst1)
 	require.NoError(t, w1.Watch(WatchRequest{
 		NodeID:    "deploy",

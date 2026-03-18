@@ -45,3 +45,19 @@ type expressionEvaluationState struct {
 	// ResolvedValue holds the cached result. Nil until Resolved=true.
 	ResolvedValue any
 }
+
+// EvalCached evaluates the expression with caching. If the expression was
+// already evaluated, the cached value is returned. Otherwise the expression
+// is evaluated against the filtered context, and the result is cached.
+func (e *expressionEvaluationState) EvalCached(ctx map[string]any) (any, error) {
+	if e.Resolved {
+		return e.ResolvedValue, nil
+	}
+	val, err := e.Expression.Eval(filterContext(ctx, e.Expression.References))
+	if err != nil {
+		return nil, err
+	}
+	e.Resolved = true
+	e.ResolvedValue = val
+	return val, nil
+}

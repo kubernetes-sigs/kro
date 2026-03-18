@@ -1955,14 +1955,14 @@ func TestEvalBoolExpr(t *testing.T) {
 			wantResolved: true,
 		},
 		{
-			name: "returns false for null values without caching",
+			name: "returns false for null values and caches the result",
 			expr: &expressionEvaluationState{
 				Expression: mustCompileTestExpr("null"),
 				Kind:       variable.ResourceVariableKindIncludeWhen,
 			},
 			ctx:          map[string]any{},
 			want:         false,
-			wantResolved: false,
+			wantResolved: true,
 		},
 		{
 			name: "errors when expression is not bool",

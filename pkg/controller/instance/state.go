@@ -21,11 +21,39 @@ import (
 )
 
 // NodeState holds the current reconciliation state for a node.
-// Prefer mutating this struct via its helper methods.
 type NodeState struct {
 	State v1alpha1.NodeState
 	Err   error
 }
+
+// Value constructors for NodeState — prefer these over mutating pointers.
+
+func inProgressState() NodeState {
+	return NodeState{State: v1alpha1.NodeStateInProgress}
+}
+
+func errorState(err error) NodeState {
+	return NodeState{State: v1alpha1.NodeStateError, Err: err}
+}
+
+func skippedState() NodeState {
+	return NodeState{State: v1alpha1.NodeStateSkipped}
+}
+
+func readyState() NodeState {
+	return NodeState{State: v1alpha1.NodeStateSynced}
+}
+
+func deletingState() NodeState {
+	return NodeState{State: v1alpha1.NodeStateDeleting}
+}
+
+func waitingForReadinessState(err error) NodeState {
+	return NodeState{State: v1alpha1.NodeStateWaitingForReadiness, Err: err}
+}
+
+// Pointer mutation methods — retained for processApplyResults and deletion paths
+// that update state on existing registered nodes.
 
 // SetInProgress marks the node as in progress and clears any error.
 func (st *NodeState) SetInProgress() {
@@ -33,16 +61,16 @@ func (st *NodeState) SetInProgress() {
 	st.Err = nil
 }
 
-// SetError marks the node as failed and records err.
-func (st *NodeState) SetError(err error) {
-	st.State = v1alpha1.NodeStateError
-	st.Err = err
-}
-
 // SetSkipped marks the node as intentionally skipped and clears any error.
 func (st *NodeState) SetSkipped() {
 	st.State = v1alpha1.NodeStateSkipped
 	st.Err = nil
+}
+
+// SetError marks the node as failed and records err.
+func (st *NodeState) SetError(err error) {
+	st.State = v1alpha1.NodeStateError
+	st.Err = err
 }
 
 // SetReady marks the node as ready/synced and clears any error.
@@ -86,13 +114,20 @@ func newStateManager() *StateManager {
 	}
 }
 
-// NewNodeState initializes and registers node state.
-// Callers should prefer this over allocating NodeState directly.
+// NewNodeState initializes and registers node state as InProgress.
+// Returns a pointer for processApplyResults and deletion paths that
+// update state on already-registered nodes.
 func (s *StateManager) NewNodeState(id string) *NodeState {
-	st := &NodeState{}
-	st.SetInProgress()
+	st := &NodeState{State: v1alpha1.NodeStateInProgress}
 	s.NodeStates[id] = st
 	return st
+}
+
+// SetNodeState registers a node state by value. This is the preferred
+// registration method for processNode — it makes the caller the single
+// point where state is written.
+func (s *StateManager) SetNodeState(id string, state NodeState) {
+	s.NodeStates[id] = &state
 }
 
 // NodeErrors aggregates errors across all node states.

@@ -423,22 +423,22 @@ func TestCollectionAndExternalCollectionProcessing(t *testing.T) {
 	collectionRuntimeNode := rcx.Runtime.Nodes()[0]
 	desired, err := collectionRuntimeNode.GetDesired()
 	require.NoError(t, err)
-	resources, err := controller.processCollectionNode(rcx, collectionRuntimeNode, rcx.StateManager.NewNodeState("configs"), desired)
+	resources, nodeState, err := controller.processCollectionNode(rcx, collectionRuntimeNode, desired)
 	require.NoError(t, err)
 	require.Len(t, resources, 2)
 	assert.Equal(t, "one", resources[0].Object.GetName())
 	assert.NotNil(t, resources[0].Current)
 	assert.Equal(t, "0", resources[0].Object.GetLabels()[metadata.CollectionIndexLabel])
 	assert.Equal(t, "2", resources[0].Object.GetLabels()[metadata.CollectionSizeLabel])
+	_ = nodeState // state registered by caller
 
-	err = controller.processExternalCollectionNode(
+	extState, err := controller.processExternalCollectionNode(
 		rcx,
 		rcx.Runtime.Nodes()[1],
-		rcx.StateManager.NewNodeState("external-configs"),
 		[]*unstructured.Unstructured{externalCollection.Template.DeepCopy()},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, v1alpha1.NodeStateSynced, rcx.StateManager.NodeStates["external-configs"].State)
+	assert.Equal(t, v1alpha1.NodeStateSynced, extState.State)
 }
 
 func TestProcessExternalRefNodePaths(t *testing.T) {
@@ -494,8 +494,7 @@ func TestProcessExternalRefNodePaths(t *testing.T) {
 				})
 			}
 
-			state := rcx.StateManager.NewNodeState(tt.name)
-			err := controller.processExternalRefNode(rcx, rcx.Runtime.Nodes()[0], state, tt.desired)
+			state, err := controller.processExternalRefNode(rcx, rcx.Runtime.Nodes()[0], tt.desired)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -523,8 +522,7 @@ func TestProcessExternalRefNodeWaitsForReadiness(t *testing.T) {
 	}
 
 	controller, rcx, _ := newControllerAndContext(t, instance, newTestGraph(node), newConfigMapObject("demo", "default"))
-	state := rcx.StateManager.NewNodeState("external")
-	err := controller.processExternalRefNode(rcx, rcx.Runtime.Nodes()[0], state, []*unstructured.Unstructured{newConfigMapObject("demo", "default")})
+	state, err := controller.processExternalRefNode(rcx, rcx.Runtime.Nodes()[0], []*unstructured.Unstructured{newConfigMapObject("demo", "default")})
 	require.NoError(t, err)
 	assert.Equal(t, v1alpha1.NodeStateWaitingForReadiness, state.State)
 }
@@ -622,8 +620,7 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 				})
 			}
 
-			state := rcx.StateManager.NewNodeState(tt.name)
-			err := controller.processExternalCollectionNode(rcx, rcx.Runtime.Nodes()[0], state, tt.desired)
+			state, err := controller.processExternalCollectionNode(rcx, rcx.Runtime.Nodes()[0], tt.desired)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

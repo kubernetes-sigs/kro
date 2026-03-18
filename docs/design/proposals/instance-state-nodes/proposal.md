@@ -198,10 +198,17 @@ current contents of `status.<storeName>` plus the node's own computed fields.
 No prior node's writes are dropped.
 
 If the `UpdateStatus` call encounters a resource version conflict (a concurrent
-external write to the same instance), the controller retries by re-fetching the
-live CR, re-reading the current `status.<storeName>`, merging the computed
-values, and retrying the call. The computed CEL expressions are not
-re-evaluated on conflict retry — only the merge and the API call are retried.
+external write to the same instance), the controller performs a full retry:
+re-fetch the live CR, re-evaluate all CEL expressions in the node's `fields`
+map against the freshly-fetched instance, merge the new results into the
+current `status.<storeName>`, and retry the call. Re-evaluation is required,
+not optional. If the retry only re-merges the originally computed values, a
+stale result can be written silently: consider a node computing
+`step = schema.status.migration.step + 1` where `step` was `0` at first
+evaluation. If a concurrent reconcile wrote `step = 1` between the read and
+the write, a merge-only retry would write `step = 1` again instead of `step = 2`.
+The counter is off by one with no error. Re-evaluating against the fresh
+instance produces `step = 2` — the correct result.
 
 ##### Idempotency
 
@@ -440,12 +447,19 @@ surface and could be implemented as a follow-on without breaking existing RGDs.
 
 kro's `updateStatus()` builds a completely fresh status map from scratch
 (conditions + instance state + CEL-resolved fields) and replaces the entire
-`status` object. Without care, this overwrites any `<storeName>` values written
-by state nodes earlier in the same reconcile. The implementation must preserve
-existing `status.<storeName>.*` values by reading them from the in-memory
-instance before the final `UpdateStatus` call and merging them into the new
-status map. This applies both to the normal `updateStatus` path and to the
-`RetryOnConflict` fetch-before-write path inside it.
+`status` object. Without explicit preservation, this overwrites any
+`<storeName>` values written by state nodes earlier in the same reconcile.
+
+Responsibility for preservation belongs to `updateStatus()` itself, not to
+the state node processor. The RGD build phase already knows which `storeName`
+values are declared across all state nodes — it uses this information for CRD
+schema injection. That same set must be threaded through to the reconciler
+context so that `updateStatus()` can read the current values of each declared
+`storeName` from the in-memory instance and merge them into the new status map
+before issuing the final `UpdateStatus` call. This applies to both the normal
+`updateStatus` code path and the `RetryOnConflict` fetch-before-write path
+inside it. No changes to the RGD API are required — the set of declared
+`storeName` values is already derivable at build time.
 
 **Precedent**
 
@@ -462,17 +476,9 @@ user-visible conditions.
    simple cases but creates a shared namespace collision risk when multiple
    independent features in one RGD each need their own state. Explicit names
    are self-documenting and prevent accidental cross-node field clobbering.
-   Recommendation: required, no default.
 
-2. **Type-checked `fields` at admission time?** Parse-only for v1 as described
-   above. The v2 path to partial type inference from the `fields` map is
-   documented and does not require an API change. Recommendation: parse-only
-   for v1, v2 improvement tracked separately.
-
-3. **Within-cycle chaining or cross-cycle only?** Within-cycle context refresh
-   is included in this proposal. For state nodes that reference their own prior
-   output (bootstrap pattern), cross-cycle requeue is required by design — the
-   node cannot read a value it has not yet written. For nodes in a DAG chain
-   that read from a sibling node's output, within-cycle refresh is sufficient
-   and preferred. These are not in conflict; both behaviors are present and
-   serve different patterns.
+2. **Type-checked `fields` at admission time?** This proposal uses parse-only
+   for v1 with a documented v2 path (see Discussion). If maintainers prefer to
+   require type checking before the feature ships, the partial type inference
+   approach described in Discussion is the recommended path — it does not
+   require changes to the RGD API surface.

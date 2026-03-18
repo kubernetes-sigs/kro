@@ -110,8 +110,12 @@ It has two fields:
 state node is considered ready as soon as its expressions evaluate and the
 status patch succeeds. `forEach` is not supported on state nodes in v1 — the
 semantics of writing multiple `storeName`-scoped entries from a single node
-(one per iteration vs. merged into one scope) are non-trivial and left for a
-follow-on proposal once the base primitive is established.
+are non-trivial and left for a follow-on proposal once the base primitive is
+established. For example: does a `forEach` with three iterations produce
+`status.migration.items = [{...}, {...}, {...}]` (one array field) or merge
+all three iterations into a flat `status.migration = {step0: ..., step1: ...,
+step2: ...}` (one map field per iteration)? Neither answer is obvious, and
+the right design depends on use cases that are not yet established.
 
 ##### Within-cycle context refresh
 
@@ -360,6 +364,7 @@ spec writes without the GitOps conflict.
 - Time-triggered transitions (no timer/TTL primitive)
 - Compile-time type checking for `status.<storeName>.*` fields (v2 improvement)
 - `forEach` on state nodes — the semantics of iterating a state write (one entry per iteration vs. merged result) are non-trivial and deferred to a follow-on proposal
+- Cleanup of orphaned `storeName` data after a state node is removed from an RGD update — existing instances retain the stale `status.<storeName>` data; pruning is left for a follow-on proposal
 - Admission-time warning for non-convergent expressions (expression reads and writes the same field without a terminating `includeWhen` gate)
 
 ## Testing strategy

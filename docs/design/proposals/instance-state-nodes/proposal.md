@@ -177,6 +177,42 @@ On first reconcile, the controller ensures `status: {<storeName>: {}}` is
 injected as a baseline into the CEL context before evaluating state node
 expressions, preventing "no such key" errors.
 
+For array-typed state fields, `has()` alone is insufficient to guard against
+index-out-of-bounds errors: `has(schema.status.migration.items)` returns `true`
+even when `items` is an empty list, and an index access on an empty list panics.
+Expressions that index into a state array field must also guard on size:
+
+```yaml
+fields:
+  result: "${has(schema.status.game.monsterHP) && size(schema.status.game.monsterHP) > idx ? schema.status.game.monsterHP[idx] - 5 : 0}"
+```
+
+The recommended pattern for state nodes that initialize array fields is a
+sentinel-first design: a single initialization node with a strict
+`includeWhen` gate (e.g., `initSeq == 0`) writes the array and advances the
+sentinel. All dependent nodes gate on `initSeq > 0`. This is safe because the
+sentinel is a scalar — guardable with `has()` alone — and ensures arrays are
+populated before any downstream index access:
+
+```yaml
+- id: initState
+  state:
+    storeName: game
+    fields:
+      monsterHP:  "${lists.range(schema.spec.monsters).map(i, baseHP)}"
+      initSeq: "${1}"
+  includeWhen:
+    - "${!has(schema.status.game.initSeq) || schema.status.game.initSeq == 0}"
+
+- id: combatResolve
+  state:
+    storeName: game
+    fields:
+      monsterHP: "${...schema.status.game.monsterHP[idx]...}"
+  includeWhen:
+    - "${has(schema.status.game.initSeq) && schema.status.game.initSeq > 0 && ...}"
+```
+
 ##### Concurrent writes to the same `storeName`
 
 When two or more state nodes target the same `storeName`, the within-cycle
@@ -297,6 +333,83 @@ use the standard `buildContext()` that strips `status`. The two code paths share
 everything except the status injection step — they are not separate environments,
 just different context construction calls.
 
+##### State fields in template, forEach, and schema.status projection expressions
+
+Template nodes, `forEach` dimension expressions, and `schema.status` projection
+expressions within an RGD may reference `schema.status.<storeName>.*` for any
+`storeName` declared by a `state:` node in the same RGD. This is the only
+exception to the rule that non-state-node expressions use a status-stripped CEL
+context.
+
+**Rationale:** `storeName` scopes are written exclusively by the kro controller
+via `state:` nodes declared in the same RGD. They are pre-initialized to `{}`
+at bootstrap (see "Bootstrap guard" above), preventing "no such key" errors on
+first reconcile. They are controller-owned, not user-owned or externally written,
+so the stale-read concern that motivates stripping `status` from template contexts
+does not apply to them.
+
+**DAG ordering:** The RGD build phase treats a template node's or `forEach`
+expression's reference to `schema.status.<storeName>.*` as an implicit DAG
+dependency edge from that node to the `state:` node declaring `storeName`. The
+state node must reach `ready` before the dependent template node or `forEach`
+expression is evaluated. Standard DAG cycle detection applies.
+
+**Evaluation order within a reconcile cycle:**
+
+1. State nodes evaluate in topological (DAG) order. After each state node
+   writes, the in-memory context is refreshed so that state nodes later in the
+   DAG read the freshly written values.
+2. Template nodes that depend on a state node (via explicit resource-status
+   references or via `schema.status.<storeName>.*` reads) evaluate after that
+   state node in topological order.
+3. `schema.status` projection expressions (the `status:` block in the RGD
+   schema) evaluate last, after all template and state nodes. They may read from
+   both child resource status fields (as today) and declared `storeName` scopes
+   (`schema.status.<storeName>.*`).
+
+**Constraint:** State node `includeWhen` and `fields` expressions may reference
+`schema.status.<storeName>.*` from sibling state nodes (read via the
+within-cycle context refresh). They may NOT reference `schema.status` projection
+outputs (e.g., `schema.status.bossState`) because projections have not yet been
+computed when state nodes execute. Attempting to do so is a build-time
+validation error.
+
+**Example:**
+
+```yaml
+resources:
+  # State node writes heroHP and monsterHP to status.game
+  - id: combatResolve
+    state:
+      storeName: game
+      fields:
+        heroHP:    "${...combat math...}"
+        monsterHP: "${...lists.setAtIndex(...)...}"
+    includeWhen:
+      - "${schema.spec.attackSeq > (has(schema.status.game.combatSeq) ? schema.status.game.combatSeq : 0)}"
+
+  # Template node reads from status.game — permitted because 'game' is a declared storeName
+  - id: heroCR
+    template:
+      apiVersion: game.k8s.example/v1alpha1
+      kind: Hero
+      spec:
+        hp: ${schema.status.game.heroHP}        # reads from declared storeName ✓
+
+  # forEach dimension reads from status.game — same scoped access
+  - id: monsterCRs
+    forEach:
+      - idx: "${has(schema.status.game.monsterHP) ? lists.range(size(schema.status.game.monsterHP)) : []}"
+    template:
+      spec:
+        hp: ${schema.status.game.monsterHP[idx]}  # reads from declared storeName ✓
+
+# schema.status projection reads from declared storeName — permitted, evaluated last
+schema:
+  status:
+    heroAlive: "${has(schema.status.game.heroHP) && schema.status.game.heroHP > 0}"
+```
+
 ## Other solutions considered
 
 **External bespoke controller (status quo)**
@@ -366,6 +479,7 @@ spec writes without the GitOps conflict.
 - `forEach` on state nodes — the semantics of iterating a state write (one entry per iteration vs. merged result) are non-trivial and deferred to a follow-on proposal
 - Cleanup of orphaned `storeName` data after a state node is removed from an RGD update — existing instances retain the stale `status.<storeName>` data; pruning is left for a follow-on proposal
 - Admission-time warning for non-convergent expressions (expression reads and writes the same field without a terminating `includeWhen` gate)
+- Allowing template nodes, `forEach` expressions, or `schema.status` projections to reference `status.*` fields beyond declared `storeName` scopes. The scoped extension described in this proposal is specifically for controller-owned state written by `state:` nodes in the same RGD. Extending it to arbitrary `status.*` fields would reintroduce the stale-read problem that motivates the standard context's status stripping.
 
 ## Testing strategy
 

@@ -217,6 +217,29 @@ var _ = Describe("Omit", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should reject omit() on metadata.name for a regular resource", func(ctx SpecContext) {
+		rgd := generator.NewResourceGraphDefinition("test-omit-name",
+			generator.WithSchema(
+				"TestOmitName", "v1alpha1",
+				map[string]interface{}{
+					"name": "string",
+				},
+				nil,
+			),
+			generator.WithResource("configmap", map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "${omit()}",
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		expectRGDInactiveWithError(ctx, rgd, "omit() cannot be used at path \"metadata.name\"")
+		Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+	})
+
 	It("should omit array elements when omit() is triggered", func(ctx SpecContext) {
 		rgd := generator.NewResourceGraphDefinition("test-omit-array",
 			generator.WithSchema(

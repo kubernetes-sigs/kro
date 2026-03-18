@@ -113,6 +113,11 @@ const (
 	//
 	// Expressions not referencing iterator variables remain static or dynamic.
 	ResourceVariableKindIteration ResourceVariableKind = "iteration"
+	// ResourceVariableKindConstant represents a constant expression.
+	// These have no variable references and no function calls (operators like
+	// +, -, *, / are allowed). They are evaluated once at build time, and the
+	// evaluated value replaces the expression in the template.
+	ResourceVariableKindConstant ResourceVariableKind = "constant"
 )
 
 // String returns the string representation of a ResourceVariableKind.
@@ -138,4 +143,9 @@ func (r ResourceVariableKind) IsIncludeWhen() bool {
 // IsIteration returns true if the ResourceVariableKind is iteration
 func (r ResourceVariableKind) IsIteration() bool {
 	return r == ResourceVariableKindIteration
+}
+
+// IsConstant returns true if the ResourceVariableKind is constant
+func (r ResourceVariableKind) IsConstant() bool {
+	return r == ResourceVariableKindConstant
 }

@@ -138,6 +138,26 @@ var _ = Describe("Omit", func() {
 			g.Expect(cm1.Data).To(HaveKeyWithValue("optional", "now-present"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+		// --- Case 1c: update instance1 back to empty → field should be omitted again ---
+		// This is the interesting SSA edge case: the field was previously managed
+		// by kro (set to "now-present"). When omit() fires, kro drops the field
+		// from the apply payload, so SSA should relinquish ownership and the
+		// field should disappear from the ConfigMap.
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, instance1)
+			g.Expect(err).ToNot(HaveOccurred())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Expect(unstructured.SetNestedField(instance1.Object, "", "spec", "optional")).To(Succeed())
+		Expect(env.Client.Update(ctx, instance1)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: name1, Namespace: namespace}, cm1)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(cm1.Data).To(HaveKeyWithValue("always", "present"))
+			g.Expect(cm1.Data).ToNot(HaveKey("optional"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
 		// --- Case 2: optional is set → field should be present ---
 		name2 := fmt.Sprintf("omit-no-%s", rand.String(4))
 		instance2 := &unstructured.Unstructured{

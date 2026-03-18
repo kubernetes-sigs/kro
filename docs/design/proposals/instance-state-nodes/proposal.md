@@ -1,4 +1,4 @@
-# Instance State Nodes
+# KREP-023: Instance State Nodes
 
 **Author:** Rafael Panazzo ([@pnz1990](https://github.com/pnz1990))
 **Status:** Draft
@@ -106,9 +106,12 @@ It has two fields:
   value is a `${...}` CEL expression. Bare strings (no `${}` wrapper) are a
   validation error.
 
-`includeWhen` and `forEach` are supported. `readyWhen` is not applicable — a
+`includeWhen` is supported. `readyWhen` is not applicable — a
 state node is considered ready as soon as its expressions evaluate and the
-status patch succeeds.
+status patch succeeds. `forEach` is not supported on state nodes in v1 — the
+semantics of writing multiple `storeName`-scoped entries from a single node
+(one per iteration vs. merged into one scope) are non-trivial and left for a
+follow-on proposal once the base primitive is established.
 
 ##### Within-cycle context refresh
 
@@ -170,6 +173,36 @@ On first reconcile, the controller ensures `status: {<storeName>: {}}` is
 injected as a baseline into the CEL context before evaluating state node
 expressions, preventing "no such key" errors.
 
+##### Concurrent writes to the same `storeName`
+
+When two or more state nodes target the same `storeName`, the within-cycle
+context refresh ensures they are not independent overwriting operations. The
+sequence is:
+
+1. The DAG processes state nodes in topological order.
+2. Node A evaluates its `fields` expressions, producing `{step: 1}`. It reads
+   the current `status.<storeName>` from the in-memory instance (e.g., `{}`),
+   merges its computed values into a copy of that map, and issues an
+   `UpdateStatus` call with the merged result: `{step: 1}`.
+3. After the write succeeds, the controller refreshes the in-memory instance
+   with the returned updated object. The instance now reflects
+   `status.<storeName> = {step: 1}`.
+4. Node B evaluates its `fields` expressions, producing `{phase: "reviewing"}`.
+   It reads the current in-memory `status.<storeName>` — which is now `{step: 1}`
+   — merges its values in, and issues `UpdateStatus` with
+   `{step: 1, phase: "reviewing"}`. Node A's fields are preserved because the
+   merge starts from the current live state, not from an empty map.
+
+The key invariant: each state node's `UpdateStatus` call contains the full
+current contents of `status.<storeName>` plus the node's own computed fields.
+No prior node's writes are dropped.
+
+If the `UpdateStatus` call encounters a resource version conflict (a concurrent
+external write to the same instance), the controller retries by re-fetching the
+live CR, re-reading the current `status.<storeName>`, merging the computed
+values, and retrying the call. The computed CEL expressions are not
+re-evaluated on conflict retry — only the merge and the API call are retried.
+
 ##### Idempotency
 
 Before issuing an `UpdateStatus` call, the controller compares the computed
@@ -196,16 +229,11 @@ runtime.
 ##### CEL type checking
 
 State node expressions are compiled in parse-only mode (no type checking) for
-v1. The reason: the typed CEL environment is built from the RGD's `schema`
-section, which has no knowledge of `status.<storeName>.*` fields at compile
-time. Type errors in state expressions are caught at runtime rather than at RGD
-validation time.
-
-A v2 improvement is feasible: at RGD admission time, derive a partial type
-schema from the declared `fields` map across all state nodes targeting the same
-`storeName`. Extend the CEL type environment with these inferred types so that
-expressions referencing `schema.status.<storeName>.*` receive compile-time
-type checking. This is out of scope for v1.
+v1. The typed CEL environment is built from the RGD's `schema` section, which
+has no knowledge of `status.<storeName>.*` fields at compile time. Type errors
+in state expressions are caught at runtime rather than at RGD admission time.
+See the Discussion section for mitigations available to RGD authors and the v2
+path to compile-time type inference.
 
 ##### Requeue behavior
 
@@ -224,20 +252,39 @@ Status writes do not advance `spec.resourceVersion` and do not automatically
 generate a watch event. The explicit requeue is required for the convergence
 loop to make progress.
 
-##### `includeWhen` evaluation context
+##### CEL evaluation context for state nodes
 
-`includeWhen` expressions on state nodes are evaluated using a CEL context that
-includes `schema.status.*` (the standard kro context strips `status` from the
-instance). This is required because the common case for a state node's
-`includeWhen` is checking whether a prior state field exists:
+State nodes use a different CEL environment than all other node types in kro.
 
-```yaml
-includeWhen:
-  - "${!has(schema.status.migration.step) || schema.status.migration.step < schema.spec.totalSteps}"
-```
+kro's standard CEL context deliberately strips `status` from the instance
+object before building the context for `template:`, `readyWhen:`, and
+`includeWhen:` expressions on ordinary resource nodes. The reasoning: child
+resource templates should not depend on `status` (which can be stale or absent
+on first reconcile) — they should depend on `spec` fields that the user controls.
 
-Without this override, the `has()` check would always return false, causing
-state nodes to fire indefinitely.
+State nodes invert this requirement. Their entire purpose is to read prior state
+values from `status.<storeName>.*` and decide whether to fire based on them.
+If the standard stripped context were used:
+
+- `has(schema.status.migration.step)` would always return `false` (status is
+  absent from the context), so `includeWhen` expressions that guard on prior
+  state would always evaluate as if no state had ever been written.
+- A state node with `includeWhen: "${!has(schema.status.foo.counter) || ...}"`
+  would fire on every reconcile regardless of whether `counter` had already
+  reached its target value — producing infinite requeue loops.
+
+To prevent this, state nodes use a status-aware context variant for both their
+`includeWhen` expressions and their `fields` expressions. This context includes
+`schema.status.*` populated from the live instance CR, with all declared
+`storeName` scopes pre-initialized to `{}` if absent (to avoid "no such key"
+errors on first reconcile).
+
+The implication for implementers: the `buildContext()` call site in the DAG
+evaluation loop must branch on node type. State nodes call
+`buildContextWithStatus()` (or equivalent); all other node types continue to
+use the standard `buildContext()` that strips `status`. The two code paths share
+everything except the status injection step — they are not separate environments,
+just different context construction calls.
 
 ## Other solutions considered
 
@@ -291,7 +338,7 @@ spec writes without the GitOps conflict.
 - `state:` virtual node type with `storeName` and `fields`
 - Within-cycle CEL context refresh after each state node write
 - CRD schema auto-injection (`x-kubernetes-preserve-unknown-fields: true`) for each declared `storeName`
-- `includeWhen` and `forEach` support on state nodes (with status-aware CEL context for `includeWhen`)
+- `includeWhen` support on state nodes (with status-aware CEL context)
 - Bootstrap `has()` guard pattern (documented; enforcement via `has()` is by convention)
 - Idempotency: no patch when computed values already match live CR
 - Reserved `storeName` validation at admission time
@@ -305,6 +352,7 @@ spec writes without the GitOps conflict.
 - Transactional atomicity across multiple state nodes in a single `UpdateStatus` call
 - Time-triggered transitions (no timer/TTL primitive)
 - Compile-time type checking for `status.<storeName>.*` fields (v2 improvement)
+- `forEach` on state nodes — the semantics of iterating a state write (one entry per iteration vs. merged result) are non-trivial and deferred to a follow-on proposal
 - Admission-time warning for non-convergent expressions (expression reads and writes the same field without a terminating `includeWhen` gate)
 
 ## Testing strategy
@@ -360,14 +408,33 @@ of scope for this proposal.
 
 **On CEL type safety**
 
-The parse-only compilation for state expressions is a real trade-off. Typos in
-state field names are silent at admission time and manifest as `nil` values at
-runtime. The v2 path is to derive a partial type schema from the `fields` map
-at RGD admission time. This is feasible because the `fields` map is static — it
-is declared in the RGD YAML, not computed at runtime. Inferred types from the
-declared expressions (integer arithmetic → `int`, string concatenation →
-`string`) could populate a supplementary CEL type environment entry for
-`schema.status.<storeName>.*`. This would not require changes to the RGD API.
+The parse-only compilation for state expressions is a real trade-off. In v1,
+a typo in a state field name — `schema.status.migration.stpe` instead of
+`schema.status.migration.step` — passes admission without error and produces
+a silent `nil` value at runtime. The expression evaluates, the write succeeds,
+and the instance reaches a broken state with no indication of what went wrong
+at the RGD level.
+
+Two mitigations available to RGD authors in v1:
+
+1. **Test with a unit test fixture** that applies the RGD to a known instance
+   state and asserts the expected `status.<storeName>.*` values after
+   reconciliation. This is the same pattern used for testing `readyWhen` and
+   `includeWhen` expressions and catches typos before production deployment.
+
+2. **Use `has()` guards defensively**: if an expression references a
+   `schema.status.<storeName>.*` field, guarding with `has()` prevents a nil
+   dereference from propagating and makes the failure mode visible as a missing
+   value rather than a panic.
+
+The v2 path to compile-time type checking is feasible: at RGD admission time,
+derive a partial type schema from the declared `fields` map across all state
+nodes targeting the same `storeName`. The `fields` map is static (declared in
+the RGD YAML, not computed at runtime), so inferred types from the declared
+expressions (integer arithmetic → `int`, string concatenation → `string`) can
+populate a supplementary CEL type environment entry for
+`schema.status.<storeName>.*`. This would not require changes to the RGD API
+surface and could be implemented as a follow-on without breaking existing RGDs.
 
 **On the `status` write mechanics**
 

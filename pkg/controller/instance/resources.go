@@ -22,7 +22,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -60,78 +59,101 @@ func resourceRef(obj *unstructured.Unstructured) string {
 	return obj.GetNamespace() + "/" + obj.GetName()
 }
 
+// reconcileResult tracks state flowing through the reconcileNodes pipeline.
+type reconcileResult struct {
+	resources      []applyset.Resource
+	applier        *applyset.ApplySet
+	applyResult    *applyset.ApplyResult
+	supersetPatch  applyset.Metadata
+	batchMeta      applyset.Metadata
+	unresolvedErr  error
+	clusterMutated bool
+	pruneRetry     bool
+}
+
 // reconcileNodes orchestrates node processing, apply, prune, and state updates.
 func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	rcx.Log.V(2).Info("Reconciling resources")
 
-	applier := c.createApplySet(rcx)
+	r, err := c.buildApplyInputs(rcx)
+	if err != nil {
+		return err
+	}
+	if err := c.applyResources(rcx, r); err != nil {
+		return err
+	}
+	if err := c.pruneIfSafe(rcx, r); err != nil {
+		return err
+	}
+	return c.finalizeState(rcx, r)
+}
 
-	// ---------------------------------------------------------
-	// 1. Process nodes (build applyset inputs)
-	// ---------------------------------------------------------
-	var firstUnresolvedErr error
+// buildApplyInputs processes all nodes and projects applyset metadata.
+func (c *Controller) buildApplyInputs(rcx *ReconcileContext) (*reconcileResult, error) {
+	r := &reconcileResult{
+		applier: c.createApplySet(rcx),
+	}
+
 	resources, err := c.processNodes(rcx)
 	if err != nil {
 		if !runtime.IsDataPending(err) {
-			return err
+			return nil, err
 		}
-		firstUnresolvedErr = err
+		r.unresolvedErr = err
 	}
-	prune := firstUnresolvedErr == nil
+	r.resources = resources
 
-	// ---------------------------------------------------------
-	// 2. Project applyset metadata and patch parent
-	// ---------------------------------------------------------
-	supersetPatch, err := applier.Project(resources)
+	r.supersetPatch, err = r.applier.Project(resources)
 	if err != nil {
-		return rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
+		return nil, rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
 	}
 
-	if err := c.patchInstanceWithApplySetMetadata(rcx, supersetPatch); err != nil {
-		return rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
+	if err := c.patchInstanceWithApplySetMetadata(rcx, r.supersetPatch); err != nil {
+		return nil, rcx.delayedRequeue(fmt.Errorf("failed to patch instance with applyset labels: %w", err))
 	}
 
-	// ---------------------------------------------------------
-	// 3. Apply desired resources
-	// ---------------------------------------------------------
-	result, batchMeta, err := applier.Apply(rcx.Ctx, resources, applyset.ApplyMode{})
+	return r, nil
+}
+
+// applyResources submits the desired resources to the cluster.
+func (c *Controller) applyResources(rcx *ReconcileContext, r *reconcileResult) error {
+	result, batchMeta, err := r.applier.Apply(rcx.Ctx, r.resources, applyset.ApplyMode{})
 	if err != nil {
 		return rcx.delayedRequeue(fmt.Errorf("apply failed: %w", err))
 	}
+	r.applyResult = result
+	r.batchMeta = batchMeta
+	r.clusterMutated = result.HasClusterMutation()
+	return nil
+}
 
-	// clusterMutated tracks any cluster-side change from apply and/or prune.
-	// NOTE: it must start from apply results and only ever be OR-ed with
-	// prune outcomes. Be careful overwrriting this later, as we may drop the
-	// "apply changed the cluster" signal and skip the requeue needed for CEL
-	// refresh.
-	clusterMutated := result.HasClusterMutation()
-
-	// ---------------------------------------------------------
-	// 4. Prune orphans (when desired is fully resolved)
-	// ---------------------------------------------------------
-	pruneNeedsRetry := false
-	//
-	// Prune is intentionally gated by two independent conditions:
-	//   1) prune == true  -> all desired objects were resolvable (no ErrDataPending)
-	//   2) result.Errors() == nil -> apply had no per resource errors
-	//
-	// The split is deliberate: "unresolved desired" is not an apply error, but
-	// pruning in that case would delete still-managed objects because they were
-	// omitted from the apply set. Keeping both checks visible prevents  regressions
-	// where one gate gets removed and prune becomes unsafe.
-	if prune && result.Errors() == nil {
-		pruned, needsRetry, err := c.pruneOrphans(rcx, applier, result, supersetPatch, batchMeta)
-		if err != nil {
-			return err
-		}
-		clusterMutated = clusterMutated || pruned
-		pruneNeedsRetry = pruneNeedsRetry || needsRetry
+// pruneIfSafe deletes orphaned resources when the desired set is fully resolved
+// and apply had no per-resource errors.
+//
+// Prune is intentionally gated by two independent conditions:
+//  1. unresolvedErr == nil -> all desired objects were resolvable (no ErrDataPending)
+//  2. applyResult.Errors() == nil -> apply had no per resource errors
+//
+// The split is deliberate: "unresolved desired" is not an apply error, but
+// pruning in that case would delete still-managed objects because they were
+// omitted from the apply set.
+func (c *Controller) pruneIfSafe(rcx *ReconcileContext, r *reconcileResult) error {
+	if r.unresolvedErr != nil || r.applyResult.Errors() != nil {
+		return nil
 	}
+	pruned, needsRetry, err := c.pruneOrphans(rcx, r.applier, r.applyResult, r.supersetPatch, r.batchMeta)
+	if err != nil {
+		return err
+	}
+	r.clusterMutated = r.clusterMutated || pruned
+	r.pruneRetry = needsRetry
+	return nil
+}
 
-	// ---------------------------------------------------------
-	// 5. Process results and update node state
-	// ---------------------------------------------------------
-	if err := c.processApplyResults(rcx, result); err != nil {
+// finalizeState processes apply results, updates node states, and determines
+// whether the controller needs to requeue.
+func (c *Controller) finalizeState(rcx *ReconcileContext, r *reconcileResult) error {
+	if err := c.processApplyResults(rcx, r.applyResult); err != nil {
 		return rcx.delayedRequeue(err)
 	}
 
@@ -140,13 +162,13 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// before the controller checks it.
 	rcx.StateManager.Update()
 
-	if firstUnresolvedErr != nil {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", firstUnresolvedErr))
+	if r.unresolvedErr != nil {
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", r.unresolvedErr))
 	}
-	if pruneNeedsRetry {
+	if r.pruneRetry {
 		return rcx.delayedRequeue(fmt.Errorf("prune encountered UID conflicts; retrying"))
 	}
-	if clusterMutated {
+	if r.clusterMutated {
 		return rcx.delayedRequeue(fmt.Errorf("cluster mutated"))
 	}
 
@@ -233,6 +255,9 @@ func (c *Controller) createApplySet(rcx *ReconcileContext) *applyset.ApplySet {
 // marker when data is pending), reads existing cluster state where required,
 // and updates runtime observations so other nodes can become resolvable/ready/
 // includable. It produces the applyset.Resource entries for that node.
+//
+// processNode is the single registration point for node state — all process*Node
+// methods return NodeState values, and this method writes them to the StateManager.
 func (c *Controller) processNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
@@ -240,18 +265,17 @@ func (c *Controller) processNode(
 	id := node.Spec.Meta.ID
 	rcx.Log.V(3).Info("Preparing resource", "id", id)
 
-	state := rcx.StateManager.NewNodeState(id)
-
 	ignored, err := node.IsIgnored()
 	if err != nil {
 		if runtime.IsDataPending(err) {
+			rcx.StateManager.SetNodeState(id, inProgressState())
 			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
 		}
-		state.SetError(err)
+		rcx.StateManager.SetNodeState(id, errorState(err))
 		return nil, err
 	}
 	if ignored {
-		state.SetSkipped()
+		rcx.StateManager.SetNodeState(id, skippedState())
 		rcx.Log.V(2).Info("Skipping resource", "id", id, "reason", "ignored")
 		return []applyset.Resource{{
 			ID:        id,
@@ -265,55 +289,47 @@ func (c *Controller) processNode(
 			// Skip prune when any resource is unresolved to avoid deleting
 			// previously managed resources that are still pending resolution.
 			// Returning the unresolved ID signals the caller to disable prune.
+			rcx.StateManager.SetNodeState(id, inProgressState())
 			return nil, fmt.Errorf("gvr %q: %w", node.Spec.Meta.GVR.String(), err)
 		}
-		state.SetError(err)
+		rcx.StateManager.SetNodeState(id, errorState(err))
 		return nil, err
 	}
 
+	var resources []applyset.Resource
+	var nodeState NodeState
+
 	switch node.Spec.Meta.Type {
 	case graph.NodeTypeExternal:
-		if err := c.processExternalRefNode(rcx, node, state, desired); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		nodeState, err = c.processExternalRefNode(rcx, node, desired)
 	case graph.NodeTypeExternalCollection:
-		if err := c.processExternalCollectionNode(rcx, node, state, desired); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		nodeState, err = c.processExternalCollectionNode(rcx, node, desired)
 	case graph.NodeTypeCollection:
-		resources, err := c.processCollectionNode(rcx, node, state, desired)
-		if err != nil {
-			return nil, err
-		}
-		return resources, nil
+		resources, nodeState, err = c.processCollectionNode(rcx, node, desired)
 	case graph.NodeTypeResource:
-		resources, err := c.processRegularNode(rcx, node, state, desired)
-		if err != nil {
-			return nil, err
-		}
-		return resources, nil
+		resources, nodeState, err = c.processRegularNode(rcx, node, desired)
 	case graph.NodeTypeInstance:
 		panic("instance node should not be processed for apply")
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", node.Spec.Meta.Type))
 	}
+
+	rcx.StateManager.SetNodeState(id, nodeState)
+	return resources, err
 }
 
 // processRegularNode builds applyset inputs for a single-resource node.
+// Returns the resources to apply and the resulting node state.
 func (c *Controller) processRegularNode(
 	rcx *ReconcileContext,
 	node *runtime.Node,
-	state *NodeState,
 	desiredList []*unstructured.Unstructured,
-) ([]applyset.Resource, error) {
+) ([]applyset.Resource, NodeState, error) {
 	id := node.Spec.Meta.ID
 	nodeMeta := node.Spec.Meta
 
 	if len(desiredList) == 0 {
-		state.SetReady()
-		return nil, nil
+		return nil, readyState(), nil
 	}
 	desired := desiredList[0]
 
@@ -327,18 +343,16 @@ func (c *Controller) processRegularNode(
 		err = nil
 	}
 	if err != nil {
-		state.SetError(fmt.Errorf("failed to get current state for %s/%s: %w", desired.GetNamespace(), desired.GetName(), err))
-		return nil, state.Err
+		return nil, errorState(fmt.Errorf("failed to get current state for %s/%s: %w", desired.GetNamespace(), desired.GetName(), err)), err
 	}
 
 	if current != nil && current.GetDeletionTimestamp() != nil {
-		state.SetDeleting()
 		rcx.Log.V(1).Info("Resource is terminating; waiting for deletion to complete",
 			"id", id,
 			"namespace", current.GetNamespace(),
 			"name", current.GetName(),
 		)
-		return nil, newResourceDeletingError(id, current)
+		return nil, deletingState(), newResourceDeletingError(id, current)
 	}
 
 	if current != nil {
@@ -354,126 +368,7 @@ func (c *Controller) processRegularNode(
 		Current: current,
 	}
 
-	return []applyset.Resource{resource}, nil
-}
-
-// processCollectionNode builds applyset inputs for a collection node and
-// aligns observed items to desired items.
-func (c *Controller) processCollectionNode(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-	expandedResources []*unstructured.Unstructured,
-) ([]applyset.Resource, error) {
-	id := node.Spec.Meta.ID
-	nodeMeta := node.Spec.Meta
-	gvr := nodeMeta.GVR
-
-	collectionSize := len(expandedResources)
-
-	// LIST all existing collection items with single call (more efficient than N GETs)
-	existingItems, err := c.listCollectionItems(rcx, gvr, id)
-	if err != nil {
-		state.SetError(fmt.Errorf("failed to list collection items: %w", err))
-		return nil, state.Err
-	}
-
-	// Empty collection: observed is set (possibly with orphans to prune), mark ready.
-	if collectionSize == 0 {
-		node.SetObserved(existingItems)
-		state.SetReady()
-		return nil, nil
-	}
-
-	// Build lookup map for current items keyed by namespace/name.
-	existingByKey := make(map[string]*unstructured.Unstructured, len(existingItems))
-	for _, current := range existingItems {
-		key := current.GetNamespace() + "/" + current.GetName()
-		existingByKey[key] = current
-	}
-
-	// Register a single collection watch for the forEach node. The selector
-	// matches all items owned by this instance + node, which is the same
-	// selector listCollectionItems uses to LIST them.
-	selector := labels.SelectorFromSet(labels.Set{
-		metadata.InstanceIDLabel: string(rcx.Instance.GetUID()),
-		metadata.NodeIDLabel:     id,
-	})
-	requestCollectionWatch(rcx, id, gvr, rcx.Instance.GetNamespace(), selector)
-
-	for _, expandedResource := range expandedResources {
-		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
-		current := existingByKey[key]
-		if current != nil && current.GetDeletionTimestamp() != nil {
-			state.SetDeleting()
-			rcx.Log.V(1).Info("Collection resource is terminating; waiting for deletion to complete",
-				"id", id,
-				"namespace", current.GetNamespace(),
-				"name", current.GetName(),
-			)
-			return nil, newResourceDeletingError(id, current)
-		}
-	}
-
-	// Pass unordered observed items to runtime; it will align them to desired
-	// order by identity.
-	node.SetObserved(existingItems)
-
-	// Build resources list for apply
-	resources := make([]applyset.Resource, 0, collectionSize)
-	for i, expandedResource := range expandedResources {
-		// Apply decorator labels with collection info
-		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
-		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
-
-		// Look up current revision from LIST results
-		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()
-		current := existingByKey[key]
-
-		expandedID := fmt.Sprintf("%s-%d", id, i)
-		resources = append(resources, applyset.Resource{
-			ID:      expandedID,
-			Object:  expandedResource,
-			Current: current,
-		})
-	}
-
-	return resources, nil
-}
-
-// listCollectionItems returns existing collection items.
-// Uses a single LIST with label selector instead of N individual GETs.
-func (c *Controller) listCollectionItems(
-	rcx *ReconcileContext,
-	gvr schema.GroupVersionResource,
-	nodeID string,
-) ([]*unstructured.Unstructured, error) {
-	// Filter by both instance UID and node ID for precise matching
-	instanceUID := string(rcx.Instance.GetUID())
-	selector := fmt.Sprintf("%s=%s,%s=%s",
-		metadata.InstanceIDLabel, instanceUID,
-		metadata.NodeIDLabel, nodeID,
-	)
-
-	// List across all namespaces - collection items may span namespaces
-	list, err := rcx.Client.Resource(gvr).List(rcx.Ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	items := make([]*unstructured.Unstructured, len(list.Items))
-	for i := range list.Items {
-		items[i] = &list.Items[i]
-	}
-	return items, nil
-}
-
-// CollectionInfo holds collection item metadata for decorator.
-type CollectionInfo struct {
-	Index int
-	Size  int
+	return []applyset.Resource{resource}, inProgressState(), nil
 }
 
 // applyDecoratorLabels merges tool labels and adds node/collection identifiers.
@@ -537,58 +432,6 @@ func (c *Controller) patchInstanceWithApplySetMetadata(rcx *ReconcileContext, me
 		},
 	)
 	return err
-}
-
-// processExternalRefNode reads an external ref object and updates node state.
-func (c *Controller) processExternalRefNode(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-	desiredList []*unstructured.Unstructured,
-) error {
-	id := node.Spec.Meta.ID
-	if len(desiredList) == 0 {
-		state.SetSkipped()
-		return nil
-	}
-	desired := desiredList[0]
-
-	// Register watch BEFORE reading the external resource.
-	requestWatch(rcx, id, node.Spec.Meta.GVR, desired.GetName(), desired.GetNamespace())
-
-	// External refs are read-only: fetch and push into runtime for dependency/readiness.
-	ri := resourceClientFor(rcx, node.Spec.Meta, desired.GetNamespace())
-	actual, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
-			return nil
-		}
-		state.SetError(fmt.Errorf("external ref get %s %s/%s: %w",
-			desired.GroupVersionKind().String(), desired.GetNamespace(), desired.GetName(), err))
-		return state.Err
-	}
-
-	rcx.Log.V(2).Info("External reference resolved",
-		"id", id,
-		"gvk", desired.GroupVersionKind().String(),
-		"namespace", actual.GetNamespace(),
-		"name", actual.GetName(),
-	)
-
-	node.SetObserved([]*unstructured.Unstructured{actual})
-
-	if err := node.CheckReadiness(); err != nil {
-		if errors.Is(err, runtime.ErrWaitingForReadiness) {
-			state.SetWaitingForReadiness(fmt.Errorf("waiting for external reference %q: %w", id, err))
-			return nil
-		}
-		state.SetError(err)
-		return err
-	}
-	state.SetReady()
-
-	return nil
 }
 
 // processApplyResults updates runtime observations and node states from apply results.
@@ -658,54 +501,6 @@ func (c *Controller) processApplyResults(
 	return nil
 }
 
-// updateCollectionFromApplyResults maps per-item apply results back to the
-// collection node and refreshes the observed list in runtime.
-func (c *Controller) updateCollectionFromApplyResults(
-	_ *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-	byID map[string]applyset.ApplyResultItem,
-) error {
-	nodeID := node.Spec.Meta.ID
-	// Re-evaluate desired for collections when processing apply results:
-	// - Any non-pending error is a real failure (bad expression, missing field, etc.),
-	//   so we mark ERROR and stop.
-	// - An empty resolved collection (len==0) is correct by design and is treated
-	//   as SYNCED/ready because there is nothing to apply.
-	// - Otherwise we expect item-level apply results and proceed to reconcile them.
-	desiredItems, err := node.GetDesired()
-	if err != nil {
-		if runtime.IsDataPending(err) {
-			return nil
-		}
-		state.SetError(err)
-		return err
-	}
-	if len(desiredItems) == 0 {
-		state.SetReady()
-		return nil
-	}
-
-	observedItems := make([]*unstructured.Unstructured, 0, len(desiredItems))
-
-	for i := range desiredItems {
-		expandedID := fmt.Sprintf("%s-%d", nodeID, i)
-		if item, ok := byID[expandedID]; ok {
-			if item.Error != nil {
-				state.SetError(fmt.Errorf("collection item %d: %w", i, item.Error))
-				return nil
-			}
-			if item.Observed != nil {
-				observedItems = append(observedItems, item.Observed)
-			}
-		}
-	}
-
-	node.SetObserved(observedItems)
-	setStateFromReadiness(node, state)
-	return nil
-}
-
 // setStateFromReadiness evaluates node readiness and updates the node state
 // to synced, waiting, or error.
 func setStateFromReadiness(node *runtime.Node, state *NodeState) {
@@ -718,96 +513,6 @@ func setStateFromReadiness(node *runtime.Node, state *NodeState) {
 		return
 	}
 	state.SetReady()
-}
-
-// processExternalCollectionNode reads external resources matching a label selector
-// and updates node state. The selector is extracted from the resolved template
-// (desired), which was resolved by the standard template pipeline.
-func (c *Controller) processExternalCollectionNode(
-	rcx *ReconcileContext,
-	node *runtime.Node,
-	state *NodeState,
-	desired []*unstructured.Unstructured,
-) error {
-	id := node.Spec.Meta.ID
-	nodeMeta := node.Spec.Meta
-
-	if len(desired) == 0 {
-		state.SetSkipped()
-		return nil
-	}
-
-	// Extract the resolved selector from the template and convert to labels.Selector.
-	// A missing selector means "select everything" (unfiltered list).
-	var selector labels.Selector
-	selectorRaw, found, err := unstructured.NestedMap(desired[0].Object, "metadata", "selector")
-	if err != nil || !found {
-		selector = labels.Everything()
-	} else {
-		ls := &metav1.LabelSelector{}
-		if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
-			state.SetError(fmt.Errorf("failed to convert selector for %s: %w", id, err))
-			return state.Err
-		}
-		selector, err = metav1.LabelSelectorAsSelector(ls)
-		if err != nil {
-			state.SetError(fmt.Errorf("invalid label selector for %s: %w", id, err))
-			return state.Err
-		}
-	}
-
-	// Get namespace from the resolved template. For cluster-scoped resources,
-	// use empty namespace so the LIST is not scoped to a single namespace.
-	ns := desired[0].GetNamespace()
-	if !nodeMeta.Namespaced {
-		ns = ""
-	} else if ns == "" {
-		// if no namespace is specified, use the namespace of the instance.
-		ns = rcx.Instance.GetNamespace()
-	}
-
-	// Register collection watch with the coordinator.
-	requestCollectionWatch(rcx, id, nodeMeta.GVR, ns, selector)
-
-	// LIST external resources matching the selector.
-	var list *unstructured.UnstructuredList
-	if ns != "" {
-		list, err = rcx.Client.Resource(nodeMeta.GVR).Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
-			LabelSelector: selector.String(),
-		})
-	} else {
-		list, err = rcx.Client.Resource(nodeMeta.GVR).List(rcx.Ctx, metav1.ListOptions{
-			LabelSelector: selector.String(),
-		})
-	}
-	if err != nil {
-		state.SetError(fmt.Errorf("failed to list external collection %s: %w", id, err))
-		return state.Err
-	}
-
-	items := make([]*unstructured.Unstructured, len(list.Items))
-	for i := range list.Items {
-		items[i] = &list.Items[i]
-	}
-
-	node.SetObserved(items)
-
-	if err := node.CheckReadiness(); err != nil {
-		if errors.Is(err, runtime.ErrWaitingForReadiness) {
-			state.SetWaitingForReadiness(fmt.Errorf("waiting for external collection %q: %w", id, err))
-			return nil
-		}
-		state.SetError(err)
-		return err
-	}
-	state.SetReady()
-
-	rcx.Log.V(2).Info("External collection resolved",
-		"id", id,
-		"gvr", nodeMeta.GVR.String(),
-		"count", len(items),
-	)
-	return nil
 }
 
 // requestWatch registers a scalar watch request with the coordinator.

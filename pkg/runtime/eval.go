@@ -22,27 +22,12 @@ import (
 
 // evalExprAny evaluates an expression using its pre-compiled Program and caches the result.
 func evalExprAny(expr *expressionEvaluationState, ctx map[string]any) (any, error) {
-	if expr.Resolved {
-		return expr.ResolvedValue, nil
-	}
-
-	val, err := expr.Expression.Eval(filterContext(ctx, expr.Expression.References))
-	if err != nil {
-		return nil, err
-	}
-
-	expr.Resolved = true
-	expr.ResolvedValue = val
-	return val, nil
+	return expr.EvalCached(ctx)
 }
 
 // evalBoolExpr evaluates an expression that should return bool.
 func evalBoolExpr(expr *expressionEvaluationState, ctx map[string]any) (bool, error) {
-	if expr.Resolved {
-		return expr.ResolvedValue.(bool), nil
-	}
-
-	val, err := expr.Expression.Eval(filterContext(ctx, expr.Expression.References))
+	val, err := expr.EvalCached(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -53,19 +38,12 @@ func evalBoolExpr(expr *expressionEvaluationState, ctx map[string]any) (bool, er
 	if !ok {
 		return false, fmt.Errorf("expression %q did not return bool", expr.Expression.UserExpression())
 	}
-
-	expr.Resolved = true
-	expr.ResolvedValue = result
 	return result, nil
 }
 
 // evalListExpr evaluates an expression that should return a list.
 func evalListExpr(expr *expressionEvaluationState, ctx map[string]any) ([]any, error) {
-	if expr.Resolved {
-		return expr.ResolvedValue.([]any), nil
-	}
-
-	val, err := expr.Expression.Eval(filterContext(ctx, expr.Expression.References))
+	val, err := expr.EvalCached(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +54,6 @@ func evalListExpr(expr *expressionEvaluationState, ctx map[string]any) ([]any, e
 	if !ok {
 		return nil, fmt.Errorf("expression %q did not return a list", expr.Expression.UserExpression())
 	}
-
-	expr.Resolved = true
-	expr.ResolvedValue = result
 	return result, nil
 }
 

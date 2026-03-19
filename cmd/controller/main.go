@@ -239,9 +239,8 @@ func main() {
 		os.Exit(1)
 	}
 	crdInformerFactory := apiextensionsinformers.NewSharedInformerFactory(apiextensionsClientset, 0)
-	crdResolver := schemaresolver.NewCRDSchemaResolver(
-		crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions(),
-	)
+	crdInformer := crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions()
+	crdResolver := schemaresolver.NewCRDSchemaResolver(crdInformer)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		crdInformerFactory.Start(ctx.Done())
 		crdInformerFactory.WaitForCacheSync(ctx.Done())
@@ -270,6 +269,7 @@ func main() {
 		dc,
 		resourceGraphDefinitionGraphBuilder,
 		instanceRequeueInterval,
+		crdInformer.Informer(),
 		resourceGraphDefinitionConcurrentReconciles,
 		graph.RGDConfig{
 			MaxCollectionSize:          rgdMaxCollectionSize,

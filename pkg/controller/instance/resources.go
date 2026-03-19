@@ -485,7 +485,7 @@ func (c *Controller) applyDecoratorLabels(
 
 	// Merge tool labels from labeler. On conflict (duplicate keys), log and use
 	// instance labels only - this avoids panic from nil dereference.
-	instanceLabeler := metadata.NewInstanceLabeler(rcx.Instance)
+	instanceLabeler := metadata.NewInstanceLabeler(rcx.Instance, c.rgd.Instance.Meta.Namespaced)
 	nodeLabeler := metadata.NewNodeLabeler()
 	merged, err := instanceLabeler.Merge(nodeLabeler)
 	if err != nil {

@@ -165,16 +165,19 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 // and name of the instance that was reconciled to create the resource.
 // It also includes the instance's GVK to allow child
 // resource handlers to filter events by parent instance type.
-func NewInstanceLabeler(instance *unstructured.Unstructured) GenericLabeler {
+func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) GenericLabeler {
 	gvk := instance.GroupVersionKind()
-	return map[string]string{
-		InstanceIDLabel:        string(instance.GetUID()),
-		InstanceLabel:          instance.GetName(),
-		InstanceNamespaceLabel: instance.GetNamespace(),
-		InstanceGroupLabel:     gvk.Group,
-		InstanceVersionLabel:   gvk.Version,
-		InstanceKindLabel:      gvk.Kind,
+	labels := map[string]string{
+		InstanceIDLabel:      string(instance.GetUID()),
+		InstanceLabel:        instance.GetName(),
+		InstanceGroupLabel:   gvk.Group,
+		InstanceVersionLabel: gvk.Version,
+		InstanceKindLabel:    gvk.Kind,
 	}
+	if namespaced {
+		labels[InstanceNamespaceLabel] = instance.GetNamespace()
+	}
+	return labels
 }
 
 // NewNodeLabeler returns a new labeler for child resources

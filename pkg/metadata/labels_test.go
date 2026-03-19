@@ -256,7 +256,7 @@ func TestNewInstanceLabeler(t *testing.T) {
 			Kind:    kind,
 		})
 
-		labeler := NewInstanceLabeler(obj)
+		labeler := NewInstanceLabeler(obj, true)
 		assert.Equal(t, GenericLabeler{
 			InstanceLabel:          name,
 			InstanceNamespaceLabel: namespace,
@@ -264,6 +264,32 @@ func TestNewInstanceLabeler(t *testing.T) {
 			InstanceGroupLabel:     group,
 			InstanceVersionLabel:   version,
 			InstanceKindLabel:      kind,
+		}, labeler)
+	})
+
+	t.Run("NewInstanceLabeler_ClusterScoped", func(t *testing.T) {
+		name := "instance-name"
+		uid := types.UID("instance-uid")
+		group := "apps.example.com"
+		version := "v1"
+		kind := "MyApp"
+
+		obj := &unstructured.Unstructured{}
+		obj.SetName(name)
+		obj.SetUID(uid)
+		obj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   group,
+			Version: version,
+			Kind:    kind,
+		})
+
+		labeler := NewInstanceLabeler(obj, false)
+		assert.Equal(t, GenericLabeler{
+			InstanceLabel:        name,
+			InstanceIDLabel:      string(uid),
+			InstanceGroupLabel:   group,
+			InstanceVersionLabel: version,
+			InstanceKindLabel:    kind,
 		}, labeler)
 	})
 }

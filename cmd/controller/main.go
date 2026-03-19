@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"strings"
@@ -26,10 +27,14 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
 
 	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -37,6 +42,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
@@ -224,11 +230,39 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(restConfig, set.HTTPClient())
+	// Schema resolution: core → CRD informer → fallback discovery.
+	coreResolver := schemaresolver.DefaultCoreResolver()
+
+	apiextensionsClientset, err := apiextensionsclient.NewForConfigAndClient(restConfig, set.HTTPClient())
 	if err != nil {
-		setupLog.Error(err, "unable to create resource graph definition graph builder")
+		setupLog.Error(err, "unable to create apiextensions clientset")
 		os.Exit(1)
 	}
+	crdInformerFactory := apiextensionsinformers.NewSharedInformerFactory(apiextensionsClientset, 0)
+	crdResolver := schemaresolver.NewCRDSchemaResolver(
+		crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions(),
+	)
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		crdInformerFactory.Start(ctx.Done())
+		crdInformerFactory.WaitForCacheSync(ctx.Done())
+		<-ctx.Done()
+		crdInformerFactory.Shutdown()
+		return nil
+	})); err != nil {
+		setupLog.Error(err, "unable to register CRD informer factory with manager")
+		os.Exit(1)
+	}
+
+	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, set.HTTPClient())
+	if err != nil {
+		setupLog.Error(err, "unable to create fallback schema resolver")
+		os.Exit(1)
+	}
+
+	resourceGraphDefinitionGraphBuilder := graph.NewBuilder(
+		schemaresolver.NewChainedResolver(coreResolver, crdResolver, fallbackResolver),
+		set.RESTMapper(),
+	)
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
 		set,

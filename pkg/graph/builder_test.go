@@ -15,8 +15,6 @@
 package graph
 
 import (
-	"net/http"
-	"os"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -28,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
@@ -2197,30 +2194,10 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 }
 
 func TestNewBuilder(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  *rest.Config
-		client  *http.Client
-		wantErr string
-	}{
-		{name: "success", config: &rest.Config{}, client: &http.Client{}},
-		{name: "schema resolver creation failure", config: &rest.Config{Host: "://bad"}, client: &http.Client{}, wantErr: "failed to create schema resolver"},
-		{name: "rest mapper creation failure", config: &rest.Config{}, client: nil, wantErr: "failed to create dynamic REST mapper"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			builder, err := NewBuilder(tt.config, tt.client)
-			if tt.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.NotNil(t, builder)
-		})
-	}
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := NewBuilder(fakeResolver, restMapper)
+	assert.NotNil(t, builder)
 }
 
 func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {

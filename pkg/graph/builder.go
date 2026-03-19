@@ -16,7 +16,6 @@ package graph
 
 import (
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 
@@ -29,10 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi"
-	"k8s.io/apiserver/pkg/cel/openapi/resolver"
-	"k8s.io/client-go/rest"
+	openapiresolver "k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/kube-openapi/pkg/validation/spec"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
@@ -45,30 +42,20 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
-	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
 
-// NewBuilder creates a new GraphBuilder instance.
-func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, error) {
-	schemaResolver, err := schemaresolver.NewCombinedResolver(clientConfig, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema resolver: %w", err)
-	}
-
-	rm, err := apiutil.NewDynamicRESTMapper(clientConfig, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
-	}
-
-	rgBuilder := &Builder{
+// NewBuilder creates a new Builder that uses the given schema resolver and
+// REST mapper. The caller is responsible for constructing and starting any
+// resolvers that require a lifecycle (e.g. CRD informer).
+func NewBuilder(schemaResolver openapiresolver.SchemaResolver, restMapper meta.RESTMapper) *Builder {
+	return &Builder{
 		schemaResolver: schemaResolver,
-		restMapper:     rm,
+		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 	}
-	return rgBuilder, nil
 }
 
 // Builder is an object that is responsible for constructing and managing
@@ -96,7 +83,7 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 // cluster.
 type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
-	schemaResolver resolver.SchemaResolver
+	schemaResolver openapiresolver.SchemaResolver
 	restMapper     meta.RESTMapper
 	// celCache holds cached CEL compilation artifacts (DeclTypes, typed
 	// environments, field type maps) scoped to this Builder instance.

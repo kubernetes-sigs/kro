@@ -15,45 +15,74 @@
 package resolver
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
-	"k8s.io/apiextensions-apiserver/pkg/generated/openapi"
-	"k8s.io/apiserver/pkg/cel/openapi/resolver"
+	generatedopenapi "k8s.io/apiextensions-apiserver/pkg/generated/openapi"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	openapiresolver "k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-// NewCombinedResolver creates a new schema resolver that can resolve both core and client types.
-func NewCombinedResolver(clientConfig *rest.Config, httpClient *http.Client) (resolver.SchemaResolver, error) {
-	// Create a regular discovery client first
+// ChainedResolver tries a sequence of SchemaResolvers in order, falling
+// through on ErrSchemaNotFound.
+type ChainedResolver struct {
+	resolvers []openapiresolver.SchemaResolver
+}
+
+// NewChainedResolver creates a ChainedResolver that tries the given resolvers
+// in order. The caller decides the resolution order.
+func NewChainedResolver(resolvers ...openapiresolver.SchemaResolver) *ChainedResolver {
+	return &ChainedResolver{resolvers: resolvers}
+}
+
+// ResolveSchema tries each resolver in order, falling back only on ErrSchemaNotFound.
+func (r *ChainedResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Schema, error) {
+	for _, res := range r.resolvers {
+		s, err := res.ResolveSchema(gvk)
+		if err == nil {
+			return s, nil
+		}
+		if errors.Is(err, openapiresolver.ErrSchemaNotFound) {
+			continue
+		}
+		return nil, err
+	}
+	return nil, openapiresolver.ErrSchemaNotFound
+}
+
+// DefaultCoreResolver creates a resolver for built-in Kubernetes types (Pods,
+// Services, Deployments, etc.) using compiled-in OpenAPI definitions.
+func DefaultCoreResolver() openapiresolver.SchemaResolver {
+	return openapiresolver.NewDefinitionsSchemaResolver(
+		generatedopenapi.GetOpenAPIDefinitions,
+		scheme.Scheme,
+	)
+}
+
+const (
+	// DefaultFallbackMaxSize is the default LRU cache size for the fallback resolver.
+	DefaultFallbackMaxSize = 500
+	// DefaultFallbackTTL is the default TTL for cached schemas in the fallback resolver.
+	DefaultFallbackTTL = 5 * time.Minute
+)
+
+// DefaultFallbackResolver creates a TTL-cached discovery resolver that serves
+// as a fallback for schemas not resolved by the core or CRD resolvers. This
+// covers aggregated API types (e.g. metrics-server, custom API servers) and
+// also acts as a warm-up fallback while the CRD informer cache is cold.
+func DefaultFallbackResolver(clientConfig *rest.Config, httpClient *http.Client) (*TTLCachedSchemaResolver, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfigAndClient(clientConfig, httpClient)
 	if err != nil {
 		return nil, err
 	}
-
-	// ClientResolver is a resolver that uses the discovery client to resolve
-	// client types. It is used to resolve types that are not known at compile
-	// time a.k.a present in:
-	// https://github.com/kubernetes/apiextensions-apiserver/blob/master/pkg/generated/openapi/zz_generated.openapi.go
-	clientResolver := &resolver.ClientDiscoveryResolver{
-		Discovery: discoveryClient,
-	}
-
-	cachedResolver := NewTTLCachedSchemaResolver(
-		clientResolver,
-		500,           // maxSize: enough for 200 CRDs × 2-3 versions
-		5*time.Minute, // TTL: balance between freshness and performance
-	)
-
-	// CoreResolver is a resolver that uses the OpenAPI definitions to resolve
-	// core types. It is used to resolve types that are known at compile time.
-	coreResolver := resolver.NewDefinitionsSchemaResolver(
-		openapi.GetOpenAPIDefinitions,
-		scheme.Scheme,
-	)
-
-	combinedResolver := coreResolver.Combine(cachedResolver)
-	return combinedResolver, nil
+	return NewTTLCachedSchemaResolver(
+		&openapiresolver.ClientDiscoveryResolver{Discovery: discoveryClient},
+		DefaultFallbackMaxSize,
+		DefaultFallbackTTL,
+	), nil
 }

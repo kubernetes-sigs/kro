@@ -69,15 +69,15 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// ---------------------------------------------------------
 	// 1. Process nodes (build applyset inputs)
 	// ---------------------------------------------------------
-	var lastUnresolvedErr error
+	var firstUnresolvedErr error
 	resources, err := c.processNodes(rcx)
 	if err != nil {
 		if !runtime.IsDataPending(err) {
 			return err
 		}
-		lastUnresolvedErr = err
+		firstUnresolvedErr = err
 	}
-	prune := lastUnresolvedErr == nil
+	prune := firstUnresolvedErr == nil
 
 	// ---------------------------------------------------------
 	// 2. Project applyset metadata and patch parent
@@ -140,8 +140,8 @@ func (c *Controller) reconcileNodes(rcx *ReconcileContext) error {
 	// before the controller checks it.
 	rcx.StateManager.Update()
 
-	if lastUnresolvedErr != nil {
-		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", lastUnresolvedErr))
+	if firstUnresolvedErr != nil {
+		return rcx.delayedRequeue(fmt.Errorf("waiting for unresolved resource: %w", firstUnresolvedErr))
 	}
 	if pruneNeedsRetry {
 		return rcx.delayedRequeue(fmt.Errorf("prune encountered UID conflicts; retrying"))
@@ -165,19 +165,22 @@ func (c *Controller) processNodes(
 
 	var resources []applyset.Resource
 
-	var lastUnresolvedErr error
+	var firstUnresolvedErr error
 	for _, node := range nodes {
 		resourcesToAdd, err := c.processNode(rcx, node)
 		if err != nil {
 			if !runtime.IsDataPending(err) {
 				return nil, err
 			}
-			lastUnresolvedErr = err
+			// surface the root error
+			if firstUnresolvedErr == nil {
+				firstUnresolvedErr = err
+			}
 		}
 		resources = append(resources, resourcesToAdd...)
 	}
 
-	return resources, lastUnresolvedErr
+	return resources, firstUnresolvedErr
 }
 
 // pruneOrphans deletes previously managed resources that are not in the current

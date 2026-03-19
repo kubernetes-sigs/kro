@@ -36,6 +36,7 @@ import (
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -560,6 +561,179 @@ func TestKeyFromGVR(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := keyFromGVR(tt.gvr)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	makeObj := func(name, ns string, gen int64, labels map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetName(name)
+		obj.SetNamespace(ns)
+		obj.SetGeneration(gen)
+		obj.SetLabels(labels)
+		return obj
+	}
+
+	tests := []struct {
+		name        string
+		oldObj      *v1.PartialObjectMetadata
+		newObj      *v1.PartialObjectMetadata
+		expectQueue int
+	}{
+		{
+			name:        "generation changed — enqueues",
+			oldObj:      makeObj("a", "default", 1, nil),
+			newObj:      makeObj("a", "default", 2, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation — skips",
+			oldObj:      makeObj("a", "default", 5, nil),
+			newObj:      makeObj("a", "default", 5, nil),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation but reconcile re-enabled — enqueues",
+			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			newObj:      makeObj("a", "default", 5, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation, reconcile stays disabled — skips",
+			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation, reconcile disabled on new only — skips",
+			oldObj:      makeObj("a", "default", 5, nil),
+			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation, reconcile re-enabled case-insensitive — enqueues",
+			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "Disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "true"}),
+			expectQueue: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1.AddMetaToScheme(scheme))
+			client := fake.NewSimpleMetadataClient(scheme)
+			mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+			dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, EventUpdate)
+			assert.Equal(t, tt.expectQueue, dc.queue.Len())
+		})
+	}
+}
+
+func TestEnqueueFromInformer_AddAndDelete(t *testing.T) {
+	// Add and Delete pass nil for oldObject — generation skip is bypassed,
+	// so these events should always enqueue.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	obj := &v1.PartialObjectMetadata{}
+	obj.SetName("a")
+	obj.SetNamespace("default")
+	obj.SetGeneration(1)
+
+	// AddFunc passes nil as oldObject — should enqueue
+	dc.enqueueFromInformer(parentGVR, nil, obj, EventAdd)
+	assert.Equal(t, 1, dc.queue.Len(), "Add events should be enqueued")
+
+	// Drain
+	item, _ := dc.queue.Get()
+	dc.queue.Done(item)
+	dc.queue.Forget(item)
+
+	// DeleteFunc passes nil as oldObject — should enqueue
+	dc.enqueueFromInformer(parentGVR, nil, obj, EventDelete)
+	assert.Equal(t, 1, dc.queue.Len(), "Delete events should be enqueued")
+}
+
+func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
+	// If newObject is nil, meta.Accessor fails and we return early.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	dc.enqueueFromInformer(parentGVR, nil, nil, EventDelete)
+	assert.Equal(t, 0, dc.queue.Len(), "nil newObject should cause early return")
+}
+
+func TestReconcileEnabledInUpdate(t *testing.T) {
+	makeObj := func(labels map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetLabels(labels)
+		return obj
+	}
+
+	tests := []struct {
+		name   string
+		old    map[string]string
+		new    map[string]string
+		expect bool
+	}{
+		{
+			name:   "disabled -> enabled (label removed)",
+			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			new:    nil,
+			expect: true,
+		},
+		{
+			name:   "disabled -> enabled (label changed)",
+			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			new:    map[string]string{metadata.InstanceReconcileLabel: "enabled"},
+			expect: true,
+		},
+		{
+			name:   "disabled -> disabled",
+			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			new:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			expect: false,
+		},
+		{
+			name:   "enabled -> disabled",
+			old:    nil,
+			new:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			expect: false,
+		},
+		{
+			name:   "no labels on either",
+			old:    nil,
+			new:    nil,
+			expect: false,
+		},
+		{
+			name:   "case insensitive disabled",
+			old:    map[string]string{metadata.InstanceReconcileLabel: "DISABLED"},
+			new:    map[string]string{metadata.InstanceReconcileLabel: "true"},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := reconcileEnabledInUpdate(makeObj(tt.old), makeObj(tt.new))
+			assert.Equal(t, tt.expect, result)
 		})
 	}
 }

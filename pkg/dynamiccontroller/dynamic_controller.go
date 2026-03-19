@@ -68,6 +68,7 @@ import (
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -77,6 +78,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -374,14 +376,14 @@ func (dc *DynamicController) Register(
 
 		// Register event handler directly on the parent informer.
 		parentHandler := cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				dc.enqueueFromInformer(parent, obj, EventAdd)
+			AddFunc: func(obj any) {
+				dc.enqueueFromInformer(parent, nil, obj, EventAdd)
 			},
-			UpdateFunc: func(_, newObj interface{}) {
-				dc.enqueueFromInformer(parent, newObj, EventUpdate)
+			UpdateFunc: func(oldObj, newObj any) {
+				dc.enqueueFromInformer(parent, oldObj, newObj, EventUpdate)
 			},
-			DeleteFunc: func(obj interface{}) {
-				dc.enqueueFromInformer(parent, obj, EventDelete)
+			DeleteFunc: func(obj any) {
+				dc.enqueueFromInformer(parent, nil, obj, EventDelete)
 			},
 		}
 		reg, err := inf.AddEventHandler(parentHandler)
@@ -423,18 +425,49 @@ func (dc *DynamicController) Register(
 }
 
 // enqueueFromInformer converts a raw informer callback into an enqueue call.
-func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionResource, obj interface{}, eventType EventType) {
-	mobj, err := meta.Accessor(obj)
+// For Update events it compares generations and skips if unchanged (unless
+// the reconcile-disabled label was just removed).
+func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionResource, oldObject, newObject any, eventType EventType) {
+	newMeta, err := meta.Accessor(newObject)
 	if err != nil {
 		dc.log.Error(err, "Failed to get meta for parent object")
 		return
 	}
+
+	// Generation-based skip only applies to updates where we have both old and new objects.
+	if eventType == EventUpdate && oldObject != nil {
+		oldMeta, err := meta.Accessor(oldObject)
+		if err != nil {
+			dc.log.Error(err, "Failed to get meta for old parent object")
+			return
+		}
+		if newMeta.GetGeneration() == oldMeta.GetGeneration() {
+			// Normally skip, but we should enqueue if the oldMeta had the reconcile disabled label, and the newMeta doesn't.
+			// This covers an edge case where the user only updates the reconcile label from disabled to enabled,
+			// which will trigger this func, but the generation won't change since it's a metadata-only update.
+			// We want to make sure this transition still triggers a reconciliation.
+			if !reconcileEnabledInUpdate(oldMeta, newMeta) {
+				dc.log.V(2).Info("Skipping update due to unchanged generation",
+					"name", newMeta.GetName(), "namespace", newMeta.GetNamespace(), "generation", newMeta.GetGeneration())
+				return
+			}
+		}
+	}
+
 	dc.enqueueParent(parentGVR, Event{
 		Type:      eventType,
 		GVR:       parentGVR,
-		Name:      mobj.GetName(),
-		Namespace: mobj.GetNamespace(),
+		Name:      newMeta.GetName(),
+		Namespace: newMeta.GetNamespace(),
 	})
+}
+
+func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
+	oldLbls := oldMeta.GetLabels()
+	newLbls := newMeta.GetLabels()
+	oldIsDisabled := strings.EqualFold(oldLbls[metadata.InstanceReconcileLabel], "disabled")
+	newIsDisabled := strings.EqualFold(newLbls[metadata.InstanceReconcileLabel], "disabled")
+	return oldIsDisabled && !newIsDisabled
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.

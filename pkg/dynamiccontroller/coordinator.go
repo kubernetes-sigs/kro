@@ -33,8 +33,6 @@ type InstanceWatcher interface {
 	//
 	// For scalar resources: set Name + Namespace.
 	// For collections: set Selector + Namespace.
-	//
-	// Call Watch() BEFORE operating on the resource to avoid event gaps.
 	Watch(req WatchRequest) error
 
 	// Done signals that all Watch() calls for this reconciliation cycle
@@ -77,23 +75,32 @@ type instanceKey struct {
 	instance  types.NamespacedName
 }
 
-// instanceState tracks watch requests for a single instance across
-// reconciliation cycles. The coordinator uses current vs previous to
-// detect and clean up stale requests.
-type instanceState struct {
-	current  map[string]*WatchRequest // keyed by nodeID
-	previous map[string]*WatchRequest // from last Done() cycle
+// watchIdentity identifies a watch by its content (GVR + target).
+// Used for diffing between reconciliation cycles instead of nodeID-based identity.
+type watchIdentity struct {
+	gvr       schema.GroupVersionResource
+	name      string
+	namespace string
+	selector  string // Selector.String() for collections, "" for scalar
 }
 
-// scalarEntry is a single scalar watch in the reverse index.
-type scalarEntry struct {
-	nodeID string
-	key    instanceKey
+func identityOf(r WatchRequest) watchIdentity {
+	sel := ""
+	if r.Selector != nil {
+		sel = r.Selector.String()
+	}
+	return watchIdentity{gvr: r.GVR, name: r.Name, namespace: r.Namespace, selector: sel}
 }
 
-// collectionEntry is a single collection watch in the reverse index.
-type collectionEntry struct {
-	nodeID    string // enables identity-based matching for dedup and removal
+// scalarRouteKey identifies a specific scalar resource in the reverse index.
+type scalarRouteKey struct {
+	gvr       schema.GroupVersionResource
+	name      string
+	namespace string
+}
+
+// collectionRoute is a single collection watch in the reverse index.
+type collectionRoute struct {
 	selector  labels.Selector
 	namespace string
 	key       instanceKey
@@ -102,6 +109,11 @@ type collectionEntry struct {
 // WatchCoordinator aggregates watch requests from all instances, manages
 // shared watches via WatchManager, and routes events back to the correct
 // instances.
+//
+// Watch requests are collected locally by each instanceWatcher and committed
+// atomically when Done(true) is called. This avoids locking the coordinator
+// during the reconciliation loop and eliminates per-cycle current/previous
+// tracking.
 type WatchCoordinator struct {
 	mu sync.RWMutex
 
@@ -109,144 +121,103 @@ type WatchCoordinator struct {
 	enqueue EnqueueFunc
 	log     logr.Logger
 
-	// Per-instance state: tracks what each instance is watching.
-	instances map[instanceKey]*instanceState
+	// Per-instance: the last committed watch set.
+	committed map[instanceKey][]WatchRequest
 
 	// Reverse indexes for event routing.
-	// GVR -> namespace/name -> list of node-owned scalar watch entries.
-	scalarIndex map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry
+	scalarRoutes     map[scalarRouteKey]map[instanceKey]struct{}
+	collectionRoutes map[schema.GroupVersionResource][]collectionRoute
 
-	// GVR -> list of collection watchers.
-	collectionIndex map[schema.GroupVersionResource][]collectionEntry
+	// Reference count per GVR across both indexes, for orphan detection.
+	gvrRefCount map[schema.GroupVersionResource]int
 }
 
 // NewWatchCoordinator creates a new WatchCoordinator.
 func NewWatchCoordinator(watches *WatchManager, enqueue EnqueueFunc, log logr.Logger) *WatchCoordinator {
 	return &WatchCoordinator{
-		watches:         watches,
-		enqueue:         enqueue,
-		log:             log.WithName("watch-coordinator"),
-		instances:       make(map[instanceKey]*instanceState),
-		scalarIndex:     make(map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry),
-		collectionIndex: make(map[schema.GroupVersionResource][]collectionEntry),
+		watches:          watches,
+		enqueue:          enqueue,
+		log:              log.WithName("watch-coordinator"),
+		committed:        make(map[instanceKey][]WatchRequest),
+		scalarRoutes:     make(map[scalarRouteKey]map[instanceKey]struct{}),
+		collectionRoutes: make(map[schema.GroupVersionResource][]collectionRoute),
+		gvrRefCount:      make(map[schema.GroupVersionResource]int),
 	}
 }
 
 // ForInstance returns a scoped InstanceWatcher handle for the given instance.
+// Watch() calls on the returned handle accumulate locally; nothing is written
+// to the coordinator until Done(true) is called.
 func (c *WatchCoordinator) ForInstance(parentGVR schema.GroupVersionResource, instance types.NamespacedName) InstanceWatcher {
 	return &instanceWatcher{
 		coordinator: c,
-		parentGVR:   parentGVR,
-		instance:    instance,
+		key:         instanceKey{parentGVR: parentGVR, instance: instance},
 	}
 }
 
-// addWatch registers a watch request for the given instance.
-func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
+// commitWatches atomically updates the watch set for an instance by diffing
+// the new requests against the previously committed set.
+func (c *WatchCoordinator) commitWatches(key instanceKey, newReqs []WatchRequest) {
+	newReqs = dedupWatchRequests(newReqs)
+
 	c.mu.Lock()
 
-	// Ensure instance state exists.
-	state, ok := c.instances[key]
-	if !ok {
-		state = &instanceState{
-			current:  make(map[string]*WatchRequest),
-			previous: make(map[string]*WatchRequest),
-		}
-		c.instances[key] = state
-	}
+	oldReqs, existed := c.committed[key]
 
-	// Fix reverse index orphaning on nodeID reuse: if an existing entry
-	// for this nodeID has a different target, remove it from indexes first.
-	if old, exists := state.current[req.NodeID]; exists {
-		if !sameWatchTarget(old, &req) {
-			if prev, shared := state.previous[req.NodeID]; !shared || !sameWatchTarget(prev, old) {
-				c.removeRequestFromIndexesLocked(key, old)
-			}
-		}
-	}
-
-	// Add to current cycle.
-	state.current[req.NodeID] = &req
-
-	// Add to reverse index only when this request is not already covered by
-	// the previously committed watch set for the same node.
-	if prev, shared := state.previous[req.NodeID]; !shared || !sameWatchTarget(prev, &req) {
-		if req.isCollection() {
-			c.addCollectionIndexLocked(key, req)
-		} else {
-			c.addScalarIndexLocked(key, req)
-		}
-	}
-
-	gvr := req.GVR
-	c.mu.Unlock()
-
-	// Ensure an informer is running for this GVR.
-	// Called outside the coordinator lock to avoid holding it while
-	// the WatchManager acquires its own lock.
-	if err := c.watches.EnsureWatch(gvr); err != nil {
-		c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
-	}
-
-	return nil
-}
-
-// abortInstance discards the current reconciliation cycle for an instance.
-func (c *WatchCoordinator) abortInstance(key instanceKey) {
-	c.mu.Lock()
-
-	state, ok := c.instances[key]
-	if !ok {
+	// Nothing to do if there were no watches before and none now.
+	if !existed && len(newReqs) == 0 {
 		c.mu.Unlock()
 		return
 	}
 
-	var affectedGVRs []schema.GroupVersionResource
-	for nodeID, req := range state.current {
-		if prev, shared := state.previous[nodeID]; shared && sameWatchTarget(prev, req) {
-			continue
-		}
-		c.removeRequestFromIndexesLocked(key, req)
-		affectedGVRs = append(affectedGVRs, req.GVR)
+	// Build identity sets for diffing.
+	oldSet := make(map[watchIdentity]WatchRequest, len(oldReqs))
+	for _, r := range oldReqs {
+		oldSet[identityOf(r)] = r
+	}
+	newSet := make(map[watchIdentity]WatchRequest, len(newReqs))
+	for _, r := range newReqs {
+		newSet[identityOf(r)] = r
 	}
 
-	state.current = make(map[string]*WatchRequest)
+	// Remove routes no longer needed.
+	var removedGVRs []schema.GroupVersionResource
+	for id, old := range oldSet {
+		if _, ok := newSet[id]; !ok {
+			c.removeRouteLocked(key, old)
+			removedGVRs = append(removedGVRs, old.GVR)
+		}
+	}
 
-	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
+	// Add routes that are new.
+	ensureGVRs := make(map[schema.GroupVersionResource]struct{})
+	for id, req := range newSet {
+		if _, ok := oldSet[id]; !ok {
+			c.addRouteLocked(key, req)
+			ensureGVRs[req.GVR] = struct{}{}
+		}
+	}
+
+	// Update committed state.
+	if len(newReqs) > 0 {
+		c.committed[key] = newReqs
+		if !existed {
+			instanceWatchCount.WithLabelValues(key.parentGVR.String()).Inc()
+		}
+	} else if existed {
+		delete(c.committed, key)
+		c.decInstanceWatchCount(key.parentGVR)
+	}
+
+	orphanedGVRs := c.findOrphanedGVRsLocked(removedGVRs)
 	c.mu.Unlock()
 
-	c.stopWatches(orphanedGVRs)
-}
-
-// doneInstance finalizes the reconciliation cycle for an instance.
-func (c *WatchCoordinator) doneInstance(key instanceKey) {
-	c.mu.Lock()
-
-	state, ok := c.instances[key]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-
-	// Remove requests that were in previous but NOT in current, or whose
-	// target changed (same nodeID but different GVR/name/namespace).
-	// Collect affected GVRs for orphan cleanup.
-	var affectedGVRs []schema.GroupVersionResource
-	for nodeID, oldReq := range state.previous {
-		if newReq, stillActive := state.current[nodeID]; stillActive && sameWatchTarget(newReq, oldReq) {
-			continue
+	// Ensure informers for new GVRs (outside lock).
+	for gvr := range ensureGVRs {
+		if err := c.watches.EnsureWatch(gvr, "coordinator"); err != nil {
+			c.log.Error(err, "Failed to ensure watch", "gvr", gvr)
 		}
-		c.removeRequestFromIndexesLocked(key, oldReq)
-		affectedGVRs = append(affectedGVRs, oldReq.GVR)
 	}
-
-	// Swap: previous = current, current = new empty map.
-	state.previous = state.current
-	state.current = make(map[string]*WatchRequest)
-
-	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
-	c.mu.Unlock()
-
 	c.stopWatches(orphanedGVRs)
 }
 
@@ -257,25 +228,20 @@ func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource,
 
 	c.mu.Lock()
 
-	state, ok := c.instances[key]
+	reqs, ok := c.committed[key]
 	if !ok {
 		c.mu.Unlock()
 		return
 	}
 
-	// Remove all current and previous requests from indexes.
-	// Collect affected GVRs for orphan cleanup.
 	var affectedGVRs []schema.GroupVersionResource
-	for _, req := range state.current {
-		c.removeRequestFromIndexesLocked(key, req)
-		affectedGVRs = append(affectedGVRs, req.GVR)
-	}
-	for _, req := range state.previous {
-		c.removeRequestFromIndexesLocked(key, req)
+	for _, req := range reqs {
+		c.removeRouteLocked(key, req)
 		affectedGVRs = append(affectedGVRs, req.GVR)
 	}
 
-	delete(c.instances, key)
+	delete(c.committed, key)
+	c.decInstanceWatchCount(parentGVR)
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -288,32 +254,22 @@ func (c *WatchCoordinator) RemoveInstance(parentGVR schema.GroupVersionResource,
 func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource) {
 	c.mu.Lock()
 
-	// Collect instance keys to remove.
 	var toRemove []instanceKey
-	for key := range c.instances {
+	for key := range c.committed {
 		if key.parentGVR == parentGVR {
 			toRemove = append(toRemove, key)
 		}
 	}
 
-	capacity := 0
+	var affectedGVRs []schema.GroupVersionResource
 	for _, key := range toRemove {
-		state := c.instances[key]
-		capacity += len(state.current) + len(state.previous)
-	}
-	affectedGVRs := make([]schema.GroupVersionResource, 0, capacity)
-	for _, key := range toRemove {
-		state := c.instances[key]
-		for _, req := range state.current {
-			c.removeRequestFromIndexesLocked(key, req)
+		for _, req := range c.committed[key] {
+			c.removeRouteLocked(key, req)
 			affectedGVRs = append(affectedGVRs, req.GVR)
 		}
-		for _, req := range state.previous {
-			c.removeRequestFromIndexesLocked(key, req)
-			affectedGVRs = append(affectedGVRs, req.GVR)
-		}
-		delete(c.instances, key)
+		delete(c.committed, key)
 	}
+	c.decInstanceWatchCount(parentGVR)
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -324,21 +280,21 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 // RouteEvent routes a watch event to all matching instances.
 // Called by the watch handler for every event.
 func (c *WatchCoordinator) RouteEvent(event Event) {
+	routeTotal.WithLabelValues(event.GVR.String()).Inc()
+
 	c.mu.RLock()
 	matched := make(map[instanceKey]struct{})
 
-	// Scalar matches (O(1) per GVR+name).
-	if byName, ok := c.scalarIndex[event.GVR]; ok {
-		key := types.NamespacedName{Name: event.Name, Namespace: event.Namespace}
-		for _, entry := range byName[key] {
-			matched[entry.key] = struct{}{}
-		}
+	// Scalar matches (O(1) lookup).
+	rk := scalarRouteKey{gvr: event.GVR, name: event.Name, namespace: event.Namespace}
+	for key := range c.scalarRoutes[rk] {
+		matched[key] = struct{}{}
 	}
 
 	// Collection matches (selector scan).
 	// Match against both current and old labels so that an object losing
 	// matching labels still triggers re-reconciliation.
-	for _, entry := range c.collectionIndex[event.GVR] {
+	for _, entry := range c.collectionRoutes[event.GVR] {
 		if entry.namespace != "" && event.Namespace != entry.namespace {
 			continue
 		}
@@ -354,6 +310,7 @@ func (c *WatchCoordinator) RouteEvent(event Event) {
 		c.enqueue(key.parentGVR, key.instance)
 	}
 	if len(matched) > 0 {
+		routeMatchTotal.WithLabelValues(event.GVR.String()).Inc()
 		c.log.V(2).Info("Routed event", "gvr", event.GVR, "name", event.Name, "namespace", event.Namespace, "type", event.Type)
 	}
 }
@@ -362,7 +319,7 @@ func (c *WatchCoordinator) RouteEvent(event Event) {
 func (c *WatchCoordinator) InstanceWatchCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.instances)
+	return len(c.committed)
 }
 
 // WatchRequestCount returns the total number of active watch requests.
@@ -370,137 +327,134 @@ func (c *WatchCoordinator) WatchRequestCount() (scalar, collection int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	for _, byName := range c.scalarIndex {
-		for _, entries := range byName {
-			scalar += len(entries)
-		}
+	for _, keys := range c.scalarRoutes {
+		scalar += len(keys)
 	}
-	for _, entries := range c.collectionIndex {
+	for _, entries := range c.collectionRoutes {
 		collection += len(entries)
 	}
 	return
 }
 
-// HasRequestsForGVR reports whether any child or external watch requests still
-// exist for the given GVR.
-func (c *WatchCoordinator) HasRequestsForGVR(gvr schema.GroupVersionResource) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.scalarIndex[gvr]) > 0 || len(c.collectionIndex[gvr]) > 0
-}
-
 // --- internal helpers ---
 
-func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchRequest) {
-	byName, ok := c.scalarIndex[req.GVR]
-	if !ok {
-		byName = make(map[types.NamespacedName][]scalarEntry)
-		c.scalarIndex[req.GVR] = byName
-	}
-	nn := types.NamespacedName{Name: req.Name, Namespace: req.Namespace}
-	for _, entry := range byName[nn] {
-		if entry.key == key && entry.nodeID == req.NodeID {
-			return
-		}
-	}
-	byName[nn] = append(byName[nn], scalarEntry{
-		nodeID: req.NodeID,
-		key:    key,
-	})
-}
-
-func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRequest) {
-	entries := c.collectionIndex[req.GVR]
-	for _, e := range entries {
-		if e.key == key &&
-			e.nodeID == req.NodeID &&
-			e.namespace == req.Namespace &&
-			e.selector.String() == req.Selector.String() {
-			return
-		}
-	}
-	c.collectionIndex[req.GVR] = append(entries, collectionEntry{
-		nodeID:    req.NodeID,
-		selector:  req.Selector,
-		namespace: req.Namespace,
-		key:       key,
-	})
-}
-
-func (c *WatchCoordinator) removeRequestFromIndexesLocked(key instanceKey, req *WatchRequest) {
+func (c *WatchCoordinator) addRouteLocked(key instanceKey, req WatchRequest) {
 	if req.isCollection() {
-		c.removeCollectionIndexLocked(key, req)
+		c.collectionRoutes[req.GVR] = append(c.collectionRoutes[req.GVR], collectionRoute{
+			selector:  req.Selector,
+			namespace: req.Namespace,
+			key:       key,
+		})
+		watchRequestCount.WithLabelValues(req.GVR.String(), "collection").Inc()
 	} else {
-		c.removeScalarIndexLocked(key, req)
-	}
-}
-
-func (c *WatchCoordinator) removeScalarIndexLocked(key instanceKey, req *WatchRequest) {
-	byName, ok := c.scalarIndex[req.GVR]
-	if !ok {
-		return
-	}
-	nn := types.NamespacedName{Name: req.Name, Namespace: req.Namespace}
-	entries, ok := byName[nn]
-	if !ok {
-		return
-	}
-	filtered := entries[:0]
-	for _, entry := range entries {
-		if entry.key == key && entry.nodeID == req.NodeID {
-			continue
+		rk := scalarRouteKey{gvr: req.GVR, name: req.Name, namespace: req.Namespace}
+		if c.scalarRoutes[rk] == nil {
+			c.scalarRoutes[rk] = make(map[instanceKey]struct{})
 		}
-		filtered = append(filtered, entry)
+		c.scalarRoutes[rk][key] = struct{}{}
+		watchRequestCount.WithLabelValues(req.GVR.String(), "scalar").Inc()
 	}
-	if len(filtered) == 0 {
-		delete(byName, nn)
+	c.gvrRefCount[req.GVR]++
+}
+
+func (c *WatchCoordinator) removeRouteLocked(key instanceKey, req WatchRequest) {
+	if req.isCollection() {
+		sel := req.Selector.String()
+		entries := c.collectionRoutes[req.GVR]
+		filtered := entries[:0]
+		for _, e := range entries {
+			if e.key == key && e.namespace == req.Namespace && e.selector.String() == sel {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		// Zero trailing elements so removed collectionRoute values (which hold
+		// labels.Selector interface references) can be garbage-collected.
+		for i := len(filtered); i < len(entries); i++ {
+			entries[i] = collectionRoute{}
+		}
+		if len(filtered) == 0 {
+			delete(c.collectionRoutes, req.GVR)
+		} else {
+			c.collectionRoutes[req.GVR] = filtered
+		}
 	} else {
-		byName[nn] = filtered
+		rk := scalarRouteKey{gvr: req.GVR, name: req.Name, namespace: req.Namespace}
+		if keys := c.scalarRoutes[rk]; keys != nil {
+			delete(keys, key)
+			if len(keys) == 0 {
+				delete(c.scalarRoutes, rk)
+			}
+		}
 	}
-	if len(byName) == 0 {
-		delete(c.scalarIndex, req.GVR)
+
+	c.gvrRefCount[req.GVR]--
+	if c.gvrRefCount[req.GVR] <= 0 {
+		delete(c.gvrRefCount, req.GVR)
+		gvrStr := req.GVR.String()
+		watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
+		watchRequestCount.DeleteLabelValues(gvrStr, "collection")
+	} else {
+		typ := "scalar"
+		if req.isCollection() {
+			typ = "collection"
+		}
+		watchRequestCount.WithLabelValues(req.GVR.String(), typ).Dec()
 	}
 }
 
-// findOrphanedGVRsLocked returns GVRs that have zero entries in both the
-// scalar and collection indexes. Must be called with c.mu held.
+// findOrphanedGVRsLocked returns GVRs from the candidate list that have zero
+// route entries. Must be called with c.mu held.
 func (c *WatchCoordinator) findOrphanedGVRsLocked(gvrs []schema.GroupVersionResource) []schema.GroupVersionResource {
 	var orphaned []schema.GroupVersionResource
 	for _, gvr := range gvrs {
-		if len(c.scalarIndex[gvr]) == 0 && len(c.collectionIndex[gvr]) == 0 {
+		if c.gvrRefCount[gvr] == 0 {
 			orphaned = append(orphaned, gvr)
 		}
 	}
 	return orphaned
 }
 
-// stopWatches stops informers for the given GVRs. Must be called without
+// stopWatches releases the coordinator's ownership of the given GVRs and
+// stops informers that have no remaining owners. Must be called without
 // c.mu held to avoid holding the coordinator lock while the WatchManager
 // acquires its own lock.
 func (c *WatchCoordinator) stopWatches(gvrs []schema.GroupVersionResource) {
 	for _, gvr := range gvrs {
-		c.watches.StopWatch(gvr)
+		c.watches.ReleaseWatch(gvr, "coordinator")
 		c.log.V(1).Info("Stopped orphaned child watch", "gvr", gvr)
 	}
 }
 
-func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *WatchRequest) {
-	entries := c.collectionIndex[req.GVR]
-	filtered := entries[:0]
-	for _, e := range entries {
-		if e.key == key &&
-			e.nodeID == req.NodeID &&
-			e.namespace == req.Namespace &&
-			e.selector.String() == req.Selector.String() {
+// decInstanceWatchCount decrements the instanceWatchCount gauge for the given
+// parent GVR, deleting the label set entirely when no instances remain.
+// Must be called with c.mu held, after the instance has been deleted.
+func (c *WatchCoordinator) decInstanceWatchCount(parentGVR schema.GroupVersionResource) {
+	for key := range c.committed {
+		if key.parentGVR == parentGVR {
+			instanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
+			return
+		}
+	}
+	instanceWatchCount.DeleteLabelValues(parentGVR.String())
+}
+
+// dedupWatchRequests removes duplicate watch requests by content identity.
+func dedupWatchRequests(reqs []WatchRequest) []WatchRequest {
+	if len(reqs) <= 1 {
+		return reqs
+	}
+	seen := make(map[watchIdentity]struct{}, len(reqs))
+	result := make([]WatchRequest, 0, len(reqs))
+	for _, r := range reqs {
+		id := identityOf(r)
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		filtered = append(filtered, e)
+		seen[id] = struct{}{}
+		result = append(result, r)
 	}
-	if len(filtered) == 0 {
-		delete(c.collectionIndex, req.GVR)
-	} else {
-		c.collectionIndex[req.GVR] = filtered
-	}
+	return result
 }
 
 // NoopInstanceWatcher is a no-op implementation of InstanceWatcher for use
@@ -511,46 +465,32 @@ func (NoopInstanceWatcher) Watch(_ WatchRequest) error { return nil }
 func (NoopInstanceWatcher) Done(bool)                  {}
 
 // instanceWatcher is the concrete implementation of InstanceWatcher.
+// Watch() calls append to a local pending slice with no coordinator
+// interaction. Done(true) commits the pending set atomically.
+//
+// Not safe for concurrent use — callers must serialize Watch/Done calls.
+// This is guaranteed by controller-runtime which processes one reconcile
+// per instance at a time.
 type instanceWatcher struct {
 	coordinator *WatchCoordinator
-	parentGVR   schema.GroupVersionResource
-	instance    types.NamespacedName
+	key         instanceKey
+	pending     []WatchRequest
 }
 
-// Watch registers a watch request for this instance.
+// Watch appends a watch request to the local pending set.
+// No locks are acquired and the call never fails.
 func (w *instanceWatcher) Watch(req WatchRequest) error {
-	return w.coordinator.addWatch(instanceKey{
-		parentGVR: w.parentGVR,
-		instance:  w.instance,
-	}, req)
+	w.pending = append(w.pending, req)
+	return nil
 }
 
-// Done finalizes the current reconciliation cycle. If commit is false, the
-// provisional watch set is discarded and the previous one stays active.
+// Done finalizes the current reconciliation cycle. If commit is true, the
+// pending watch set replaces the previously committed set and indexes are
+// updated atomically. If commit is false, the pending set is discarded and
+// the previously committed watches remain active.
 func (w *instanceWatcher) Done(commit bool) {
-	key := instanceKey{
-		parentGVR: w.parentGVR,
-		instance:  w.instance,
-	}
 	if !commit {
-		w.coordinator.abortInstance(key)
 		return
 	}
-	w.coordinator.doneInstance(key)
-}
-
-func sameWatchTarget(a, b *WatchRequest) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	if a.GVR != b.GVR || a.Name != b.Name || a.Namespace != b.Namespace {
-		return false
-	}
-	if a.isCollection() != b.isCollection() {
-		return false
-	}
-	if !a.isCollection() {
-		return true
-	}
-	return a.Selector.String() == b.Selector.String()
+	w.coordinator.commitWatches(w.key, w.pending)
 }

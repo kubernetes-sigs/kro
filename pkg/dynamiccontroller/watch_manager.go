@@ -31,20 +31,17 @@ import (
 )
 
 // WatchManager manages informer lifecycle per GVR.
-// Informers start lazily on first use and stay alive until Shutdown().
-// This avoids all start/stop races and lock-while-blocking issues.
+// Informers start lazily on first use and stay alive until all owners release
+// them or Shutdown() is called.
 type WatchManager struct {
 	mu      sync.Mutex
 	watches map[schema.GroupVersionResource]*gvrWatch
-	// parentRefs keeps parent informers alive while a registered parent GVR
-	// still depends on the shared watch.
-	// TODO: If watch ownership gets more complex, replace the split
-	// parent-retention + coordinator-index model with a unified owner set in
-	// WatchManager so informer lifetime is derived from one source of truth.
-	parentRefs map[schema.GroupVersionResource]int
-	client     metadata.Interface
-	resync     time.Duration
-	log        logr.Logger
+	// owners tracks who retains each GVR. An informer is eligible for
+	// shutdown only when its owner set is empty.
+	owners map[schema.GroupVersionResource]map[string]struct{}
+	client metadata.Interface
+	resync time.Duration
+	log    logr.Logger
 
 	// onEvent is the single callback invoked for every informer event.
 	// Set at construction time; never nil.
@@ -60,98 +57,85 @@ type WatchManager struct {
 }
 
 // gvrWatch wraps a single SharedIndexInformer for one GVR.
-// Once started, the informer runs until Shutdown().
+// Once started, the informer runs until all owners release it or Shutdown().
 type gvrWatch struct {
-	gvr      schema.GroupVersionResource
-	informer cache.SharedIndexInformer
-	stopCh   chan struct{}
-	log      logr.Logger
+	gvr        schema.GroupVersionResource
+	informer   cache.SharedIndexInformer
+	handlerReg cache.ResourceEventHandlerRegistration
+	cancel     context.CancelFunc
+	log        logr.Logger
 }
 
 // NewWatchManager creates a new WatchManager. The onEvent callback is invoked
 // for every informer event across all GVRs.
 func NewWatchManager(client metadata.Interface, resync time.Duration, onEvent EventHandler, log logr.Logger) *WatchManager {
 	wm := &WatchManager{
-		watches:    make(map[schema.GroupVersionResource]*gvrWatch),
-		parentRefs: make(map[schema.GroupVersionResource]int),
-		client:     client,
-		resync:     resync,
-		onEvent:    onEvent,
-		log:        log.WithName("watch-manager"),
+		watches: make(map[schema.GroupVersionResource]*gvrWatch),
+		owners:  make(map[schema.GroupVersionResource]map[string]struct{}),
+		client:  client,
+		resync:  resync,
+		onEvent: onEvent,
+		log:     log.WithName("watch-manager"),
 	}
 	wm.createInformer = wm.defaultCreateInformer
 	return wm
 }
 
-// EnsureParentWatch retains the watch for a registered parent GVR and ensures
-// the underlying informer is running.
-func (m *WatchManager) EnsureParentWatch(gvr schema.GroupVersionResource) error {
+// EnsureWatch ensures a watch on the given GVR registered under a given owner.
+// If the informer fails to start, the owner is removed.
+func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID string) error {
 	m.mu.Lock()
-	m.parentRefs[gvr]++
-	m.mu.Unlock()
-
-	if err := m.EnsureWatch(gvr); err != nil {
-		m.ReleaseParentWatch(gvr)
-		return err
+	if m.owners[gvr] == nil {
+		m.owners[gvr] = make(map[string]struct{})
 	}
-	return nil
-}
+	m.owners[gvr][ownerID] = struct{}{}
 
-// ReleaseParentWatch drops one parent retention for the given GVR.
-func (m *WatchManager) ReleaseParentWatch(gvr schema.GroupVersionResource) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	refs := m.parentRefs[gvr]
-	switch {
-	case refs <= 1:
-		delete(m.parentRefs, gvr)
-	default:
-		m.parentRefs[gvr] = refs - 1
-	}
-}
-
-// EnsureWatch idempotently ensures an informer is running for the given GVR.
-// If the informer is already running, this is a no-op. After starting the
-// informer it waits for the initial cache sync with a timeout and returns an
-// error if the sync does not complete.
-func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource) error {
-	m.mu.Lock()
-
+	// Check if watch already exists while still holding the lock.
 	if _, ok := m.watches[gvr]; ok {
 		m.mu.Unlock()
 		return nil
 	}
 
+	// Create and start the informer while still holding the lock,
+	// so no ReleaseWatch can remove our owner before the watch exists.
 	w := m.newWatch(gvr)
 	m.watches[gvr] = w
-
-	go w.informer.Run(w.stopCh)
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	go w.informer.RunWithContext(ctx)
+	watchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Informer started", "gvr", gvr)
 
 	// Release the lock before blocking on cache sync.
 	m.mu.Unlock()
 
 	// Wait for initial list/sync with a timeout so callers get a usable cache.
-	syncCtx, cancel := context.WithTimeout(context.Background(), m.syncTimeout())
-	defer cancel()
+	syncStart := time.Now()
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), m.syncTimeout())
+	defer syncCancel()
 
 	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
-		// Stop and remove the broken watch so a future EnsureWatch can retry
-		// with a fresh informer instead of returning early for a registered
-		// but non-functional watch.
+		informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 		m.forceStopWatch(gvr)
+		m.ReleaseWatch(gvr, ownerID)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
+	informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 	return nil
 }
 
-// StopWatch stops the informer for the given GVR and removes it from the
-// watches map. It is non-blocking and idempotent. A subsequent EnsureWatch
-// for the same GVR will create a fresh informer.
-func (m *WatchManager) StopWatch(gvr schema.GroupVersionResource) {
+// ReleaseWatch removes an owner from the GVR. If no owners remain, the
+// informer is stopped automatically.
+func (m *WatchManager) ReleaseWatch(gvr schema.GroupVersionResource, ownerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if owners := m.owners[gvr]; owners != nil {
+		delete(owners, ownerID)
+		if len(owners) == 0 {
+			delete(m.owners, gvr)
+		}
+	}
 	m.stopWatchLocked(gvr, false)
 }
 
@@ -178,12 +162,11 @@ func (m *WatchManager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for gvr, w := range m.watches {
-		m.log.V(1).Info("Shutting down watch", "gvr", gvr)
-		close(w.stopCh)
+	for gvr := range m.watches {
+		m.stopWatchLocked(gvr, true)
 	}
 	m.watches = make(map[schema.GroupVersionResource]*gvrWatch)
-	m.parentRefs = make(map[schema.GroupVersionResource]int)
+	m.owners = make(map[schema.GroupVersionResource]map[string]struct{})
 }
 
 const defaultSyncTimeout = 30 * time.Second
@@ -213,15 +196,16 @@ func (m *WatchManager) newWatch(gvr schema.GroupVersionResource) *gvrWatch {
 	w := &gvrWatch{
 		gvr:      gvr,
 		informer: inf,
-		stopCh:   make(chan struct{}),
 		log:      m.log.WithValues("gvr", gvr.String()),
 	}
 
 	// Register a single event handler that converts informer callbacks
 	// into normalized Event structs and dispatches via onEvent.
-	if _, err := inf.AddEventHandler(w.eventHandlerFuncs(m.onEvent)); err != nil {
+	reg, err := inf.AddEventHandler(w.eventHandlerFuncs(m.onEvent))
+	if err != nil {
 		m.log.Error(err, "Failed to add event handler to informer", "gvr", gvr)
 	}
+	w.handlerReg = reg
 
 	return w
 }
@@ -238,13 +222,17 @@ func (m *WatchManager) stopWatchLocked(gvr schema.GroupVersionResource, force bo
 		return
 	}
 	if !force {
-		if refs := m.parentRefs[gvr]; refs > 0 {
-			m.log.V(1).Info("Watch retained by registered parent", "gvr", gvr, "parentRefs", refs)
+		if owners := m.owners[gvr]; len(owners) > 0 {
+			m.log.V(1).Info("Watch retained by owners", "gvr", gvr, "owners", len(owners))
 			return
 		}
 	}
-	close(w.stopCh)
+	// event handler registration can only fail if the handler type is
+	// mismatched, which can never happen since we own all handlers
+	_ = w.informer.RemoveEventHandler(w.handlerReg)
+	w.cancel()
 	delete(m.watches, gvr)
+	watchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Watch stopped", "gvr", gvr)
 }
 

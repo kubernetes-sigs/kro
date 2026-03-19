@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
@@ -221,6 +222,10 @@ var _ = Describe("ClusterScopedInstance", func() {
 			g.Expect(policyCM.Data["setting"]).To(Equal("enabled"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
+		By("verifying cluster-scoped instance child does NOT have instance-namespace label")
+		Expect(policyCM.GetLabels()).ToNot(HaveKey(metadata.InstanceNamespaceLabel),
+			"cluster-scoped instance child should not have instance-namespace label")
+
 		By("verifying collection resources were created in the target namespace")
 		for _, val := range []string{"dev", "staging"} {
 			cm := &corev1.ConfigMap{}
@@ -232,6 +237,18 @@ var _ = Describe("ClusterScopedInstance", func() {
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(cm.Data["env"]).To(Equal(val))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}
+
+		By("verifying collection children also lack instance-namespace label")
+		for _, val := range []string{"dev", "staging"} {
+			cm := &corev1.ConfigMap{}
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      fmt.Sprintf("%s-env-%s", instanceName, val),
+				Namespace: namespace,
+			}, cm)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cm.GetLabels()).ToNot(HaveKey(metadata.InstanceNamespaceLabel),
+				"cluster-scoped instance collection child should not have instance-namespace label")
 		}
 
 		By("deleting the cluster-scoped instance")

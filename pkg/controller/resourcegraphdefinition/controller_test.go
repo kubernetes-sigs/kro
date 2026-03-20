@@ -643,7 +643,7 @@ func TestSetupWithManager(t *testing.T) {
 				v1alpha1.GroupVersion,
 				extv1.SchemeGroupVersion,
 			})
-			cache := &stubCache{
+			stubCch := &stubCache{
 				rgdInformer: &stubInformer{},
 				crdInformer: &stubInformer{},
 			}
@@ -652,12 +652,12 @@ func TestSetupWithManager(t *testing.T) {
 				restMapper:        mapper,
 				logger:            logr.Discard(),
 				scheme:            testScheme(t),
-				cache:             cache,
+				cache:             stubCch,
 				controllerOptions: config.Controller{SkipNameValidation: &skipNameValidation},
 				addErr:            tt.addErr,
 			}
 
-			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, cache.crdInformer, 3, graph.RGDConfig{})
+			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, stubCch.crdInformer, 3, graph.RGDConfig{})
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
 			err := reconciler.SetupWithManager(mgr)

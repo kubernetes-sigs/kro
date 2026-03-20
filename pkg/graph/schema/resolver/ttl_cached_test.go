@@ -15,6 +15,7 @@
 package resolver
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,6 +170,25 @@ func TestTTLCachedSchemaResolver_LRUEviction(t *testing.T) {
 
 	if calls := mock.getCallCount(); calls != 0 {
 		t.Errorf("expected 0 calls for cache hit, got %d", calls)
+	}
+}
+
+type failingResolver struct{}
+
+func (f *failingResolver) ResolveSchema(_ schema.GroupVersionKind) (*spec.Schema, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestTTLCachedSchemaResolver_DelegateError(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"}
+	cached := NewTTLCachedSchemaResolver(&failingResolver{}, 100, time.Hour)
+	_, err := cached.ResolveSchema(gvk)
+	if err == nil || err.Error() != "connection refused" {
+		t.Fatalf("expected delegate error, got %v", err)
+	}
+	_, err = cached.ResolveSchema(gvk)
+	if err == nil {
+		t.Fatal("expected error on second call")
 	}
 }
 

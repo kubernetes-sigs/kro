@@ -27,10 +27,10 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -230,9 +230,7 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	// Schema resolution: core → CRD informer → fallback discovery.
-	coreResolver := schemaresolver.DefaultCoreResolver()
-
+	// Shared CRD informer for schema resolution and RGD controller.
 	apiextensionsClientset, err := apiextensionsclient.NewForConfigAndClient(restConfig, set.HTTPClient())
 	if err != nil {
 		setupLog.Error(err, "unable to create apiextensions clientset")
@@ -240,7 +238,6 @@ func main() {
 	}
 	crdInformerFactory := apiextensionsinformers.NewSharedInformerFactory(apiextensionsClientset, 0)
 	crdInformer := crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions()
-	crdResolver := schemaresolver.NewCRDSchemaResolver(crdInformer)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		crdInformerFactory.Start(ctx.Done())
 		crdInformerFactory.WaitForCacheSync(ctx.Done())
@@ -248,18 +245,23 @@ func main() {
 		crdInformerFactory.Shutdown()
 		return nil
 	})); err != nil {
-		setupLog.Error(err, "unable to register CRD informer factory with manager")
+		setupLog.Error(err, "unable to register CRD informer with manager")
 		os.Exit(1)
 	}
 
+	// Schema resolution: core -> CRD informer -> fallback discovery.
+	crdResolver, err := schemaresolver.NewCRDSchemaResolver(crdInformer)
+	if err != nil {
+		setupLog.Error(err, "unable to create CRD schema resolver")
+		os.Exit(1)
+	}
 	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, set.HTTPClient())
 	if err != nil {
 		setupLog.Error(err, "unable to create fallback schema resolver")
 		os.Exit(1)
 	}
-
 	resourceGraphDefinitionGraphBuilder := graph.NewBuilder(
-		schemaresolver.NewChainedResolver(coreResolver, crdResolver, fallbackResolver),
+		schemaresolver.NewChainedResolver(schemaresolver.DefaultCoreResolver(), crdResolver, fallbackResolver),
 		set.RESTMapper(),
 	)
 

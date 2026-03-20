@@ -17,7 +17,9 @@ package resolver
 import (
 	"fmt"
 	"sync"
+	"time"
 
+	"golang.org/x/sync/singleflight"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
@@ -27,6 +29,8 @@ import (
 	openapiresolver "k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	kroschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 )
 
 const (
@@ -45,6 +49,7 @@ type CRDSchemaResolver struct {
 	mu      sync.RWMutex
 	schemas map[schema.GroupVersionKind]*spec.Schema
 	indexer cache.Indexer
+	sf      singleflight.Group
 }
 
 // NewCRDSchemaResolver creates a resolver from a CRD informer. It adds a
@@ -52,11 +57,11 @@ type CRDSchemaResolver struct {
 // handlers for cache eviction. The caller is responsible for starting the
 // informer (e.g. via the informer factory registered with the controller
 // manager).
-func NewCRDSchemaResolver(crdInformer crdinformers.CustomResourceDefinitionInformer) *CRDSchemaResolver {
+func NewCRDSchemaResolver(crdInformer crdinformers.CustomResourceDefinitionInformer) (*CRDSchemaResolver, error) {
 	informer := crdInformer.Informer()
 
 	// Add a custom indexer that maps GVK strings to CRD objects.
-	informer.AddIndexers(cache.Indexers{
+	if err := informer.AddIndexers(cache.Indexers{
 		gvkIndexName: func(obj any) ([]string, error) {
 			crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
 			if !ok {
@@ -64,60 +69,91 @@ func NewCRDSchemaResolver(crdInformer crdinformers.CustomResourceDefinitionInfor
 			}
 			return gvkIndexKeys(crd), nil
 		},
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("adding GVK indexer: %w", err)
+	}
 
 	r := &CRDSchemaResolver{
 		schemas: make(map[schema.GroupVersionKind]*spec.Schema),
 		indexer: informer.GetIndexer(),
 	}
 
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: r.onUpdate,
 		DeleteFunc: r.onDelete,
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("adding event handler: %w", err)
+	}
 
-	return r
+	return r, nil
 }
 
 // ResolveSchema returns the OpenAPI schema for the given GVK.
 //
-// On cache hit the schema is returned immediately. On miss the resolver
-// queries the informer's GVK index to find the CRD, extracts the schema for
-// the requested version, caches it, and returns it.
+// On cache hit the schema is returned immediately. On miss, singleflight
+// deduplicates concurrent extractions for the same GVK: only one goroutine
+// queries the informer index, extracts the schema, and populates the cache.
 func (r *CRDSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Schema, error) {
 	// Fast path: cached schema.
 	r.mu.RLock()
 	if s, ok := r.schemas[gvk]; ok {
 		r.mu.RUnlock()
+		crdCacheHitsTotal.Inc()
 		return s, nil
 	}
 	r.mu.RUnlock()
 
-	// Look up the CRD from the informer's GVK index.
+	crdCacheMissesTotal.Inc()
+
 	key := gvkIndexKey(gvk)
-	items, err := r.indexer.ByIndex(gvkIndexName, key)
-	if err != nil || len(items) == 0 {
-		return nil, openapiresolver.ErrSchemaNotFound
-	}
+	result, err, shared := r.sf.Do(key, func() (any, error) {
+		// Double-check: another goroutine may have populated the cache.
+		r.mu.RLock()
+		if s, ok := r.schemas[gvk]; ok {
+			r.mu.RUnlock()
+			return s, nil
+		}
+		r.mu.RUnlock()
 
-	crd, ok := items[0].(*apiextensionsv1.CustomResourceDefinition)
-	if !ok {
-		return nil, openapiresolver.ErrSchemaNotFound
-	}
+		// Look up the CRD from the informer's GVK index.
+		items, err := r.indexer.ByIndex(gvkIndexName, key)
+		if err != nil || len(items) == 0 {
+			return nil, openapiresolver.ErrSchemaNotFound
+		}
 
-	// Extract the schema for the requested version.
-	s, err := extractVersionSchema(crd, gvk.Version)
+		crd, ok := items[0].(*apiextensionsv1.CustomResourceDefinition)
+		if !ok {
+			return nil, openapiresolver.ErrSchemaNotFound
+		}
+
+		// Extract the schema for the requested version and inject ObjectMeta.
+		start := time.Now()
+		s, err := extractVersionSchema(crd, gvk.Version)
+		if err != nil {
+			crdExtractionErrorsTotal.Inc()
+			return nil, fmt.Errorf("extracting schema for %v: %w", gvk, err)
+		}
+		if s == nil {
+			return nil, openapiresolver.ErrSchemaNotFound
+		}
+		injectKubeEnvelope(s, crd.Spec.Scope == apiextensionsv1.NamespaceScoped)
+		crdExtractionDuration.Observe(time.Since(start).Seconds())
+
+		r.mu.Lock()
+		r.schemas[gvk] = s
+		r.mu.Unlock()
+
+		crdCacheSize.Set(float64(len(r.schemas)))
+		return s, nil
+	})
+
+	if shared {
+		crdSingleflightDeduplicatedTotal.Inc()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("extracting schema for %v: %w", gvk, err)
+		return nil, err
 	}
-	if s == nil {
-		return nil, openapiresolver.ErrSchemaNotFound
-	}
-
-	r.mu.Lock()
-	r.schemas[gvk] = s
-	r.mu.Unlock()
-	return s, nil
+	return result.(*spec.Schema), nil
 }
 
 // gvkIndexKey returns the index key for a GVK.
@@ -157,10 +193,14 @@ func allGVKs(crd *apiextensionsv1.CustomResourceDefinition) []schema.GroupVersio
 
 func (r *CRDSchemaResolver) evictGVKs(gvks []schema.GroupVersionKind) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	for _, gvk := range gvks {
-		delete(r.schemas, gvk)
+		if _, ok := r.schemas[gvk]; ok {
+			delete(r.schemas, gvk)
+			crdCacheEvictionsTotal.Inc()
+		}
 	}
+	crdCacheSize.Set(float64(len(r.schemas)))
+	r.mu.Unlock()
 }
 
 func (r *CRDSchemaResolver) onUpdate(oldObj, newObj any) {
@@ -189,6 +229,30 @@ func (r *CRDSchemaResolver) onDelete(obj any) {
 		return
 	}
 	r.evictGVKs(allGVKs(crd))
+}
+
+// injectKubeEnvelope adds the standard Kubernetes envelope fields (metadata,
+// apiVersion, kind) to a CRD schema. CRD specs only contain spec/status —
+// the API server injects the rest when serving aggregated OpenAPI.
+func injectKubeEnvelope(s *spec.Schema, namespaced bool) {
+	if s.Properties == nil {
+		s.Properties = make(map[string]spec.Schema)
+	}
+	// Replace metadata if absent or if it's a bare "type: object" stub
+	// (common in CRDs generated by controller-gen).
+	if meta, ok := s.Properties["metadata"]; !ok || len(meta.Properties) == 0 {
+		if namespaced {
+			s.Properties["metadata"] = kroschema.ObjectMetaSchema
+		} else {
+			s.Properties["metadata"] = kroschema.NamespacelessObjectMetaSchema
+		}
+	}
+	if _, ok := s.Properties["apiVersion"]; !ok {
+		s.Properties["apiVersion"] = kroschema.StringSchema
+	}
+	if _, ok := s.Properties["kind"]; !ok {
+		s.Properties["kind"] = kroschema.StringSchema
+	}
 }
 
 // extractVersionSchema extracts the OpenAPI schema for a specific version from a CRD.

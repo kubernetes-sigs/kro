@@ -31,12 +31,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 )
 
 type Environment struct {
@@ -132,12 +137,6 @@ func (e *Environment) initializeClients() error {
 
 	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
 
-	restConfig := e.ClientSet.RESTConfig()
-	e.GraphBuilder, err = graph.NewBuilder(restConfig, e.ClientSet.HTTPClient())
-	if err != nil {
-		return fmt.Errorf("creating graph builder: %w", err)
-	}
-
 	return nil
 }
 
@@ -155,6 +154,40 @@ func (e *Environment) setupController() error {
 		return fmt.Errorf("creating manager: %w", err)
 	}
 	e.ClientSet.SetRESTMapper(e.CtrlManager.GetRESTMapper())
+
+	restConfig := e.ClientSet.RESTConfig()
+
+	// Shared CRD informer for schema resolution and RGD controller.
+	apiextensionsClientset, err := apiextensionsclient.NewForConfigAndClient(restConfig, e.ClientSet.HTTPClient())
+	if err != nil {
+		return fmt.Errorf("creating apiextensions clientset: %w", err)
+	}
+	crdInformerFactory := apiextensionsinformers.NewSharedInformerFactory(apiextensionsClientset, 0)
+	crdInformer := crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions()
+
+	// Schema resolution: core -> CRD informer -> fallback discovery.
+	crdResolver, err := schemaresolver.NewCRDSchemaResolver(crdInformer)
+	if err != nil {
+		return fmt.Errorf("creating CRD schema resolver: %w", err)
+	}
+	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, e.ClientSet.HTTPClient())
+	if err != nil {
+		return fmt.Errorf("creating fallback resolver: %w", err)
+	}
+	if err := e.CtrlManager.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		crdInformerFactory.Start(ctx.Done())
+		crdInformerFactory.WaitForCacheSync(ctx.Done())
+		<-ctx.Done()
+		crdInformerFactory.Shutdown()
+		return nil
+	})); err != nil {
+		return fmt.Errorf("registering CRD informer factory: %w", err)
+	}
+
+	e.GraphBuilder = graph.NewBuilder(
+		schemaresolver.NewChainedResolver(schemaresolver.DefaultCoreResolver(), crdResolver, fallbackResolver),
+		e.CtrlManager.GetRESTMapper(),
+	)
 
 	dc := dynamiccontroller.NewDynamicController(
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),
@@ -175,6 +208,7 @@ func (e *Environment) setupController() error {
 		dc,
 		e.GraphBuilder,
 		e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
+		crdInformer.Informer(),
 		40,
 		graph.RGDConfig{
 			MaxCollectionSize:          1000,

@@ -327,6 +327,33 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 			},
 		},
 		// v1 resources
+		{Version: "v1", Kind: "ResourceQuota"}: {
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"apiVersion": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					"kind":       {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					"metadata":   metadataSchema(),
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							Properties: map[string]spec.Schema{
+								"hard": resourceListSchema(),
+							},
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							Properties: map[string]spec.Schema{
+								"hard": resourceListSchema(),
+								"used": resourceListSchema(),
+							},
+						},
+					},
+				},
+			},
+		},
 		{Version: "v1", Kind: "Pod"}: {
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
@@ -550,6 +577,12 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 					Kind:       "ConfigMap",
 					Verbs:      []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 				},
+				{
+					Name:       "resourcequotas",
+					Namespaced: true,
+					Kind:       "ResourceQuota",
+					Verbs:      []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
 			},
 		},
 		// CRD
@@ -567,6 +600,34 @@ func NewFakeResolver() (*FakeResolver, *fake.FakeDiscovery) {
 	}
 
 	return &FakeResolver{schemas: schemas}, fakeDiscovery
+}
+
+// quantitySchema returns the OpenAPI v3 representation of resource.Quantity
+// as served by the Kubernetes API server: oneOf string|number with no
+// top-level type and no x-kubernetes-int-or-string extension.
+func quantitySchema() spec.Schema {
+	return spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			OneOf: []spec.Schema{
+				{SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+				{SchemaProps: spec.SchemaProps{Type: []string{"number"}}},
+			},
+		},
+	}
+}
+
+// resourceListSchema returns a map[string]Quantity schema (e.g. ResourceQuota.spec.hard).
+func resourceListSchema() spec.Schema {
+	qs := quantitySchema()
+	return spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			AdditionalProperties: &spec.SchemaOrBool{
+				Allows: true,
+				Schema: &qs,
+			},
+		},
+	}
 }
 
 // Helper to create AWS tags schema

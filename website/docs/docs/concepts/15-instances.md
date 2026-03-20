@@ -46,7 +46,7 @@ This continuous loop ensures your resources stay in sync with your desired state
 - Rich status tracking
 
 :::tip
-To suspend active reconciliation of an instance for debugging purposes, apply a label with the key `kro.run/reconcile` and the value `disabled`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
+To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `disabled`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
 :::
 
 ### Reactive Reconciliation
@@ -81,12 +81,6 @@ When kro manages an instance, it applies these labels and annotations:
 | `kro.run/resource-graph-definition-name` | Name of the ResourceGraphDefinition |
 | `applyset.kubernetes.io/id` | Unique ApplySet identifier (hash of name.namespace.kind.group) |
 
-**Debugging-specific labels:** 
-
-| Label| Description |
-|------|-------------|
-| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
-
 **Annotations:**
 
 | Annotation | Description |
@@ -94,6 +88,12 @@ When kro manages an instance, it applies these labels and annotations:
 | `applyset.kubernetes.io/tooling` | Identifies kro as the managing tool (format: `kro/<version>`) |
 | `applyset.kubernetes.io/contains-group-kinds` | Comma-separated list of GroupKinds managed by this instance |
 | `applyset.kubernetes.io/additional-namespaces` | Comma-separated list of namespaces containing managed resources |
+
+**Debugging-specific annotations:** 
+
+| Annotation | Description |
+|------|-------------|
+| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
 
 </TabItem>
 <TabItem value="managed" label="Managed Resource Metadata">
@@ -245,7 +245,7 @@ Detailed status information structured hierarchically. kro provides a top-level 
   - Reports when all resources have reached their ready state
 
 - **`ReconciliationSuspended`** - Instance Reconciliation is Suspended
-  - Set to True when the label `kro.run/reconcile: "disabled"` label key and value are present. Otherwise set to false
+  - Set to True when the annotation `kro.run/reconcile: "disabled"` annotation key and value are present. Otherwise set to false
   - Explicitly shows if kro is actively reconciling an instance or not
 
 - **`Ready`** - Instance is fully operational (top-level condition)

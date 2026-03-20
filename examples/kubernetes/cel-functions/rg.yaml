@@ -47,6 +47,8 @@ spec:
                       value: "${json.unmarshal('{\"exampleJSONKey\": \"exampleJSONValue\"}').exampleJSONKey}"
                     - name: JSON_MARSHAL_EXAMPLE
                       value: "${json.marshal({\"name\": schema.spec.name})}"
+                    - name: QUANTITY_COMPARISON
+                      value: "${quantity(\"500Mi\").isLessThan(quantity(\"1Gi\")) ? \"small\" : \"large\"}"
     - id: service
       template:
         apiVersion: v1

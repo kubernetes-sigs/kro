@@ -964,6 +964,27 @@ func TestNewInspectorWithEnv_CustomFunctionsNotResources(t *testing.T) {
 			wantUnknownRes: nil,
 		},
 		{
+			name:       "quantity is not an unknown function",
+			resources:  []string{"pvc"},
+			expression: `quantity(pvc.spec.resources.requests.storage).isGreaterThan(quantity("10Gi"))`,
+			wantResources: []ResourceDependency{
+				{ID: "pvc", Path: "pvc.spec.resources.requests.storage"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "isQuantity is not an unknown function",
+			resources:  []string{"schema"},
+			expression: `isQuantity(schema.spec.memory) ? quantity(schema.spec.memory) : quantity("512Mi")`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.memory"},
+				{ID: "schema", Path: "schema.spec.memory"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
 			name:       "has macro is not an unknown function",
 			resources:  []string{"deploy"},
 			expression: `has(deploy.spec.replicas)`,

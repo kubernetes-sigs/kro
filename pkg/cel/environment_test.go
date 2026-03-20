@@ -152,11 +152,26 @@ func TestDefaultEnvironment_KubernetesLibraries(t *testing.T) {
 	env, err := DefaultEnvironment()
 	require.NoError(t, err, "failed to create CEL env")
 
-	// The expression should compile without an "undeclared reference to 'url'"
-	// error once the Kubernetes URL library is wired in.
-	expr := `url("https://example.com/foo").getHost()`
-	_, issues := env.Compile(expr)
-	require.NoError(t, issues.Err(), "expected URL expression to compile without errors")
+	tests := []struct {
+		name string
+		expr string
+	}{
+		{
+			name: "url library",
+			expr: `url("https://example.com/foo").getHost()`,
+		},
+		{
+			name: "quantity library",
+			expr: `quantity("500Mi").isLessThan(quantity("1Gi"))`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, issues := env.Compile(tc.expr)
+			require.NoError(t, issues.Err(), "expected expression to compile without errors")
+		})
+	}
 }
 
 // TestDefaultEnvironment_TwoVarComprehensions verifies that the two-variable

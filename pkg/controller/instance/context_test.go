@@ -41,6 +41,11 @@ func TestContextHelpersAndStateTransitions(t *testing.T) {
 	require.ErrorAs(t, delayed, &retryAfter)
 	assert.Equal(t, 2*time.Second, retryAfter.Duration())
 
+	rcx.Config.DefaultRequeueDuration = 0
+	noRequeue := rcx.delayedRequeue(errors.New("do not retry"))
+	var noRequeueErr *requeue.NoRequeue
+	require.ErrorAs(t, noRequeue, &noRequeueErr)
+
 	clusterScoped := newClusterScopedInstanceObject("cluster-demo")
 	_, clusterRCX, raw := newControllerAndContext(t, clusterScoped, newTestGraph())
 	_, err := clusterRCX.InstanceClient().Get(context.Background(), clusterScoped.GetName(), metav1.GetOptions{})

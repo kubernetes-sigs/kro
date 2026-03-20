@@ -174,6 +174,7 @@ func (e *Environment) setupController() error {
 		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
+		e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
 		40,
 		graph.RGDConfig{
 			MaxCollectionSize:          1000,

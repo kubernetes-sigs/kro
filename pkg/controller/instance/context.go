@@ -86,6 +86,9 @@ func NewReconcileContext(
 }
 
 func (rcx *ReconcileContext) delayedRequeue(err error) error {
+	if rcx.Config.DefaultRequeueDuration == 0 {
+		return requeue.None(err)
+	}
 	return requeue.NeededAfter(err, rcx.Config.DefaultRequeueDuration)
 }
 

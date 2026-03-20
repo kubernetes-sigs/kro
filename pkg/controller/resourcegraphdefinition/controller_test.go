@@ -471,6 +471,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 		true,
 		nil,
 		nil,
+		9*time.Second,
 		7,
 		graph.RGDConfig{MaxCollectionSize: 32},
 	)
@@ -478,9 +479,25 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	require.NotNil(t, r)
 	assert.True(t, r.allowCRDDeletion)
 	assert.NotNil(t, r.crdManager)
+	assert.Equal(t, 9*time.Second, r.instanceRequeueInterval)
 	assert.Equal(t, 7, r.maxConcurrentReconciles)
 	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.rgdConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
+}
+
+func TestNewResourceGraphDefinitionReconcilerPreservesZeroInstanceRequeueInterval(t *testing.T) {
+	r := NewResourceGraphDefinitionReconciler(
+		newKROFakeSet(),
+		true,
+		nil,
+		nil,
+		0,
+		7,
+		graph.RGDConfig{},
+	)
+
+	require.NotNil(t, r)
+	assert.Zero(t, r.instanceRequeueInterval)
 }
 
 func TestFindRGDsForCRD(t *testing.T) {
@@ -626,7 +643,7 @@ func TestSetupWithManager(t *testing.T) {
 				addErr:            tt.addErr,
 			}
 
-			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 3, graph.RGDConfig{})
+			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, 3, graph.RGDConfig{})
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
 			err := reconciler.SetupWithManager(mgr)

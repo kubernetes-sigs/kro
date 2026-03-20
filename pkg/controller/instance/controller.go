@@ -44,8 +44,9 @@ const FieldManagerForLabeler = "kro.run/labeller"
 // ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
-	// DefaultRequeueDuration is the default duration to wait before requeuing a
-	// a reconciliation if no specific requeue time is set.
+	// DefaultRequeueDuration is the fixed delay used when the instance
+	// reconciler needs to retry after transient cluster state changes.
+	// Set to 0 to disable delayed requeues.
 	DefaultRequeueDuration time.Duration
 	// DeletionGraceTimeDuration is the duration to wait after initializing a resource
 	// deletion before considering it failed

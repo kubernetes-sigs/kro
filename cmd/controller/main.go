@@ -73,6 +73,7 @@ func main() {
 		rateLimit     int
 		burstLimit    int
 		// reconciler parameters
+		instanceRequeueInterval time.Duration
 		resyncPeriod            int
 		queueMaxRetries         int
 		gracefulShutdownTimeout time.Duration
@@ -126,6 +127,8 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
+	flag.DurationVar(&instanceRequeueInterval, "instance-requeue-interval", 3*time.Second,
+		"Fixed delay between delayed instance requeues while waiting for cluster state to settle.")
 	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
 		"interval at which the controller will re list resources even with no changes, in seconds.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
@@ -232,6 +235,7 @@ func main() {
 		allowCRDDeletion,
 		dc,
 		resourceGraphDefinitionGraphBuilder,
+		instanceRequeueInterval,
 		resourceGraphDefinitionConcurrentReconciles,
 		graph.RGDConfig{
 			MaxCollectionSize:          rgdMaxCollectionSize,

@@ -71,6 +71,8 @@ spec:
               value: {{ .Values.config.dynamicControllerDefaultQueueMaxRetries | quote }}
             - name: KRO_GRACEFUL_SHUTDOWN_TIMEOUT
               value: {{ .Values.config.gracefulShutdownTimeout | quote }}
+            - name: KRO_INSTANCE_REQUEUE_INTERVAL
+              value: {{ .Values.config.instance.requeueInterval | quote }}
             - name: KRO_CLIENT_QPS
               value: {{ .Values.config.clientQps | quote }}
             - name: KRO_CLIENT_BURST
@@ -95,6 +97,8 @@ spec:
             - "$(KRO_LOG_LEVEL)"
             - --graceful-shutdown-timeout
             - "$(KRO_GRACEFUL_SHUTDOWN_TIMEOUT)"
+            - --instance-requeue-interval
+            - "$(KRO_INSTANCE_REQUEUE_INTERVAL)"
             - --dynamic-controller-default-resync-period
             - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_RESYNC_PERIOD)"
             - --dynamic-controller-default-queue-max-retries

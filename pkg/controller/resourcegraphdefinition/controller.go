@@ -59,6 +59,7 @@ type ResourceGraphDefinitionReconciler struct {
 	metadataLabeler         metadata.Labeler
 	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
+	instanceRequeueInterval time.Duration
 	maxConcurrentReconciles int
 	rgdConfig               graph.RGDConfig
 }
@@ -68,6 +69,7 @@ func NewResourceGraphDefinitionReconciler(
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
+	instanceRequeueInterval time.Duration,
 	maxConcurrentReconciles int,
 	rgdConfig graph.RGDConfig,
 ) *ResourceGraphDefinitionReconciler {
@@ -78,6 +80,7 @@ func NewResourceGraphDefinitionReconciler(
 		allowCRDDeletion:        allowCRDDeletion,
 		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
+		instanceRequeueInterval: instanceRequeueInterval,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,

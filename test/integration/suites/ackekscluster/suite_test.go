@@ -47,7 +47,7 @@ func TestEKSCluster(t *testing.T) {
 				AllowCRDDeletion: true,
 				LogWriter:        GinkgoWriter,
 				ReconcileConfig: ctrlinstance.ReconcileConfig{
-					DefaultRequeueDuration: 15 * time.Second,
+					DefaultRequeueDuration: 3 * time.Second,
 				},
 			},
 		)

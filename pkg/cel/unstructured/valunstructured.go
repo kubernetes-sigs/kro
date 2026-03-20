@@ -193,11 +193,30 @@ func UnstructuredToVal(unstructured interface{}, schema common.Schema) ref.Val {
 	}
 
 	if schema.IsXPreserveUnknownFields() {
-		// Adjusted so KRO gives access to unknown fields best effort
+		// kro divergence: gives access to unknown fields best effort
+		return types.DefaultTypeAdapter.NativeToValue(unstructured)
+	}
+
+	// kro divergence: resource.Quantity in OpenAPI v3 has no top-level type,
+	// just oneOf: [{type: string}, {type: number}]. The x-kubernetes-int-or-string
+	// extension is absent. Detect this pattern and let NativeToValue handle it.
+	if schema.Type() == "" && isOneOfStringNumber(schema) {
 		return types.DefaultTypeAdapter.NativeToValue(unstructured)
 	}
 
 	return types.NewErr("invalid type, expected object, array, number, integer, boolean or string, or no type with x-kubernetes-int-or-string or x-kubernetes-preserve-unknown-fields is true, got %s", schema.Type())
+}
+
+// isOneOfStringNumber returns true if the schema has exactly oneOf with
+// "string" and "number" variants. This is how resource.Quantity appears
+// in OpenAPI v3 schemas discovered from the cluster.
+func isOneOfStringNumber(schema common.Schema) bool {
+	oneOf := schema.OneOf()
+	if len(oneOf) != 2 {
+		return false
+	}
+	has := map[string]bool{oneOf[0].Type(): true, oneOf[1].Type(): true}
+	return has["string"] && has["number"]
 }
 
 // unstructuredMapList represents an unstructured data instance of an OpenAPI array with x-kubernetes-list-type=map.

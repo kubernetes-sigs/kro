@@ -28,8 +28,11 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	rtschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	testk8s "github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
 
 func schema(typ string) *openapi.Schema {
@@ -1274,4 +1277,79 @@ func TestCELExpressionEvaluation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, types.False, out)
 	})
+}
+
+func TestUnstructuredToVal_OneOfStringNumber(t *testing.T) {
+	resolver, _ := testk8s.NewFakeResolver()
+	rqSpec, err := resolver.ResolveSchema(rtschema.GroupVersionKind{Version: "v1", Kind: "ResourceQuota"})
+	require.NoError(t, err)
+
+	// Extract the Quantity schema from ResourceQuota.spec.hard.additionalProperties.
+	quantitySpec := rqSpec.Properties["spec"].Properties["hard"].AdditionalProperties.Schema
+	s := &openapi.Schema{Schema: quantitySpec}
+
+	tests := []struct {
+		name  string
+		input interface{}
+		want  ref.Val
+	}{
+		{"string quantity", "500m", types.String("500m")},
+		{"string quantity gi", "128Mi", types.String("128Mi")},
+		{"float64 from json", float64(1.5), types.Double(1.5)},
+		{"int64", int64(4), types.Int(4)},
+		{"whole number float", float64(100), types.Double(100)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := UnstructuredToVal(tt.input, s)
+			assert.False(t, types.IsError(val), "should not error: %v", val)
+			assert.Equal(t, tt.want, val)
+		})
+	}
+}
+
+func TestCELExpressionEvaluation_ResourceQuotaQuantities(t *testing.T) {
+	resolver, _ := testk8s.NewFakeResolver()
+	rqSpec, err := resolver.ResolveSchema(rtschema.GroupVersionKind{Version: "v1", Kind: "ResourceQuota"})
+	require.NoError(t, err)
+	rqSchema := &openapi.Schema{Schema: rqSpec}
+
+	data := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"name":      "team-alpha",
+			"namespace": "default",
+		},
+		"spec": map[string]interface{}{
+			"hard": map[string]interface{}{
+				"requests.cpu":    "4",
+				"requests.memory": "8Gi",
+				"limits.cpu":      "8",
+				"limits.memory":   "16Gi",
+			},
+		},
+	}
+
+	vars := map[string]typedValue{
+		"rq": {value: data, schema: rqSchema},
+	}
+
+	tests := []struct {
+		name string
+		expr string
+		want ref.Val
+	}{
+		{"access name", "rq.metadata.name == 'team-alpha'", types.True},
+		{"access cpu quantity", "rq.spec.hard['requests.cpu'] == '4'", types.True},
+		{"access memory quantity", "rq.spec.hard['limits.memory'] == '16Gi'", types.True},
+		{"key exists", "'requests.cpu' in rq.spec.hard", types.True},
+		{"key missing", "'requests.gpu' in rq.spec.hard", types.False},
+		{"map size", "size(rq.spec.hard) == 4", types.True},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := evalCEL(t, tt.expr, vars)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out)
+		})
+	}
 }

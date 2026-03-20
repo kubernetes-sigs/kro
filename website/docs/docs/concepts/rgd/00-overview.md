@@ -148,11 +148,11 @@ When your RGD is validated and accepted:
 
 kro reports the RGD's state through three conditions in `status.conditions`:
 
-| Condition                 | Description                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **ResourceGraphAccepted** | Whether the RGD spec passed validation. If `False`, the `message` field contains the validation error. |
-| **KindReady**             | Whether the CRD for your custom API has been generated and registered with Kubernetes.                 |
-| **ControllerReady**       | Whether kro is actively watching for instances of your custom API.                                     |
+| Condition                            | Description                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| **GraphVerified**                    | Whether the RGD spec passed validation. If `False`, the `message` field contains the validation error. |
+| **CustomResourceDefinitionSynced**   | Whether the CRD for your custom API has been generated and registered with Kubernetes.                 |
+| **ReconcilerReady**                  | Whether kro is actively watching for instances of your custom API.                                     |
 
 When all three conditions are `True`, the RGD is fully operational and ready to accept instances. You can check the status with:
 

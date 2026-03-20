@@ -121,6 +121,14 @@ spec:
             - --enable-controller-warmup
             {{- end }}
             {{- end }}
+            {{- if .Values.config.featureGates }}
+            {{- $gates := list }}
+            {{- range $k, $v := .Values.config.featureGates }}
+            {{- $gates = append $gates (printf "%s=%t" $k $v) }}
+            {{- end }}
+            - --feature-gates
+            - {{ join "," $gates | quote }}
+            {{- end }}
             {{- if $pprofEnabled }}
             - --pprof-bind-address
             - ":{{ $pprofPort }}"

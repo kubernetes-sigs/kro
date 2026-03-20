@@ -43,6 +43,8 @@ spec:
                       value: ${schema.spec.fullDNSName.split('.').slice(0, 1).join('.')}
                     - name: RANDOM_SEEDED_STRING
                       value: ${random.seededString(10, schema.metadata.uid)}
+                    - name: LISTS_SUM
+                      value: "${string([100, 200, 300].sum())}"
                     - name: JSON_UNMARSHAL_EXAMPLE
                       value: "${json.unmarshal('{\"exampleJSONKey\": \"exampleJSONValue\"}').exampleJSONKey}"
                     - name: JSON_MARSHAL_EXAMPLE

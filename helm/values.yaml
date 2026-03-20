@@ -151,6 +151,10 @@ config:
     maxCollectionSize: 1000
     # Maximum size of collection dimension per forEach defined in ResourceGraphDefinitions
     maxCollectionDimensionSize: 10
+  instance:
+    # The fixed delay between delayed instance requeues while waiting for cluster state to settle.
+    # Set to 0 to disable delayed requeues.
+    requeueInterval: 3s
 
 metrics:
   service:

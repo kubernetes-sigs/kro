@@ -89,6 +89,14 @@ More workers increase throughput but also increase concurrent API server load.
 
 The resync period triggers reconciliation for all resources periodically, even without changes. This catches any drift that might have been missed.
 
+### Instance Requeues
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `config.instance.requeueInterval` | `3s` | Fixed delay for delayed instance requeues when kro is waiting for resources, readiness, or deletion to settle. Set to `0` to disable delayed requeues |
+
+This setting is also available as the `--instance-requeue-interval` flag.
+
 ### Rate Limiting
 
 The queue uses a combined rate limiter with two strategies:

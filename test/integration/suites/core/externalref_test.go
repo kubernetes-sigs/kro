@@ -534,4 +534,105 @@ var _ = Describe("ExternalRef", func() {
 		// Cleanup
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 	})
+
+	It("should list external collection resources across all namespaces when namespace is omitted", func(ctx SpecContext) {
+		// This test verifies that an external collection without an explicit
+		// namespace lists resources across ALL namespaces, not just the
+		// instance's namespace.
+		uniqueLabel := fmt.Sprintf("cross-ns-%s", rand.String(5))
+
+		nsA := fmt.Sprintf("test-ns-a-%s", rand.String(5))
+		nsB := fmt.Sprintf("test-ns-b-%s", rand.String(5))
+		instanceNS := fmt.Sprintf("test-inst-%s", rand.String(5))
+
+		for _, name := range []string{nsA, nsB, instanceNS} {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: name},
+			}
+			Expect(env.Client.Create(ctx, ns)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) {
+				Expect(env.Client.Delete(ctx, ns)).To(Succeed())
+			})
+		}
+
+		By("creating ConfigMaps with the same label in three different namespaces")
+		for i, ns := range []string{nsA, nsB, instanceNS} {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("cm-%d", i),
+					Namespace: ns,
+					Labels:    map[string]string{"suite": uniqueLabel},
+				},
+				Data: map[string]string{"from": ns},
+			}
+			Expect(env.Client.Create(ctx, cm)).To(Succeed())
+		}
+
+		By("creating RGD with external collection using label selector and NO namespace")
+		rgdName := fmt.Sprintf("test-crossns-%s", rand.String(5))
+		rgd := generator.NewResourceGraphDefinition(rgdName,
+			generator.WithSchema(
+				"TestCrossNsExtColl", "v1alpha1",
+				map[string]interface{}{},
+				map[string]interface{}{
+					"configCount": "${string(size(allconfigs))}",
+				},
+			),
+			generator.WithExternalRef("allconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					// No Namespace — should list across all namespaces.
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"suite": uniqueLabel},
+					},
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating the instance in its own namespace")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestCrossNsExtColl",
+				"metadata": map[string]interface{}{
+					"name":      "cross-ns-test",
+					"namespace": instanceNS,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("asserting instance sees ConfigMaps from ALL three namespaces (configCount=3)")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: instanceNS,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("3"),
+				"external collection without namespace should list across all namespaces, not just the instance namespace")
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Cleanup
+		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
+	})
 })

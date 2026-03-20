@@ -780,7 +780,7 @@ func TestNode_GetDesired_NamespaceNormalization_Regression(t *testing.T) {
 		withDep(inst).
 		withTemplate(map[string]any{
 			"apiVersion": "v1", "kind": "Pod",
-			"metadata":   map[string]any{"name": ""},
+			"metadata": map[string]any{"name": ""},
 		}).build()
 
 	result, err := extCol.GetDesired()

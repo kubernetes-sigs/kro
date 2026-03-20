@@ -286,11 +286,16 @@ func validateTemplateConstraints(
 		}
 	}
 	if resourceNamespaced && !instanceNamespaced {
-		if !found {
-			return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
-		}
-		if ns, ok := namespaceValue.(string); !ok || strings.TrimSpace(ns) == "" {
-			return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+		// External collection refs (selector-based) are allowed to omit namespace
+		// on cluster-scoped instances — this means "list across all namespaces".
+		isExternalCollection := rgResource.ExternalRef != nil && rgResource.ExternalRef.Metadata.Selector != nil
+		if !isExternalCollection {
+			if !found {
+				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+			}
+			if ns, ok := namespaceValue.(string); !ok || strings.TrimSpace(ns) == "" {
+				return fmt.Errorf("resource %q is namespaced and must set metadata.namespace when the instance CRD is cluster-scoped", rgResource.ID)
+			}
 		}
 	}
 

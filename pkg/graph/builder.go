@@ -67,6 +67,7 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 		schemaResolver: schemaResolver,
 		restMapper:     rm,
 		celCache:       celcache.NewBuilderCache(),
+		schemaCache:    schema.NewCache(),
 	}
 	return rgBuilder, nil
 }
@@ -101,7 +102,8 @@ type Builder struct {
 	// celCache holds cached CEL compilation artifacts (DeclTypes, typed
 	// environments, field type maps) scoped to this Builder instance.
 	// Long-lived across reconciles for cross-RGD cache hits.
-	celCache *celcache.BuilderCache
+	celCache    *celcache.BuilderCache
+	schemaCache *schema.Cache
 }
 
 // RGDConfig holds RGD runtime configuration parameters.
@@ -292,7 +294,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// Validate and compile all resource CEL expressions.
 	for id, node := range nodes {
-		if err := validateAndCompileNode(b.celCache, sessionCache, node, inspector, typedEnv, schemas[id], typeProvider); err != nil {
+		if err := validateAndCompileNode(b.celCache, b.schemaCache, sessionCache, node, inspector, typedEnv, schemas[id], typeProvider); err != nil {
 			return nil, fmt.Errorf("failed to validate resource %q: %w", id, err)
 		}
 	}
@@ -1015,14 +1017,14 @@ func parseForEachDimensions(apiDimensions []v1alpha1.ForEachDimension) ([]ForEac
 // For each segment:
 //   - Named segments: append to type name, look up in schema properties
 //   - Index segments: dereference array to element schema, append ".@idx" to type name
-func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Schema, resourceID string) (*spec.Schema, string, error) {
+func resolveSchemaAndTypeName(c *schema.Cache, segments []fieldpath.Segment, rootSchema *spec.Schema, resourceID string) (*spec.Schema, string, error) {
 	typeName := krocel.TypeNamePrefix + resourceID
 	currentSchema := rootSchema
 
 	for _, seg := range segments {
 		if seg.Name != "" {
 			typeName = typeName + "." + seg.Name
-			currentSchema = lookupSchemaAtField(currentSchema, seg.Name)
+			currentSchema = lookupSchemaAtField(c, currentSchema, seg.Name)
 			if currentSchema == nil {
 				return nil, "", fmt.Errorf("field %q not found in schema", seg.Name)
 			}
@@ -1043,13 +1045,13 @@ func resolveSchemaAndTypeName(segments []fieldpath.Segment, rootSchema *spec.Sch
 
 // getExpectedTypeForField computes the expected CEL type for a field descriptor
 // by deriving it from the OpenAPI schema at the path.
-func getExpectedTypeForField(builderCache *celcache.BuilderCache, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
+func getExpectedTypeForField(builderCache *celcache.BuilderCache, schemaCache *schema.Cache, descriptor *variable.FieldDescriptor, rootSchema *spec.Schema, resourceID string, typeProvider *krocel.DeclTypeProvider) *cel.Type {
 	segments, err := fieldpath.Parse(descriptor.Path)
 	if err != nil {
 		return cel.DynType
 	}
 
-	schema, typeName, err := resolveSchemaAndTypeName(segments, rootSchema, resourceID)
+	schema, typeName, err := resolveSchemaAndTypeName(schemaCache, segments, rootSchema, resourceID)
 	if err != nil {
 		return cel.DynType
 	}
@@ -1083,26 +1085,22 @@ func getCelTypeFromSchema(builderCache *celcache.BuilderCache, schema *spec.Sche
 }
 
 // lookupSchemaAtField resolves a single field name within a schema.
-func lookupSchemaAtField(schema *spec.Schema, field string) *spec.Schema {
-	if schema == nil || field == "" {
-		return schema
+// Returns a pointer-stable result via the schema cache.
+func lookupSchemaAtField(c *schema.Cache, s *spec.Schema, field string) *spec.Schema {
+	if s == nil || field == "" {
+		return s
 	}
 
-	if prop, ok := schema.Properties[field]; ok {
-		return &prop
+	if result := c.LookupField(s, field); result != nil {
+		return result
 	}
 
-	if schema.AdditionalProperties != nil {
-		if schema.AdditionalProperties.Schema != nil {
-			return schema.AdditionalProperties.Schema
-		}
-		if schema.AdditionalProperties.Allows {
-			return &spec.Schema{}
-		}
+	if result := c.LookupAdditionalProperties(s); result != nil {
+		return result
 	}
 
-	if schema.Items != nil && schema.Items.Schema != nil {
-		return lookupSchemaAtField(schema.Items.Schema, field)
+	if s.Items != nil && s.Items.Schema != nil {
+		return lookupSchemaAtField(c, s.Items.Schema, field)
 	}
 
 	return nil
@@ -1115,7 +1113,7 @@ func lookupSchemaAtField(schema *spec.Schema, field string) *spec.Schema {
 // - readyWhen expressions (resource readiness conditions)
 //
 // Uses the shared inspectorEnv for AST inspection and typed env for compilation.
-func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *celcache.SessionCache, node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
+func validateAndCompileNode(builderCache *celcache.BuilderCache, schemaCache *schema.Cache, sessionCache *celcache.SessionCache, node *Node, inspector *ast.Inspector, env *cel.Env, nodeSchema *spec.Schema, typeProvider *krocel.DeclTypeProvider) error {
 	// Track iterator types for extending template environment
 	var iteratorTypes map[string]*cel.Type
 
@@ -1129,7 +1127,7 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 	}
 
 	// Validate and compile template expressions
-	if err := validateAndCompileTemplates(builderCache, sessionCache, env, node, nodeSchema, typeProvider, iteratorTypes); err != nil {
+	if err := validateAndCompileTemplates(builderCache, schemaCache, sessionCache, env, node, nodeSchema, typeProvider, iteratorTypes); err != nil {
 		return err
 	}
 
@@ -1189,6 +1187,7 @@ func validateAndCompileNode(builderCache *celcache.BuilderCache, sessionCache *c
 // For collections with forEach, the env is extended with iterator variable declarations.
 func validateAndCompileTemplates(
 	builderCache *celcache.BuilderCache,
+	schemaCache *schema.Cache,
 	sessionCache *celcache.SessionCache,
 	env *cel.Env,
 	node *Node,
@@ -1219,7 +1218,7 @@ func validateAndCompileTemplates(
 
 	for _, templateVariable := range node.Variables {
 		// Compute expected type for this field
-		expectedType := getExpectedTypeForField(builderCache, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
+		expectedType := getExpectedTypeForField(builderCache, schemaCache, &templateVariable.FieldDescriptor, nodeSchema, node.Meta.ID, typeProvider)
 
 		expression := templateVariable.Expression
 		displayExpr := expression.UserExpression()

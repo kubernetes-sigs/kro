@@ -17,6 +17,7 @@ package graph
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -49,6 +50,8 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema"
 )
+
+var jsonPathIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // NewBuilder creates a new GraphBuilder instance.
 func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, error) {
@@ -207,14 +210,14 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// Build instance spec schema from SimpleSchema.
 	// This is independent of resources - just YAML parsing.
-	instanceSpecSchema, err := buildInstanceSpecSchema(rgd.Spec.Schema)
+	instanceSpecSchema, generatedPrinterColumns, err := buildInstanceSpecSchema(rgd.Spec.Schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build resourcegraphdefinition %q: %w", rgd.Name, err)
 	}
 
 	// Synthesize CRD early with empty status.
 	// We'll update the status later after inferring it from CEL expressions.
-	instanceCRD := crd.SynthesizeCRD(
+	instanceCRD := crd.SynthesizeCRDWithPrinterColumns(
 		rgd.Spec.Schema.Group,
 		rgd.Spec.Schema.APIVersion,
 		rgd.Spec.Schema.Kind,
@@ -223,6 +226,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 		false,                   // don't add default fields yet
 		crdScope,
 		rgd.Spec.Schema,
+		generatedPrinterColumns,
 	)
 
 	// Create a single expression inspector for all AST inspection operations.
@@ -730,13 +734,13 @@ func buildInstanceNode(
 // buildInstanceSpecSchema builds the instance spec schema that will be
 // used to generate the CRD for the instance resource. The instance spec
 // schema is expected to be defined using the "SimpleSchema" format.
-func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, error) {
+func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps, []extv1.CustomResourceColumnDefinition, error) {
 	// We need to unmarshal the instance schema to a map[string]interface{} to
 	// make it easier to work with.
 	instanceSpec := map[string]interface{}{}
 	err := yaml.UnmarshalStrict(rgSchema.Spec.Raw, &instanceSpec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal spec schema: %w", err)
 	}
 
 	// Also the custom types must be unmarshalled to a map[string]interface{} to
@@ -744,16 +748,97 @@ func buildInstanceSpecSchema(rgSchema *v1alpha1.Schema) (*extv1.JSONSchemaProps,
 	customTypes := map[string]interface{}{}
 	err = yaml.UnmarshalStrict(rgSchema.Types.Raw, &customTypes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
+		return nil, nil, fmt.Errorf("failed to unmarshal predefined types: %w", err)
 	}
 
 	// The instance resource has a schema defined using the "SimpleSchema" format.
-	instanceSchema, err := simpleschema.ToOpenAPISpec(instanceSpec, customTypes)
+	instanceSchema, printerColumns, err := simpleschema.ToOpenAPISpec(instanceSpec, customTypes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
+		return nil, nil, fmt.Errorf("failed to build OpenAPI schema for instance: %v", err)
 	}
 
-	return instanceSchema, nil
+	generatedPrinterColumns, err := buildInstanceSpecPrinterColumns(printerColumns)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return instanceSchema, generatedPrinterColumns, nil
+}
+
+func buildInstanceSpecPrinterColumns(printerColumns []simpleschema.PrinterColumn) ([]extv1.CustomResourceColumnDefinition, error) {
+	if len(printerColumns) == 0 {
+		return nil, nil
+	}
+
+	// Sort by path for deterministic column ordering (map iteration in
+	// simpleschema is non-deterministic).
+	slices.SortFunc(printerColumns, func(a, b simpleschema.PrinterColumn) int {
+		return slices.Compare(a.Path, b.Path)
+	})
+
+	result := make([]extv1.CustomResourceColumnDefinition, 0, len(printerColumns))
+	seenPaths := make(map[string]struct{}, len(printerColumns))
+	for _, column := range printerColumns {
+		pathKey := strings.Join(column.Path, "\x00")
+		if _, ok := seenPaths[pathKey]; ok {
+			continue
+		}
+		seenPaths[pathKey] = struct{}{}
+
+		columnType, err := buildCRDPrinterColumnType(column.TargetType)
+		if err != nil {
+			fieldPath := strings.Join(column.Path, ".")
+			return nil, fmt.Errorf("spec field %q: printColumn marker only supports scalar fields, got type: %s", fieldPath, column.TargetType)
+		}
+		if strings.TrimSpace(column.Title) == "" {
+			fieldPath := strings.Join(column.Path, ".")
+			return nil, fmt.Errorf("spec field %q: printColumn requires a non-empty title", fieldPath)
+		}
+		jsonPath, err := buildPrinterColumnJSONPath(".spec", column.Path)
+		if err != nil {
+			fieldPath := strings.Join(column.Path, ".")
+			return nil, fmt.Errorf("spec field %q: %w", fieldPath, err)
+		}
+
+		result = append(result, extv1.CustomResourceColumnDefinition{
+			Name:     column.Title,
+			Type:     columnType,
+			JSONPath: jsonPath,
+		})
+	}
+
+	return result, nil
+}
+
+func buildCRDPrinterColumnType(targetType string) (string, error) {
+	switch targetType {
+	case "string", "integer", "boolean", "number":
+		return targetType, nil
+	case "float":
+		return "number", nil
+	default:
+		return "", fmt.Errorf("unsupported printer column type: %s", targetType)
+	}
+}
+
+func buildPrinterColumnJSONPath(prefix string, path []string) (string, error) {
+	var builder strings.Builder
+	builder.WriteString(prefix)
+
+	for _, segment := range path {
+		if !jsonPathIdentifierRE.MatchString(segment) {
+			return "", fmt.Errorf(
+				"printColumn only supports identifier-safe field names (matching %q), got %q",
+				jsonPathIdentifierRE.String(),
+				segment,
+			)
+		}
+
+		builder.WriteByte('.')
+		builder.WriteString(segment)
+	}
+
+	return builder.String(), nil
 }
 
 // buildStatusSchema builds the status schema for the instance resource.

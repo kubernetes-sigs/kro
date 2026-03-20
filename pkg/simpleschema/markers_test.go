@@ -79,6 +79,18 @@ func TestApplyMarkers(t *testing.T) {
 			markers:    `description="A helpful description"`,
 			want:       &extv1.JSONSchemaProps{Type: "string", Description: "A helpful description"},
 		},
+		{
+			name:       "printColumn marker is schema no-op",
+			schemaType: "string",
+			markers:    `printColumn="IMAGE"`,
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+		},
+		{
+			name:       "printColumn title marker is schema no-op",
+			schemaType: "string",
+			markers:    `printColumn="CONTAINERIMAGE"`,
+			want:       &extv1.JSONSchemaProps{Type: "string"},
+		},
 		// Minimum/Maximum markers
 		{
 			name:       "minimum",
@@ -431,6 +443,22 @@ func TestParseMarkers(t *testing.T) {
 				{MarkerType: MarkerTypeDefault, Key: "default", Value: "5"},
 				{MarkerType: MarkerTypeDescription, Key: "description", Value: "This is a description"},
 			},
+		},
+		{
+			name:  "printColumn marker",
+			input: `printColumn="IMAGE"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypePrintColumn, Key: "printColumn", Value: "IMAGE"},
+			},
+			wantErr: false,
+		},
+		{
+			name:  "printColumn marker with title",
+			input: `printColumn="CONTAINERIMAGE"`,
+			want: []*Marker{
+				{MarkerType: MarkerTypePrintColumn, Key: "printColumn", Value: "CONTAINERIMAGE"},
+			},
+			wantErr: false,
 		},
 		{
 			name:  "complex markers with array as default value",

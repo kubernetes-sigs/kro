@@ -87,6 +87,8 @@ const (
 	MarkerTypeMinItems MarkerType = "minItems"
 	// MarkerTypeMaxItems represents the `maxItems` marker.
 	MarkerTypeMaxItems MarkerType = "maxItems"
+	// MarkerTypePrintColumn marks a scalar field for CRD printer column generation.
+	MarkerTypePrintColumn MarkerType = "printColumn"
 )
 
 func markerTypeFromString(s string) (MarkerType, error) {
@@ -94,7 +96,7 @@ func markerTypeFromString(s string) (MarkerType, error) {
 	case MarkerTypeRequired, MarkerTypeDefault, MarkerTypeDescription,
 		MarkerTypeMinimum, MarkerTypeMaximum, MarkerTypeValidation, MarkerTypeEnum, MarkerTypeImmutable,
 		MarkerTypePattern, MarkerTypeUniqueItems, MarkerTypeMinLength, MarkerTypeMaxLength, MarkerTypeMinItems,
-		MarkerTypeMaxItems:
+		MarkerTypeMaxItems, MarkerTypePrintColumn:
 		return MarkerType(s), nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownMarker, s)
@@ -258,6 +260,8 @@ func applyMarker(schema *extv1.JSONSchemaProps, marker *Marker, key string, pare
 		return applyMinItemsMarker(schema, marker)
 	case MarkerTypeMaxItems:
 		return applyMaxItemsMarker(schema, marker)
+	case MarkerTypePrintColumn:
+		return nil
 	default:
 		return fmt.Errorf("%w: %s", ErrUnknownMarker, marker.MarkerType)
 	}

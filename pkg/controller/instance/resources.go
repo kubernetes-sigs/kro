@@ -392,9 +392,14 @@ func (c *Controller) processCollectionNode(
 		existingByKey[key] = current
 	}
 
-	for _, expandedResource := range expandedResources {
-		requestWatch(rcx, id, gvr, expandedResource.GetName(), expandedResource.GetNamespace())
-	}
+	// Register a single collection watch for the forEach node. The selector
+	// matches all items owned by this instance + node, which is the same
+	// selector listCollectionItems uses to LIST them.
+	selector := labels.SelectorFromSet(labels.Set{
+		metadata.InstanceIDLabel: string(rcx.Instance.GetUID()),
+		metadata.NodeIDLabel:     id,
+	})
+	requestCollectionWatch(rcx, id, gvr, rcx.Instance.GetNamespace(), selector)
 
 	for _, expandedResource := range expandedResources {
 		key := expandedResource.GetNamespace() + "/" + expandedResource.GetName()

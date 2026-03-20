@@ -563,6 +563,236 @@ func TestNode_GetDesired_DependencyNotReady(t *testing.T) {
 	}
 }
 
+func TestNode_GetDesired_NamespaceNormalization(t *testing.T) {
+	// instanceNode returns a schema/instance node observed in the given namespace.
+	instanceNode := func(ns string) *Node {
+		return newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+			withObserved(map[string]any{
+				"metadata": map[string]any{"name": "my-instance", "namespace": ns},
+			}).build()
+	}
+
+	tests := []struct {
+		name          string
+		node          *Node
+		wantNamespace string // expected namespace on the first result object
+	}{
+		// ── Namespaced resources: namespace IS injected ──────────────────
+		{
+			name: "namespaced resource without namespace gets instance namespace",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("deploy", graph.NodeTypeResource).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "apps/v1", "kind": "Deployment",
+						"metadata": map[string]any{"name": "web"},
+					}).build()
+			}(),
+			wantNamespace: "tenant-ns",
+		},
+		{
+			name: "namespaced resource with explicit namespace keeps it",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("deploy", graph.NodeTypeResource).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "apps/v1", "kind": "Deployment",
+						"metadata": map[string]any{"name": "web", "namespace": "other-ns"},
+					}).build()
+			}(),
+			wantNamespace: "other-ns",
+		},
+
+		// ── Namespaced external: namespace IS injected ───────────────────
+		{
+			name: "namespaced external without namespace gets instance namespace",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("ext", graph.NodeTypeExternal).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "shared-config"},
+					}).build()
+			}(),
+			wantNamespace: "tenant-ns",
+		},
+		{
+			name: "namespaced external with explicit namespace keeps it",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("ext", graph.NodeTypeExternal).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{"name": "shared-config", "namespace": "specific-ns"},
+					}).build()
+			}(),
+			wantNamespace: "specific-ns",
+		},
+
+		// ── Cluster-scoped resource: no namespace injected ──────────────
+		{
+			name: "cluster-scoped resource stays without namespace",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("crb", graph.NodeTypeResource).
+					// NOT withNamespaced()
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding",
+						"metadata": map[string]any{"name": "my-binding"},
+					}).build()
+			}(),
+			wantNamespace: "",
+		},
+
+		// ── Instance node: never normalized ─────────────────────────────
+		{
+			name: "instance node is never namespace-normalized",
+			node: newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+				withNamespaced().
+				withTemplate(map[string]any{
+					"apiVersion": "v1", "kind": "Instance",
+					"metadata": map[string]any{"name": "my-instance"},
+				}).build(),
+			wantNamespace: "",
+		},
+
+		// ── External collection: NEVER normalized (the fix) ─────────────
+		{
+			name: "namespaced external collection without namespace stays empty (list all)",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("extcol", graph.NodeTypeExternalCollection).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "Pod",
+						"metadata": map[string]any{"name": ""},
+					}).build()
+			}(),
+			wantNamespace: "", // must NOT be "tenant-ns"
+		},
+		{
+			name: "namespaced external collection with explicit namespace keeps it",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("extcol", graph.NodeTypeExternalCollection).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "Pod",
+						"metadata": map[string]any{"name": "", "namespace": "specific-ns"},
+					}).build()
+			}(),
+			wantNamespace: "specific-ns",
+		},
+		{
+			name: "cluster-scoped external collection stays without namespace",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("extcol", graph.NodeTypeExternalCollection).
+					// NOT withNamespaced()
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "Node",
+						"metadata": map[string]any{"name": ""},
+					}).build()
+			}(),
+			wantNamespace: "",
+		},
+
+		// ── CEL-resolved namespace scenarios ────────────────────────────
+		{
+			name: "namespaced resource with CEL-resolved namespace keeps resolved value",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("cm", graph.NodeTypeResource).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "ConfigMap",
+						"metadata": map[string]any{
+							"name":      "test",
+							"namespace": "${schema.metadata.namespace}",
+						},
+					}).
+					withTemplateVar("metadata.namespace", "schema.metadata.namespace").
+					withTemplateExpr("schema.metadata.namespace", variable.ResourceVariableKindStatic).
+					build()
+			}(),
+			wantNamespace: "tenant-ns", // resolved via CEL, not injected by normalizeNamespaces
+		},
+		{
+			name: "namespaced external collection with CEL namespace preserves resolved value",
+			node: func() *Node {
+				inst := instanceNode("tenant-ns")
+				return newTestNode("extcol", graph.NodeTypeExternalCollection).
+					withNamespaced().
+					withDep(inst).
+					withTemplate(map[string]any{
+						"apiVersion": "v1", "kind": "Pod",
+						"metadata": map[string]any{
+							"name":      "",
+							"namespace": "${schema.metadata.namespace}",
+						},
+					}).
+					withTemplateVar("metadata.namespace", "schema.metadata.namespace").
+					withTemplateExpr("schema.metadata.namespace", variable.ResourceVariableKindStatic).
+					build()
+			}(),
+			wantNamespace: "tenant-ns", // resolved via CEL, normalizeNamespaces skipped but no-op anyway
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.node.GetDesired()
+			require.NoError(t, err)
+			require.Len(t, result, 1, "expected exactly one desired object")
+			assert.Equal(t, tt.wantNamespace, result[0].GetNamespace(),
+				"unexpected namespace on desired object")
+		})
+	}
+}
+
+// TestNode_GetDesired_NamespaceNormalization_Regression verifies that the
+// namespace normalization bug cannot silently regress. If someone removes the
+// ExternalCollection guard from the normalizeNamespaces condition, this test
+// will catch it by asserting that an empty-namespace external collection object
+// does NOT get the instance namespace injected.
+func TestNode_GetDesired_NamespaceNormalization_Regression(t *testing.T) {
+	inst := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+		withObserved(map[string]any{
+			"metadata": map[string]any{"name": "inst", "namespace": "default"},
+		}).build()
+
+	// External collection with empty namespace — the "list all namespaces" pattern.
+	extCol := newTestNode("pods", graph.NodeTypeExternalCollection).
+		withNamespaced().
+		withDep(inst).
+		withTemplate(map[string]any{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata":   map[string]any{"name": ""},
+		}).build()
+
+	result, err := extCol.GetDesired()
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	// This is the regression assertion: namespace must remain empty.
+	assert.Empty(t, result[0].GetNamespace(),
+		"BUG: normalizeNamespaces injected instance namespace into external collection; "+
+			"empty namespace means 'list all namespaces' and must not be overwritten")
+}
+
 func TestNode_IsReady_Collection(t *testing.T) {
 	waitingForReadinessErr := func(t assert.TestingT, err error, i ...interface{}) bool {
 		return assert.ErrorIs(t, err, ErrWaitingForReadiness)
@@ -1632,6 +1862,7 @@ func mustCompileTestExpr(expr string) *krocel.Expression {
 type testNodeBuilder struct {
 	id               string
 	nodeType         graph.NodeType
+	namespaced       bool
 	deps             map[string]*Node
 	observed         []*unstructured.Unstructured
 	desired          []*unstructured.Unstructured
@@ -1761,6 +1992,12 @@ func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	return b
 }
 
+// withNamespaced marks the node as namespace-scoped.
+func (b *testNodeBuilder) withNamespaced() *testNodeBuilder {
+	b.namespaced = true
+	return b
+}
+
 // withResourceSchema sets the OpenAPI schema for this node's resource.
 func (b *testNodeBuilder) withResourceSchema(schema *spec.Schema) *testNodeBuilder {
 	b.resourceSchema = schema
@@ -1772,8 +2009,9 @@ func (b *testNodeBuilder) build() *Node {
 	node := &Node{
 		Spec: &graph.Node{
 			Meta: graph.NodeMeta{
-				ID:   b.id,
-				Type: b.nodeType,
+				ID:         b.id,
+				Type:       b.nodeType,
+				Namespaced: b.namespaced,
 			},
 			Template: b.template,
 		},

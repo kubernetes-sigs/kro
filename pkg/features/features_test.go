@@ -27,6 +27,8 @@ import (
 func TestDefaultFeatureGatesAreDisabled(t *testing.T) {
 	assert.False(t, FeatureGate.Enabled(InstanceConditionEvents),
 		"InstanceConditionEvents should be disabled by default (Alpha)")
+	assert.False(t, FeatureGate.Enabled(CELOmitFunction),
+		"CELOmitFunction should be disabled by default (Alpha)")
 }
 
 // TestEnableFeatureViaSet verifies that a feature can be enabled by calling
@@ -64,4 +66,5 @@ func TestKnownFeaturesContainsAllRegistered(t *testing.T) {
 	knownStr := strings.Join(known, " ")
 
 	assert.Contains(t, knownStr, string(InstanceConditionEvents))
+	assert.Contains(t, knownStr, string(CELOmitFunction))
 }

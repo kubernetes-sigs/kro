@@ -16,6 +16,7 @@ package graph
 
 import (
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -35,11 +36,29 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
+
+func TestMain(m *testing.M) {
+	// Enable CELOmitFunction by default for all graph package tests.
+	// Tests that verify gate-off behavior disable it locally.
+	_ = features.FeatureGate.Set("CELOmitFunction=true")
+	os.Exit(m.Run())
+}
+
+// disableOmitFeatureGate disables the CELOmitFunction feature gate for the
+// duration of the test and restores it on cleanup.
+func disableOmitFeatureGate(t *testing.T) {
+	t.Helper()
+	require.NoError(t, features.FeatureGate.Set("CELOmitFunction=false"))
+	t.Cleanup(func() {
+		require.NoError(t, features.FeatureGate.Set("CELOmitFunction=true"))
+	})
+}
 
 var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
 
@@ -4254,6 +4273,16 @@ func TestBuilderHelperCases(t *testing.T) {
 				deps, _, err := extractDependencies(inspector, expr("omit()"), nil)
 				require.NoError(t, err)
 				assert.Empty(t, deps)
+			},
+		},
+		{
+			name: "extractDependencies rejects omit when feature gate is disabled",
+			run: func(t *testing.T) {
+				disableOmitFeatureGate(t)
+				inspector := newUnitInspector(t, "schema")
+				_, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "CELOmitFunction feature gate")
 			},
 		},
 		{

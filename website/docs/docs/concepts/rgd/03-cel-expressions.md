@@ -318,17 +318,18 @@ The `?` operator prevents kro from validating the field's existence at build tim
 
 ## Available CEL Libraries
 
-| Library                     | Documentation                                                                                 |
-|-----------------------------|-----------------------------------------------------------------------------------------------|
-| Lists                       | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists)                           |
-| Strings                     | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings)                         |
-| Encoders                    | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders)                        |
-| Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)            |
-| Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)      |
-| JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)        |
-| Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)       |
-| URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)  |
-| Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
+| Library                     | Documentation                                                                                     |
+|-----------------------------|---------------------------------------------------------------------------------------------------|
+| Lists                       | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists)                               |
+| Strings                     | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings)                             |
+| Encoders                    | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders)                            |
+| Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)                |
+| Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)          |
+| JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)            |
+| Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)           |
+| URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)      |
+| Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex)     |
+| Quantity                    | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Quantity)  |
 
 The kro **Index Mutation** library adds three pure list functions (they return a new list and do not modify the input):
 

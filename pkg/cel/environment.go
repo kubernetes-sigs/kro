@@ -115,6 +115,7 @@ func BaseDeclarations() []cel.EnvOption {
 			// https://github.com/kubernetes-sigs/kro/issues/880.
 			k8scellib.URLs(),
 			k8scellib.Regex(),
+			k8scellib.Quantity(),
 			library.Random(),
 			library.Maps(),
 			library.JSON(),

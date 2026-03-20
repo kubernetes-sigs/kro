@@ -31,6 +31,11 @@ const (
 	// blocked due to breaking schema changes. Use with caution - breaking changes
 	// can invalidate existing instances.
 	AllowBreakingChangesAnnotation = KRODomainName + "/allow-breaking-changes"
+
+	// InstanceReconcileAnnotation controls instance reconciliation. When set to
+	// "disabled" (case-insensitive), the instance controller skips resource
+	// reconciliation and marks the instance as suspended.
+	InstanceReconcileAnnotation = KRODomainName + "/reconcile"
 )
 
 var (

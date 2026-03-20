@@ -78,7 +78,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -451,8 +451,8 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 			return
 		}
 		if newMeta.GetGeneration() == oldMeta.GetGeneration() {
-			// Normally skip, but we should enqueue if the oldMeta had the reconcile disabled label, and the newMeta doesn't.
-			// This covers an edge case where the user only updates the reconcile label from disabled to enabled,
+			// Normally skip, but we should enqueue if the oldMeta had the reconcile disabled annotation, and the newMeta doesn't.
+			// This covers an edge case where the user only updates the reconcile annotation from disabled to enabled,
 			// which will trigger this func, but the generation won't change since it's a metadata-only update.
 			// We want to make sure this transition still triggers a reconciliation.
 			if !reconcileEnabledInUpdate(oldMeta, newMeta) {
@@ -474,8 +474,8 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
 	oldLbls := oldMeta.GetLabels()
 	newLbls := newMeta.GetLabels()
-	oldIsDisabled := strings.EqualFold(oldLbls[metadata.InstanceReconcileLabel], "disabled")
-	newIsDisabled := strings.EqualFold(newLbls[metadata.InstanceReconcileLabel], "disabled")
+	oldIsDisabled := strings.EqualFold(oldLbls[v1alpha1.InstanceReconcileAnnotation], "disabled")
+	newIsDisabled := strings.EqualFold(newLbls[v1alpha1.InstanceReconcileAnnotation], "disabled")
 	return oldIsDisabled && !newIsDisabled
 }
 

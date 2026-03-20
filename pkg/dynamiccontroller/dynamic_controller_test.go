@@ -36,7 +36,7 @@ import (
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -568,12 +568,12 @@ func TestKeyFromGVR(t *testing.T) {
 func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
 
-	makeObj := func(name, ns string, gen int64, labels map[string]string) *v1.PartialObjectMetadata {
+	makeObj := func(name, ns string, gen int64, annotations map[string]string) *v1.PartialObjectMetadata {
 		obj := &v1.PartialObjectMetadata{}
 		obj.SetName(name)
 		obj.SetNamespace(ns)
 		obj.SetGeneration(gen)
-		obj.SetLabels(labels)
+		obj.SetAnnotations(annotations)
 		return obj
 	}
 
@@ -597,26 +597,26 @@ func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
 		},
 		{
 			name:        "same generation but reconcile re-enabled — enqueues",
-			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
 			newObj:      makeObj("a", "default", 5, nil),
 			expectQueue: 1,
 		},
 		{
 			name:        "same generation, reconcile stays disabled — skips",
-			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
-			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
 			expectQueue: 0,
 		},
 		{
 			name:        "same generation, reconcile disabled on new only — skips",
 			oldObj:      makeObj("a", "default", 5, nil),
-			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
 			expectQueue: 0,
 		},
 		{
 			name:        "same generation, reconcile re-enabled case-insensitive — enqueues",
-			oldObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "Disabled"}),
-			newObj:      makeObj("a", "default", 5, map[string]string{metadata.InstanceReconcileLabel: "true"}),
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "Disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"}),
 			expectQueue: 1,
 		},
 	}
@@ -694,26 +694,26 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 	}{
 		{
 			name:   "disabled -> enabled (label removed)",
-			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			new:    nil,
 			expect: true,
 		},
 		{
 			name:   "disabled -> enabled (label changed)",
-			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
-			new:    map[string]string{metadata.InstanceReconcileLabel: "enabled"},
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "enabled"},
 			expect: true,
 		},
 		{
 			name:   "disabled -> disabled",
-			old:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
-			new:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			expect: false,
 		},
 		{
 			name:   "enabled -> disabled",
 			old:    nil,
-			new:    map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			expect: false,
 		},
 		{
@@ -724,8 +724,8 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 		},
 		{
 			name:   "case insensitive disabled",
-			old:    map[string]string{metadata.InstanceReconcileLabel: "DISABLED"},
-			new:    map[string]string{metadata.InstanceReconcileLabel: "true"},
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "DISABLED"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"},
 			expect: true,
 		},
 	}

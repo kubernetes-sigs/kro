@@ -146,7 +146,7 @@ func TestReconcileInstanceLoad(t *testing.T) {
 func TestReconcileStatusPaths(t *testing.T) {
 	tests := []struct {
 		name                string
-		instanceLabels      map[string]string
+		instanceAnnotations map[string]string
 		wantState           string
 		wantConditionType   string
 		wantConditionStatus metav1.ConditionStatus
@@ -159,7 +159,7 @@ func TestReconcileStatusPaths(t *testing.T) {
 		},
 		{
 			name:                "suspended reconciliation sets condition",
-			instanceLabels:      map[string]string{metadata.InstanceReconcileLabel: "disabled"},
+			instanceAnnotations: map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			wantState:           string(v1alpha1.InstanceStateActive),
 			wantConditionType:   ReconciliationSuspended,
 			wantConditionStatus: metav1.ConditionTrue,
@@ -169,7 +169,7 @@ func TestReconcileStatusPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			instance := newInstanceObject("demo", "default")
-			instance.SetLabels(tt.instanceLabels)
+			instance.SetAnnotations(tt.instanceAnnotations)
 
 			raw := newControllerTestDynamicClient(t, instance.DeepCopy())
 			controller, _ := newControllerUnderTest(t, raw, newTestGraph())

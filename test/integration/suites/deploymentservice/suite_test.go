@@ -174,10 +174,10 @@ var _ = Describe("DeploymentService", func() {
 			instanceIsReady(g, ctx, env, namespace, instance)
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		// // label instance with "kro.run/reconcile:disabled"
-		currentLabels := instance.GetLabels()
-		currentLabels[metadata.InstanceReconcileLabel] = "disabled"
-		instance.SetLabels(currentLabels)
+		// // annotate instance with "kro.run/reconcile:disabled"
+		currentAnnotations := instance.GetAnnotations()
+		currentAnnotations[krov1alpha1.InstanceReconcileAnnotation] = "disabled"
+		instance.SetAnnotations(currentAnnotations)
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 
 		// Instance should still be ready status

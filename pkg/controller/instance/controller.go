@@ -224,10 +224,10 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	rcx.Mark.GraphResolved()
 
 	//--------------------------------------------------------------
-	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend label is not present.
+	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend annotation is not present.
 	//--------------------------------------------------------------
-	labels := inst.GetLabels()
-	reconcileState, ok := labels[metadata.InstanceReconcileLabel]
+	annotations := inst.GetAnnotations()
+	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
 	if !ok || !strings.EqualFold(reconcileState, "disabled") {
 		rcx.Mark.ReconciliationActive()
 		if err := c.reconcileNodes(rcx); err != nil {
@@ -242,7 +242,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			return err
 		}
 	} else {
-		rcx.Mark.ReconciliationSuspended("label %s is set to %s", metadata.InstanceReconcileLabel, reconcileState)
+		rcx.Mark.ReconciliationSuspended("annotation %s is set to %s", v1alpha1.InstanceReconcileAnnotation, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,

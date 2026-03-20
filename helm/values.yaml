@@ -155,6 +155,12 @@ config:
     # The fixed delay between delayed instance requeues while waiting for cluster state to settle.
     # Set to 0 to disable delayed requeues.
     requeueInterval: 3s
+  # Feature gates for alpha/experimental features.
+  # Each key is a feature gate name, each value is a boolean.
+  # Example:
+  #   featureGates:
+  #     CELOmitFunction: true
+  featureGates: {}
 
 metrics:
   service:

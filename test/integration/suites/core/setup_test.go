@@ -24,12 +24,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/test/integration/environment"
 )
 
 var env *environment.Environment
 
 func TestCore(t *testing.T) {
+	// Enable alpha feature gates for integration test coverage.
+	if err := features.FeatureGate.Set("CELOmitFunction=true"); err != nil {
+		t.Fatalf("failed to enable CELOmitFunction feature gate: %v", err)
+	}
+
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
 		var err error

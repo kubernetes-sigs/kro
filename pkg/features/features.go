@@ -24,6 +24,13 @@ const (
 	// enabled, every condition change is surfaced as an Event on the instance
 	// object, visible via `kubectl describe`.
 	InstanceConditionEvents featuregate.Feature = "InstanceConditionEvents"
+
+	// CELOmitFunction enables the omit() CEL function for conditional field
+	// omission in resource templates. When enabled, CEL expressions can return
+	// omit() to remove the containing field from the rendered object instead
+	// of writing a value. When disabled, any use of omit() in an RGD is
+	// rejected at build time.
+	CELOmitFunction featuregate.Feature = "CELOmitFunction"
 )
 
 // defaultKroFeatureGates consists of all known KRO-specific feature keys.
@@ -31,6 +38,7 @@ const (
 // its default state and maturity stage (Alpha, Beta, or GA).
 var defaultKroFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	InstanceConditionEvents: {Default: false, PreRelease: featuregate.Alpha},
+	CELOmitFunction:         {Default: false, PreRelease: featuregate.Alpha},
 }
 
 // FeatureGate is the shared global MutableFeatureGate for KRO.

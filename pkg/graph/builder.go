@@ -39,6 +39,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
 	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/crd"
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
@@ -255,8 +256,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 
 	// Validate that omit() is not used on resource identity fields.
-	if err := validateIdentityFields(nodes, inspector, instanceNamespaced); err != nil {
-		return nil, err
+	// Only needed when omit() is enabled — if the gate is off, the builder
+	// already rejects any omit() usage in extractDependencies.
+	if features.FeatureGate.Enabled(features.CELOmitFunction) {
+		if err := validateIdentityFields(nodes, inspector, instanceNamespaced); err != nil {
+			return nil, err
+		}
 	}
 
 	// Collect all schemas for CEL validation:
@@ -889,6 +894,10 @@ func extractDependencies(inspector *ast.Inspector, expr *krocel.Expression, iter
 	inspectionResult, err := inspector.Inspect(expr.Original)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to inspect expression: %w", err)
+	}
+
+	if !features.FeatureGate.Enabled(features.CELOmitFunction) && inspectionResult.UsesOmit() {
+		return nil, nil, fmt.Errorf("omit() requires the CELOmitFunction feature gate to be enabled")
 	}
 
 	// Populate expression references

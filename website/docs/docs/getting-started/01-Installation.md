@@ -122,10 +122,6 @@ kro-7d98bc6f46-jvjl5   1/1     Running   0          30s
 ```
   </TabItem>
   <TabItem value="kubectl" label="Raw manifest installation">
-Check the Helm release:
-
-```bash
-
 Check the kro pod is running:
 
 ```bash

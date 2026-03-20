@@ -113,6 +113,7 @@ func BaseDeclarations() []cel.EnvOption {
 			// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
 			// See https://kubernetes.io/docs/reference/using-api/cel/ and
 			// https://github.com/kubernetes-sigs/kro/issues/880.
+			k8scellib.Lists(),
 			k8scellib.URLs(),
 			k8scellib.Regex(),
 			k8scellib.Quantity(),

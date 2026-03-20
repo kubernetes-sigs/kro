@@ -964,6 +964,26 @@ func TestNewInspectorWithEnv_CustomFunctionsNotResources(t *testing.T) {
 			wantUnknownRes: nil,
 		},
 		{
+			name:       "lists.sum is not an unknown function",
+			resources:  []string{"items"},
+			expression: `items.prices.sum() > 100`,
+			wantResources: []ResourceDependency{
+				{ID: "items", Path: "items.prices"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
+			name:       "lists.isSorted is not an unknown function",
+			resources:  []string{"schema"},
+			expression: `schema.spec.values.isSorted()`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.values"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
 			name:       "quantity is not an unknown function",
 			resources:  []string{"pvc"},
 			expression: `quantity(pvc.spec.resources.requests.storage).isGreaterThan(quantity("10Gi"))`,

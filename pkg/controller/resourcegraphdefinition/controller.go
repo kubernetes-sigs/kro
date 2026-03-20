@@ -20,19 +20,18 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -62,7 +61,6 @@ type ResourceGraphDefinitionReconciler struct {
 	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
 	instanceRequeueInterval time.Duration
-	crdInformer             cache.Informer
 	maxConcurrentReconciles int
 	rgdConfig               graph.RGDConfig
 
@@ -75,7 +73,6 @@ func NewResourceGraphDefinitionReconciler(
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
 	instanceRequeueInterval time.Duration,
-	crdInformer cache.Informer,
 	maxConcurrentReconciles int,
 	rgdConfig graph.RGDConfig,
 ) *ResourceGraphDefinitionReconciler {
@@ -89,7 +86,6 @@ func NewResourceGraphDefinitionReconciler(
 		instanceRequeueInterval: instanceRequeueInterval,
 		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
-		crdInformer:             crdInformer,
 		maxConcurrentReconciles: maxConcurrentReconciles,
 		rgdConfig:               rgdConfig,
 	}
@@ -131,21 +127,15 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.maxConcurrentReconciles,
 			},
 		).
-		WatchesRawSource(&source.Informer{
-			Informer: r.crdInformer,
-			Handler:  handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
-			Predicates: []predicate.Predicate{predicate.Funcs{
-				UpdateFunc: func(e event.UpdateEvent) bool {
-					return true
-				},
-				CreateFunc: func(e event.CreateEvent) bool {
-					return false
-				},
-				DeleteFunc: func(e event.DeleteEvent) bool {
-					return true
-				},
-			}},
-		}).
+		Watches(
+			&apiextensionsv1.CustomResourceDefinition{},
+			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc: func(e event.CreateEvent) bool { return false },
+				UpdateFunc: func(e event.UpdateEvent) bool { return true },
+				DeleteFunc: func(e event.DeleteEvent) bool { return true },
+			}),
+		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
 }
 

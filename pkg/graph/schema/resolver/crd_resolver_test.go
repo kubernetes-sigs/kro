@@ -17,19 +17,130 @@ package resolver
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
-	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	fake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
-	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	openapiresolver "k8s.io/apiserver/pkg/cel/openapi/resolver"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+// testCache is a minimal cache.Cache implementation for unit testing the
+// CRDSchemaResolver. It supports List with MatchingFields and Get.
+type testCache struct {
+	cache.Cache
+	mu        sync.RWMutex
+	objects   []*apiextensionsv1.CustomResourceDefinition
+	indexFn   client.IndexerFunc
+	indexName string
+}
+
+func newTestCache(crds ...*apiextensionsv1.CustomResourceDefinition) *testCache {
+	return &testCache{
+		objects: crds,
+	}
+}
+
+func (c *testCache) IndexField(_ context.Context, _ client.Object, field string, extractValue client.IndexerFunc) error {
+	c.indexName = field
+	c.indexFn = extractValue
+	return nil
+}
+
+func (c *testCache) GetInformer(_ context.Context, _ client.Object, _ ...cache.InformerGetOption) (cache.Informer, error) {
+	// Not used by Reconcile-based eviction, but needed to satisfy the interface
+	// if NewCRDSchemaResolver ever calls it during setup in tests.
+	return nil, nil
+}
+
+func (c *testCache) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, crd := range c.objects {
+		if crd.Name == key.Name {
+			*obj.(*apiextensionsv1.CustomResourceDefinition) = *crd
+			return nil
+		}
+	}
+	return apierrors.NewNotFound(schema.GroupResource{
+		Group:    "apiextensions.k8s.io",
+		Resource: "customresourcedefinitions",
+	}, key.Name)
+}
+
+func (c *testCache) List(_ context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	crdList, ok := list.(*apiextensionsv1.CustomResourceDefinitionList)
+	if !ok {
+		return errors.New("unsupported list type")
+	}
+
+	listOpts := &client.ListOptions{}
+	for _, o := range opts {
+		o.ApplyToList(listOpts)
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// If there's a MatchingFields selector, filter using the index function.
+	if listOpts.FieldSelector != nil {
+		reqs := listOpts.FieldSelector.Requirements()
+		for _, req := range reqs {
+			if req.Field == c.indexName {
+				wantValue := req.Value
+				for _, crd := range c.objects {
+					keys := c.indexFn(crd)
+					for _, key := range keys {
+						if key == wantValue {
+							crdList.Items = append(crdList.Items, *crd)
+						}
+					}
+				}
+				return nil
+			}
+		}
+	}
+
+	// No filter — return all.
+	for _, crd := range c.objects {
+		crdList.Items = append(crdList.Items, *crd)
+	}
+	return nil
+}
+
+func (c *testCache) addCRD(crd *apiextensionsv1.CustomResourceDefinition) {
+	c.mu.Lock()
+	c.objects = append(c.objects, crd)
+	c.mu.Unlock()
+}
+
+func (c *testCache) updateCRD(name string, crd *apiextensionsv1.CustomResourceDefinition) {
+	c.mu.Lock()
+	for i, existing := range c.objects {
+		if existing.Name == name {
+			c.objects[i] = crd
+			break
+		}
+	}
+	c.mu.Unlock()
+}
+
+func (c *testCache) removeCRD(name string) {
+	c.mu.Lock()
+	for i, existing := range c.objects {
+		if existing.Name == name {
+			c.objects = append(c.objects[:i], c.objects[i+1:]...)
+			break
+		}
+	}
+	c.mu.Unlock()
+}
 
 func newTestCRD(name, kind string, versions ...string) *apiextensionsv1.CustomResourceDefinition {
 	crd := &apiextensionsv1.CustomResourceDefinition{
@@ -56,38 +167,22 @@ func newTestCRD(name, kind string, versions ...string) *apiextensionsv1.CustomRe
 	return crd
 }
 
-func startResolver(t *testing.T, crds ...*apiextensionsv1.CustomResourceDefinition) (*CRDSchemaResolver, *fake.Clientset) {
+func startResolver(t *testing.T, crds ...*apiextensionsv1.CustomResourceDefinition) (*CRDSchemaResolver, *testCache) {
 	t.Helper()
-	objs := make([]k8sruntime.Object, len(crds))
-	for i := range crds {
-		objs[i] = crds[i]
-	}
-	fakeClient := fake.NewSimpleClientset(objs...)
-	factory := apiextensionsinformers.NewSharedInformerFactory(fakeClient, 0)
-	r, err := NewCRDSchemaResolver(factory.Apiextensions().V1().CustomResourceDefinitions())
-	if err != nil {
-		t.Fatalf("NewCRDSchemaResolver: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	factory.Start(ctx.Done())
-	factory.WaitForCacheSync(ctx.Done())
-
-	return r, fakeClient
+	tc := newTestCache(crds...)
+	r := NewCRDSchemaResolver(tc)
+	return r, tc
 }
 
-func eventually(t *testing.T, condition func() bool, timeout, interval time.Duration) {
+// reconcileCRD is a test helper that triggers a Reconcile for the given CRD name.
+func reconcileCRD(t *testing.T, r *CRDSchemaResolver, name string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(interval)
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: name},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile(%s): %v", name, err)
 	}
-	t.Fatal("condition not met within timeout")
 }
 
 func TestExtractVersionSchema(t *testing.T) {
@@ -200,7 +295,6 @@ func TestResolveSchema(t *testing.T) {
 		crds    []*apiextensionsv1.CustomResourceDefinition
 		gvk     schema.GroupVersionKind
 		wantErr bool
-		wantNil bool
 	}{
 		{
 			name: "resolves existing CRD",
@@ -261,9 +355,9 @@ func TestResolveSchema_MultipleVersions(t *testing.T) {
 	}
 }
 
-func TestResolveSchema_EvictOnUpdate(t *testing.T) {
+func TestReconcile_EvictOnUpdate(t *testing.T) {
 	crd := newTestCRD("foos.example.com", "Foo", "v1")
-	r, fakeClient := startResolver(t, crd)
+	r, tc := startResolver(t, crd)
 
 	gvk := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"}
 	s1, _ := r.ResolveSchema(gvk)
@@ -271,23 +365,25 @@ func TestResolveSchema_EvictOnUpdate(t *testing.T) {
 		t.Fatal("expected non-nil schema")
 	}
 
-	crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"] = apiextensionsv1.JSONSchemaProps{Type: "object"}
-	_, err := fakeClient.ApiextensionsV1().CustomResourceDefinitions().Update(
-		context.Background(), crd, metav1.UpdateOptions{},
-	)
-	if err != nil {
-		t.Fatalf("failed to update CRD: %v", err)
-	}
+	// Update the CRD in the fake cache and reconcile.
+	updatedCRD := crd.DeepCopy()
+	updatedCRD.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"] = apiextensionsv1.JSONSchemaProps{Type: "object"}
+	tc.updateCRD("foos.example.com", updatedCRD)
+	reconcileCRD(t, r, "foos.example.com")
 
-	eventually(t, func() bool {
-		s2, err := r.ResolveSchema(gvk)
-		return err == nil && s2 != s1
-	}, 5*time.Second, 50*time.Millisecond)
+	// After eviction, the next resolve should return a different schema pointer.
+	s2, err := r.ResolveSchema(gvk)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s2 == s1 {
+		t.Fatal("expected different schema pointer after eviction")
+	}
 }
 
-func TestResolveSchema_EvictOnDelete(t *testing.T) {
+func TestReconcile_EvictOnDelete(t *testing.T) {
 	crd := newTestCRD("foos.example.com", "Foo", "v1")
-	r, fakeClient := startResolver(t, crd)
+	r, tc := startResolver(t, crd)
 
 	gvk := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"}
 	_, err := r.ResolveSchema(gvk)
@@ -295,70 +391,35 @@ func TestResolveSchema_EvictOnDelete(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = fakeClient.ApiextensionsV1().CustomResourceDefinitions().Delete(
-		context.Background(), "foos.example.com", metav1.DeleteOptions{},
-	)
-	if err != nil {
-		t.Fatalf("failed to delete CRD: %v", err)
-	}
+	// Remove CRD from cache and reconcile (simulates delete).
+	tc.removeCRD("foos.example.com")
+	reconcileCRD(t, r, "foos.example.com")
 
-	eventually(t, func() bool {
-		_, err := r.ResolveSchema(gvk)
-		return errors.Is(err, openapiresolver.ErrSchemaNotFound)
-	}, 5*time.Second, 50*time.Millisecond)
+	_, err = r.ResolveSchema(gvk)
+	if !errors.Is(err, openapiresolver.ErrSchemaNotFound) {
+		t.Fatalf("expected ErrSchemaNotFound after delete, got %v", err)
+	}
+}
+
+func TestReconcile_DeleteUnknownCRD(t *testing.T) {
+	// Reconciling a CRD name that was never resolved should be a no-op.
+	r, _ := startResolver(t)
+	reconcileCRD(t, r, "unknown.example.com")
 }
 
 func TestResolveSchema_DynamicAdd(t *testing.T) {
-	r, fakeClient := startResolver(t)
+	r, tc := startResolver(t)
 
 	barCRD := newTestCRD("bars.example.com", "Bar", "v1")
-	_, err := fakeClient.ApiextensionsV1().CustomResourceDefinitions().Create(
-		context.Background(), barCRD, metav1.CreateOptions{},
-	)
-	if err != nil {
-		t.Fatalf("failed to create CRD: %v", err)
-	}
+	tc.addCRD(barCRD)
 
 	barGVK := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Bar"}
-	eventually(t, func() bool {
-		s, err := r.ResolveSchema(barGVK)
-		return err == nil && s != nil
-	}, 5*time.Second, 50*time.Millisecond)
-}
-
-func TestOnDelete_InvalidObject(t *testing.T) {
-	r, _ := startResolver(t)
-	tests := []struct {
-		name string
-		obj  any
-	}{
-		{"nil", nil},
-		{"string", "not-a-crd"},
-		{"tombstone with string", cache.DeletedFinalStateUnknown{Obj: "not-a-crd"}},
-		{"tombstone with nil CRD", cache.DeletedFinalStateUnknown{Obj: (*apiextensionsv1.CustomResourceDefinition)(nil)}},
+	s, err := r.ResolveSchema(barGVK)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r.onDelete(tt.obj) // should not panic
-		})
-	}
-}
-
-func TestOnDelete_Tombstone(t *testing.T) {
-	crd := newTestCRD("foos.example.com", "Foo", "v1")
-	r, _ := startResolver(t, crd)
-
-	gvk := schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Foo"}
-	_, _ = r.ResolveSchema(gvk)
-
-	tombstone := cache.DeletedFinalStateUnknown{Key: "foos.example.com", Obj: crd}
-	r.onDelete(tombstone)
-
-	r.mu.RLock()
-	_, ok := r.schemas[gvk]
-	r.mu.RUnlock()
-	if ok {
-		t.Fatal("expected cache eviction after tombstone delete")
+	if s == nil {
+		t.Fatal("expected non-nil schema")
 	}
 }
 

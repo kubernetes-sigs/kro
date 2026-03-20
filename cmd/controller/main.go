@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 	"strings"
@@ -30,11 +29,7 @@ import (
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-
-	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
-	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
 
 	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
@@ -230,29 +225,10 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	// Shared CRD informer for schema resolution and RGD controller.
-	apiextensionsClientset, err := apiextensionsclient.NewForConfigAndClient(restConfig, set.HTTPClient())
-	if err != nil {
-		setupLog.Error(err, "unable to create apiextensions clientset")
-		os.Exit(1)
-	}
-	crdInformerFactory := apiextensionsinformers.NewSharedInformerFactory(apiextensionsClientset, 0)
-	crdInformer := crdInformerFactory.Apiextensions().V1().CustomResourceDefinitions()
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		crdInformerFactory.Start(ctx.Done())
-		crdInformerFactory.WaitForCacheSync(ctx.Done())
-		<-ctx.Done()
-		crdInformerFactory.Shutdown()
-		return nil
-	})); err != nil {
-		setupLog.Error(err, "unable to register CRD informer with manager")
-		os.Exit(1)
-	}
-
-	// Schema resolution: core -> CRD informer -> fallback discovery.
-	crdResolver, err := schemaresolver.NewCRDSchemaResolver(crdInformer)
-	if err != nil {
-		setupLog.Error(err, "unable to create CRD schema resolver")
+	// Schema resolution: core -> CRD informer (via manager cache) -> fallback discovery.
+	crdResolver := schemaresolver.NewCRDSchemaResolver(mgr.GetCache())
+	if err := crdResolver.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup CRD schema resolver")
 		os.Exit(1)
 	}
 	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, set.HTTPClient())
@@ -271,7 +247,6 @@ func main() {
 		dc,
 		resourceGraphDefinitionGraphBuilder,
 		instanceRequeueInterval,
-		crdInformer.Informer(),
 		resourceGraphDefinitionConcurrentReconciles,
 		graph.RGDConfig{
 			MaxCollectionSize:          rgdMaxCollectionSize,

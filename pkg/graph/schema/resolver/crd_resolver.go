@@ -15,6 +15,7 @@
 package resolver
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -23,76 +24,145 @@ import (
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
-	crdinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/cel/environment"
 	openapiresolver "k8s.io/apiserver/pkg/cel/openapi/resolver"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kroschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 )
 
 const (
-	// gvkIndexName is the name of the custom indexer that maps GVK strings
-	// to CRD objects.
-	gvkIndexName = "byGVK"
+	// CRDGVKIndexField is the field index name used by controller-runtime's
+	// cache to map GVK strings to CRD objects.
+	CRDGVKIndexField = ".metadata.gvkIndex"
 )
 
-// CRDSchemaResolver resolves schemas from CRD OpenAPI definitions using a CRD
-// informer with a custom GVK indexer for lookups and lazy schema extraction.
+// CRDSchemaResolver resolves schemas from CRD OpenAPI definitions using the
+// controller-runtime cache with a custom GVK field index for lookups and lazy
+// schema extraction.
 //
 // Schemas are only parsed when ResolveSchema is called (lazy) and cached until
-// the CRD is updated or deleted. Event handlers evict cached schemas so the
-// next resolve re-extracts from the updated CRD.
+// the CRD is updated or deleted. A controller watches CRD changes and evicts
+// cached schemas so the next resolve re-extracts from the updated CRD.
 type CRDSchemaResolver struct {
 	mu      sync.RWMutex
 	schemas map[schema.GroupVersionKind]*spec.Schema
-	indexer cache.Indexer
+	// crdGVKs is a reverse index: CRD name → GVKs tracked for that CRD.
+	// Used to evict schemas when a CRD is deleted (the object is already
+	// gone from the cache by the time the reconciler runs).
+	crdGVKs map[string][]schema.GroupVersionKind
+	cache   cache.Cache
 	sf      singleflight.Group
 }
 
-// NewCRDSchemaResolver creates a resolver from a CRD informer. It adds a
-// custom GVK indexer to the informer for O(1) lookups and registers event
-// handlers for cache eviction. The caller is responsible for starting the
-// informer (e.g. via the informer factory registered with the controller
-// manager).
-func NewCRDSchemaResolver(crdInformer crdinformers.CustomResourceDefinitionInformer) (*CRDSchemaResolver, error) {
-	informer := crdInformer.Informer()
+// NewCRDSchemaResolver creates a resolver backed by the controller-runtime
+// cache. Call SetupWithManager to register the field index and eviction
+// controller before starting the manager.
+func NewCRDSchemaResolver(c cache.Cache) *CRDSchemaResolver {
+	return &CRDSchemaResolver{
+		schemas: make(map[schema.GroupVersionKind]*spec.Schema),
+		crdGVKs: make(map[string][]schema.GroupVersionKind),
+		cache:   c,
+	}
+}
 
-	// Add a custom indexer that maps GVK strings to CRD objects.
-	if err := informer.AddIndexers(cache.Indexers{
-		gvkIndexName: func(obj any) ([]string, error) {
+// SetupWithManager registers a GVK field index on the cache and a controller
+// that watches CRD updates/deletes to evict stale cached schemas. Must be
+// called before the manager is started.
+func (r *CRDSchemaResolver) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetCache().IndexField(
+		context.Background(),
+		&apiextensionsv1.CustomResourceDefinition{},
+		CRDGVKIndexField,
+		func(obj client.Object) []string {
 			crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
 			if !ok {
-				return nil, nil
+				return nil
 			}
-			return gvkIndexKeys(crd), nil
+			return gvkIndexKeys(crd)
 		},
-	}); err != nil {
-		return nil, fmt.Errorf("adding GVK indexer: %w", err)
+	); err != nil {
+		return fmt.Errorf("adding GVK field index: %w", err)
 	}
 
-	r := &CRDSchemaResolver{
-		schemas: make(map[schema.GroupVersionKind]*spec.Schema),
-		indexer: informer.GetIndexer(),
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("crd-schema-resolver").
+		Watches(
+			&apiextensionsv1.CustomResourceDefinition{},
+			&handler.EnqueueRequestForObject{},
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc: func(event.CreateEvent) bool { return false },
+				UpdateFunc: func(event.UpdateEvent) bool { return true },
+				DeleteFunc: func(event.DeleteEvent) bool { return true },
+			}),
+		).
+		Complete(r)
+}
+
+// Reconcile evicts cached schemas when a CRD is updated or deleted.
+func (r *CRDSchemaResolver) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	if err := r.cache.Get(ctx, client.ObjectKey{Name: req.Name}, crd); err != nil {
+		if apierrors.IsNotFound(err) {
+			// CRD deleted — evict using the reverse index.
+			r.mu.Lock()
+			if gvks, ok := r.crdGVKs[req.Name]; ok {
+				for _, gvk := range gvks {
+					if _, exists := r.schemas[gvk]; exists {
+						delete(r.schemas, gvk)
+						crdCacheEvictionsTotal.Inc()
+					}
+				}
+				delete(r.crdGVKs, req.Name)
+				crdCacheSize.Set(float64(len(r.schemas)))
+			}
+			r.mu.Unlock()
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, err
 	}
 
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		UpdateFunc: r.onUpdate,
-		DeleteFunc: r.onDelete,
-	}); err != nil {
-		return nil, fmt.Errorf("adding event handler: %w", err)
+	// CRD updated — evict all tracked GVKs (old + new versions).
+	gvks := allGVKs(crd)
+	r.mu.Lock()
+	// Evict previously tracked GVKs (handles removed versions).
+	if old, ok := r.crdGVKs[req.Name]; ok {
+		for _, gvk := range old {
+			if _, exists := r.schemas[gvk]; exists {
+				delete(r.schemas, gvk)
+				crdCacheEvictionsTotal.Inc()
+			}
+		}
 	}
+	// Evict current GVKs and update the reverse index.
+	for _, gvk := range gvks {
+		if _, exists := r.schemas[gvk]; exists {
+			delete(r.schemas, gvk)
+			crdCacheEvictionsTotal.Inc()
+		}
+	}
+	r.crdGVKs[req.Name] = gvks
+	crdCacheSize.Set(float64(len(r.schemas)))
+	r.mu.Unlock()
 
-	return r, nil
+	return reconcile.Result{}, nil
 }
 
 // ResolveSchema returns the OpenAPI schema for the given GVK.
 //
 // On cache hit the schema is returned immediately. On miss, singleflight
 // deduplicates concurrent extractions for the same GVK: only one goroutine
-// queries the informer index, extracts the schema, and populates the cache.
+// queries the cache index, extracts the schema, and populates the local cache.
 func (r *CRDSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Schema, error) {
 	// Fast path: cached schema.
 	r.mu.RLock()
@@ -115,16 +185,18 @@ func (r *CRDSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Sc
 		}
 		r.mu.RUnlock()
 
-		// Look up the CRD from the informer's GVK index.
-		items, err := r.indexer.ByIndex(gvkIndexName, key)
-		if err != nil || len(items) == 0 {
+		// Look up the CRD from the cache's GVK field index.
+		var crdList apiextensionsv1.CustomResourceDefinitionList
+		if err := r.cache.List(context.Background(), &crdList,
+			client.MatchingFields{CRDGVKIndexField: key},
+		); err != nil {
+			return nil, fmt.Errorf("listing CRDs by GVK index: %w", err)
+		}
+		if len(crdList.Items) == 0 {
 			return nil, openapiresolver.ErrSchemaNotFound
 		}
 
-		crd, ok := items[0].(*apiextensionsv1.CustomResourceDefinition)
-		if !ok {
-			return nil, openapiresolver.ErrSchemaNotFound
-		}
+		crd := &crdList.Items[0]
 
 		// Extract the schema for the requested version and inject ObjectMeta.
 		start := time.Now()
@@ -141,6 +213,8 @@ func (r *CRDSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Sc
 
 		r.mu.Lock()
 		r.schemas[gvk] = s
+		// Track this CRD in the reverse index for delete eviction.
+		r.crdGVKs[crd.Name] = allGVKs(crd)
 		r.mu.Unlock()
 
 		crdCacheSize.Set(float64(len(r.schemas)))
@@ -189,46 +263,6 @@ func allGVKs(crd *apiextensionsv1.CustomResourceDefinition) []schema.GroupVersio
 		})
 	}
 	return gvks
-}
-
-func (r *CRDSchemaResolver) evictGVKs(gvks []schema.GroupVersionKind) {
-	r.mu.Lock()
-	for _, gvk := range gvks {
-		if _, ok := r.schemas[gvk]; ok {
-			delete(r.schemas, gvk)
-			crdCacheEvictionsTotal.Inc()
-		}
-	}
-	crdCacheSize.Set(float64(len(r.schemas)))
-	r.mu.Unlock()
-}
-
-func (r *CRDSchemaResolver) onUpdate(oldObj, newObj any) {
-	// Evict GVKs from both old and new CRD to handle served-version changes.
-	if oldCRD, ok := oldObj.(*apiextensionsv1.CustomResourceDefinition); ok && oldCRD != nil {
-		r.evictGVKs(allGVKs(oldCRD))
-	}
-	if newCRD, ok := newObj.(*apiextensionsv1.CustomResourceDefinition); ok && newCRD != nil {
-		r.evictGVKs(allGVKs(newCRD))
-	}
-}
-
-func (r *CRDSchemaResolver) onDelete(obj any) {
-	crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
-	if !ok {
-		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			return
-		}
-		crd, ok = tombstone.Obj.(*apiextensionsv1.CustomResourceDefinition)
-		if !ok {
-			return
-		}
-	}
-	if crd == nil {
-		return
-	}
-	r.evictGVKs(allGVKs(crd))
 }
 
 // injectKubeEnvelope adds the standard Kubernetes envelope fields (metadata,

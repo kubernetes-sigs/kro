@@ -485,7 +485,6 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 		nil,
 		nil,
 		9*time.Second,
-		nil,
 		7,
 		graph.RGDConfig{MaxCollectionSize: 32},
 	)
@@ -657,7 +656,7 @@ func TestSetupWithManager(t *testing.T) {
 				addErr:            tt.addErr,
 			}
 
-			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, stubCch.crdInformer, 3, graph.RGDConfig{})
+			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, 3, graph.RGDConfig{})
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
 			err := reconciler.SetupWithManager(mgr)

@@ -97,6 +97,21 @@ deployment:
   # Additional volume mount settings for Pods
   extraVolumeMounts: []
 
+# Debugging configuration settings
+# WARNING: pprof profiling endpoints expose sensitive performance data.
+# Do not use in production environments.
+debug:
+  pprof:
+    # Enable pprof profiling (uses the -debug tagged image)
+    # When using image.ko=true, build with GOFLAGS="-tags=pprof".
+    enabled: false
+    # Port for the pprof HTTP server
+    port: 6060
+    # Create a Service for pprof (useful for port-forwarding)
+    service:
+      enabled: false
+      type: ClusterIP
+
 # Application configuration settings
 config:
   # Allow kro to delete CRDs

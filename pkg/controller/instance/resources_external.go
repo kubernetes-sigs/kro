@@ -107,14 +107,12 @@ func (c *Controller) processExternalCollectionNode(
 		}
 	}
 
-	// Get namespace from the resolved template. For cluster-scoped resources,
-	// use empty namespace so the LIST is not scoped to a single namespace.
+	// Get namespace from the resolved template. For namespaced resources, an
+	// empty namespace means "list across all namespaces" rather than falling
+	// back to the instance namespace.
 	ns := desired[0].GetNamespace()
 	if !nodeMeta.Namespaced {
 		ns = ""
-	} else if ns == "" {
-		// if no namespace is specified, use the namespace of the instance.
-		ns = rcx.Instance.GetNamespace()
 	}
 
 	// Register collection watch with the coordinator.

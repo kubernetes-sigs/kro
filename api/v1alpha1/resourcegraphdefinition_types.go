@@ -129,7 +129,8 @@ type ExternalRefMetadata struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name,omitempty"`
 	// Namespace is the namespace of the external resource.
-	// If empty, the instance's namespace will be used.
+	// For single external refs (Name), defaults to the instance's namespace.
+	// For external collections (Selector), empty means list across all namespaces.
 	//
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`

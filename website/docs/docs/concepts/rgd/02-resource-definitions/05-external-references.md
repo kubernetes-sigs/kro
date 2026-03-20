@@ -55,7 +55,8 @@ This allows multiple instances to share the same configuration without duplicati
 - **kro never creates, updates, or deletes** the external resource
 - **The resource must exist** for reconciliation to succeed - kro waits for it to be present
 - **External resources participate in the dependency graph** just like managed resources
-- **If namespace is omitted**, kro looks for the resource in the instance's namespace
+- **If namespace is omitted** on a scalar ref, kro looks for the resource in the instance's namespace
+- **If namespace is omitted** on a collection ref, kro lists resources across all namespaces
 
 ## What You Can Reference
 
@@ -69,7 +70,7 @@ External references support two forms: **scalar** (single resource by name) and 
     kind: ConfigMap
     metadata:
       name: my-config          # Fetch one resource by name
-      namespace: default       # Optional: Defaults to instance namespace
+      namespace: default       # Optional: defaults to instance namespace
 
 # Collection: reference multiple resources by label selector
 - id: teamConfigs
@@ -77,6 +78,7 @@ External references support two forms: **scalar** (single resource by name) and 
     apiVersion: v1
     kind: ConfigMap
     metadata:
+      namespace: default       # Optional: omit to list across all namespaces
       selector:                # Fetch all matching resources as an array
         matchLabels:
           team: platform
@@ -250,7 +252,7 @@ CEL selector values are evaluated on every reconciliation. If the schema field c
 
 ### Empty Selectors
 
-An empty selector matches **all** resources of the given kind in the target namespace:
+An empty selector matches **all** resources of the given kind across all namespaces (or in a specific namespace if `namespace` is set):
 
 ```kro
 - id: allConfigs

@@ -15,10 +15,11 @@
 package cache
 
 import (
+	"encoding/hex"
+	"encoding/json"
+	"hash/fnv"
 	"sort"
-	"strconv"
 	"strings"
-	"unsafe"
 
 	"github.com/google/cel-go/cel"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -84,9 +85,25 @@ func MakeIteratorVarsKey(vars map[string]*cel.Type) string {
 	return b.String()
 }
 
+type envSchemaKey struct {
+	Type                  []string                 `json:"type,omitempty"`
+	Format                string                   `json:"format,omitempty"`
+	Required              []string                 `json:"required,omitempty"`
+	XIntOrString          bool                     `json:"xIntOrString,omitempty"`
+	PreserveUnknownFields bool                     `json:"preserveUnknownFields,omitempty"`
+	Properties            map[string]*envSchemaKey `json:"properties,omitempty"`
+	Items                 *envSchemaKey            `json:"items,omitempty"`
+	AdditionalProperties  *envAdditionalPropsKey   `json:"additionalProperties,omitempty"`
+}
+
+type envAdditionalPropsKey struct {
+	Allows bool          `json:"allows,omitempty"`
+	Schema *envSchemaKey `json:"schema,omitempty"`
+}
+
 // MakeEnvCacheKey builds a canonical string key from a schema map.
-// Schemas are sorted by name for determinism, and each entry encodes
-// the schema pointer address to distinguish different schema objects.
+// Schemas are keyed by their CEL-relevant structural shape rather than
+// by pointer identity so equivalent schema sets reuse the same typed env.
 func MakeEnvCacheKey(schemas map[string]*spec.Schema) string {
 	names := make([]string, 0, len(schemas))
 	for name := range schemas {
@@ -94,15 +111,64 @@ func MakeEnvCacheKey(schemas map[string]*spec.Schema) string {
 	}
 	sort.Strings(names)
 
-	var b strings.Builder
-	for i, name := range names {
-		if i > 0 {
-			b.WriteByte(';')
-		}
-		b.WriteString(name)
-		b.WriteByte(':')
-		b.WriteString("0x")
-		b.WriteString(strconv.FormatUint(uint64(uintptr(unsafe.Pointer(schemas[name]))), 16))
+	h := fnv.New128a()
+	normalized := make(map[string]*envSchemaKey, len(schemas))
+	for _, name := range names {
+		normalized[name] = makeEnvSchemaKey(schemas[name])
 	}
-	return b.String()
+
+	data, err := json.Marshal(normalized)
+	if err == nil {
+		_, _ = h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func makeEnvSchemaKey(schema *spec.Schema) *envSchemaKey {
+	if schema == nil {
+		return nil
+	}
+
+	key := &envSchemaKey{
+		Type:                  append([]string(nil), schema.Type...),
+		Format:                schema.Format,
+		Required:              append([]string(nil), schema.Required...),
+		XIntOrString:          extensionBool(schema.Extensions, "x-kubernetes-int-or-string"),
+		PreserveUnknownFields: extensionBool(schema.Extensions, "x-kubernetes-preserve-unknown-fields"),
+	}
+	sort.Strings(key.Type)
+	sort.Strings(key.Required)
+
+	if len(schema.Properties) > 0 {
+		key.Properties = make(map[string]*envSchemaKey, len(schema.Properties))
+		for name, child := range schema.Properties {
+			childCopy := child
+			key.Properties[name] = makeEnvSchemaKey(&childCopy)
+		}
+	}
+
+	if schema.Items != nil && schema.Items.Schema != nil {
+		key.Items = makeEnvSchemaKey(schema.Items.Schema)
+	}
+
+	if schema.AdditionalProperties != nil {
+		key.AdditionalProperties = &envAdditionalPropsKey{
+			Allows: schema.AdditionalProperties.Allows,
+			Schema: makeEnvSchemaKey(schema.AdditionalProperties.Schema),
+		}
+	}
+
+	return key
+}
+
+func extensionBool(ext spec.Extensions, key string) bool {
+	if ext == nil {
+		return false
+	}
+	v, ok := ext[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
 }

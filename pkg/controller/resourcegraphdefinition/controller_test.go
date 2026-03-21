@@ -642,7 +642,7 @@ func TestSetupWithManager(t *testing.T) {
 				v1alpha1.GroupVersion,
 				extv1.SchemeGroupVersion,
 			})
-			cache := &stubCache{
+			stubCch := &stubCache{
 				rgdInformer: &stubInformer{},
 				crdInformer: &stubInformer{},
 			}
@@ -651,7 +651,7 @@ func TestSetupWithManager(t *testing.T) {
 				restMapper:        mapper,
 				logger:            logr.Discard(),
 				scheme:            testScheme(t),
-				cache:             cache,
+				cache:             stubCch,
 				controllerOptions: config.Controller{SkipNameValidation: &skipNameValidation},
 				addErr:            tt.addErr,
 			}

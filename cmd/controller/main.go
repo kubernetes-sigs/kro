@@ -37,6 +37,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
@@ -224,11 +225,21 @@ func main() {
 		BurstLimit:      burstLimit,
 	}, set.Metadata(), set.RESTMapper())
 
-	resourceGraphDefinitionGraphBuilder, err := graph.NewBuilder(restConfig, set.HTTPClient())
-	if err != nil {
-		setupLog.Error(err, "unable to create resource graph definition graph builder")
+	// Schema resolution: core -> CRD informer (via manager cache) -> fallback discovery.
+	crdResolver := schemaresolver.NewCRDSchemaResolver(mgr.GetCache())
+	if err := crdResolver.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup CRD schema resolver")
 		os.Exit(1)
 	}
+	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, set.HTTPClient())
+	if err != nil {
+		setupLog.Error(err, "unable to create fallback schema resolver")
+		os.Exit(1)
+	}
+	resourceGraphDefinitionGraphBuilder := graph.NewBuilder(
+		schemaresolver.NewChainedResolver(schemaresolver.DefaultCoreResolver(), crdResolver, fallbackResolver),
+		set.RESTMapper(),
+	)
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
 		set,

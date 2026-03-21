@@ -37,6 +37,7 @@ import (
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	schemaresolver "github.com/kubernetes-sigs/kro/pkg/graph/schema/resolver"
 )
 
 type Environment struct {
@@ -132,12 +133,6 @@ func (e *Environment) initializeClients() error {
 
 	e.CRDManager = e.ClientSet.CRD(kroclient.CRDWrapperConfig{})
 
-	restConfig := e.ClientSet.RESTConfig()
-	e.GraphBuilder, err = graph.NewBuilder(restConfig, e.ClientSet.HTTPClient())
-	if err != nil {
-		return fmt.Errorf("creating graph builder: %w", err)
-	}
-
 	return nil
 }
 
@@ -155,6 +150,23 @@ func (e *Environment) setupController() error {
 		return fmt.Errorf("creating manager: %w", err)
 	}
 	e.ClientSet.SetRESTMapper(e.CtrlManager.GetRESTMapper())
+
+	restConfig := e.ClientSet.RESTConfig()
+
+	// Schema resolution: core -> CRD informer (via manager cache) -> fallback discovery.
+	crdResolver := schemaresolver.NewCRDSchemaResolver(e.CtrlManager.GetCache())
+	if err := crdResolver.SetupWithManager(e.CtrlManager); err != nil {
+		return fmt.Errorf("setting up CRD schema resolver: %w", err)
+	}
+	fallbackResolver, err := schemaresolver.DefaultFallbackResolver(restConfig, e.ClientSet.HTTPClient())
+	if err != nil {
+		return fmt.Errorf("creating fallback resolver: %w", err)
+	}
+
+	e.GraphBuilder = graph.NewBuilder(
+		schemaresolver.NewChainedResolver(schemaresolver.DefaultCoreResolver(), crdResolver, fallbackResolver),
+		e.CtrlManager.GetRESTMapper(),
+	)
 
 	dc := dynamiccontroller.NewDynamicController(
 		zap.New(zap.WriteTo(e.ControllerConfig.LogWriter), zap.UseDevMode(true)),

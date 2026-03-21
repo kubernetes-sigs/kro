@@ -23,6 +23,11 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
+// StringSchema is a simple string type schema.
+var StringSchema = spec.Schema{
+	SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+}
+
 // ObjectMeta holds the k8s ObjectMeta schema, populated once at startup.
 var ObjectMetaSchema spec.Schema
 

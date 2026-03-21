@@ -20,6 +20,7 @@ import (
 )
 
 var (
+	// TTL-cached (fallback) resolver metrics.
 	cacheHitsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "schema_resolver_cache_hits_total",
 		Help: "Total number of schema resolver cache hits",
@@ -54,11 +55,43 @@ var (
 		Name: "schema_resolver_errors_total",
 		Help: "Total number of schema resolution errors",
 	})
+
+	// CRD informer-backed resolver metrics.
+	crdCacheHitsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "schema_resolver_crd_cache_hits_total",
+		Help: "Total number of CRD schema resolver cache hits",
+	})
+	crdCacheMissesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "schema_resolver_crd_cache_misses_total",
+		Help: "Total number of CRD schema resolver cache misses",
+	})
+	crdCacheSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "schema_resolver_crd_cache_size",
+		Help: "Current number of entries in the CRD schema resolver cache",
+	})
+	crdCacheEvictionsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "schema_resolver_crd_cache_evictions_total",
+		Help: "Total number of entries evicted from the CRD schema resolver cache",
+	})
+	crdExtractionDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "schema_resolver_crd_extraction_duration_seconds",
+		Help:    "Duration of CRD schema extraction from informer cache",
+		Buckets: prometheus.ExponentialBuckets(0.0001, 2, 12), // 0.1ms to ~0.4s
+	})
+	crdExtractionErrorsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "schema_resolver_crd_extraction_errors_total",
+		Help: "Total number of CRD schema extraction errors",
+	})
+	crdSingleflightDeduplicatedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "schema_resolver_crd_singleflight_deduplicated_total",
+		Help: "Total number of CRD resolver requests deduplicated by singleflight",
+	})
 )
 
 // MustRegister registers the metrics with the given Prometheus registry
 func MustRegister(registry prometheus.Registerer) {
 	registry.MustRegister(
+		// TTL-cached (fallback) resolver.
 		cacheHitsTotal,
 		cacheMissesTotal,
 		cacheSize,
@@ -66,6 +99,14 @@ func MustRegister(registry prometheus.Registerer) {
 		apiCallDuration,
 		singleflightDeduplicatedTotal,
 		schemaResolutionErrorsTotal,
+		// CRD informer-backed resolver.
+		crdCacheHitsTotal,
+		crdCacheMissesTotal,
+		crdCacheSize,
+		crdCacheEvictionsTotal,
+		crdExtractionDuration,
+		crdExtractionErrorsTotal,
+		crdSingleflightDeduplicatedTotal,
 	)
 }
 

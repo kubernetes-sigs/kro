@@ -63,11 +63,13 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 		return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
 	}
 
+	schemaCache := schema.NewCache()
 	rgBuilder := &Builder{
 		schemaResolver: schemaResolver,
 		restMapper:     rm,
 		celCache:       celcache.NewBuilderCache(),
-		schemaCache:    schema.NewCache(),
+		schemaCache:    schemaCache,
+		parser:         parser.New(schemaCache),
 	}
 	return rgBuilder, nil
 }
@@ -104,6 +106,7 @@ type Builder struct {
 	// Long-lived across reconciles for cross-RGD cache hits.
 	celCache    *celcache.BuilderCache
 	schemaCache *schema.Cache
+	parser      *parser.Parser
 }
 
 // RGDConfig holds RGD runtime configuration parameters.
@@ -272,7 +275,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//
 	// This allows expressions like ${schema.spec.replicas} and ${deployment.status.replicas}.
 	// Note: only spec and metadata are included - status references are not allowed in RGDs.
-	celSchemas := collectNodeSchemas(nodes, schemas)
+	celSchemas := collectNodeSchemas(b.schemaCache, nodes, schemas)
 	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema without status: %w", err)
@@ -453,7 +456,7 @@ func (b *Builder) buildRGResource(
 			}
 		}
 	} else {
-		fieldDescriptors, err = parser.ParseResource(resourceObject, resourceSchema)
+		fieldDescriptors, err = b.parser.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}
@@ -1410,12 +1413,12 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
 // Collections (forEach) and external collections (selector) are wrapped as
 // list types so other nodes can reference them as arrays and use CEL list functions.
-func collectNodeSchemas(nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
+func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map[string]*spec.Schema) map[string]*spec.Schema {
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
 			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
-				result[id] = schema.WrapSchemaAsList(sch)
+				result[id] = c.WrapAsList(sch)
 			} else {
 				result[id] = sch
 			}

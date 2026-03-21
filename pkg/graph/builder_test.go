@@ -38,6 +38,7 @@ import (
 	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	graphschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -272,6 +273,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -861,6 +863,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -1423,6 +1426,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -1763,6 +1767,7 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2236,6 +2241,7 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2581,6 +2587,7 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2986,6 +2993,7 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3209,6 +3217,7 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3368,6 +3377,7 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3658,6 +3668,7 @@ func newUnitTestBuilder() *Builder {
 		restMapper:     restMapper,
 		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    graphschema.NewCache(),
+		parser:         parser.New(graphschema.NewCache()),
 	}
 }
 

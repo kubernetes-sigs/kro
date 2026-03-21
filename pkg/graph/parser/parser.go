@@ -37,6 +37,27 @@ var (
 	typesStringOrInteger = []string{"string", "integer"}
 )
 
+// SchemaLookup abstracts pointer-stable schema field resolution.
+type SchemaLookup interface {
+	LookupField(parent *spec.Schema, field string) *spec.Schema
+	LookupAdditionalProperties(parent *spec.Schema) *spec.Schema
+}
+
+// Parser extracts CEL expressions from resources using OpenAPI schemas.
+// When a SchemaLookup is provided, field lookups go through it to
+// produce pointer-stable results suitable for downstream caching.
+type Parser struct {
+	schemas SchemaLookup
+}
+
+// New creates a Parser with the given schema lookup.
+func New(schemas SchemaLookup) *Parser {
+	if schemas == nil {
+		panic("parser: SchemaLookup must not be nil")
+	}
+	return &Parser{schemas: schemas}
+}
+
 // ParseResource extracts CEL expressions from a resource based on
 // the schema. The resource is expected to be a map[string]interface{}.
 //
@@ -45,15 +66,15 @@ var (
 // expressions are found, they are extracted and returned with the schema
 // of the field. The caller is responsible for converting schemas to CEL types
 // with appropriate type naming.
-func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
-	return parseResource(resource, resourceSchema, "")
+func (p *Parser) ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
+	return p.parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depth first search to traverse the resource and
 // extract expressions from string fields.
 // The path parameter includes array indices for error reporting (e.g., "spec.containers[0]").
-func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -65,9 +86,9 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 
 	switch field := resource.(type) {
 	case map[string]interface{}:
-		return parseObject(field, schema, path, expectedTypes)
+		return p.parseObject(field, schema, path, expectedTypes)
 	case []interface{}:
-		return parseArray(field, schema, path, expectedTypes)
+		return p.parseArray(field, schema, path, expectedTypes)
 	case string:
 		return parseString(field, path, expectedTypes)
 	case nil:
@@ -185,7 +206,7 @@ func validateSchema(schema *spec.Schema, path string) error {
 	return nil
 }
 
-func parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -208,12 +229,12 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 
 	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for fieldName, value := range field {
-		fieldSchema, err := getFieldSchema(schema, fieldName)
+		fieldSchema, err := p.getFieldSchema(schema, fieldName)
 		if err != nil {
 			return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+fieldName, err)
 		}
 		fieldPath := joinPathAndFieldName(path, fieldName)
-		fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
+		fieldExpressions, err := p.parseResource(value, fieldSchema, fieldPath)
 		if err != nil {
 			return nil, err
 		}
@@ -222,7 +243,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 	return expressionsFields, nil
 }
 
-func parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -251,7 +272,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for i, item := range field {
 		itemPath := path + "[" + strconv.Itoa(i) + "]"
-		itemExpressions, err := parseResource(item, itemSchema, itemPath)
+		itemExpressions, err := p.parseResource(item, itemSchema, itemPath)
 		if err != nil {
 			return nil, err
 		}
@@ -354,19 +375,13 @@ func getSchemaTypeName(v interface{}) string {
 	}
 }
 
-func getFieldSchema(schema *spec.Schema, field string) (*spec.Schema, error) {
-	if schema.Properties != nil {
-		if fieldSchema, ok := schema.Properties[field]; ok {
-			return &fieldSchema, nil
-		}
+func (p *Parser) getFieldSchema(s *spec.Schema, field string) (*spec.Schema, error) {
+	if result := p.schemas.LookupField(s, field); result != nil {
+		return result, nil
 	}
 
-	if schema.AdditionalProperties != nil {
-		if schema.AdditionalProperties.Schema != nil {
-			return schema.AdditionalProperties.Schema, nil
-		} else if schema.AdditionalProperties.Allows {
-			return &spec.Schema{}, nil
-		}
+	if result := p.schemas.LookupAdditionalProperties(s); result != nil {
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("schema not found for field %s", field)

@@ -266,6 +266,9 @@ type ResourceGraphDefinitionStatus struct {
 	// Resources provides detailed information about each resource in the graph,
 	// including their dependencies.
 	Resources []ResourceInformation `json:"resources,omitempty"`
+	// LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.
+	// It is a persisted high-water mark used to keep revision allocation monotonic across GC.
+	LastIssuedRevision int64 `json:"lastIssuedRevision,omitempty"`
 }
 
 // ResourceInformation provides detailed information about a specific resource

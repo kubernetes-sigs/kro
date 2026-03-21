@@ -31,12 +31,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	graphrevisionctrl "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
@@ -49,6 +52,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
@@ -65,6 +69,7 @@ func main() {
 		probeAddr                                   string
 		pprofAddr                                   string
 		allowCRDDeletion                            bool
+		graphRevisionConcurrentReconciles           int
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
 		// dynamic controller rate limiter parameters
@@ -82,6 +87,7 @@ func main() {
 		burst                         int
 		rgdMaxCollectionSize          int
 		rgdMaxCollectionDimensionSize int
+		rgdMaxGraphRevisions          int
 		featureGatesFlag              string
 	)
 
@@ -110,6 +116,10 @@ func main() {
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
 		"The number of resource graph definition reconciles to run in parallel",
+	)
+	flag.IntVar(&graphRevisionConcurrentReconciles,
+		"graph-revision-concurrent-reconciles", 1,
+		"The number of graph revision reconciles to run in parallel",
 	)
 	flag.IntVar(&dynamicControllerConcurrentReconciles,
 		"dynamic-controller-concurrent-reconciles", 1,
@@ -145,6 +155,8 @@ func main() {
 		"A set of key=value pairs that describe feature gates for alpha/experimental features. "+
 			"For example: --feature-gates=InstanceConditionEvents=true. "+
 			"Known features: "+strings.Join(features.FeatureGate.KnownFeatures(), ", "))
+	flag.IntVar(&rgdMaxGraphRevisions, "rgd-max-graph-revisions", 5,
+		"Maximum number of GraphRevisions to retain per ResourceGraphDefinition")
 
 	opts := zap.Options{
 		Development: true,
@@ -229,6 +241,7 @@ func main() {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")
 		os.Exit(1)
 	}
+	graphRevisionRegistry := revisions.NewRegistry()
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
 		set,
@@ -236,7 +249,9 @@ func main() {
 		dc,
 		resourceGraphDefinitionGraphBuilder,
 		instanceRequeueInterval,
+		graphRevisionRegistry,
 		resourceGraphDefinitionConcurrentReconciles,
+		rgdMaxGraphRevisions,
 		graph.RGDConfig{
 			MaxCollectionSize:          rgdMaxCollectionSize,
 			MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
@@ -244,6 +259,20 @@ func main() {
 	)
 	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
+		os.Exit(1)
+	}
+
+	gv := graphrevisionctrl.NewGraphRevisionReconciler(
+		resourceGraphDefinitionGraphBuilder,
+		graphRevisionRegistry,
+		graphRevisionConcurrentReconciles,
+		graph.RGDConfig{
+			MaxCollectionSize:          rgdMaxCollectionSize,
+			MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
+		},
+	)
+	if err := gv.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GraphRevision")
 		os.Exit(1)
 	}
 

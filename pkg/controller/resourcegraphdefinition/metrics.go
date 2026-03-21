@@ -23,12 +23,13 @@ var (
 	rgdLabels             = []string{"name"}
 	stateTransitionLabels = []string{"name", "from", "to"}
 
-	graphBuildTotal       *prometheus.CounterVec
-	graphBuildDuration    *prometheus.HistogramVec
-	graphBuildErrorsTotal *prometheus.CounterVec
-	stateTransitionsTotal *prometheus.CounterVec
-	deletionsTotal        *prometheus.CounterVec
-	deletionDuration      *prometheus.HistogramVec
+	graphBuildTotal            *prometheus.CounterVec
+	graphBuildDuration         *prometheus.HistogramVec
+	graphBuildErrorsTotal      *prometheus.CounterVec
+	stateTransitionsTotal      *prometheus.CounterVec
+	deletionsTotal             *prometheus.CounterVec
+	deletionDuration           *prometheus.HistogramVec
+	graphRevisionGCErrorsTotal *prometheus.CounterVec
 )
 
 func init() {
@@ -82,6 +83,14 @@ func init() {
 		rgdLabels,
 	)
 
+	graphRevisionGCErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kro_graph_revision_gc_errors_total",
+			Help: "Total number of graph revision retention GC errors per RGD",
+		},
+		[]string{"rgd_name"},
+	)
+
 	metrics.Registry.MustRegister(
 		graphBuildTotal,
 		graphBuildDuration,
@@ -89,5 +98,6 @@ func init() {
 		stateTransitionsTotal,
 		deletionsTotal,
 		deletionDuration,
+		graphRevisionGCErrorsTotal,
 	)
 }

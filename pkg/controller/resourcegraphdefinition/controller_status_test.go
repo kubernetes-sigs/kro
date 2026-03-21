@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -60,6 +61,14 @@ func TestConditionsMarker(t *testing.T) {
 			},
 		},
 		{
+			name:      "revision lineage failed",
+			condition: RevisionLineageResolved,
+			reason:    "ResolutionFailed",
+			apply: func(m *ConditionsMarker) {
+				m.RevisionLineageFailed("lineage failed")
+			},
+		},
+		{
 			name:      "labeler failed",
 			condition: ControllerReady,
 			reason:    "FailedLabelerSetup",
@@ -83,6 +92,45 @@ func TestConditionsMarker(t *testing.T) {
 				m.ControllerFailedToStart("register failed")
 			},
 		},
+		{
+			name:      "revision lineage pending can coexist with ready serving",
+			rootReady: true,
+			apply: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+				m.ControllerRunning()
+				m.RevisionLineagePending("Waiting", "lineage settling")
+			},
+			check: func(t *testing.T, rgd *v1alpha1.ResourceGraphDefinition) {
+				cond := conditionFor(t, rgd, RevisionLineageResolved)
+				assert.True(t, cond.IsUnknown())
+				require.NotNil(t, cond.Reason)
+				assert.Equal(t, "Waiting", *cond.Reason)
+			},
+		},
+		{
+			name: "serving unknown keeps ready unresolved",
+			apply: func(m *ConditionsMarker) {
+				m.ServingUnknown("InvalidResourceGraph", "new generation is invalid while older serving state remains")
+			},
+			check: func(t *testing.T, rgd *v1alpha1.ResourceGraphDefinition) {
+				assert.True(t, conditionFor(t, rgd, KindReady).IsUnknown())
+				assert.True(t, conditionFor(t, rgd, ControllerReady).IsUnknown())
+			},
+		},
+		{
+			name:      "resource graph acceptance is informational for ready",
+			rootReady: true,
+			apply: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+				m.ControllerRunning()
+				m.ResourceGraphInvalid("bad graph")
+			},
+			check: func(t *testing.T, rgd *v1alpha1.ResourceGraphDefinition) {
+				assert.True(t, conditionFor(t, rgd, ResourceGraphAccepted).IsFalse())
+				assert.True(t, conditionFor(t, rgd, KindReady).IsTrue())
+				assert.True(t, conditionFor(t, rgd, ControllerReady).IsTrue())
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -101,6 +149,255 @@ func TestConditionsMarker(t *testing.T) {
 			assert.True(t, cond.IsFalse())
 			require.NotNil(t, cond.Reason)
 			assert.Equal(t, tt.reason, *cond.Reason)
+		})
+	}
+}
+
+func TestInformationalConditionStatusMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		condition string
+		want      metav1.ConditionStatus
+		apply     func(*ConditionsMarker)
+	}{
+		{
+			name:      "resource graph accepted true",
+			condition: ResourceGraphAccepted,
+			want:      metav1.ConditionTrue,
+			apply: func(m *ConditionsMarker) {
+				m.ResourceGraphValid()
+			},
+		},
+		{
+			name:      "resource graph accepted false",
+			condition: ResourceGraphAccepted,
+			want:      metav1.ConditionFalse,
+			apply: func(m *ConditionsMarker) {
+				m.ResourceGraphInvalid("bad graph")
+			},
+		},
+		{
+			name:      "resource graph accepted unknown",
+			condition: ResourceGraphAccepted,
+			want:      metav1.ConditionUnknown,
+			apply: func(m *ConditionsMarker) {
+				m.cs.SetUnknownWithReason(ResourceGraphAccepted, "Reconciling", "graph validation pending")
+			},
+		},
+		{
+			name:      "revision lineage resolved true",
+			condition: RevisionLineageResolved,
+			want:      metav1.ConditionTrue,
+			apply: func(m *ConditionsMarker) {
+				m.RevisionLineageResolved(7)
+			},
+		},
+		{
+			name:      "revision lineage resolved false",
+			condition: RevisionLineageResolved,
+			want:      metav1.ConditionFalse,
+			apply: func(m *ConditionsMarker) {
+				m.RevisionLineageFailed("lineage failed")
+			},
+		},
+		{
+			name:      "revision lineage resolved unknown",
+			condition: RevisionLineageResolved,
+			want:      metav1.ConditionUnknown,
+			apply: func(m *ConditionsMarker) {
+				m.RevisionLineagePending("Waiting", "lineage settling")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rgd := newTestRGD(tt.name)
+			marker := NewConditionsMarkerFor(rgd)
+			marker.KindReady("Network")
+			marker.ControllerRunning()
+			tt.apply(marker)
+
+			cond := conditionFor(t, rgd, tt.condition)
+			assert.Equal(t, tt.want, cond.Status)
+			assert.True(t, rgdConditionTypes.For(rgd).IsRootReady())
+			assert.Equal(t, metav1.ConditionTrue, conditionFor(t, rgd, Ready).Status)
+		})
+	}
+}
+
+func TestServingConditionStatusMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		condition     string
+		want          metav1.ConditionStatus
+		wantReady     metav1.ConditionStatus
+		prepare       func(*ConditionsMarker)
+		apply         func(*ConditionsMarker)
+		wantRootReady bool
+	}{
+		{
+			name:      "kind ready true",
+			condition: KindReady,
+			want:      metav1.ConditionTrue,
+			wantReady: metav1.ConditionTrue,
+			prepare: func(m *ConditionsMarker) {
+				m.ControllerRunning()
+			},
+			apply: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+			},
+			wantRootReady: true,
+		},
+		{
+			name:      "kind ready false",
+			condition: KindReady,
+			want:      metav1.ConditionFalse,
+			wantReady: metav1.ConditionFalse,
+			prepare: func(m *ConditionsMarker) {
+				m.ControllerRunning()
+			},
+			apply: func(m *ConditionsMarker) {
+				m.KindUnready("crd failed")
+			},
+			wantRootReady: false,
+		},
+		{
+			name:      "kind ready unknown",
+			condition: KindReady,
+			want:      metav1.ConditionUnknown,
+			wantReady: metav1.ConditionUnknown,
+			prepare: func(m *ConditionsMarker) {
+				m.ControllerRunning()
+			},
+			apply: func(m *ConditionsMarker) {
+				m.cs.SetUnknownWithReason(KindReady, "Reconciling", "waiting for CRD")
+			},
+			wantRootReady: false,
+		},
+		{
+			name:      "controller ready true",
+			condition: ControllerReady,
+			want:      metav1.ConditionTrue,
+			wantReady: metav1.ConditionTrue,
+			prepare: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+			},
+			apply: func(m *ConditionsMarker) {
+				m.ControllerRunning()
+			},
+			wantRootReady: true,
+		},
+		{
+			name:      "controller ready false",
+			condition: ControllerReady,
+			want:      metav1.ConditionFalse,
+			wantReady: metav1.ConditionFalse,
+			prepare: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+			},
+			apply: func(m *ConditionsMarker) {
+				m.ControllerFailedToStart("controller boom")
+			},
+			wantRootReady: false,
+		},
+		{
+			name:      "controller ready unknown",
+			condition: ControllerReady,
+			want:      metav1.ConditionUnknown,
+			wantReady: metav1.ConditionUnknown,
+			prepare: func(m *ConditionsMarker) {
+				m.KindReady("Network")
+			},
+			apply: func(m *ConditionsMarker) {
+				m.cs.SetUnknownWithReason(ControllerReady, "Reconciling", "waiting for controller")
+			},
+			wantRootReady: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rgd := newTestRGD(tt.name)
+			marker := NewConditionsMarkerFor(rgd)
+			tt.prepare(marker)
+			tt.apply(marker)
+
+			cond := conditionFor(t, rgd, tt.condition)
+			assert.Equal(t, tt.want, cond.Status)
+			assert.Equal(t, tt.wantReady, conditionFor(t, rgd, Ready).Status)
+			assert.Equal(t, tt.wantRootReady, rgdConditionTypes.For(rgd).IsRootReady())
+		})
+	}
+}
+
+func TestServingHelperStatusMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		apply     func(*ConditionsMarker)
+		wantKind  metav1.ConditionStatus
+		wantCtrl  metav1.ConditionStatus
+		wantReady metav1.ConditionStatus
+	}{
+		{
+			name: "initialize serving conditions marks unknown",
+			apply: func(m *ConditionsMarker) {
+				m.InitializeServingConditions(1)
+			},
+			wantKind:  metav1.ConditionUnknown,
+			wantCtrl:  metav1.ConditionUnknown,
+			wantReady: metav1.ConditionUnknown,
+		},
+		{
+			name: "serving pending marks both unknown",
+			apply: func(m *ConditionsMarker) {
+				m.ServingPending("Waiting", "pending")
+			},
+			wantKind:  metav1.ConditionUnknown,
+			wantCtrl:  metav1.ConditionUnknown,
+			wantReady: metav1.ConditionUnknown,
+		},
+		{
+			name: "serving unknown marks both unknown",
+			apply: func(m *ConditionsMarker) {
+				m.ServingUnknown("Reconciling", "unknown")
+			},
+			wantKind:  metav1.ConditionUnknown,
+			wantCtrl:  metav1.ConditionUnknown,
+			wantReady: metav1.ConditionUnknown,
+		},
+		{
+			name: "serving unavailable marks both false",
+			apply: func(m *ConditionsMarker) {
+				m.ServingUnavailable("Failed", "unavailable")
+			},
+			wantKind:  metav1.ConditionFalse,
+			wantCtrl:  metav1.ConditionFalse,
+			wantReady: metav1.ConditionFalse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rgd := newTestRGD(tt.name)
+			marker := NewConditionsMarkerFor(rgd)
+			tt.apply(marker)
+
+			assert.Equal(t, tt.wantKind, conditionFor(t, rgd, KindReady).Status)
+			assert.Equal(t, tt.wantCtrl, conditionFor(t, rgd, ControllerReady).Status)
+			assert.Equal(t, tt.wantReady, conditionFor(t, rgd, Ready).Status)
 		})
 	}
 }

@@ -34,6 +34,7 @@ type ReconcileContext struct {
 	Log logr.Logger
 
 	GVR        schema.GroupVersionResource
+	Namespaced bool
 	Client     dynamic.Interface
 	RestMapper meta.RESTMapper
 	Labeler    metadata.Labeler
@@ -63,6 +64,7 @@ func NewReconcileContext(
 	ctx context.Context,
 	log logr.Logger,
 	gvr schema.GroupVersionResource,
+	namespaced bool,
 	client dynamic.Interface,
 	restMapper meta.RESTMapper,
 	labeler metadata.Labeler,
@@ -74,6 +76,7 @@ func NewReconcileContext(
 		Ctx:          ctx,
 		Log:          log,
 		GVR:          gvr,
+		Namespaced:   namespaced,
 		Client:       client,
 		RestMapper:   restMapper,
 		Labeler:      labeler,
@@ -94,7 +97,7 @@ func (rcx *ReconcileContext) delayedRequeue(err error) error {
 
 func (rcx *ReconcileContext) InstanceClient() dynamic.ResourceInterface {
 	base := rcx.Client.Resource(rcx.GVR)
-	if rcx.Instance.GetNamespace() != "" {
+	if rcx.Namespaced {
 		return base.Namespace(rcx.Instance.GetNamespace())
 	}
 	return base

@@ -136,6 +136,8 @@ config:
   healthProbeBindAddress: :8079
   # The number of resource graph definition reconciles to run in parallel
   resourceGraphDefinitionConcurrentReconciles: 1
+  # The number of graph revision reconciles to run in parallel
+  graphRevisionConcurrentReconciles: 1
   # The maximum duration to wait for the controller manager to gracefully shutdown
   gracefulShutdownTimeout: 60s
   # The number of dynamic controller reconciles to run in parallel
@@ -151,6 +153,8 @@ config:
     maxCollectionSize: 1000
     # Maximum size of collection dimension per forEach defined in ResourceGraphDefinitions
     maxCollectionDimensionSize: 10
+    # Maximum number of GraphRevisions to retain per ResourceGraphDefinition
+    maxGraphRevisions: 5
   instance:
     # The fixed delay between delayed instance requeues while waiting for cluster state to settle.
     # Set to 0 to disable delayed requeues.

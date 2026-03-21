@@ -316,7 +316,9 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 		}
 		delete(c.instances, key)
 	}
-	c.decInstanceWatchCount(parentGVR)
+	// All instances for this parent are gone — delete the gauge outright
+	// rather than decrementing once (which would undercount for N > 1).
+	instanceWatchCount.DeleteLabelValues(parentGVR.String())
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -460,15 +462,15 @@ func (c *WatchCoordinator) removeScalarIndexLocked(key instanceKey, req *WatchRe
 		byName[nn] = filtered
 	}
 	gvrStr := req.GVR.String()
+	if removed > 0 {
+		watchRequestCount.WithLabelValues(gvrStr, "scalar").Sub(float64(removed))
+	}
 	if len(byName) == 0 {
 		delete(c.scalarIndex, req.GVR)
-		// If this GVR is also gone from collectionIndex, delete its gauge labels.
 		if len(c.collectionIndex[req.GVR]) == 0 {
 			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
 			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
 		}
-	} else if removed > 0 {
-		watchRequestCount.WithLabelValues(gvrStr, "scalar").Sub(float64(removed))
 	}
 }
 
@@ -510,18 +512,17 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 		filtered = append(filtered, e)
 	}
 	gvrStr := req.GVR.String()
+	if removed > 0 {
+		watchRequestCount.WithLabelValues(gvrStr, "collection").Sub(float64(removed))
+	}
 	if len(filtered) == 0 {
 		delete(c.collectionIndex, req.GVR)
-		// If this GVR is also gone from scalarIndex, delete its gauge labels.
 		if len(c.scalarIndex[req.GVR]) == 0 {
 			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
 			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
 		}
 	} else {
 		c.collectionIndex[req.GVR] = filtered
-		if removed > 0 {
-			watchRequestCount.WithLabelValues(gvrStr, "collection").Sub(float64(removed))
-		}
 	}
 }
 

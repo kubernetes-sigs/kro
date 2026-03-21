@@ -345,9 +345,6 @@ func (dc *DynamicController) Register(
 	parent schema.GroupVersionResource,
 	instanceHandler Handler,
 ) error {
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-
 	ctx := dc.ctx.Load()
 	if ctx == nil {
 		return fmt.Errorf("dynamic controller not started")
@@ -356,8 +353,12 @@ func (dc *DynamicController) Register(
 	// Store handler.
 	dc.handlers.Store(parent, instanceHandler)
 
+	dc.mu.Lock()
+	_, exists := dc.parentWatches[parent]
+	dc.mu.Unlock()
+
 	// Create parent watch if it doesn't exist.
-	if _, exists := dc.parentWatches[parent]; !exists {
+	if !exists {
 		// Retain the shared informer for the parent and wait for cache sync.
 		if err := dc.watches.EnsureParentWatch(parent); err != nil {
 			dc.handlers.Delete(parent)
@@ -374,33 +375,41 @@ func (dc *DynamicController) Register(
 			return fmt.Errorf("add parent handler %s: informer not found after EnsureWatch", parent)
 		}
 
-		// Register event handler directly on the parent informer.
-		parentHandler := cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj any) {
-				dc.enqueueFromInformer(parent, nil, obj, EventAdd)
-			},
-			UpdateFunc: func(oldObj, newObj any) {
-				dc.enqueueFromInformer(parent, oldObj, newObj, EventUpdate)
-			},
-			DeleteFunc: func(obj any) {
-				dc.enqueueFromInformer(parent, nil, obj, EventDelete)
-			},
-		}
-		reg, err := inf.AddEventHandler(parentHandler)
-		if err != nil {
+		dc.mu.Lock()
+		if _, exists := dc.parentWatches[parent]; exists {
+			dc.mu.Unlock()
 			dc.watches.ReleaseParentWatch(parent)
-			if !dc.coordinator.HasRequestsForGVR(parent) {
-				dc.watches.StopWatch(parent)
+		} else {
+			// Register event handler directly on the parent informer.
+			parentHandler := cache.ResourceEventHandlerFuncs{
+				AddFunc: func(obj any) {
+					dc.enqueueFromInformer(parent, nil, obj, EventAdd)
+				},
+				UpdateFunc: func(oldObj, newObj any) {
+					dc.enqueueFromInformer(parent, oldObj, newObj, EventUpdate)
+				},
+				DeleteFunc: func(obj any) {
+					dc.enqueueFromInformer(parent, nil, obj, EventDelete)
+				},
 			}
-			dc.handlers.Delete(parent)
-			return fmt.Errorf("add parent handler %s: %w", parent, err)
-		}
-		dc.parentWatches[parent] = reg
+			reg, err := inf.AddEventHandler(parentHandler)
+			if err != nil {
+				dc.mu.Unlock()
+				dc.watches.ReleaseParentWatch(parent)
+				if !dc.coordinator.HasRequestsForGVR(parent) {
+					dc.watches.StopWatch(parent)
+				}
+				dc.handlers.Delete(parent)
+				return fmt.Errorf("add parent handler %s: %w", parent, err)
+			}
+			dc.parentWatches[parent] = reg
+			dc.mu.Unlock()
 
-		gvrCount.Inc()
-		handlerAttachTotal.WithLabelValues("parent").Inc()
-		handlerCount.WithLabelValues("parent").Inc()
-		dc.log.V(1).Info("Attached parent watch", "gvr", parent)
+			gvrCount.Inc()
+			handlerAttachTotal.WithLabelValues("parent").Inc()
+			handlerCount.WithLabelValues("parent").Inc()
+			dc.log.V(1).Info("Attached parent watch", "gvr", parent)
+		}
 	}
 
 	// Enqueue existing instances from parent cache.

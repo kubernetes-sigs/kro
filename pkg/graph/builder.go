@@ -1194,12 +1194,15 @@ func validateAndCompileTemplates(
 	// by validateIdentityFields earlier in the build pipeline.
 	compileEnv := env
 	if len(iteratorTypes) > 0 {
-		opts := make([]cel.EnvOption, 0, len(iteratorTypes))
-		for name, typ := range iteratorTypes {
-			opts = append(opts, cel.Variable(name, typ))
-		}
+		varsKey := celcache.MakeIteratorVarsKey(iteratorTypes)
 		var err error
-		compileEnv, err = env.Extend(opts...)
+		compileEnv, err = sessionCache.ExtendWithVariables(env, varsKey, func() (*cel.Env, error) {
+			opts := make([]cel.EnvOption, 0, len(iteratorTypes))
+			for name, typ := range iteratorTypes {
+				opts = append(opts, cel.Variable(name, typ))
+			}
+			return env.Extend(opts...)
+		})
 		if err != nil {
 			return fmt.Errorf("failed to extend CEL environment with iterator types: %w", err)
 		}

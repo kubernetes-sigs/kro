@@ -53,7 +53,9 @@ func (c *BuilderCache) SchemaDeclType(schema *spec.Schema, create func(*spec.Sch
 	builderCacheMissesTotal.WithLabelValues("decl_type").Inc()
 	declType := create(schema)
 	if declType != nil {
-		c.declTypes.Store(schema, declType)
+		if actual, loaded := c.declTypes.LoadOrStore(schema, declType); loaded {
+			return actual.(*apiservercel.DeclType)
+		}
 		builderCacheSize.WithLabelValues("decl_type").Inc()
 	}
 	return declType
@@ -70,7 +72,9 @@ func (c *BuilderCache) MaybeAssignTypeName(schema *spec.Schema, declType *apiser
 	}
 	builderCacheMissesTotal.WithLabelValues("named_type").Inc()
 	named := declType.MaybeAssignTypeName(typeName)
-	c.namedTypes.Store(key, named)
+	if actual, loaded := c.namedTypes.LoadOrStore(key, named); loaded {
+		return actual.(*apiservercel.DeclType)
+	}
 	builderCacheSize.WithLabelValues("named_type").Inc()
 	return named
 }
@@ -90,9 +94,14 @@ func (c *BuilderCache) TypedEnvironmentWithProvider(schemas map[string]*spec.Sch
 		builderCacheMissesTotal.WithLabelValues("typed_env").Inc()
 		env, provider, err := create()
 		if err != nil {
+			builderCacheErrorsTotal.WithLabelValues("typed_env").Inc()
 			return nil, nil, err
 		}
-		c.typedEnvs.Store(key, &TypedEnvEntry{Env: env, Provider: provider})
+		entry := &TypedEnvEntry{Env: env, Provider: provider}
+		if actual, loaded := c.typedEnvs.LoadOrStore(key, entry); loaded {
+			cached := actual.(*TypedEnvEntry)
+			return cached.Env, cached.Provider, nil
+		}
 		builderCacheSize.WithLabelValues("typed_env").Inc()
 		return env, provider, nil
 	}
@@ -108,7 +117,9 @@ func (c *BuilderCache) FieldTypeMap(t *apiservercel.DeclType, create func() map[
 	}
 	builderCacheMissesTotal.WithLabelValues("field_type_map").Inc()
 	m := create()
-	c.fieldTypeMaps.Store(t, m)
+	if actual, loaded := c.fieldTypeMaps.LoadOrStore(t, m); loaded {
+		return actual.(map[string]*apiservercel.DeclType)
+	}
 	builderCacheSize.WithLabelValues("field_type_map").Inc()
 	return m
 }

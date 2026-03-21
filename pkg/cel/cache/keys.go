@@ -49,11 +49,39 @@ type extendedEnvCacheKey struct {
 	schema    *spec.Schema
 }
 
+// iteratorEnvCacheKey keys iterator-extended environments by (parent, varsKey).
+// varsKey is a canonical string encoding the iterator variable declarations.
+type iteratorEnvCacheKey struct {
+	parentEnv *cel.Env
+	varsKey   string
+}
+
 // TypedEnvEntry holds a cached (env, provider) pair.
 // Provider is stored as any to avoid importing pkg/cel (DeclTypeProvider).
 type TypedEnvEntry struct {
 	Env      *cel.Env
 	Provider any
+}
+
+// MakeIteratorVarsKey builds a canonical string key from iterator variable
+// names and their CEL type strings. Sorted by name for determinism.
+func MakeIteratorVarsKey(vars map[string]*cel.Type) string {
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			b.WriteByte(';')
+		}
+		b.WriteString(name)
+		b.WriteByte(':')
+		b.WriteString(vars[name].String())
+	}
+	return b.String()
 }
 
 // MakeEnvCacheKey builds a canonical string key from a schema map.

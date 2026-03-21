@@ -44,6 +44,14 @@ var (
 		[]string{"cache_type"},
 	)
 
+	builderCacheErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cel_cache_builder_errors_total",
+			Help: "Total number of builder cache creation failures on miss",
+		},
+		[]string{"cache_type"},
+	)
+
 	// SessionCache metrics — short-lived, per-RGD-build cache.
 
 	sessionCacheHitsTotal = prometheus.NewCounterVec(
@@ -73,6 +81,7 @@ func init() {
 		builderCacheHitsTotal,
 		builderCacheMissesTotal,
 		builderCacheSize,
+		builderCacheErrorsTotal,
 		sessionCacheHitsTotal,
 		sessionCacheMissesTotal,
 		sessionCacheASTReuseTotal,

@@ -3975,7 +3975,7 @@ func TestBuildStatusSchema(t *testing.T) {
 			"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
 		}),
 	})
-	sessionCache := celcache.NewSessionCache()
+	statusSessionCache := celcache.NewSessionCache()
 	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
 	inspector := newUnitInspector(t, "resource")
 	tests := []struct {
@@ -3993,7 +3993,7 @@ func TestBuildStatusSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			statusSchema, fieldDescriptors, _, err := buildStatusSchema(sessionCache, &krov1alpha1.Schema{
+			statusSchema, fieldDescriptors, _, err := buildStatusSchema(statusSessionCache, &krov1alpha1.Schema{
 				Status: rawExt(tt.statusRaw),
 			}, []string{"resource"}, inspector, env, provider)
 			if tt.wantErr != "" {

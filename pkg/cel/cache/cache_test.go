@@ -410,7 +410,7 @@ func TestSessionCache_ExtendWithTypedVar(t *testing.T) {
 	}
 }
 
-func TestSessionCache_ConcurrentAccess(t *testing.T) {
+func TestSessionCache_ParseCheckAndCompile_ConcurrentAccess(t *testing.T) {
 	cache := NewSessionCache()
 
 	env, err := cel.NewEnv(cel.Variable("x", cel.IntType))

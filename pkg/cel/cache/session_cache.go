@@ -34,6 +34,7 @@ type SessionCache struct {
 	checkedASTs  sync.Map // key: ProgramCacheKey, value: *cel.Ast
 	programs     sync.Map // key: ProgramCacheKey, value: *ProgramCacheEntry
 	extendedEnvs sync.Map // key: extendedEnvCacheKey, value: *cel.Env
+	iteratorEnvs sync.Map // key: iteratorEnvCacheKey, value: *cel.Env
 }
 
 // NewSessionCache returns a fresh SessionCache instance.
@@ -49,11 +50,9 @@ func (c *SessionCache) ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error
 	// Check if we already have a full program cached — reuse its AST.
 	if v, ok := c.programs.Load(key); ok {
 		sessionCacheHitsTotal.WithLabelValues("checked_ast").Inc()
-		entry := v.(*ProgramCacheEntry)
-		return entry.Ast, nil
+		return v.(*ProgramCacheEntry).Ast, nil
 	}
 
-	// Check the AST-only cache.
 	if v, ok := c.checkedASTs.Load(key); ok {
 		sessionCacheHitsTotal.WithLabelValues("checked_ast").Inc()
 		return v.(*cel.Ast), nil
@@ -77,9 +76,8 @@ func (c *SessionCache) ParseAndCheck(env *cel.Env, expr string) (*cel.Ast, error
 
 // ParseCheckAndCompile returns a cached compiled program and checked AST
 // for the given expression and environment. On cache miss, it parses,
-// type-checks, and compiles the expression, then stores the result.
-// If a checked AST was previously cached by ParseAndCheck, it is reused
-// to skip the parse and check phases.
+// type-checks, and compiles the expression. If a checked AST was
+// previously cached by ParseAndCheck, it is reused to skip parse+check.
 func (c *SessionCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Program, *cel.Ast, error) {
 	key := ProgramCacheKey{Expr: expr, Env: env}
 	if v, ok := c.programs.Load(key); ok {
@@ -96,15 +94,10 @@ func (c *SessionCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Prog
 		sessionCacheASTReuseTotal.Inc()
 		checkedAST = v.(*cel.Ast)
 	} else {
-		parsedAST, issues := env.Parse(expr)
-		if issues != nil && issues.Err() != nil {
-			return nil, nil, issues.Err()
-		}
-
-		var checkIssues *cel.Issues
-		checkedAST, checkIssues = env.Check(parsedAST)
-		if checkIssues != nil && checkIssues.Err() != nil {
-			return nil, nil, checkIssues.Err()
+		var err error
+		checkedAST, err = c.ParseAndCheck(env, expr)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -117,10 +110,9 @@ func (c *SessionCache) ParseCheckAndCompile(env *cel.Env, expr string) (cel.Prog
 	return program, checkedAST, nil
 }
 
-// ExtendWithTypedVar returns a cached environment that extends the parent
+// ExtendWithTypedVar returns a cached environment extending the parent
 // with a single typed variable declaration derived from the given schema.
 // On cache miss, the create callback is called to build the extended env.
-// The callback pattern avoids importing pkg/cel (for DeclTypeProvider etc.).
 func (c *SessionCache) ExtendWithTypedVar(parent *cel.Env, varName string, schema *spec.Schema, create func() (*cel.Env, error)) (*cel.Env, error) {
 	key := extendedEnvCacheKey{parentEnv: parent, varName: varName, schema: schema}
 	if v, ok := c.extendedEnvs.Load(key); ok {
@@ -136,5 +128,26 @@ func (c *SessionCache) ExtendWithTypedVar(parent *cel.Env, varName string, schem
 	}
 
 	c.extendedEnvs.Store(key, extended)
+	return extended, nil
+}
+
+// ExtendWithVariables returns a cached environment that extends the parent
+// with variable declarations. The key is the parent env pointer plus a
+// canonical string built from the variable names and type strings.
+func (c *SessionCache) ExtendWithVariables(parent *cel.Env, varsKey string, create func() (*cel.Env, error)) (*cel.Env, error) {
+	key := iteratorEnvCacheKey{parentEnv: parent, varsKey: varsKey}
+	if v, ok := c.iteratorEnvs.Load(key); ok {
+		sessionCacheHitsTotal.WithLabelValues("iterator_env").Inc()
+		return v.(*cel.Env), nil
+	}
+
+	sessionCacheMissesTotal.WithLabelValues("iterator_env").Inc()
+
+	extended, err := create()
+	if err != nil {
+		return nil, err
+	}
+
+	c.iteratorEnvs.Store(key, extended)
 	return extended, nil
 }

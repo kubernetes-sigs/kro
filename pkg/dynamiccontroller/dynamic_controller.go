@@ -463,10 +463,10 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 }
 
 func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
-	oldLbls := oldMeta.GetLabels()
-	newLbls := newMeta.GetLabels()
-	oldIsDisabled := strings.EqualFold(oldLbls[v1alpha1.InstanceReconcileAnnotation], "disabled")
-	newIsDisabled := strings.EqualFold(newLbls[v1alpha1.InstanceReconcileAnnotation], "disabled")
+	oldAnnotations := oldMeta.GetAnnotations()
+	newAnnotations := newMeta.GetAnnotations()
+	oldIsDisabled := strings.EqualFold(oldAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
+	newIsDisabled := strings.EqualFold(newAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
 	return oldIsDisabled && !newIsDisabled
 }
 

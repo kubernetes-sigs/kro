@@ -680,9 +680,9 @@ func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
 }
 
 func TestReconcileEnabledInUpdate(t *testing.T) {
-	makeObj := func(labels map[string]string) *v1.PartialObjectMetadata {
+	makeObj := func(annotations map[string]string) *v1.PartialObjectMetadata {
 		obj := &v1.PartialObjectMetadata{}
-		obj.SetLabels(labels)
+		obj.SetAnnotations(annotations)
 		return obj
 	}
 

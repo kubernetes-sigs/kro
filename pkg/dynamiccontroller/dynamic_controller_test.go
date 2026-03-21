@@ -144,7 +144,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err := dc.Register(t.Context(), gvr, handlerFunc)
 	require.NoError(t, err)
 
-	_, exists := dc.parentWatches[gvr]
+	_, exists := dc.parentWatches.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
@@ -157,7 +157,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err = dc.Deregister(shutdownContext, gvr)
 	require.NoError(t, err)
 
-	_, exists = dc.parentWatches[gvr]
+	_, exists = dc.parentWatches.Load(gvr)
 	assert.False(t, exists)
 
 	// Parent informer should be stopped after deregister.

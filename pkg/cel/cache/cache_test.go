@@ -163,7 +163,33 @@ func TestBuilderCache_TypedEnvironmentWithProvider(t *testing.T) {
 		t.Errorf("expected create to not be called again, got %d calls", createCalls)
 	}
 
-	// Different schema pointer should produce different env
+	// Equivalent schema content with a different pointer should still hit cache.
+	schemaClone := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type: []string{"object"},
+			Properties: map[string]spec.Schema{
+				"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			},
+		},
+	}
+	schemasClone := map[string]*spec.Schema{
+		"pod": schemaClone,
+	}
+	envClone, provClone, err := cache.TypedEnvironmentWithProvider(schemasClone, create)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if envClone != env1 {
+		t.Error("expected same env for equivalent schema content")
+	}
+	if provClone != prov1 {
+		t.Error("expected same provider for equivalent schema content")
+	}
+	if createCalls != 1 {
+		t.Errorf("expected create to not be called again, got %d calls", createCalls)
+	}
+
+	// Different schema content should produce different env.
 	schema2 := &spec.Schema{
 		SchemaProps: spec.SchemaProps{
 			Type: []string{"object"},
@@ -229,10 +255,16 @@ func TestBuilderCache_FieldTypeMap(t *testing.T) {
 }
 
 func TestMakeEnvCacheKey(t *testing.T) {
-	s1 := &spec.Schema{}
-	s2 := &spec.Schema{}
+	s1 := &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"object"}}}
+	s1Clone := &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type:        []string{"object"},
+			Description: "ignored for CEL typing",
+		},
+	}
+	s2 := &spec.Schema{SchemaProps: spec.SchemaProps{Type: []string{"string"}}}
 
-	// Same map should produce same key
+	// Same logical map should produce the same key regardless of iteration order.
 	m1 := map[string]*spec.Schema{"a": s1, "b": s2}
 	m2 := map[string]*spec.Schema{"b": s2, "a": s1}
 	k1 := MakeEnvCacheKey(m1)
@@ -241,11 +273,20 @@ func TestMakeEnvCacheKey(t *testing.T) {
 		t.Errorf("expected same key regardless of iteration order, got %q vs %q", k1, k2)
 	}
 
-	// Different schemas should produce different key
-	m3 := map[string]*spec.Schema{"a": s2, "b": s1}
+	// Equivalent schema content should produce the same key even with a different pointer.
+	mEquivalent := map[string]*spec.Schema{"a": s1Clone, "b": s2}
+	if k := MakeEnvCacheKey(mEquivalent); k != k1 {
+		t.Errorf("expected equivalent schema content to produce same key, got %q vs %q", k, k1)
+	}
+
+	// Different CEL-relevant schemas should produce a different key.
+	m3 := map[string]*spec.Schema{
+		"a": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+		"b": s2,
+	}
 	k3 := MakeEnvCacheKey(m3)
 	if k1 == k3 {
-		t.Error("expected different key for swapped schema pointers")
+		t.Error("expected different key for different schema content")
 	}
 }
 

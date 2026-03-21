@@ -22,6 +22,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	schemacache "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -161,7 +162,7 @@ func TestParseResource(t *testing.T) {
 			{Path: "schemalessField.nestedSomething.nested", Expression: krocel.NewUncompiled("schemaless.nested.value")},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -207,7 +208,7 @@ func TestParseResource(t *testing.T) {
 			},
 		}
 
-		_, err := ParseResource(resource, schema)
+		_, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err == nil {
 			t.Errorf("ParseResource() expected error, got nil")
 		}
@@ -437,7 +438,7 @@ func TestTypeMismatches(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseResource(tc.resource, tc.schema)
+			_, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ParseResource() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -521,7 +522,7 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		},
 	}
 
-	expressions, err := ParseResource(resource, schema)
+	expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 	if err != nil {
 		t.Fatalf("ParseResource() error = %v", err)
 	}
@@ -742,7 +743,7 @@ func TestParserEdgeCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseResource(tc.resource, tc.schema, "")
+			_, err := New(schemacache.NewCache()).parseResource(tc.resource, tc.schema, "")
 			if tc.expectedError == "" {
 				if err != nil {
 					t.Errorf("Expected no error, but got: %s", err.Error())
@@ -863,7 +864,7 @@ func TestXKubernetesIntOrString(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseResource(tc.resource, schema)
+			_, err := New(schemacache.NewCache()).ParseResource(tc.resource, schema)
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error but got none")
 			} else if !tc.wantErr && err != nil {
@@ -944,7 +945,7 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				_, err := ParseResource(tc.resource, schema)
+				_, err := New(schemacache.NewCache()).ParseResource(tc.resource, schema)
 				if tc.wantErr && err == nil {
 					t.Errorf("Expected error, but got none")
 				} else if !tc.wantErr && err != nil {
@@ -1166,7 +1167,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseResource(tc.resource, tc.schema, "")
+			_, err := New(schemacache.NewCache()).parseResource(tc.resource, tc.schema, "")
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error but got none")
 			} else if !tc.wantErr && err != nil {
@@ -1239,7 +1240,7 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -1323,7 +1324,7 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -1488,7 +1489,7 @@ func TestPreserveUnknownFields(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			expressions, err := ParseResource(tc.resource, tc.schema)
+			expressions, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if tc.wantErr {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -1713,7 +1714,7 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fields, err := ParseResource(tc.resource, tc.schema)
+			fields, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if err != nil {
 				t.Fatalf("ParseResource() error = %v", err)
 			}

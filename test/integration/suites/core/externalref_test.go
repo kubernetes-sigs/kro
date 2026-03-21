@@ -422,7 +422,7 @@ var _ = Describe("ExternalRef", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "config-alpha",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "alpha"},
+				Labels:    map[string]string{"empty-selector-test": "alpha"},
 			},
 			Data: map[string]string{"key": "value1"},
 		}
@@ -430,7 +430,7 @@ var _ = Describe("ExternalRef", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "config-beta",
 				Namespace: namespace,
-				Labels:    map[string]string{"team": "beta"},
+				Labels:    map[string]string{"empty-selector-test": "beta"},
 			},
 			Data: map[string]string{"key": "value2"},
 		}

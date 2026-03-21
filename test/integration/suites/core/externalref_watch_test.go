@@ -275,7 +275,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				Metadata: krov1alpha1.ExternalRefMetadata{
 					Selector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
-							"team": "alpha",
+							"watch-test": "reactive",
 						},
 					},
 				},
@@ -294,13 +294,13 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		By("creating first ConfigMap with label team=alpha")
+		By("creating first ConfigMap with label watch-test=reactive")
 		cm1 := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "alpha-config-1",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"team": "alpha",
+					"watch-test": "reactive",
 				},
 			},
 			Data: map[string]string{"key": "value1"},
@@ -336,13 +336,13 @@ var _ = Describe("ExternalRef Watch", func() {
 			g.Expect(configCount).To(Equal("1"))
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		By("creating a second ConfigMap with label team=alpha")
+		By("creating a second ConfigMap with label watch-test=reactive")
 		cm2 := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "alpha-config-2",
 				Namespace: namespace,
 				Labels: map[string]string{
-					"team": "alpha",
+					"watch-test": "reactive",
 				},
 			},
 			Data: map[string]string{"key": "value2"},

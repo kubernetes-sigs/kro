@@ -146,9 +146,6 @@ type DynamicController struct {
 	// such as the controller-runtime manager. Thread-safe.
 	ctx atomic.Pointer[context.Context]
 
-	// mu protects parentWatches.
-	mu sync.Mutex
-
 	config Config
 	log    logr.Logger
 
@@ -159,7 +156,7 @@ type DynamicController struct {
 	coordinator *WatchCoordinator
 
 	// Parent watch tracking: maps parent GVR to its event handler registration.
-	parentWatches map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
+	parentWatches sync.Map // map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration
 
 	// Handler dispatch.
 	handlers sync.Map // map[schema.GroupVersionResource]Handler (thread-safe on its own)
@@ -177,10 +174,9 @@ func NewDynamicController(
 	logger := log.WithName("dynamic-controller")
 
 	dc := &DynamicController{
-		config:        config,
-		log:           logger,
-		parentWatches: make(map[schema.GroupVersionResource]cache.ResourceEventHandlerRegistration),
-		mapper:        mapper,
+		config: config,
+		log:    logger,
+		mapper: mapper,
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](config.MinRetryDelay, config.MaxRetryDelay),
 			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(config.RateLimit), config.BurstLimit)},
@@ -354,7 +350,7 @@ func (dc *DynamicController) Register(
 	dc.handlers.Store(parent, instanceHandler)
 
 	// Re-registration: just enqueue existing instances.
-	if _, exists := dc.parentWatches[parent]; exists {
+	if _, exists := dc.parentWatches.Load(parent); exists {
 		dc.enqueueExistingInstances(parent)
 		return nil
 	}
@@ -386,7 +382,7 @@ func (dc *DynamicController) Register(
 
 	// Success — cancel deferred cleanup.
 	cleanupWatch = false
-	dc.parentWatches[parent] = reg
+	dc.parentWatches.Store(parent, reg)
 
 	gvrCount.Inc()
 	handlerAttachTotal.WithLabelValues("parent").Inc()
@@ -474,22 +470,19 @@ func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.
 func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVersionResource) error {
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-
 	gvrKey := keyFromGVR(parent)
 
 	// Clean up coordinator state for all instances of this parent.
 	dc.coordinator.RemoveParentGVR(parent)
 
 	// Remove parent event handler registration from the informer.
-	if reg, exists := dc.parentWatches[parent]; exists {
+	if val, exists := dc.parentWatches.LoadAndDelete(parent); exists {
+		reg := val.(cache.ResourceEventHandlerRegistration)
 		if inf := dc.watches.GetInformer(parent); inf != nil {
 			if err := inf.RemoveEventHandler(reg); err != nil {
 				dc.log.Error(err, "failed to remove parent event handler", "parent", gvrKey)
 			}
 		}
-		delete(dc.parentWatches, parent)
 
 		// Release the parent ownership; ReleaseWatch stops the informer
 		// automatically if no other owners remain.

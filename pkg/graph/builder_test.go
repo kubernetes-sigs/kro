@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	apiservercel "k8s.io/apiserver/pkg/cel"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
@@ -3686,6 +3687,18 @@ func newTypedEnvWithProvider(t *testing.T, schemas map[string]*spec.Schema) (*ce
 	return env, provider
 }
 
+func newTestBuildContext(t *testing.T, env *cel.Env, provider *krocel.DeclTypeProvider) *buildContext {
+	t.Helper()
+	return &buildContext{
+		env:          env,
+		typeProvider: provider,
+		schemaCache:  graphschema.NewCache(),
+		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
+		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
+		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
+	}
+}
+
 func rawExt(raw string) runtime.RawExtension {
 	return runtime.RawExtension{Raw: []byte(raw)}
 }
@@ -3997,6 +4010,7 @@ func TestBuildStatusSchema(t *testing.T) {
 		}),
 	})
 	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
+	statusBc := newTestBuildContext(t, env, provider)
 	inspector := newUnitInspector(t, "resource")
 	tests := []struct {
 		name            string
@@ -4013,9 +4027,9 @@ func TestBuildStatusSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			statusSchema, fieldDescriptors, _, err := buildStatusSchema(&krov1alpha1.Schema{
+			statusSchema, fieldDescriptors, _, err := buildStatusSchema(statusBc, &krov1alpha1.Schema{
 				Status: rawExt(tt.statusRaw),
-			}, []string{"resource"}, inspector, env, provider)
+			}, []string{"resource"}, inspector)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -4155,8 +4169,10 @@ func TestBuilderHelperCases(t *testing.T) {
 		"resource":    rootSchema,
 	})
 	require.NoError(t, err)
+	bc := newTestBuildContext(t, resourceEnv, provider)
 	plainEnv, err := cel.NewEnv(cel.Variable("items", cel.StringType))
 	require.NoError(t, err)
+	plainBc := newTestBuildContext(t, plainEnv, nil)
 
 	tests := []struct {
 		name string
@@ -4181,19 +4197,19 @@ func TestBuilderHelperCases(t *testing.T) {
 		{
 			name: "getExpectedTypeForField falls back to dyn on bad paths",
 			run: func(t *testing.T) {
-				assert.Equal(t, cel.DynType, getExpectedTypeForField(schemaCache, &variable.FieldDescriptor{
+				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec[",
-				}, rootSchema, "resource", provider))
-				assert.Equal(t, cel.DynType, getExpectedTypeForField(schemaCache, &variable.FieldDescriptor{
+				}, rootSchema, "resource"))
+				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
 					Path: "spec.missing",
-				}, rootSchema, "resource", provider))
+				}, rootSchema, "resource"))
 			},
 		},
 		{
 			name: "getCelTypeFromSchema falls back to dyn for nil and empty schemas",
 			run: func(t *testing.T) {
-				assert.Equal(t, cel.DynType, getCelTypeFromSchema(nil, "resource.Nil", nil))
-				assert.Equal(t, cel.DynType, getCelTypeFromSchema(&spec.Schema{}, "resource.Empty", nil))
+				assert.Equal(t, cel.DynType, celTypeFromSchema(bc, nil, "resource.Nil"))
+				assert.Equal(t, cel.DynType, celTypeFromSchema(bc, &spec.Schema{}, "resource.Empty"))
 			},
 		},
 		{
@@ -4209,7 +4225,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				env, err := cel.NewEnv()
 				require.NoError(t, err)
-				_, err = parseCheckAndCompile(env, expr("1 +"))
+				_, err = bc.compile(env, expr("1 +"))
 				require.Error(t, err)
 			},
 		},
@@ -4218,7 +4234,7 @@ func TestBuilderHelperCases(t *testing.T) {
 			run: func(t *testing.T) {
 				env, err := cel.NewEnv()
 				require.NoError(t, err)
-				err = validateConditionExpression(env, expr("1 +"), "includeWhen", "resource")
+				err = validateConditionExpression(bc, env, expr("1 +"), "includeWhen", "resource")
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "failed to type-check includeWhen expression")
 			},
@@ -4227,11 +4243,11 @@ func TestBuilderHelperCases(t *testing.T) {
 			name: "validateAndCompileForEach handles empty and invalid expressions",
 			run: func(t *testing.T) {
 				inspector := newUnitInspector(t, "schema")
-				iteratorTypes, err := validateAndCompileForEach(plainEnv, &Node{}, inspector)
+				iteratorTypes, err := validateAndCompileForEach(plainBc, &Node{}, inspector)
 				require.NoError(t, err)
 				assert.Nil(t, iteratorTypes)
 
-				_, err = validateAndCompileForEach(plainEnv, &Node{
+				_, err = validateAndCompileForEach(plainBc, &Node{
 					Meta: NodeMeta{ID: "resource"},
 					ForEach: []ForEachDimension{
 						{Name: "item", Expression: expr("items +")},
@@ -4250,7 +4266,7 @@ func TestBuilderHelperCases(t *testing.T) {
 					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource, Dependencies: []string{}},
 					IncludeWhen: []*krocel.Expression{e},
 				}
-				err := validateAndCompileNode(schemaCache, node, newUnitInspector(t, "schema", "resource", "other"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource", "other"), rootSchema)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "includeWhen")
 				assert.Contains(t, err.Error(), "references unknown identifiers")
@@ -4349,7 +4365,7 @@ func TestBuilderHelperCases(t *testing.T) {
 					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
 					IncludeWhen: []*krocel.Expression{expr("omit()")},
 				}
-				err := validateAndCompileNode(schemaCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "includeWhen")
 				assert.Contains(t, err.Error(), "must return bool or optional_type(bool), but returns \"dyn\"")
@@ -4362,7 +4378,7 @@ func TestBuilderHelperCases(t *testing.T) {
 					Meta:      NodeMeta{ID: "resource", Type: NodeTypeResource},
 					ReadyWhen: []*krocel.Expression{expr("omit()")},
 				}
-				err := validateAndCompileNode(schemaCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "readyWhen")
 				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
@@ -4377,7 +4393,7 @@ func TestBuilderHelperCases(t *testing.T) {
 						{Name: "item", Expression: expr("omit()")},
 					},
 				}
-				err := validateAndCompileNode(schemaCache, node, newUnitInspector(t, "schema", "resource"), resourceEnv, rootSchema, provider)
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "forEach")
 				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")

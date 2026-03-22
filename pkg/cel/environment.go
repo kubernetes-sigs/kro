@@ -225,34 +225,6 @@ func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *D
 	return defaultEnvironment(WithTypedResources(schemas))
 }
 
-// ExtendWithTypedVar returns an environment extending the parent
-// with a single typed variable declaration derived from the given schema.
-func ExtendWithTypedVar(parent *cel.Env, varName string, schema *spec.Schema) (*cel.Env, error) {
-	declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
-	if declType == nil {
-		return nil, fmt.Errorf("failed to build DeclType for schema")
-	}
-
-	typeName := TypeNamePrefix + varName
-	declType = declType.MaybeAssignTypeName(typeName)
-
-	provider := NewDeclTypeProvider(declType)
-	provider.SetRecognizeKeywordAsFieldName(true)
-
-	celType := declType.CelType()
-
-	registry := types.NewEmptyRegistry()
-	wrappedProvider, err := provider.WithTypeProvider(registry)
-	if err != nil {
-		return nil, err
-	}
-
-	return parent.Extend(
-		cel.Variable(varName, celType),
-		cel.CustomTypeProvider(wrappedProvider),
-	)
-}
-
 // TypedEnvironment creates a CEL environment with type checking enabled.
 //
 // This should be used during RGD build time (pkg/graph.Builder) to validate

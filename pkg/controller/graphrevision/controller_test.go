@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -303,6 +305,85 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			assertStoredRevisionState(t, cl, revision, tt.wantFinalizer, tt.wantVerified, tt.wantReady, tt.wantOrder, tt.wantResourceIDs)
 			assertRegistryState(t, registry, tt.wantRegistry, tt.wantRegistryMiss)
 		})
+	}
+}
+
+func TestGraphRevisionPrimaryWatchPredicate(t *testing.T) {
+	t.Parallel()
+
+	pred := graphRevisionPrimaryWatchPredicate()
+	deletionTime := metav1.NewTime(time.Unix(123, 0))
+
+	testCases := []struct {
+		name string
+		run  func() bool
+		want bool
+	}{
+		{
+			name: "accepts create events",
+			run: func() bool {
+				return pred.Create(event.CreateEvent{Object: newPredicateTestGraphRevision(1, nil)})
+			},
+			want: true,
+		},
+		{
+			name: "ignores generation-only updates",
+			run: func() bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestGraphRevision(1, nil),
+					ObjectNew: newPredicateTestGraphRevision(2, nil),
+				})
+			},
+			want: false,
+		},
+		{
+			name: "accepts deletion timestamp transitions",
+			run: func() bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestGraphRevision(1, nil),
+					ObjectNew: newPredicateTestGraphRevision(1, &deletionTime),
+				})
+			},
+			want: true,
+		},
+		{
+			name: "ignores non-deletion updates",
+			run: func() bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestGraphRevision(1, nil),
+					ObjectNew: newPredicateTestGraphRevision(1, nil),
+				})
+			},
+			want: false,
+		},
+		{
+			name: "ignores updates after deletion already started",
+			run: func() bool {
+				return pred.Update(event.UpdateEvent{
+					ObjectOld: newPredicateTestGraphRevision(1, &deletionTime),
+					ObjectNew: newPredicateTestGraphRevision(1, &deletionTime),
+				})
+			},
+			want: false,
+		},
+		{
+			name: "ignores delete events",
+			run: func() bool {
+				return pred.Delete(event.DeleteEvent{Object: newPredicateTestGraphRevision(1, nil)})
+			},
+			want: false,
+		},
+		{
+			name: "ignores generic events",
+			run: func() bool {
+				return pred.Generic(event.GenericEvent{Object: newPredicateTestGraphRevision(1, nil)})
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		assert.Equal(t, tc.want, tc.run(), tc.name)
 	}
 }
 
@@ -699,6 +780,16 @@ func findCondition(conditions []v1alpha1.Condition, t v1alpha1.ConditionType) *v
 		}
 	}
 	return nil
+}
+
+func newPredicateTestGraphRevision(generation int64, deletionTimestamp *metav1.Time) *internalv1alpha1.GraphRevision {
+	return &internalv1alpha1.GraphRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-graphrevision",
+			Generation:        generation,
+			DeletionTimestamp: deletionTimestamp,
+		},
+	}
 }
 
 func boolPtr(v bool) *bool { return &v }

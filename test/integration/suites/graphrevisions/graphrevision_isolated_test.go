@@ -72,8 +72,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			g.Expect(gvs).To(HaveLen(isolatedGraphRevisionRetentionLimit))
 			g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
 				expectedRetainedRevisionNumbers(
-					isolatedGraphRevisionRetentionLimit,
-					int64(isolatedGraphRevisionRetentionLimit+1),
+					int64(isolatedGraphRevisionRetentionLimit + 1),
 				),
 			))
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -97,8 +96,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			g.Expect(gvs).To(HaveLen(isolatedGraphRevisionRetentionLimit))
 			g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
 				expectedRetainedRevisionNumbers(
-					isolatedGraphRevisionRetentionLimit,
-					int64(isolatedGraphRevisionRetentionLimit+2),
+					int64(isolatedGraphRevisionRetentionLimit + 2),
 				),
 			))
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
@@ -146,7 +144,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				}
 
 				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
-					expectedRetainedRevisionNumbers(isolatedGraphRevisionRetentionLimit, revision),
+					expectedRetainedRevisionNumbers(revision),
 				))
 			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		}
@@ -233,7 +231,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 				}
 
 				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
-					expectedRetainedRevisionNumbers(isolatedGraphRevisionRetentionLimit, revision),
+					expectedRetainedRevisionNumbers(revision),
 				))
 			}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 		}
@@ -643,9 +641,9 @@ func maxGraphRevisionNumber(gvs []internalv1alpha1.GraphRevision) int64 {
 	return maxRevision
 }
 
-func expectedRetainedRevisionNumbers(limit int, latest int64) []int64 {
-	start := latest - int64(limit) + 1
-	numbers := make([]int64, 0, limit)
+func expectedRetainedRevisionNumbers(latest int64) []int64 {
+	start := latest - int64(isolatedGraphRevisionRetentionLimit) + 1
+	numbers := make([]int64, 0, isolatedGraphRevisionRetentionLimit)
 	for revision := start; revision <= latest; revision++ {
 		numbers = append(numbers, revision)
 	}

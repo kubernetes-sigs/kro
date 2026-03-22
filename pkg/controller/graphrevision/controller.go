@@ -22,8 +22,11 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
@@ -65,11 +68,35 @@ func (r *GraphRevisionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&internalv1alpha1.GraphRevision{}).
+		For(
+			&internalv1alpha1.GraphRevision{},
+			builder.WithPredicates(graphRevisionPrimaryWatchPredicate()),
+		).
 		WithOptions(ctrlrtcontroller.Options{
 			MaxConcurrentReconciles: r.maxConcurrentReconciles,
 		}).
 		Complete(reconcile.AsReconciler(mgr.GetClient(), r))
+}
+
+// graphRevisionPrimaryWatchPredicate reconciles only on create and deletion
+// start. GraphRevision spec is immutable, so generation-changing updates are
+// not part of the normal lifecycle. Status-only and finalizer-only updates are
+// ignored so the controller does not re-enqueue itself after persisting its own
+// status or finalizer changes.
+func graphRevisionPrimaryWatchPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldDeleting := !e.ObjectOld.GetDeletionTimestamp().IsZero()
+			newDeleting := !e.ObjectNew.GetDeletionTimestamp().IsZero()
+			return !oldDeleting && newDeleting
+		},
+		GenericFunc: func(event.GenericEvent) bool {
+			return false
+		},
+		DeleteFunc: func(event.DeleteEvent) bool {
+			return false
+		},
+	}
 }
 
 // Reconcile compiles GraphRevision definitions, tracks readiness, and stores

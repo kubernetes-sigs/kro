@@ -15,8 +15,6 @@
 package schema
 
 import (
-	"sync"
-
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
@@ -29,14 +27,20 @@ type fieldKey struct {
 // OpenAPI Properties maps store schemas by value, so indexing copies the
 // struct and produces a fresh pointer each time. Cache ensures the same
 // (parent, field) pair always returns the same *spec.Schema pointer.
+//
+// Not safe for concurrent use. Intended to be created per-build and
+// discarded when the build completes.
 type Cache struct {
-	fields sync.Map // fieldKey → *spec.Schema
-	lists  sync.Map // *spec.Schema → *spec.Schema (list wrapper)
+	fields map[fieldKey]*spec.Schema
+	lists  map[*spec.Schema]*spec.Schema
 }
 
 // NewCache returns a new schema cache.
 func NewCache() *Cache {
-	return &Cache{}
+	return &Cache{
+		fields: make(map[fieldKey]*spec.Schema),
+		lists:  make(map[*spec.Schema]*spec.Schema),
+	}
 }
 
 // LookupField returns a pointer-stable schema for a named property of parent.
@@ -50,11 +54,12 @@ func (c *Cache) LookupField(parent *spec.Schema, field string) *spec.Schema {
 		return nil
 	}
 	k := fieldKey{parent: parent, field: field}
-	if v, ok := c.fields.Load(k); ok {
-		return v.(*spec.Schema)
+	if v, ok := c.fields[k]; ok {
+		return v
 	}
-	actual, _ := c.fields.LoadOrStore(k, &prop)
-	return actual.(*spec.Schema)
+	p := &prop
+	c.fields[k] = p
+	return p
 }
 
 // LookupAdditionalProperties returns a pointer-stable schema for
@@ -70,19 +75,19 @@ func (c *Cache) LookupAdditionalProperties(parent *spec.Schema) *spec.Schema {
 		return nil
 	}
 	k := fieldKey{parent: parent, field: "__additional_properties__"}
-	if v, ok := c.fields.Load(k); ok {
-		return v.(*spec.Schema)
+	if v, ok := c.fields[k]; ok {
+		return v
 	}
 	empty := &spec.Schema{}
-	actual, _ := c.fields.LoadOrStore(k, empty)
-	return actual.(*spec.Schema)
+	c.fields[k] = empty
+	return empty
 }
 
 // WrapAsList returns a pointer-stable list schema wrapping itemSchema.
 // Same input pointer always returns the same wrapper pointer.
 func (c *Cache) WrapAsList(itemSchema *spec.Schema) *spec.Schema {
-	if v, ok := c.lists.Load(itemSchema); ok {
-		return v.(*spec.Schema)
+	if v, ok := c.lists[itemSchema]; ok {
+		return v
 	}
 	wrapped := &spec.Schema{
 		SchemaProps: spec.SchemaProps{
@@ -92,6 +97,6 @@ func (c *Cache) WrapAsList(itemSchema *spec.Schema) *spec.Schema {
 			},
 		},
 	}
-	actual, _ := c.lists.LoadOrStore(itemSchema, wrapped)
-	return actual.(*spec.Schema)
+	c.lists[itemSchema] = wrapped
+	return wrapped
 }

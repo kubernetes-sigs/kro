@@ -93,7 +93,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 		},
 		{
-			name: "status patch failure after compile reverts revision to pending",
+			name: "status patch failure after first compile keeps revision pending",
 			buildClient: func(t *testing.T, scheme *runtime.Scheme, revision *internalv1alpha1.GraphRevision) client.Client {
 				base := fake.NewClientBuilder().
 					WithScheme(scheme).
@@ -112,6 +112,38 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				Revision: 1,
 				SpecHash: expectedHash,
 				State:    revisions.RevisionStatePending,
+			},
+		},
+		{
+			name: "status patch failure after recompile preserves active revision",
+			buildClient: func(t *testing.T, scheme *runtime.Scheme, revision *internalv1alpha1.GraphRevision) client.Client {
+				base := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithStatusSubresource(&internalv1alpha1.GraphRevision{}).
+					WithObjects(revision).
+					Build()
+				return &statusPatchFailClient{Client: base, patchErr: errors.New("status patch failed")}
+			},
+			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
+				registry.Put(revisions.Entry{
+					RGDName:       revision.Spec.Snapshot.Name,
+					Revision:      revision.Spec.Revision,
+					SpecHash:      expectedHash,
+					State:         revisions.RevisionStateActive,
+					CompiledGraph: compiled,
+				})
+			},
+			compile: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
+				return compiled, nil
+			},
+			wantErrContains: []string{"status patch failed"},
+			wantFinalizer:   boolPtr(true),
+			wantRegistry: &revisions.Entry{
+				RGDName:       "demo-rgd",
+				Revision:      1,
+				SpecHash:      expectedHash,
+				State:         revisions.RevisionStateActive,
+				CompiledGraph: compiled,
 			},
 		},
 		{
@@ -469,12 +501,17 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			},
 		}
 
-		_, _, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+		topologicalOrder, resources, activeEntry, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
+		require.NotNil(t, activeEntry)
+		assert.Equal(t, revisions.RevisionStateActive, activeEntry.State)
+		assert.Equal(t, []string{"config", "deploy"}, topologicalOrder)
+		assert.Equal(t, []string{"deploy"}, resourceIDs(resources))
 
 		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 		require.True(t, ok)
-		assert.Equal(t, revisions.RevisionStateActive, entry.State)
+		assert.Equal(t, revisions.RevisionStatePending, entry.State)
+		assert.Nil(t, entry.CompiledGraph)
 	})
 
 	t.Run("existing revision keeps prior state during recompile", func(t *testing.T) {
@@ -500,8 +537,12 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			},
 		}
 
-		_, _, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+		topologicalOrder, resources, activeEntry, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
+		require.NotNil(t, activeEntry)
+		assert.Equal(t, revisions.RevisionStateActive, activeEntry.State)
+		assert.Equal(t, []string{"config", "deploy"}, topologicalOrder)
+		assert.Equal(t, []string{"deploy"}, resourceIDs(resources))
 
 		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 		require.True(t, ok)
@@ -522,13 +563,13 @@ func TestGraphRevisionReconcilerFailsCleanlyWhenSpecHashingFails(t *testing.T) {
 		rgdConfig:    graph.RGDConfig{},
 	}
 
-	topologicalOrder, resources, specHash, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+	topologicalOrder, resources, activeEntry, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "compute graph revision spec hash")
 	assert.Contains(t, err.Error(), "normalize schema.spec")
 	assert.Nil(t, topologicalOrder)
 	assert.Nil(t, resources)
-	assert.Empty(t, specHash)
+	assert.Nil(t, activeEntry)
 
 	verified := findCondition(revision.Status.Conditions, v1alpha1.GraphRevisionConditionTypeGraphVerified)
 	require.NotNil(t, verified)

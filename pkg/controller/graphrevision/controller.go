@@ -88,24 +88,17 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resources, specHash, reconcileErr := r.reconcileGraphRevision(ctx, obj)
+	topologicalOrder, resources, activeEntry, reconcileErr := r.reconcileGraphRevision(ctx, obj)
 
 	if err := r.updateStatus(ctx, obj, topologicalOrder, resources); err != nil {
-		if reconcileErr == nil {
-			// Revert to Pending — the graph compiled successfully, only the
-			// status write failed. Failed would be a lie about the graph's
-			// validity and would cause instance controllers to return terminal
-			// errors for a graph that actually compiled fine. Pending triggers
-			// a requeue, giving the next reconcile a chance to retry the status
-			// write.
-			r.registry.Put(revisions.Entry{
-				RGDName:  obj.Spec.Snapshot.Name,
-				Revision: obj.Spec.Revision,
-				SpecHash: specHash,
-				State:    revisions.RevisionStatePending,
-			})
-		}
 		reconcileErr = errors.Join(reconcileErr, err)
+		return ctrl.Result{}, reconcileErr
+	}
+
+	if reconcileErr == nil && activeEntry != nil {
+		// Publish Active only after status has been persisted. Until then the
+		// revision remains Pending so consumers conservatively requeue.
+		r.registry.Put(*activeEntry)
 	}
 
 	return ctrl.Result{}, reconcileErr
@@ -114,14 +107,14 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	ctx context.Context,
 	revision *internalv1alpha1.GraphRevision,
-) ([]string, []krov1alpha1.ResourceInformation, string, error) {
+) ([]string, []krov1alpha1.ResourceInformation, *revisions.Entry, error) {
 	mark := NewConditionsMarkerFor(revision)
 
 	specHash, err := graphhash.Spec(revision.Spec.Snapshot.Spec)
 	if err != nil {
 		hashErr := fmt.Errorf("compute graph revision spec hash: %w", err)
 		mark.GraphInvalid(hashErr.Error())
-		return nil, nil, "", hashErr
+		return nil, nil, nil, hashErr
 	}
 
 	// Only initialize Pending the first time this revision enters the registry.
@@ -146,21 +139,19 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 			SpecHash: specHash,
 			State:    revisions.RevisionStateFailed,
 		})
-		return nil, nil, specHash, err
+		return nil, nil, nil, err
 	}
 
 	mark.GraphVerified()
-	// Active is the invariant used by other controllers to mean compiled graph
-	// is present and safe to use directly.
-	r.registry.Put(revisions.Entry{
+	// Return the desired Active entry to the caller, which only publishes it
+	// after status has been written successfully.
+	return compiledGraph.TopologicalOrder, resourcesInfo, &revisions.Entry{
 		RGDName:       revision.Spec.Snapshot.Name,
 		Revision:      revision.Spec.Revision,
 		SpecHash:      specHash,
 		State:         revisions.RevisionStateActive,
 		CompiledGraph: compiledGraph,
-	})
-
-	return compiledGraph.TopologicalOrder, resourcesInfo, specHash, nil
+	}, nil
 }
 
 func (r *GraphRevisionReconciler) compileGraphRevision(

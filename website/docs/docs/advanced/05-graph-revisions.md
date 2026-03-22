@@ -10,10 +10,10 @@ when, and whether the change compiled successfully.
 
 ```bash
 $ kubectl get graphrevisions
-NAME                          REVISION   READY   AGE
-my-webapp-r1-a1b2c3d4e5f6     1          True    2d
-my-webapp-r2-a1b2c3d4e5f6     2          True    1d
-my-webapp-r3-a1b2c3d4e5f6     3          True    5m
+NAME                          RGD        REVISION   READY   AGE
+my-webapp-r1-a1b2c3d4e5f6     my-webapp  1          True    2d
+my-webapp-r2-a1b2c3d4e5f6     my-webapp  2          True    1d
+my-webapp-r3-a1b2c3d4e5f6     my-webapp  3          True    5m
 ```
 
 :::warning Internal API
@@ -34,7 +34,7 @@ Each GraphRevision has a `READY` column that tells you its compilation state:
 | `Unknown` | Still compiling — instances wait until it finishes         |
 | `False`   | Compilation failed — instances are blocked (see below)     |
 
-Use `-o wide` to see which RGD a revision belongs to and its spec hash:
+Use `-o wide` to also see the spec hash:
 
 ```bash
 $ kubectl get graphrevisions -o wide

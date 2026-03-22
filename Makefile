@@ -114,6 +114,10 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 tt:
 	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
 
+.PHONY: verify-codegen
+verify-codegen: ## Verify generated code is up-to-date.
+	./scripts/hack/verify-codegen.sh
+
 .PHONY: fmt
 fmt: go-generate ## Run go fmt against code and add licenses.
 	go fmt ./...

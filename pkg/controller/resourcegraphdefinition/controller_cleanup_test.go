@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -117,9 +118,10 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 
 			manager := &stubCRDManager{deleteErr: tt.deleteErr}
 			reconciler := &ResourceGraphDefinitionReconciler{
-				allowCRDDeletion:  tt.allowCRDDeletion,
+				cfg:               Config{AllowCRDDeletion: tt.allowCRDDeletion},
 				dynamicController: dc,
 				crdManager:        manager,
+				revisionsRegistry: revisions.NewRegistry(),
 			}
 
 			err := reconciler.cleanupResourceGraphDefinition(context.Background(), rgd)
@@ -133,6 +135,36 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 			assert.Equal(t, tt.wantDeleted, manager.deleted)
 		})
 	}
+}
+
+func TestCleanupPreservesRegistryEntries(t *testing.T) {
+	rgd := newTestRGD("evict")
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+	dc := newRunningDynamicController(t)
+	require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
+
+	registry := revisions.NewRegistry()
+	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 1, SpecHash: "aaa", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{RGDName: rgd.Name, Revision: 2, SpecHash: "bbb", State: revisions.RevisionStateActive})
+	registry.Put(revisions.Entry{RGDName: "other-rgd", Revision: 1, SpecHash: "ccc", State: revisions.RevisionStateActive})
+
+	reconciler := &ResourceGraphDefinitionReconciler{
+		dynamicController: dc,
+		crdManager:        &stubCRDManager{},
+		revisionsRegistry: registry,
+	}
+
+	require.NoError(t, reconciler.cleanupResourceGraphDefinition(context.Background(), rgd))
+
+	// RGD cleanup no longer evicts registry entries. The GraphRevision
+	// controller handles eviction as each revision is deleted by GC.
+	_, found := registry.Get(rgd.Name, 1)
+	assert.True(t, found, "revision 1 should be preserved")
+	_, found = registry.Get(rgd.Name, 2)
+	assert.True(t, found, "revision 2 should be preserved")
+
+	_, found = registry.Get("other-rgd", 1)
+	assert.True(t, found, "unrelated RGD entries must be preserved")
 }
 
 func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
@@ -161,8 +193,8 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &stubCRDManager{deleteErr: tt.deleteErr}
 			reconciler := &ResourceGraphDefinitionReconciler{
-				allowCRDDeletion: tt.allowCRDDeletion,
-				crdManager:       manager,
+				cfg:        Config{AllowCRDDeletion: tt.allowCRDDeletion},
+				crdManager: manager,
 			}
 
 			err := reconciler.cleanupResourceGraphDefinitionCRD(context.Background(), "networks.example.io")

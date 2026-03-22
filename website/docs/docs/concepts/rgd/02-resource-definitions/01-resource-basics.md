@@ -436,7 +436,7 @@ resources:
 ```yaml
 status:
   conditions:
-    - type: ResourceGraphAccepted
+    - type: GraphAccepted
       status: "False"
       reason: InvalidResourceGraph
       message: "failed to get schema for resource database: schema not found"
@@ -460,7 +460,7 @@ resources:
 ```yaml
 status:
   conditions:
-    - type: ResourceGraphAccepted
+    - type: GraphAccepted
       status: "False"
       reason: InvalidResourceGraph
       message: "error getting field schema for path spec.unknownField: schema not found for field unknownField"
@@ -482,7 +482,7 @@ resources:
 ```yaml
 status:
   conditions:
-    - type: ResourceGraphAccepted
+    - type: GraphAccepted
       status: "False"
       reason: InvalidResourceGraph
       message: "failed to type-check template expression \"deployment.spec.nonExistentField\" at path \"spec.port\": no such member: nonExistentField"
@@ -504,7 +504,7 @@ resources:
 ```yaml
 status:
   conditions:
-    - type: ResourceGraphAccepted
+    - type: GraphAccepted
       status: "False"
       reason: InvalidResourceGraph
       message: "type mismatch in resource \"deployment\" at path \"spec.replicas\": expression \"schema.spec.name\" returns type \"string\" but expected \"integer\""

@@ -20,23 +20,28 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	ctrlgraphrevision "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
 	ctrlresourcegraphdefinition "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 )
 
 type Environment struct {
@@ -50,19 +55,31 @@ type Environment struct {
 	ClientSet        *kroclient.Set
 	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
-	ManagerResult    chan error
+	managerReady     <-chan struct{}
+	managerDone      chan struct{}
+	managerErrMu     sync.RWMutex
+	managerErr       error
 }
 
 type ControllerConfig struct {
-	AllowCRDDeletion bool
-	ReconcileConfig  ctrlinstance.ReconcileConfig
-	LogWriter        io.Writer
+	AllowCRDDeletion  bool
+	ReconcileConfig   ctrlinstance.ReconcileConfig
+	MaxGraphRevisions int
+	LogWriter         io.Writer
 }
 
-func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
+func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment, retErr error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
 	}
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if cleanupErr := env.Stop(); cleanupErr != nil {
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 
 	if env.ControllerConfig.LogWriter == nil {
 		env.ControllerConfig.LogWriter = io.Discard
@@ -92,33 +109,45 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 	// Start the test environment
 	cfg, err := env.TestEnv.Start()
 	if err != nil {
-		return nil, fmt.Errorf("starting test environment: %w", err)
+		retErr = fmt.Errorf("starting test environment: %w", err)
+		return nil, retErr
 	}
 
 	clientSet, err := kroclient.NewSet(kroclient.Config{
 		RestConfig: cfg,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating client set: %w", err)
+		retErr = fmt.Errorf("creating client set: %w", err)
+		return nil, retErr
 	}
 	env.ClientSet = clientSet
 
 	// Setup scheme
+	if err := internalv1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		retErr = fmt.Errorf("adding internal kro scheme: %w", err)
+		return nil, retErr
+	}
 	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		return nil, fmt.Errorf("adding kro scheme: %w", err)
+		retErr = fmt.Errorf("adding kro scheme: %w", err)
+		return nil, retErr
 	}
 
 	// Initialize clients
 	if err := env.initializeClients(); err != nil {
-		return nil, fmt.Errorf("initializing clients: %w", err)
+		retErr = fmt.Errorf("initializing clients: %w", err)
+		return nil, retErr
 	}
 
 	// Setup and start controller
 	if err := env.setupController(); err != nil {
-		return nil, fmt.Errorf("setting up controller: %w", err)
+		retErr = fmt.Errorf("setting up controller: %w", err)
+		return nil, retErr
 	}
 
-	time.Sleep(1 * time.Second)
+	if err := env.waitForManagerReady(); err != nil {
+		retErr = fmt.Errorf("waiting for manager readiness: %w", err)
+		return nil, retErr
+	}
 	return env, nil
 }
 
@@ -143,8 +172,20 @@ func (e *Environment) initializeClients() error {
 
 func (e *Environment) setupController() error {
 	var err error
+	rgdConfig := graph.RGDConfig{
+		MaxCollectionSize:          1000,
+		MaxCollectionDimensionSize: 10,
+	}
+	maxGraphRevisions := e.ControllerConfig.MaxGraphRevisions
+	if maxGraphRevisions <= 0 {
+		maxGraphRevisions = 20
+	}
+
 	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
+		Controller: config.Controller{
+			SkipNameValidation: ptr.To(true),
+		},
 		Metrics: server.Options{
 			// Disable the metrics server
 			BindAddress: "0",
@@ -169,17 +210,26 @@ func (e *Environment) setupController() error {
 		},
 		e.ClientSet.Metadata(), e.ClientSet.RESTMapper())
 
+	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
-		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
-		e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
-		40,
-		graph.RGDConfig{
-			MaxCollectionSize:          1000,
-			MaxCollectionDimensionSize: 10,
+		graphRevisionRegistry,
+		ctrlresourcegraphdefinition.Config{
+			AllowCRDDeletion:        e.ControllerConfig.AllowCRDDeletion,
+			InstanceRequeueInterval: e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
+			ProgressRequeueDelay:    3 * time.Second,
+			MaxConcurrentReconciles: 40,
+			MaxGraphRevisions:       maxGraphRevisions,
+			RGDConfig:               rgdConfig,
 		},
+	)
+	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(
+		e.GraphBuilder,
+		graphRevisionRegistry,
+		10,
+		rgdConfig,
 	)
 
 	if err := e.CtrlManager.Add(dc); err != nil {
@@ -189,17 +239,86 @@ func (e *Environment) setupController() error {
 	if err = rgReconciler.SetupWithManager(e.CtrlManager); err != nil {
 		return fmt.Errorf("setting up reconciler: %w", err)
 	}
+	if err = gvReconciler.SetupWithManager(e.CtrlManager); err != nil {
+		return fmt.Errorf("setting up graph revision reconciler: %w", err)
+	}
 
-	e.ManagerResult = make(chan error, 1)
+	e.managerReady = e.CtrlManager.Elected()
+	e.managerErrMu.Lock()
+	e.managerErr = nil
+	e.managerErrMu.Unlock()
+	e.managerDone = make(chan struct{})
 	go func() {
-		e.ManagerResult <- e.CtrlManager.Start(e.context)
+		err := e.CtrlManager.Start(e.context)
+		e.managerErrMu.Lock()
+		e.managerErr = err
+		e.managerErrMu.Unlock()
+		close(e.managerDone)
 	}()
 
 	return nil
 }
 
-func (e *Environment) Stop() error {
+func (e *Environment) RestartControllers() error {
 	e.cancel()
-	time.Sleep(1 * time.Second)
-	return errors.Join(e.TestEnv.Stop(), <-e.ManagerResult)
+	if err := e.waitForManagerStop(); err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("stopping manager: %w", err)
+	}
+
+	e.context, e.cancel = context.WithCancel(context.Background())
+	if err := e.setupController(); err != nil {
+		return fmt.Errorf("restarting controller: %w", err)
+	}
+
+	return e.waitForManagerReady()
+}
+
+// waitForManagerReady blocks until the controller-runtime manager has synced
+// its caches and is ready to serve. Replaces hard time.Sleep with the
+// structural signal provided by Manager.Elected().
+func (e *Environment) waitForManagerReady() error {
+	select {
+	case <-e.managerReady:
+		return nil
+	case <-e.managerDone:
+		err := e.currentManagerErr()
+		return fmt.Errorf("manager exited before becoming ready: %w", err)
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timed out waiting for manager readiness")
+	}
+}
+
+func (e *Environment) Stop() error {
+	if e == nil {
+		return nil
+	}
+	if e.cancel != nil {
+		e.cancel()
+	}
+
+	var stopErr error
+	if e.TestEnv != nil {
+		stopErr = e.TestEnv.Stop()
+	}
+
+	managerErr := e.waitForManagerStop()
+	if errors.Is(managerErr, context.Canceled) {
+		managerErr = nil
+	}
+
+	return errors.Join(stopErr, managerErr)
+}
+
+func (e *Environment) waitForManagerStop() error {
+	if e == nil || e.managerDone == nil {
+		return nil
+	}
+	<-e.managerDone
+	return e.currentManagerErr()
+}
+
+func (e *Environment) currentManagerErr() error {
+	e.managerErrMu.RLock()
+	defer e.managerErrMu.RUnlock()
+	return e.managerErr
 }

@@ -61,6 +61,8 @@ spec:
               value: {{ .Values.config.healthProbeBindAddress | quote }}
             - name: KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES
               value: {{ .Values.config.resourceGraphDefinitionConcurrentReconciles | quote }}
+            - name: KRO_GRAPH_REVISION_CONCURRENT_RECONCILES
+              value: {{ .Values.config.graphRevisionConcurrentReconciles | quote }}
             - name: KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES
               value: {{ .Values.config.dynamicControllerConcurrentReconciles | quote }}
             - name: KRO_LOG_LEVEL
@@ -81,6 +83,8 @@ spec:
               value: {{ .Values.config.rgd.maxCollectionSize | quote }}
             - name: KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE
               value: {{ .Values.config.rgd.maxCollectionDimensionSize | quote }}
+            - name: KRO_RGD_MAX_GRAPH_REVISIONS
+              value: {{ .Values.config.rgd.maxGraphRevisions | quote }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
@@ -91,6 +95,8 @@ spec:
             - "$(KRO_HEALTH_PROBE_BIND_ADDRESS)"
             - --resource-graph-definition-concurrent-reconciles
             - "$(KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES)"
+            - --graph-revision-concurrent-reconciles
+            - "$(KRO_GRAPH_REVISION_CONCURRENT_RECONCILES)"
             - --dynamic-controller-concurrent-reconciles
             - "$(KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES)"
             - --zap-log-level
@@ -111,6 +117,8 @@ spec:
             - "$(KRO_RGD_MAX_COLLECTION_SIZE)"
             - --rgd-max-collection-dimension-size
             - "$(KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE)"
+            - --rgd-max-graph-revisions
+            - "$(KRO_RGD_MAX_GRAPH_REVISIONS)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}

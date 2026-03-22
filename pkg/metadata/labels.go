@@ -58,6 +58,8 @@ const (
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// GraphRevisionHashLabel stores a label-safe representation of the GraphRevision spec hash.
+	GraphRevisionHashLabel = LabelKROPrefix + "graph-revision-hash"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -156,6 +158,14 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	return map[string]string{
 		ResourceGraphDefinitionIDLabel:   string(rgMeta.GetUID()),
 		ResourceGraphDefinitionNameLabel: rgMeta.GetName(),
+	}
+}
+
+// NewGraphRevisionHashLabeler returns a new labeler that sets a label-safe
+// representation of the GraphRevision spec hash on a resource.
+func NewGraphRevisionHashLabeler(specHash string) GenericLabeler {
+	return map[string]string{
+		GraphRevisionHashLabel: specHash,
 	}
 }
 

@@ -46,10 +46,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	krofake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
@@ -69,6 +72,7 @@ type stubCRDManager struct {
 type stubManager struct {
 	manager.Manager
 	client            client.Client
+	apiReader         client.Reader
 	restMapper        apimeta.RESTMapper
 	logger            logr.Logger
 	scheme            *runtime.Scheme
@@ -139,6 +143,13 @@ func (m *stubManager) GetClient() client.Client {
 	return m.client
 }
 
+func (m *stubManager) GetAPIReader() client.Reader {
+	if m.apiReader != nil {
+		return m.apiReader
+	}
+	return m.client
+}
+
 func (m *stubManager) GetRESTMapper() apimeta.RESTMapper {
 	return m.restMapper
 }
@@ -170,6 +181,8 @@ func newFakeEventRecorderFactory() func(string) record.EventRecorder {
 func (m *stubManager) GetEventRecorderFor(name string) record.EventRecorder {
 	return newFakeEventRecorderFactory()(name)
 }
+
+func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return nil }
 
 func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.RGDConfig) (*graph.Graph, error) {
 	return s.build(rgd, config)
@@ -262,6 +275,7 @@ func testScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
+	require.NoError(t, internalv1alpha1.AddToScheme(scheme))
 	require.NoError(t, v1alpha1.AddToScheme(scheme))
 	require.NoError(t, extv1.AddToScheme(scheme))
 
@@ -274,6 +288,13 @@ func newTestClient(t testing.TB, funcs interceptor.Funcs, objs ...client.Object)
 	builder := clientfake.NewClientBuilder().
 		WithScheme(testScheme(t)).
 		WithStatusSubresource(&v1alpha1.ResourceGraphDefinition{}).
+		WithIndex(&internalv1alpha1.GraphRevision{}, "spec.snapshot.name", func(obj client.Object) []string {
+			gr, ok := obj.(*internalv1alpha1.GraphRevision)
+			if !ok {
+				return nil
+			}
+			return []string{gr.Spec.Snapshot.Name}
+		}).
 		WithInterceptorFuncs(funcs)
 	if len(objs) > 0 {
 		builder = builder.WithObjects(objs...)
@@ -453,6 +474,26 @@ func newTestRGD(name string) *v1alpha1.ResourceGraphDefinition {
 	return rgd
 }
 
+//nolint:unparam // Keep the helper generic for future multi-revision fixtures.
+func newActiveGraphRevisionFixture(
+	t testing.TB,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	revision int64,
+) (*internalv1alpha1.GraphRevision, revisions.Entry) {
+	t.Helper()
+
+	specHash, err := graphhash.Spec(rgd.Spec)
+	require.NoError(t, err)
+
+	return newListedGraphRevision(rgd, revision, specHash), revisions.Entry{
+		RGDName:       rgd.Name,
+		Revision:      revision,
+		SpecHash:      specHash,
+		State:         revisions.RevisionStateActive,
+		CompiledGraph: newProcessedGraph(),
+	}
+}
+
 func conditionFor(t testing.TB, rgd *v1alpha1.ResourceGraphDefinition, conditionType string) *v1alpha1.Condition {
 	t.Helper()
 
@@ -481,36 +522,44 @@ func expectedResourcesInfo() []v1alpha1.ResourceInformation {
 func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	r := NewResourceGraphDefinitionReconciler(
 		newKROFakeSet(),
-		true,
 		nil,
 		nil,
-		9*time.Second,
-		7,
-		graph.RGDConfig{MaxCollectionSize: 32},
+		revisions.NewRegistry(),
+		Config{
+			AllowCRDDeletion:        true,
+			InstanceRequeueInterval: 9 * time.Second,
+			ProgressRequeueDelay:    5 * time.Second,
+			MaxConcurrentReconciles: 7,
+			MaxGraphRevisions:       20,
+			RGDConfig:               graph.RGDConfig{MaxCollectionSize: 32},
+		},
 	)
 
 	require.NotNil(t, r)
-	assert.True(t, r.allowCRDDeletion)
+	assert.True(t, r.cfg.AllowCRDDeletion)
 	assert.NotNil(t, r.crdManager)
-	assert.Equal(t, 9*time.Second, r.instanceRequeueInterval)
-	assert.Equal(t, 7, r.maxConcurrentReconciles)
-	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.rgdConfig)
+	assert.Equal(t, 9*time.Second, r.cfg.InstanceRequeueInterval)
+	assert.Equal(t, 5*time.Second, r.cfg.ProgressRequeueDelay)
+	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
+	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
 }
 
 func TestNewResourceGraphDefinitionReconcilerPreservesZeroInstanceRequeueInterval(t *testing.T) {
 	r := NewResourceGraphDefinitionReconciler(
 		newKROFakeSet(),
-		true,
 		nil,
 		nil,
-		0,
-		7,
-		graph.RGDConfig{},
+		revisions.NewRegistry(),
+		Config{
+			AllowCRDDeletion:        true,
+			MaxConcurrentReconciles: 7,
+			MaxGraphRevisions:       20,
+		},
 	)
 
 	require.NotNil(t, r)
-	assert.Zero(t, r.instanceRequeueInterval)
+	assert.Zero(t, r.cfg.InstanceRequeueInterval)
 }
 
 func TestFindRGDsForCRD(t *testing.T) {
@@ -635,7 +684,8 @@ func TestSetupWithManager(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := newTestRGD("setup-manager")
-			fakeClient := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
+			liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
+			fakeClient := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy(), liveRevision)
 			fakeSet := newKROFakeSet()
 			skipNameValidation := true
 			mapper := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{
@@ -655,8 +705,22 @@ func TestSetupWithManager(t *testing.T) {
 				controllerOptions: config.Controller{SkipNameValidation: &skipNameValidation},
 				addErr:            tt.addErr,
 			}
+			registry := revisions.NewRegistry()
+			registry.Put(entry)
 
-			reconciler := NewResourceGraphDefinitionReconciler(fakeSet, true, newRunningDynamicController(t), nil, 5*time.Second, 3, graph.RGDConfig{})
+			reconciler := NewResourceGraphDefinitionReconciler(
+				fakeSet,
+				newRunningDynamicController(t),
+				nil,
+				registry,
+				Config{
+					AllowCRDDeletion:        true,
+					InstanceRequeueInterval: 5 * time.Second,
+					ProgressRequeueDelay:    3 * time.Second,
+					MaxConcurrentReconciles: 3,
+					MaxGraphRevisions:       20,
+				},
+			)
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
 			err := reconciler.SetupWithManager(mgr)
@@ -688,7 +752,7 @@ func TestReconcile(t *testing.T) {
 					},
 				}, rgd.DeepCopy())
 
-				return &ResourceGraphDefinitionReconciler{Client: c}, c, rgd, nil
+				return &ResourceGraphDefinitionReconciler{Client: c, apiReader: c}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, _ client.WithWatch, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
 				assert.Equal(t, ctrl.Result{}, result)
@@ -700,11 +764,15 @@ func TestReconcile(t *testing.T) {
 			name: "reconciles active rgds successfully",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("reconcile-active")
-				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
+				liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
+				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy(), liveRevision)
 				manager := &stubCRDManager{}
+				registry := revisions.NewRegistry()
+				registry.Put(entry)
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
@@ -712,6 +780,7 @@ func TestReconcile(t *testing.T) {
 					clientSet:         newKROFakeSet(),
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
+					revisionsRegistry: registry,
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -736,10 +805,12 @@ func TestReconcile(t *testing.T) {
 				}, rgd.DeepCopy())
 
 				return &ResourceGraphDefinitionReconciler{
-					Client:          c,
-					metadataLabeler: metadata.NewKROMetaLabeler(),
-					rgBuilder:       newFailingBuilder(errors.New("naming convention violation")),
-					clientSet:       newKROFakeSet(),
+					Client:            c,
+					apiReader:         c,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newFailingBuilder(errors.New("naming convention violation")),
+					clientSet:         newKROFakeSet(),
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, _ client.WithWatch, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -765,9 +836,11 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
-					allowCRDDeletion:  true,
+					apiReader:         c,
+					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: dc,
 					crdManager:        manager,
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
@@ -793,9 +866,11 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
-					allowCRDDeletion:  true,
+					apiReader:         c,
+					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -825,8 +900,10 @@ func TestReconcile(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					dynamicController: dc,
 					crdManager:        &stubCRDManager{},
+					revisionsRegistry: revisions.NewRegistry(),
 				}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -1000,6 +1077,20 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 			t.Errorf("%s: got %t, want %t", tc.name, got, tc.want)
 		}
 	}
+}
+
+func TestResourceGraphDefinitionPrimaryWatchPredicateRejectsNilObjects(t *testing.T) {
+	t.Parallel()
+
+	pred := resourceGraphDefinitionPrimaryWatchPredicate()
+	assert.False(t, pred.Update(event.UpdateEvent{
+		ObjectOld: nil,
+		ObjectNew: newPredicateTestRGD(1, nil),
+	}))
+	assert.False(t, pred.Update(event.UpdateEvent{
+		ObjectOld: newPredicateTestRGD(1, nil),
+		ObjectNew: nil,
+	}))
 }
 
 func newPredicateTestRGD(generation int64, deletionTimestamp *metav1.Time) *v1alpha1.ResourceGraphDefinition {

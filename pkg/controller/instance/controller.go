@@ -35,6 +35,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
@@ -62,6 +63,26 @@ type ReconcileConfig struct {
 	RGDConfig graph.RGDConfig
 }
 
+// GraphRevisionResolver resolves compiled graph revisions for a single RGD.
+//
+// Implementations are already scoped to one RGD's graph revisions. Callers do
+// not pass an RGD identifier on each method call; they only ask for the newest
+// issued revision or a specific revision number for that RGD.
+type GraphRevisionResolver interface {
+	// GetLatestRevision returns the newest issued revision currently present in
+	// the in-memory registry for this resolver's RGD.
+	//
+	// The boolean return is false when no revision is currently cached for that
+	// RGD, for example before warmup completes or after pruning.
+	GetLatestRevision() (revisions.Entry, bool)
+	// GetGraphRevision returns a specific revision from the in-memory registry
+	// for this resolver's RGD.
+	//
+	// The boolean return is false when that revision is not present in cache,
+	// for example because it has not been warmed yet or has already been pruned.
+	GetGraphRevision(revision int64) (revisions.Entry, bool)
+}
+
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
 // / it is responsible for reconciling the instance and its sub-resources.
 //
@@ -87,7 +108,9 @@ type Controller struct {
 	log    logr.Logger
 	client kroclient.SetInterface
 	gvr    schema.GroupVersionResource
-	rgd    *graph.Graph
+
+	graphResolver GraphRevisionResolver
+	namespaced    bool
 
 	instanceLabeler      metadata.Labeler
 	childResourceLabeler metadata.Labeler
@@ -98,12 +121,14 @@ type Controller struct {
 	eventRecorder record.EventRecorder
 }
 
-// NewController constructs a new controller with static RGD.
+// NewController constructs a new controller that resolves the newest issued
+// graph revision for the RGD from a GraphRevisionResolver.
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	rgd *graph.Graph,
+	graphResolver GraphRevisionResolver,
+	namespaced bool,
 	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
 	childResourceLabeler metadata.Labeler,
@@ -114,7 +139,8 @@ func NewController(
 		log:                  log,
 		client:               client,
 		gvr:                  gvr,
-		rgd:                  rgd,
+		graphResolver:        graphResolver,
+		namespaced:           namespaced,
 		instanceLabeler:      instanceLabeler,
 		childResourceLabeler: childResourceLabeler,
 		reconcileConfig:      reconcileConfig,
@@ -147,7 +173,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	ri := c.client.Dynamic().Resource(c.gvr)
 	var inst *unstructured.Unstructured
-	if c.rgd.Instance.Meta.Namespaced {
+	if c.namespaced {
 		inst, err = ri.Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
 	} else {
 		inst, err = ri.Get(ctx, req.Name, metav1.GetOptions{})
@@ -178,7 +204,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	// 2. Create a fresh runtime for this reconciliation
 	//--------------------------------------------------------------
-	runtimeObj, err := runtime.FromGraph(c.rgd, inst, c.reconcileConfig.RGDConfig)
+	compiledGraph, err := c.resolveCompiledGraph()
+	if err != nil {
+		log.Error(err, "failed to resolve graph revision")
+		return err
+	}
+	runtimeObj, err := runtime.FromGraph(compiledGraph, inst, c.reconcileConfig.RGDConfig)
 	if err != nil {
 		log.Error(err, "failed to create runtime")
 		return err
@@ -189,6 +220,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	//--------------------------------------------------------------
 	rcx = NewReconcileContext(
 		ctx, log, c.gvr,
+		c.namespaced,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
 		c.childResourceLabeler,
@@ -281,6 +313,33 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 	}
 	rcx.Mark.InstanceManaged()
 	return nil
+}
+
+func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
+	latest, ok := c.graphResolver.GetLatestRevision()
+	if !ok {
+		return nil, requeue.NeededAfter(fmt.Errorf("latest issued graph revision not available"), c.reconcileConfig.DefaultRequeueDuration)
+	}
+
+	switch latest.State {
+	case revisions.RevisionStateActive:
+		// Active implies the newest issued revision compiled successfully and its
+		// graph is present; this is guaranteed by the GR reconciler and registry
+		// invariant.
+		return latest.CompiledGraph, nil
+	case revisions.RevisionStatePending:
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d is pending", latest.Revision),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	case revisions.RevisionStateFailed:
+		return nil, requeue.None(fmt.Errorf("latest issued graph revision %d failed", latest.Revision))
+	default:
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d has unknown state %q", latest.Revision, latest.State),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	}
 }
 
 func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*unstructured.Unstructured, error) {

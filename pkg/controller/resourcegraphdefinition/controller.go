@@ -37,6 +37,7 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
@@ -44,56 +45,60 @@ type resourceGraphBuilder interface {
 	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
 }
 
+// Config holds tunable parameters for the RGD reconciler.
+type Config struct {
+	AllowCRDDeletion        bool
+	InstanceRequeueInterval time.Duration
+	ProgressRequeueDelay    time.Duration
+	MaxConcurrentReconciles int
+	MaxGraphRevisions       int
+	RGDConfig               graph.RGDConfig
+}
+
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
-	allowCRDDeletion bool
-
-	// Client and instanceLogger are set with SetupWithManager
-
+	// Client, apiReader, and instanceLogger are set with SetupWithManager
 	client.Client
-
+	apiReader      client.Reader
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
-
-	metadataLabeler         metadata.Labeler
-	rgBuilder               resourceGraphBuilder
-	dynamicController       *dynamiccontroller.DynamicController
-	instanceRequeueInterval time.Duration
-	maxConcurrentReconciles int
-	rgdConfig               graph.RGDConfig
+	clientSet         kroclient.SetInterface
+	crdManager        kroclient.CRDClient
+	metadataLabeler   metadata.Labeler
+	rgBuilder         resourceGraphBuilder
+	dynamicController *dynamiccontroller.DynamicController
+	revisionsRegistry *revisions.Registry
+	cfg               Config
 
 	newEventRecorder func(string) record.EventRecorder
 }
 
 func NewResourceGraphDefinitionReconciler(
 	clientSet kroclient.SetInterface,
-	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
-	instanceRequeueInterval time.Duration,
-	maxConcurrentReconciles int,
-	rgdConfig graph.RGDConfig,
+	revisionsRegistry *revisions.Registry,
+	cfg Config,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
-		clientSet:               clientSet,
-		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
-		dynamicController:       dynamicController,
-		instanceRequeueInterval: instanceRequeueInterval,
-		metadataLabeler:         metadata.NewKROMetaLabeler(),
-		rgBuilder:               builder,
-		maxConcurrentReconciles: maxConcurrentReconciles,
-		rgdConfig:               rgdConfig,
+		clientSet:         clientSet,
+		crdManager:        crdWrapper,
+		dynamicController: dynamicController,
+		revisionsRegistry: revisionsRegistry,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		rgBuilder:         builder,
+		cfg:               cfg,
 	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	// GraphRevision selection relies on a CRD selectable field, so use the
+	// direct API reader instead of a cache-only field index.
+	r.apiReader = mgr.GetAPIReader()
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 	r.newEventRecorder = mgr.GetEventRecorderFor
@@ -124,7 +129,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
-				MaxConcurrentReconciles: r.maxConcurrentReconciles,
+				MaxConcurrentReconciles: r.cfg.MaxConcurrentReconciles,
 			},
 		).
 		WatchesMetadata(
@@ -246,11 +251,11 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
+	reconcileResult, topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
 	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
 	}
 
-	return ctrl.Result{}, reconcileErr
+	return reconcileResult, reconcileErr
 }

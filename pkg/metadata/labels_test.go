@@ -237,6 +237,15 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 	})
 }
 
+func TestNewGraphRevisionHashLabeler(t *testing.T) {
+	t.Run("sets hash label directly", func(t *testing.T) {
+		labeler := NewGraphRevisionHashLabeler("hash-1")
+		assert.Equal(t, GenericLabeler{
+			GraphRevisionHashLabel: "hash-1",
+		}, labeler)
+	})
+}
+
 func TestNewInstanceLabeler(t *testing.T) {
 	t.Run("NewInstanceLabeler", func(t *testing.T) {
 		name := "instance-name"

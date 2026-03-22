@@ -22,7 +22,6 @@ import (
 	"k8s.io/client-go/restmapper"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
 	"github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -37,7 +36,6 @@ func newBenchBuilder(b *testing.B) *Builder {
 	return &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-		celCache:       celcache.NewBuilderCache(),
 		schemaCache:    schema.NewCache(),
 		parser:         parser.New(schema.NewCache()),
 	}

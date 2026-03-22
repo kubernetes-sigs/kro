@@ -33,12 +33,16 @@ var jsonMarshal = json.Marshal
 
 // Spec computes a deterministic FNV-128a hash for an RGD spec.
 //
-// FNV is chosen over a cryptographic hash because this is a content-identity
-// fingerprint, not a security boundary. FNV-128a is fast, well-distributed,
-// and sufficient for collision resistance at the scale of revision lineages.
+// This hash is an internal dedup mechanism — it is not persisted on GraphRevision
+// specs or exposed as an API contract. It is only used in the in-memory registry
+// and as a label for kubectl convenience. The normalization can be changed freely
+// without versioning; a change causes each RGD to reissue one revision on first
+// reconcile, then stabilizes.
 //
-// The hash is based on a canonicalized form of the spec:
+// The hash is based on a normalized form of the spec:
 // - Struct field order is stable via JSON marshaling (sorted map keys).
+// - Resources are sorted by ID so YAML reordering is a no-op.
+// - ReadyWhen, IncludeWhen, and ForEach are sorted for the same reason.
 // - RawExtension payloads are normalized into canonical JSON bytes.
 func Spec(spec v1alpha1.ResourceGraphDefinitionSpec) (string, error) {
 	normalized, err := normalizeSpec(spec)

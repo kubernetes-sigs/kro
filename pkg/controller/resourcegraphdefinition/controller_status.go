@@ -43,8 +43,11 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	oldState := o.Status.State
 
 	conditions := rgdConditionTypes.For(o)
-	kindReady := isConditionTrueForObservedGeneration(conditions.Get(KindReady), o.GetGeneration())
-	controllerReady := isConditionTrueForObservedGeneration(conditions.Get(ControllerReady), o.GetGeneration())
+	gen := o.GetGeneration()
+	kindCond := conditions.Get(KindReady)
+	ctrlCond := conditions.Get(ControllerReady)
+	kindReady := kindCond != nil && kindCond.IsTrue() && kindCond.ObservedGeneration == gen
+	controllerReady := ctrlCond != nil && ctrlCond.IsTrue() && ctrlCond.ObservedGeneration == gen
 
 	// ResourceGraphAccepted indicates whether the current spec compiles,
 	// while RGD serving state is about whether traffic can flow through the
@@ -95,13 +98,6 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 
 		return r.Status().Patch(ctx, dc, client.MergeFrom(current))
 	})
-}
-
-func isConditionTrueForObservedGeneration(cond *v1alpha1.Condition, generation int64) bool {
-	if cond == nil {
-		return false
-	}
-	return cond.IsTrue() && cond.ObservedGeneration == generation
 }
 
 // setManaged sets the resourcegraphdefinition as managed, by adding the
@@ -215,6 +211,11 @@ func (m *ConditionsMarker) RevisionLineagePending(reason, msg string) {
 // RevisionLineageFailed signals lineage reconciliation could not converge.
 func (m *ConditionsMarker) RevisionLineageFailed(msg string) {
 	m.cs.SetFalse(RevisionLineageResolved, "ResolutionFailed", msg)
+}
+
+// CreateGraphRevisionFailed signals that creating a new GraphRevision object failed.
+func (m *ConditionsMarker) CreateGraphRevisionFailed(msg string) {
+	m.cs.SetFalse(RevisionLineageResolved, "CreateGraphRevisionFailed", msg)
 }
 
 // ServingUnknown signals the current generation has not converged to a known

@@ -75,7 +75,7 @@ func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicro
 // cleanupResourceGraphDefinitionCRD deletes the CRD with the given name if CRD deletion is enabled.
 // If CRD deletion is disabled, it logs the skip and returns nil.
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
-	if !r.allowCRDDeletion {
+	if !r.cfg.AllowCRDDeletion {
 		ctrl.LoggerFrom(ctx).Info(
 			"skipping CRD deletion because allowCRDDeletion is disabled",
 			"crd", crdName,

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -64,22 +63,9 @@ func NewGraphRevisionReconciler(
 func (r *GraphRevisionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
 
-	logConstructor := func(req *reconcile.Request) logr.Logger {
-		log := mgr.GetLogger().WithName("graph-revision-controller").WithValues(
-			"controller", "GraphRevision",
-			"controllerGroup", internalv1alpha1.GroupVersion.Group,
-			"controllerKind", "GraphRevision",
-		)
-		if req != nil {
-			log = log.WithValues("name", req.Name)
-		}
-		return log
-	}
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&internalv1alpha1.GraphRevision{}).
 		WithOptions(ctrlrtcontroller.Options{
-			LogConstructor:          logConstructor,
 			MaxConcurrentReconciles: r.maxConcurrentReconciles,
 		}).
 		Complete(reconcile.AsReconciler(mgr.GetClient(), r))

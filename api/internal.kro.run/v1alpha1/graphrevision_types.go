@@ -16,7 +16,6 @@ package v1alpha1
 import (
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // GraphRevisionSpec defines the desired state of GraphRevision.
@@ -42,11 +41,6 @@ type ResourceGraphDefinitionSnapshot struct {
 	//
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
-	// UID is the UID of the source ResourceGraphDefinition when this revision
-	// was issued. Informational only — lineage is name-based, not UID-based.
-	//
-	// +kubebuilder:validation:Required
-	UID types.UID `json:"uid"`
 	// Generation is the metadata.generation of the source ResourceGraphDefinition
 	// when this revision was issued. Informational only.
 	//

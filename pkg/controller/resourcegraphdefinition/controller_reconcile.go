@@ -38,15 +38,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-const (
-	// defaultRequeueDelay is the delay before requeuing when waiting for
-	// asynchronous state to converge (e.g. cache warmup, pending compilation).
-	defaultRequeueDelay = 3 * time.Second
-	// graphRevisionNameHashLen is the short hash suffix length in the GraphRevision
-	// name. This balances readability with collision resistance after truncation.
-	graphRevisionNameHashLen = 12
-)
-
 var errRevisionLineagePending = errors.New("revision lineage pending")
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition.
@@ -88,14 +79,25 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	latestRevisionView, warmed := r.getLatestGraphRevisionView(rgd.Name, graphRevisions)
 	if err := r.reconcileRevisionLineage(rgd, currentSpecHash, latestRevisionView, hasTerminating, warmed, mark); err != nil {
 		if errors.Is(err, errRevisionLineagePending) {
-			return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+			return ctrl.Result{RequeueAfter: r.cfg.StabilizationInterval}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 		}
 		return ctrl.Result{}, rgd.Status.TopologicalOrder, rgd.Status.Resources, err
 	}
 
 	latestRevision := latestRevisionView.Revision
-	if latestRevision == nil || latestRevisionView.RuntimeEntry == nil || latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash {
-		log.V(1).Info("building resource graph definition")
+	noRevision := latestRevision == nil
+	notCompiled := !noRevision && latestRevisionView.RuntimeEntry == nil
+	specChanged := !noRevision && !notCompiled && latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash
+	if noRevision || notCompiled || specChanged {
+		reason := "spec changed"
+		if noRevision {
+			reason = "no existing revision"
+		} else if notCompiled {
+			reason = "validating spec"
+		}
+		log.V(1).Info("building resource graph definition", "reason", reason)
+		// TODO(amine): replace with a lighter validation-only pass that doesn't
+		// produce a full compiled graph.
 		if _, _, err := r.buildResourceGraphDefinition(ctx, rgd); err != nil {
 			mark.InvalidResourceGraph(err.Error())
 			return ctrl.Result{}, nil, nil, err
@@ -105,12 +107,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {
-			mark.RevisionLineageFailed(createErr.Error())
+			mark.CreateGraphRevisionFailed(createErr.Error())
 			return ctrl.Result{}, nil, nil, createErr
 		}
 		rgd.Status.LastIssuedRevision = createdGR.Spec.Revision
 		mark.GraphRevisionIssuedPendingCompilation(createdGR.Spec.Revision)
-		return ctrl.Result{RequeueAfter: defaultRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+		return ctrl.Result{RequeueAfter: r.cfg.StabilizationInterval}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
 
 	topologicalOrder, resourcesInfo, err := r.ensureServingState(
@@ -146,10 +148,10 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	return instancectrl.NewController(
 		instanceLogger,
 		instancectrl.ReconcileConfig{
-			DefaultRequeueDuration:    r.instanceRequeueInterval,
+			DefaultRequeueDuration:    r.cfg.InstanceRequeueInterval,
 			DeletionGraceTimeDuration: 30 * time.Second,
 			DeletionPolicy:            "Delete",
-			RGDConfig:                 r.rgdConfig,
+			RGDConfig:                 r.cfg.RGDConfig,
 		},
 		gvr,
 		r.revisionsRegistry.ResolverForRGD(rgd.Name),
@@ -163,6 +165,21 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	)
 }
 
+// reconcileRevisionLineage determines whether the RGD can proceed to serving
+// or must wait for revision state to stabilize.
+//
+// Decision order:
+//  1. Terminating revisions exist → wait for GC to settle before making decisions.
+//  2. Latest revision not in registry → wait for informer cache warmup.
+//  3. No revisions exist → caller issues a fresh revision.
+//  4. Latest revision exists but hash doesn't match or isn't compiled → caller
+//     revalidates the spec and issues a new revision.
+//  5. Latest revision is Active → lineage resolved, proceed to serving.
+//  6. Latest revision is Pending → wait for GR controller to compile.
+//  7. Latest revision is Failed → surface the failure, no requeue.
+//
+// Returns errRevisionLineagePending for cases that need a requeue, nil for
+// cases where the caller should proceed, and a real error for terminal failures.
 func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
 	rgd *v1alpha1.ResourceGraphDefinition,
 	currentSpecHash string,
@@ -189,11 +206,6 @@ func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
 	rgd.Status.LastIssuedRevision = max(rgd.Status.LastIssuedRevision, latestRevision.Spec.Revision)
 	if latestRevisionView.RuntimeEntry == nil || latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash {
 		return nil
-	}
-
-	if latestRevisionView.RuntimeEntry == nil {
-		mark.WaitingForGraphRevisionWarmup()
-		return errRevisionLineagePending
 	}
 
 	switch latestRevisionView.RuntimeEntry.State {
@@ -223,7 +235,7 @@ func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ conte
 		graphBuildTotal.WithLabelValues(rgd.Name).Inc()
 	}()
 
-	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd, r.rgdConfig)
+	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd, r.cfg.RGDConfig)
 	if err != nil {
 		graphBuildErrorsTotal.WithLabelValues(rgd.Name).Inc()
 		return nil, nil, newGraphError(err)
@@ -454,7 +466,6 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 			Revision: revision,
 			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
 				Name:       rgd.Name,
-				UID:        rgd.UID,
 				Generation: rgd.Generation,
 				Spec:       *rgd.Spec.DeepCopy(),
 			},
@@ -488,8 +499,8 @@ func graphRevisionName(rgdName string, revision int64) string {
 	return rgdName + suffix
 }
 
-// graphRevisionNameHash computes a short FNV-128a hash of the RGD name for use
-// in GraphRevision object names.
+// graphRevisionNameHash computes an FNV-32a hash of the RGD name for use in
+// GraphRevision object names.
 //
 // This hash exists solely as a collision guard for truncated RGD names. When an
 // RGD name exceeds the Kubernetes 253-char name limit minus the suffix length,
@@ -500,13 +511,10 @@ func graphRevisionName(rgdName string, revision int64) string {
 // prefixes produce unique revision names. It is NOT a content hash — the same
 // RGD always produces the same hash regardless of spec changes, giving
 // consistent naming across revisions (e.g. my-webapp-r1-aabb, my-webapp-r2-aabb).
-//
-// FNV-128a is used instead of a cryptographic hash because this is a naming
-// concern, not a security boundary. FNV is fast and well-distributed.
 func graphRevisionNameHash(rgdName string) string {
-	h := fnv.New128a()
+	h := fnv.New32a()
 	h.Write([]byte(rgdName))
-	return hex.EncodeToString(h.Sum(nil))[:graphRevisionNameHashLen]
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // garbageCollectGraphRevisions deletes old GraphRevision objects exceeding the
@@ -514,8 +522,11 @@ func graphRevisionNameHash(rgdName string) string {
 //
 // Bounded retention GC keeps only the N most recent revisions per RGD,
 // pruning both API objects and in-memory cache entries.
+//
+// TODO(amine): enforce a minimum retention of 2 (n-1) so there is always a
+// rollback target if the latest revision fails.
 func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
-	if r.maxGraphRevisions <= 0 {
+	if r.cfg.MaxGraphRevisions <= 0 {
 		return nil
 	}
 
@@ -523,11 +534,11 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 	if err != nil {
 		return fmt.Errorf("listing graph revisions for gc: %w", err)
 	}
-	if len(graphRevisions) <= r.maxGraphRevisions {
+	if len(graphRevisions) <= r.cfg.MaxGraphRevisions {
 		return nil
 	}
 
-	minRevisionToKeep := graphRevisionRetentionFloor(graphRevisions, r.maxGraphRevisions)
+	minRevisionToKeep := graphRevisionRetentionFloor(graphRevisions, r.cfg.MaxGraphRevisions)
 	for i := range graphRevisions {
 		revision := graphRevisions[i]
 		if revision.Spec.Revision >= minRevisionToKeep {
@@ -541,7 +552,8 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		}
 	}
 
-	r.revisionsRegistry.DeleteRevisionsBefore(rgd.Name, minRevisionToKeep)
+	// Registry eviction is handled by the GR controller's finalizer as each
+	// revision is deleted. No need to eagerly evict here.
 	return nil
 }
 

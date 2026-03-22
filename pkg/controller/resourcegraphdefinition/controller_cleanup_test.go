@@ -118,7 +118,7 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 
 			manager := &stubCRDManager{deleteErr: tt.deleteErr}
 			reconciler := &ResourceGraphDefinitionReconciler{
-				allowCRDDeletion:  tt.allowCRDDeletion,
+				cfg:               Config{AllowCRDDeletion: tt.allowCRDDeletion},
 				dynamicController: dc,
 				crdManager:        manager,
 				revisionsRegistry: revisions.NewRegistry(),
@@ -193,8 +193,8 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := &stubCRDManager{deleteErr: tt.deleteErr}
 			reconciler := &ResourceGraphDefinitionReconciler{
-				allowCRDDeletion: tt.allowCRDDeletion,
-				crdManager:       manager,
+				cfg:        Config{AllowCRDDeletion: tt.allowCRDDeletion},
+				crdManager: manager,
 			}
 
 			err := reconciler.cleanupResourceGraphDefinitionCRD(context.Background(), "networks.example.io")

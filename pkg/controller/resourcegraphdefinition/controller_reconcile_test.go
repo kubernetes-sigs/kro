@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
@@ -371,13 +372,13 @@ func TestGraphRevisionName(t *testing.T) {
 			name:      "simple name",
 			rgdName:   "demo",
 			revision:  1,
-			wantExact: "demo-r1-695b6c57ca75",
+			wantExact: "demo-r1-aefd3536",
 		},
 		{
 			name:      "larger revision number",
 			rgdName:   "demo",
 			revision:  1234,
-			wantExact: "demo-r1234-695b6c57ca75",
+			wantExact: "demo-r1234-aefd3536",
 		},
 		{
 			name:     "long name truncates to 253",
@@ -545,7 +546,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 			instanceLogger:    logr.Discard(),
 			newEventRecorder:  newFakeEventRecorderFactory(),
 			revisionsRegistry: registry,
-			maxGraphRevisions: 20,
+			cfg: Config{
+				MaxGraphRevisions:     20,
+				StabilizationInterval: 3 * time.Second,
+			},
 		}, manager
 	}
 
@@ -582,7 +586,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, manager *stubCRDManager) {
@@ -615,7 +622,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("naming convention violation")),
 					revisionsRegistry: revisions.NewRegistry(),
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -646,7 +656,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					},
 					rgBuilder:         newTestBuilder(),
 					revisionsRegistry: revisions.NewRegistry(),
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -701,7 +714,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd, manager
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -737,7 +753,10 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, topologicalOrder []string, resourcesInfo []v1alpha1.ResourceInformation, err error, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
@@ -789,7 +808,10 @@ func TestReconcileResourceGraphDefinitionGCFailureDoesNotBlockReady(t *testing.T
 		instanceLogger:    logr.Discard(),
 		newEventRecorder:  newFakeEventRecorderFactory(),
 		revisionsRegistry: registry,
-		maxGraphRevisions: 20,
+		cfg: Config{
+			MaxGraphRevisions:     20,
+			StabilizationInterval: 3 * time.Second,
+		},
 	}
 
 	// GC failure is best-effort: it increments a metric but does not produce
@@ -852,7 +874,10 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called before warmup")),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd
 			},
 			check: func(
@@ -867,7 +892,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				t.Helper()
 
 				require.NoError(t, err)
-				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+				assert.Equal(t, 3*time.Second, result.RequeueAfter)
 				assert.Equal(t, rgd.Status.TopologicalOrder, topologicalOrder)
 				assert.Equal(t, rgd.Status.Resources, resourcesInfo)
 			},
@@ -901,7 +926,10 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd
 			},
 			check: func(
@@ -953,7 +981,10 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called while latest revision is pending")),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd
 			},
 			check: func(
@@ -968,7 +999,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				t.Helper()
 
 				require.NoError(t, err)
-				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+				assert.Equal(t, 3*time.Second, result.RequeueAfter)
 				assert.Equal(t, rgd.Status.TopologicalOrder, topologicalOrder)
 				assert.Equal(t, rgd.Status.Resources, resourcesInfo)
 				assert.Equal(t, int64(4), rgd.Status.LastIssuedRevision)
@@ -1000,7 +1031,10 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called when latest revision failed")),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd
 			},
 			check: func(
@@ -1050,7 +1084,10 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 					instanceLogger:    logr.Discard(),
 					newEventRecorder:  newFakeEventRecorderFactory(),
 					revisionsRegistry: registry,
-					maxGraphRevisions: 20,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
 				}, rgd
 			},
 			check: func(
@@ -1065,7 +1102,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				t.Helper()
 
 				require.NoError(t, err)
-				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+				assert.Equal(t, 3*time.Second, result.RequeueAfter)
 				assert.Nil(t, topologicalOrder)
 				assert.Nil(t, resourcesInfo)
 				assert.Equal(t, int64(10), rgd.Status.LastIssuedRevision)
@@ -1083,6 +1120,56 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				assert.Equal(t, currentSpecHash, entry.SpecHash)
 				assert.Equal(t, revisions.RevisionStatePending, entry.State)
 				assert.True(t, conditionFor(t, rgd, RevisionLineageResolved).IsUnknown())
+			},
+		},
+		{
+			name: "marks CreateGraphRevisionFailed when revision creation fails",
+			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition) {
+				t.Helper()
+
+				rgd := newTestRGD("rgd-create-fail")
+
+				cl := newTestClient(t, interceptor.Funcs{
+					Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						if _, ok := obj.(*internalv1alpha1.GraphRevision); ok {
+							return errors.New("api server unavailable")
+						}
+						return c.Create(ctx, obj, opts...)
+					},
+				})
+				registry := revisions.NewRegistry()
+
+				return &ResourceGraphDefinitionReconciler{
+					Client:            cl,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newTestBuilder(),
+					revisionsRegistry: registry,
+					cfg: Config{
+						MaxGraphRevisions:     20,
+						StabilizationInterval: 3 * time.Second,
+					},
+				}, rgd
+			},
+			check: func(
+				t *testing.T,
+				result ctrl.Result,
+				topologicalOrder []string,
+				resourcesInfo []v1alpha1.ResourceInformation,
+				err error,
+				_ *ResourceGraphDefinitionReconciler,
+				rgd *v1alpha1.ResourceGraphDefinition,
+			) {
+				t.Helper()
+
+				require.Error(t, err)
+				assert.ErrorContains(t, err, "api server unavailable")
+				assert.Equal(t, ctrl.Result{}, result)
+
+				cond := conditionFor(t, rgd, RevisionLineageResolved)
+				require.NotNil(t, cond)
+				assert.True(t, cond.IsFalse())
+				require.NotNil(t, cond.Reason)
+				assert.Equal(t, "CreateGraphRevisionFailed", *cond.Reason)
 			},
 		},
 	}
@@ -1121,12 +1208,15 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 		instanceLogger:    logr.Discard(),
 		newEventRecorder:  newFakeEventRecorderFactory(),
 		revisionsRegistry: registry,
-		maxGraphRevisions: 20,
+		cfg: Config{
+			MaxGraphRevisions:     20,
+			StabilizationInterval: 3 * time.Second,
+		},
 	}
 
 	result, _, _, reconcileErr := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
 	require.NoError(t, reconcileErr)
-	assert.Equal(t, defaultRequeueDelay, result.RequeueAfter)
+	assert.Equal(t, 3*time.Second, result.RequeueAfter)
 	assert.Equal(t, int64(1), rgd.Status.LastIssuedRevision)
 
 	revisionList := &internalv1alpha1.GraphRevisionList{}
@@ -1225,14 +1315,17 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 				instanceLogger:    logr.Discard(),
 				newEventRecorder:  newFakeEventRecorderFactory(),
 				revisionsRegistry: registry,
-				maxGraphRevisions: 20,
+				cfg: Config{
+					MaxGraphRevisions:     20,
+					StabilizationInterval: 3 * time.Second,
+				},
 			}
 
 			result, _, _, reconcileErr := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
 
 			if tt.wantRequeue {
 				require.NoError(t, reconcileErr)
-				assert.Equal(t, defaultRequeueDelay, result.RequeueAfter,
+				assert.Equal(t, 3*time.Second, result.RequeueAfter,
 					"should requeue when terminating revisions exist")
 
 				// Registry should NOT be cleared during requeue — GR controller
@@ -1305,7 +1398,10 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 		instanceLogger:    logr.Discard(),
 		newEventRecorder:  newFakeEventRecorderFactory(),
 		revisionsRegistry: registry,
-		maxGraphRevisions: 20,
+		cfg: Config{
+			MaxGraphRevisions:     20,
+			StabilizationInterval: 3 * time.Second,
+		},
 	}
 
 	result, topologicalOrder, resourcesInfo, err := reconciler.reconcileResourceGraphDefinition(context.Background(), rgd)
@@ -1341,7 +1437,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 	assert.Equal(t, revision, revisionList.Items[0].Spec.Revision)
 }
 
-func TestGarbageCollectGraphRevisionsPrunesObjectsAndRegistry(t *testing.T) {
+func TestGarbageCollectGraphRevisionsPrunesObjects(t *testing.T) {
 	t.Parallel()
 
 	rgd := newTestRGD("rgd-gc-prune")
@@ -1364,24 +1460,27 @@ func TestGarbageCollectGraphRevisionsPrunesObjectsAndRegistry(t *testing.T) {
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
 		revisionsRegistry: registry,
-		maxGraphRevisions: 2,
+		cfg: Config{
+			MaxGraphRevisions:     2,
+			StabilizationInterval: 3 * time.Second,
+		},
 	}
 
 	require.NoError(t, reconciler.garbageCollectGraphRevisions(context.Background(), rgd))
 
+	// GC deletes old API objects but does not evict from the registry.
+	// The GR controller's finalizer handles registry eviction as each
+	// revision is fully deleted.
 	revisionList := &internalv1alpha1.GraphRevisionList{}
 	require.NoError(t, cl.List(context.Background(), revisionList))
 	require.Len(t, revisionList.Items, 2)
 	assert.ElementsMatch(t, []int64{3, 4}, []int64{revisionList.Items[0].Spec.Revision, revisionList.Items[1].Spec.Revision})
 
-	_, ok := registry.Get(rgd.Name, 1)
-	assert.False(t, ok)
-	_, ok = registry.Get(rgd.Name, 2)
-	assert.False(t, ok)
-	_, ok = registry.Get(rgd.Name, 3)
-	assert.True(t, ok)
-	_, ok = registry.Get(rgd.Name, 4)
-	assert.True(t, ok)
+	// Registry entries are preserved — finalizer handles eviction.
+	for revision := int64(1); revision <= 4; revision++ {
+		_, ok := registry.Get(rgd.Name, revision)
+		assert.True(t, ok, "registry entry %d should be preserved", revision)
+	}
 }
 
 func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int64, specHash string) *internalv1alpha1.GraphRevision {

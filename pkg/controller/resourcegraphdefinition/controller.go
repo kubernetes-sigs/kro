@@ -47,56 +47,50 @@ type resourceGraphBuilder interface {
 	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
 }
 
+// Config holds tunable parameters for the RGD reconciler.
+type Config struct {
+	AllowCRDDeletion        bool
+	InstanceRequeueInterval time.Duration
+	StabilizationInterval   time.Duration
+	MaxConcurrentReconciles int
+	MaxGraphRevisions       int
+	RGDConfig               graph.RGDConfig
+}
+
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
-	allowCRDDeletion bool
-
 	// Client and instanceLogger are set with SetupWithManager
-
 	client.Client
-
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
-
-	metadataLabeler         metadata.Labeler
-	rgBuilder               resourceGraphBuilder
-	dynamicController       *dynamiccontroller.DynamicController
-	instanceRequeueInterval time.Duration
-	revisionsRegistry       *revisions.Registry
-	maxConcurrentReconciles int
-	maxGraphRevisions       int
-	rgdConfig               graph.RGDConfig
+	clientSet         kroclient.SetInterface
+	crdManager        kroclient.CRDClient
+	metadataLabeler   metadata.Labeler
+	rgBuilder         resourceGraphBuilder
+	dynamicController *dynamiccontroller.DynamicController
+	revisionsRegistry *revisions.Registry
+	cfg               Config
 
 	newEventRecorder func(string) record.EventRecorder
 }
 
 func NewResourceGraphDefinitionReconciler(
 	clientSet kroclient.SetInterface,
-	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
-	instanceRequeueInterval time.Duration,
 	revisionsRegistry *revisions.Registry,
-	maxConcurrentReconciles int,
-	maxGraphRevisions int,
-	rgdConfig graph.RGDConfig,
+	cfg Config,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
-		clientSet:               clientSet,
-		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
-		dynamicController:       dynamicController,
-		instanceRequeueInterval: instanceRequeueInterval,
-		revisionsRegistry:       revisionsRegistry,
-		metadataLabeler:         metadata.NewKROMetaLabeler(),
-		rgBuilder:               builder,
-		maxConcurrentReconciles: maxConcurrentReconciles,
-		maxGraphRevisions:       maxGraphRevisions,
-		rgdConfig:               rgdConfig,
+		clientSet:         clientSet,
+		crdManager:        crdWrapper,
+		dynamicController: dynamicController,
+		revisionsRegistry: revisionsRegistry,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		rgBuilder:         builder,
+		cfg:               cfg,
 	}
 }
 
@@ -107,10 +101,8 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	r.instanceLogger = mgr.GetLogger()
 	r.newEventRecorder = mgr.GetEventRecorderFor
 
-	// Index GraphRevisions by RGD name so listGraphRevisions can use a field
-	// selector on the immutable spec field instead of a label selector. Labels
-	// are kept for kubectl/informational purposes but are not trusted for
-	// functional lookups since they can be modified externally.
+	// Index GraphRevisions by RGD name in the informer cache so
+	// listGraphRevisions can filter efficiently via MatchingFields.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&internalv1alpha1.GraphRevision{},
@@ -152,7 +144,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
-				MaxConcurrentReconciles: r.maxConcurrentReconciles,
+				MaxConcurrentReconciles: r.cfg.MaxConcurrentReconciles,
 			},
 		).
 		WatchesMetadata(

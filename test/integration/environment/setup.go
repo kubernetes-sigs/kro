@@ -192,14 +192,17 @@ func (e *Environment) setupController() error {
 	graphRevisionRegistry := revisions.NewRegistry()
 	rgReconciler := ctrlresourcegraphdefinition.NewResourceGraphDefinitionReconciler(
 		e.ClientSet,
-		e.ControllerConfig.AllowCRDDeletion,
 		dc,
 		e.GraphBuilder,
-		e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
 		graphRevisionRegistry,
-		40,
-		maxGraphRevisions,
-		rgdConfig,
+		ctrlresourcegraphdefinition.Config{
+			AllowCRDDeletion:        e.ControllerConfig.AllowCRDDeletion,
+			InstanceRequeueInterval: e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
+			StabilizationInterval:   3 * time.Second,
+			MaxConcurrentReconciles: 40,
+			MaxGraphRevisions:       maxGraphRevisions,
+			RGDConfig:               rgdConfig,
+		},
 	)
 	gvReconciler := ctrlgraphrevision.NewGraphRevisionReconciler(
 		e.GraphBuilder,

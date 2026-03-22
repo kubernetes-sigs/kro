@@ -15,9 +15,6 @@
 package metadata
 
 import (
-	"crypto/sha256"
-	"encoding/base32"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -168,7 +165,7 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 // representation of the GraphRevision spec hash on a resource.
 func NewGraphRevisionHashLabeler(specHash string) GenericLabeler {
 	return map[string]string{
-		GraphRevisionHashLabel: safeHashLabelValue(specHash),
+		GraphRevisionHashLabel: specHash,
 	}
 }
 
@@ -229,22 +226,6 @@ func safeVersion(version string) string {
 	// The script we use might add '+dirty' to development branches,
 	// so let's try replacing '+' with '-'.
 	return strings.ReplaceAll(version, "+", "-")
-}
-
-func safeHashLabelValue(specHash string) string {
-	if validation.IsValidLabelValue(specHash) == nil {
-		return specHash
-	}
-
-	if raw, err := hex.DecodeString(specHash); err == nil {
-		encoded := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw))
-		if validation.IsValidLabelValue(encoded) == nil {
-			return encoded
-		}
-	}
-
-	sum := sha256.Sum256([]byte(specHash))
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
 }
 
 func booleanFromString(s string) bool {

@@ -404,16 +404,10 @@ spec:
                     required:
                     - schema
                     type: object
-                  uid:
-                    description: |-
-                      UID is the UID of the source ResourceGraphDefinition when this revision
-                      was issued. Informational only — lineage is name-based, not UID-based.
-                    type: string
                 required:
                 - generation
                 - name
                 - spec
-                - uid
                 type: object
             required:
             - revision

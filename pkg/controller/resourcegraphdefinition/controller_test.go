@@ -522,40 +522,44 @@ func expectedResourcesInfo() []v1alpha1.ResourceInformation {
 func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	r := NewResourceGraphDefinitionReconciler(
 		newKROFakeSet(),
-		true,
 		nil,
 		nil,
-		9*time.Second,
 		revisions.NewRegistry(),
-		7,
-		20,
-		graph.RGDConfig{MaxCollectionSize: 32},
+		Config{
+			AllowCRDDeletion:        true,
+			InstanceRequeueInterval: 9 * time.Second,
+			StabilizationInterval:   5 * time.Second,
+			MaxConcurrentReconciles: 7,
+			MaxGraphRevisions:       20,
+			RGDConfig:               graph.RGDConfig{MaxCollectionSize: 32},
+		},
 	)
 
 	require.NotNil(t, r)
-	assert.True(t, r.allowCRDDeletion)
+	assert.True(t, r.cfg.AllowCRDDeletion)
 	assert.NotNil(t, r.crdManager)
-	assert.Equal(t, 9*time.Second, r.instanceRequeueInterval)
-	assert.Equal(t, 7, r.maxConcurrentReconciles)
-	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.rgdConfig)
+	assert.Equal(t, 9*time.Second, r.cfg.InstanceRequeueInterval)
+	assert.Equal(t, 5*time.Second, r.cfg.StabilizationInterval)
+	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
+	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
 }
 
 func TestNewResourceGraphDefinitionReconcilerPreservesZeroInstanceRequeueInterval(t *testing.T) {
 	r := NewResourceGraphDefinitionReconciler(
 		newKROFakeSet(),
-		true,
 		nil,
 		nil,
-		0,
 		revisions.NewRegistry(),
-		7,
-		20,
-		graph.RGDConfig{},
+		Config{
+			AllowCRDDeletion:        true,
+			MaxConcurrentReconciles: 7,
+			MaxGraphRevisions:       20,
+		},
 	)
 
 	require.NotNil(t, r)
-	assert.Zero(t, r.instanceRequeueInterval)
+	assert.Zero(t, r.cfg.InstanceRequeueInterval)
 }
 
 func TestFindRGDsForCRD(t *testing.T) {
@@ -706,14 +710,16 @@ func TestSetupWithManager(t *testing.T) {
 
 			reconciler := NewResourceGraphDefinitionReconciler(
 				fakeSet,
-				true,
 				newRunningDynamicController(t),
 				nil,
-				5*time.Second,
 				registry,
-				3,
-				20,
-				graph.RGDConfig{},
+				Config{
+					AllowCRDDeletion:        true,
+					InstanceRequeueInterval: 5 * time.Second,
+					StabilizationInterval:   3 * time.Second,
+					MaxConcurrentReconciles: 3,
+					MaxGraphRevisions:       20,
+				},
 			)
 			reconciler.rgBuilder = newTestBuilder()
 			reconciler.crdManager = &stubCRDManager{}
@@ -828,7 +834,7 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
-					allowCRDDeletion:  true,
+					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: dc,
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),
@@ -857,7 +863,7 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
-					allowCRDDeletion:  true,
+					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),

@@ -69,6 +69,14 @@ func TestConditionsMarker(t *testing.T) {
 			},
 		},
 		{
+			name:      "create graph revision failed",
+			condition: RevisionLineageResolved,
+			reason:    "CreateGraphRevisionFailed",
+			apply: func(m *ConditionsMarker) {
+				m.CreateGraphRevisionFailed("api error")
+			},
+		},
+		{
 			name:      "labeler failed",
 			condition: ControllerReady,
 			reason:    "FailedLabelerSetup",

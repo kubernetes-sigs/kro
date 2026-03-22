@@ -61,12 +61,9 @@ func NewBuilder(clientConfig *rest.Config, httpClient *http.Client) (*Builder, e
 		return nil, fmt.Errorf("failed to create dynamic REST mapper: %w", err)
 	}
 
-	schemaCache := schema.NewCache()
 	rgBuilder := &Builder{
 		schemaResolver: schemaResolver,
 		restMapper:     rm,
-		schemaCache:    schemaCache,
-		parser:         parser.New(schemaCache),
 	}
 	return rgBuilder, nil
 }
@@ -98,8 +95,6 @@ type Builder struct {
 	// schemaResolver is used to resolve the OpenAPI schema for the resources.
 	schemaResolver resolver.SchemaResolver
 	restMapper     meta.RESTMapper
-	schemaCache    *schema.Cache
-	parser         *parser.Parser
 }
 
 // RGDConfig holds RGD runtime configuration parameters.
@@ -148,13 +143,18 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//    CEL expressions.
 	// 4. Extract the CEL expressions from the resource + validate them.
 
+	// Per-build schema cache provides pointer-stable field lookups within
+	// this build. Discarded when the build completes.
+	schemaCache := schema.NewCache()
+	p := parser.New(schemaCache)
+
 	// we'll also store the nodes and schemas in maps for easy access later.
 	// Schemas are only needed during build for CEL validation.
 	nodes := make(map[string]*Node)
 	schemas := make(map[string]*spec.Schema)
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
-		node, nodeSchema, err := b.buildRGResource(rgResource, i, instanceNamespaced)
+		node, nodeSchema, err := b.buildRGResource(p, rgResource, i, instanceNamespaced)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
 		}
@@ -268,7 +268,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	//
 	// This allows expressions like ${schema.spec.replicas} and ${deployment.status.replicas}.
 	// Note: only spec and metadata are included - status references are not allowed in RGDs.
-	celSchemas := collectNodeSchemas(b.schemaCache, nodes, schemas)
+	celSchemas := collectNodeSchemas(schemaCache, nodes, schemas)
 	schemaWithoutStatus, err := getSchemaWithoutStatus(instanceCRD)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema without status: %w", err)
@@ -288,7 +288,7 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	bc := &buildContext{
 		env:          typedEnv,
 		typeProvider: typeProvider,
-		schemaCache:  b.schemaCache,
+		schemaCache:  schemaCache,
 		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
 		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
 		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
@@ -378,6 +378,7 @@ func (b *Builder) buildExternalRefResource(
 // from the schema.
 // Returns the Node and the OpenAPI schema (schema is only needed during build for CEL validation).
 func (b *Builder) buildRGResource(
+	p *parser.Parser,
 	rgResource *v1alpha1.Resource,
 	order int,
 	instanceNamespaced bool,
@@ -453,7 +454,7 @@ func (b *Builder) buildRGResource(
 			}
 		}
 	} else {
-		fieldDescriptors, err = b.parser.ParseResource(resourceObject, resourceSchema)
+		fieldDescriptors, err = p.ParseResource(resourceObject, resourceSchema)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to extract CEL expressions from schema for resource %s: %w", rgResource.ID, err)
 		}

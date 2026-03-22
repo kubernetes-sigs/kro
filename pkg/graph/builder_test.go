@@ -272,9 +272,6 @@ func TestGraphBuilder_Validation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -862,9 +859,6 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -1425,9 +1419,6 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -1766,9 +1757,6 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2240,9 +2228,6 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2586,9 +2571,6 @@ func TestGraphBuilder_ForEachParsing(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -2992,9 +2974,6 @@ func TestGraphBuilder_CollectionChaining(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3216,9 +3195,6 @@ func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3376,9 +3352,6 @@ func TestGraphBuilder_CollectionValidation(t *testing.T) {
 	builder := &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 
 	tests := []struct {
@@ -3667,9 +3640,6 @@ func newUnitTestBuilder() *Builder {
 	return &Builder{
 		schemaResolver: fakeResolver,
 		restMapper:     restMapper,
-
-		schemaCache: graphschema.NewCache(),
-		parser:      parser.New(graphschema.NewCache()),
 	}
 }
 
@@ -3717,9 +3687,10 @@ func objectSchema(fields map[string]spec.Schema) *spec.Schema {
 }
 
 func TestBuildRGResourceErrorPaths(t *testing.T) {
+	testParser := parser.New(graphschema.NewCache())
 	t.Run("template unmarshal error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID:       "bad",
 			Template: rawExt("["),
 		}, 0, true)
@@ -3729,7 +3700,7 @@ func TestBuildRGResourceErrorPaths(t *testing.T) {
 
 	t.Run("extract gvk error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "badGVK",
 			Template: rawExt(`
 apiVersion: not/a/valid/apiVersion
@@ -3749,7 +3720,7 @@ metadata:
 			restMapper:     meta.NewDefaultRESTMapper([]schema.GroupVersion{}),
 		}
 
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "cm",
 			Template: rawExt(`
 apiVersion: v1
@@ -3764,7 +3735,7 @@ metadata:
 
 	t.Run("external ref parse error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -3780,7 +3751,7 @@ metadata:
 
 	t.Run("crd schemaless parse error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -3797,7 +3768,7 @@ spec:
 
 	t.Run("crd only allows metadata expressions", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "crd",
 			Template: rawExt(`
 apiVersion: apiextensions.k8s.io/v1
@@ -3814,7 +3785,7 @@ spec:
 
 	t.Run("schema based parsing error", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "vpc",
 			Template: rawExt(`
 apiVersion: ec2.services.k8s.aws/v1alpha1
@@ -3831,7 +3802,7 @@ spec:
 
 	t.Run("external selector becomes collection", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		node, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",
@@ -3849,7 +3820,7 @@ spec:
 
 	t.Run("cluster-scoped instance requires namespace on namespaced resource", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "cm",
 			Template: rawExt(`
 apiVersion: v1
@@ -3864,7 +3835,7 @@ metadata:
 
 	t.Run("cluster-scoped instance requires namespace on namespaced external ref", func(t *testing.T) {
 		builder := newUnitTestBuilder()
-		_, _, err := builder.buildRGResource(&krov1alpha1.Resource{
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
 			ID: "external",
 			ExternalRef: &krov1alpha1.ExternalRef{
 				APIVersion: "v1",

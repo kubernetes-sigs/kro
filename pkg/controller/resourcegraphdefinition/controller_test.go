@@ -72,6 +72,7 @@ type stubCRDManager struct {
 type stubManager struct {
 	manager.Manager
 	client            client.Client
+	apiReader         client.Reader
 	restMapper        apimeta.RESTMapper
 	logger            logr.Logger
 	scheme            *runtime.Scheme
@@ -139,6 +140,13 @@ func (m *stubManager) Add(r manager.Runnable) error {
 }
 
 func (m *stubManager) GetClient() client.Client {
+	return m.client
+}
+
+func (m *stubManager) GetAPIReader() client.Reader {
+	if m.apiReader != nil {
+		return m.apiReader
+	}
 	return m.client
 }
 
@@ -626,6 +634,7 @@ func TestSetupWithManager(t *testing.T) {
 			name: "registers the controller runnable",
 			check: func(t *testing.T, reconciler *ResourceGraphDefinitionReconciler, fakeSet *krofake.FakeSet, mgr *stubManager, fakeClient client.WithWatch, mapper apimeta.RESTMapper, rgd *v1alpha1.ResourceGraphDefinition) {
 				assert.Equal(t, fakeClient, reconciler.Client)
+				assert.Equal(t, fakeClient, reconciler.apiReader)
 				assert.Equal(t, mapper, fakeSet.RESTMapper())
 				assert.Equal(t, 1, mgr.addCalls)
 				assert.NotNil(t, mgr.lastRunnable)
@@ -675,6 +684,7 @@ func TestSetupWithManager(t *testing.T) {
 			wantErr: "add boom",
 			check: func(t *testing.T, reconciler *ResourceGraphDefinitionReconciler, fakeSet *krofake.FakeSet, mgr *stubManager, fakeClient client.WithWatch, mapper apimeta.RESTMapper, _ *v1alpha1.ResourceGraphDefinition) {
 				assert.Equal(t, fakeClient, reconciler.Client)
+				assert.Equal(t, fakeClient, reconciler.apiReader)
 				assert.Equal(t, mapper, fakeSet.RESTMapper())
 				assert.Equal(t, 1, mgr.addCalls)
 			},
@@ -698,6 +708,7 @@ func TestSetupWithManager(t *testing.T) {
 			}
 			mgr := &stubManager{
 				client:            fakeClient,
+				apiReader:         fakeClient,
 				restMapper:        mapper,
 				logger:            logr.Discard(),
 				scheme:            testScheme(t),
@@ -752,7 +763,7 @@ func TestReconcile(t *testing.T) {
 					},
 				}, rgd.DeepCopy())
 
-				return &ResourceGraphDefinitionReconciler{Client: c}, c, rgd, nil
+				return &ResourceGraphDefinitionReconciler{Client: c, apiReader: c}, c, rgd, nil
 			},
 			check: func(t *testing.T, result ctrl.Result, err error, _ client.WithWatch, _ *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
 				assert.Equal(t, ctrl.Result{}, result)
@@ -772,6 +783,7 @@ func TestReconcile(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
@@ -805,6 +817,7 @@ func TestReconcile(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("naming convention violation")),
 					clientSet:         newKROFakeSet(),
@@ -834,6 +847,7 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: dc,
 					crdManager:        manager,
@@ -863,6 +877,7 @@ func TestReconcile(t *testing.T) {
 				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
@@ -896,6 +911,7 @@ func TestReconcile(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
+					apiReader:         c,
 					dynamicController: dc,
 					crdManager:        &stubCRDManager{},
 					revisionsRegistry: revisions.NewRegistry(),

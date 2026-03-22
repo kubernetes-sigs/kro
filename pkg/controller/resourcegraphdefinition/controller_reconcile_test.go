@@ -120,7 +120,7 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 		WithObjects(revisionWithOldUID, revisionWithNewUID, otherRGDRevision).
 		Build()
 
-	reconciler := &ResourceGraphDefinitionReconciler{Client: cl}
+	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
 	recreatedRGD := &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "demo",
@@ -163,7 +163,7 @@ func TestListGraphRevisions_SkipsTerminatingRevisions(t *testing.T) {
 		WithObjects(liveRevision, terminatingRevision).
 		Build()
 
-	reconciler := &ResourceGraphDefinitionReconciler{Client: cl}
+	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
 
 	got, hasTerminating, err := reconciler.listGraphRevisions(context.Background(), rgd)
 	require.NoError(t, err)
@@ -183,6 +183,7 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	registry := revisions.NewRegistry()
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		metadataLabeler:   metadata.NewKROMetaLabeler(),
 		revisionsRegistry: registry,
 	}
@@ -244,6 +245,7 @@ func TestCreateGraphRevision_AlreadyExistsReturnsError(t *testing.T) {
 	registry := revisions.NewRegistry()
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		metadataLabeler:   metadata.NewKROMetaLabeler(),
 		revisionsRegistry: registry,
 	}
@@ -614,6 +616,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 
 		return &ResourceGraphDefinitionReconciler{
 			Client:            cl,
+			apiReader:         cl,
 			metadataLabeler:   metadata.NewKROMetaLabeler(),
 			rgBuilder:         newTestBuilder(),
 			dynamicController: newRunningDynamicController(t),
@@ -654,6 +657,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				manager := &stubCRDManager{}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
@@ -695,6 +699,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				cl := newFakeClientBuilder().WithScheme(scheme).Build()
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("naming convention violation")),
 					revisionsRegistry: revisions.NewRegistry(),
@@ -726,7 +731,8 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 
 				cl := newFakeClientBuilder().WithScheme(scheme).Build()
 				return &ResourceGraphDefinitionReconciler{
-					Client: cl,
+					Client:    cl,
+					apiReader: cl,
 					metadataLabeler: metadata.GenericLabeler{
 						metadata.ResourceGraphDefinitionNameLabel: "conflict",
 					},
@@ -783,6 +789,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				manager := &stubCRDManager{getErr: errors.New("crd get boom")}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
@@ -822,6 +829,7 @@ func TestReconcileResourceGraphDefinition(t *testing.T) {
 				registry.Put(entry)
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newDynamicController(t),
@@ -877,6 +885,7 @@ func TestReconcileResourceGraphDefinitionGCFailureDoesNotBlockReady(t *testing.T
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		metadataLabeler:   metadata.NewKROMetaLabeler(),
 		rgBuilder:         newTestBuilder(),
 		dynamicController: newRunningDynamicController(t),
@@ -937,12 +946,14 @@ func TestReconcileResourceGraphDefinitionEarlyFailures(t *testing.T) {
 		t.Parallel()
 
 		rgd := newTestRGD("rgd-list-error")
+		cl := newTestClient(t, interceptor.Funcs{
+			List: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) error {
+				return errors.New("list boom")
+			},
+		})
 		reconciler := &ResourceGraphDefinitionReconciler{
-			Client: newTestClient(t, interceptor.Funcs{
-				List: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) error {
-					return errors.New("list boom")
-				},
-			}),
+			Client:            cl,
+			apiReader:         cl,
 			revisionsRegistry: revisions.NewRegistry(),
 			cfg: Config{
 				ProgressRequeueDelay: 3 * time.Second,
@@ -1007,6 +1018,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called before warmup")),
 					revisionsRegistry: registry,
@@ -1054,6 +1066,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called when cache is hot")),
 					dynamicController: newRunningDynamicController(t),
@@ -1114,6 +1127,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called while latest revision is pending")),
 					revisionsRegistry: registry,
@@ -1164,6 +1178,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newFailingBuilder(errors.New("builder should not be called when latest revision failed")),
 					revisionsRegistry: registry,
@@ -1212,6 +1227,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					dynamicController: newRunningDynamicController(t),
@@ -1277,6 +1293,7 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				return &ResourceGraphDefinitionReconciler{
 					Client:            cl,
+					apiReader:         cl,
 					metadataLabeler:   metadata.NewKROMetaLabeler(),
 					rgBuilder:         newTestBuilder(),
 					revisionsRegistry: registry,
@@ -1397,6 +1414,7 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		metadataLabeler:   metadata.NewKROMetaLabeler(),
 		rgBuilder:         newTestBuilder(),
 		dynamicController: newRunningDynamicController(t),
@@ -1504,6 +1522,7 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 
 			reconciler := &ResourceGraphDefinitionReconciler{
 				Client:            cl,
+				apiReader:         cl,
 				metadataLabeler:   metadata.NewKROMetaLabeler(),
 				rgBuilder:         newTestBuilder(),
 				dynamicController: newRunningDynamicController(t),
@@ -1587,6 +1606,7 @@ func TestReconcileResourceGraphDefinitionRecoversWhenLatestFailedBecomesActiveWi
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		metadataLabeler:   metadata.NewKROMetaLabeler(),
 		rgBuilder:         newFailingBuilder(errors.New("builder should not be called when hash matches latest revision")),
 		dynamicController: newRunningDynamicController(t),
@@ -1656,6 +1676,7 @@ func TestGarbageCollectGraphRevisionsPrunesObjects(t *testing.T) {
 
 	reconciler := &ResourceGraphDefinitionReconciler{
 		Client:            cl,
+		apiReader:         cl,
 		revisionsRegistry: registry,
 		cfg: Config{
 			MaxGraphRevisions:    2,
@@ -1686,17 +1707,19 @@ func TestGarbageCollectGraphRevisionsDeleteError(t *testing.T) {
 	rgd := newTestRGD("rgd-gc-delete-error")
 	oldRevision := newListedGraphRevision(rgd, 1, "hash-1")
 	newRevision := newListedGraphRevision(rgd, 2, "hash-2")
+	cl := newTestClient(t, interceptor.Funcs{
+		Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
+			if gr, ok := obj.(*internalv1alpha1.GraphRevision); ok && gr.Name == oldRevision.Name {
+				return errors.New("delete boom")
+			}
+			return nil
+		},
+	}, oldRevision, newRevision)
 
 	reconciler := &ResourceGraphDefinitionReconciler{
-		Client: newTestClient(t, interceptor.Funcs{
-			Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
-				if gr, ok := obj.(*internalv1alpha1.GraphRevision); ok && gr.Name == oldRevision.Name {
-					return errors.New("delete boom")
-				}
-				return nil
-			},
-		}, oldRevision, newRevision),
-		cfg: Config{MaxGraphRevisions: 1},
+		Client:    cl,
+		apiReader: cl,
+		cfg:       Config{MaxGraphRevisions: 1},
 	}
 
 	err := reconciler.garbageCollectGraphRevisions(context.Background(), rgd)

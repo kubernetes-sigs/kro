@@ -17,7 +17,6 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -34,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
@@ -59,8 +57,9 @@ type Config struct {
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
-	// Client and instanceLogger are set with SetupWithManager
+	// Client, apiReader, and instanceLogger are set with SetupWithManager
 	client.Client
+	apiReader      client.Reader
 	instanceLogger logr.Logger
 
 	clientSet         kroclient.SetInterface
@@ -97,26 +96,12 @@ func NewResourceGraphDefinitionReconciler(
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	// GraphRevision selection relies on a CRD selectable field, so use the
+	// direct API reader instead of a cache-only field index.
+	r.apiReader = mgr.GetAPIReader()
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
 	r.newEventRecorder = mgr.GetEventRecorderFor
-
-	// Index GraphRevisions by RGD name in the informer cache so
-	// listGraphRevisions can filter efficiently via MatchingFields.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&internalv1alpha1.GraphRevision{},
-		"spec.snapshot.name",
-		func(obj client.Object) []string {
-			gr, ok := obj.(*internalv1alpha1.GraphRevision)
-			if !ok {
-				return nil
-			}
-			return []string{gr.Spec.Snapshot.Name}
-		},
-	); err != nil {
-		return fmt.Errorf("failed to index GraphRevision by spec.snapshot.name: %w", err)
-	}
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(

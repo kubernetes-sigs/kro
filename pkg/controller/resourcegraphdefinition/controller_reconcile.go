@@ -375,11 +375,13 @@ func newMicroControllerError(err error) error { return &microControllerError{err
 // and terminating sets.
 //
 // GraphRevisions are grouped by RGD name (not UID) so a recreated RGD with the
-// same name can adopt the existing revisions. The caller uses the terminating
-// flag to defer decisions while GC is in flight.
+// same name can adopt the existing revisions. The list uses the direct API
+// reader with a CRD selectable field on spec.snapshot.name rather than a
+// cache-only field index. The caller uses the terminating flag to defer
+// decisions while GC is in flight.
 func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, err error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
-	if err := r.List(ctx, revisionList, client.MatchingFields{
+	if err := r.apiReader.List(ctx, revisionList, client.MatchingFields{
 		"spec.snapshot.name": rgd.Name,
 	}); err != nil {
 		return nil, false, err

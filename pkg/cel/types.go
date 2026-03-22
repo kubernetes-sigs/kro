@@ -25,21 +25,16 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"k8s.io/apimachinery/pkg/util/sets"
 	apiservercel "k8s.io/apiserver/pkg/cel"
-
-	celcache "github.com/kubernetes-sigs/kro/pkg/cel/cache"
 )
 
 // FieldTypeMap constructs a map of the field and object types nested within a given type.
-// The result is cached in the given BuilderCache to avoid redundant computation.
-func FieldTypeMap(cache *celcache.BuilderCache, path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
+func FieldTypeMap(path string, t *apiservercel.DeclType) map[string]*apiservercel.DeclType {
 	if t.IsObject() && t.TypeName() != "object" {
 		path = t.TypeName()
 	}
-	return cache.FieldTypeMap(t, func() map[string]*apiservercel.DeclType {
-		typeMap := make(map[string]*apiservercel.DeclType)
-		buildDeclTypes(path, t, typeMap)
-		return typeMap
-	})
+	typeMap := make(map[string]*apiservercel.DeclType)
+	buildDeclTypes(path, t, typeMap)
+	return typeMap
 }
 
 func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*apiservercel.DeclType) {
@@ -69,26 +64,24 @@ func buildDeclTypes(path string, t *apiservercel.DeclType, types map[string]*api
 }
 
 // NewDeclTypeProvider returns an Open API Schema-based type-system which is CEL compatible.
-// The cache parameter is used for FieldTypeMap lookups; pass nil to skip caching
-// (a throwaway cache will be created).
-func NewDeclTypeProvider(cache *celcache.BuilderCache, rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
+func NewDeclTypeProvider(rootTypes ...*apiservercel.DeclType) *DeclTypeProvider {
 	// Note, if the schema indicates that it's actually based on another proto
 	// then prefer the proto definition. For expressions in the proto, a new field
 	// annotation will be needed to indicate the expected environment and type of
 	// the expression.
 	//
 	// Instead of merging all FieldTypeMaps into a single map (which allocates
-	// ~189MB at scale), we store references to the individual cached FieldTypeMap
+	// ~189MB at scale), we store references to the individual FieldTypeMap
 	// results and search across them lazily in findDeclType.
 	if rootTypes == nil {
 		return &DeclTypeProvider{}
 	}
-	if cache == nil {
-		cache = celcache.NewBuilderCache()
-	}
-	typeMaps := make([]map[string]*apiservercel.DeclType, len(rootTypes))
-	for i, dt := range rootTypes {
-		typeMaps[i] = FieldTypeMap(cache, dt.TypeName(), dt)
+	typeMaps := make([]map[string]*apiservercel.DeclType, 0, len(rootTypes))
+	for _, dt := range rootTypes {
+		if dt == nil {
+			continue
+		}
+		typeMaps = append(typeMaps, FieldTypeMap(dt.TypeName(), dt))
 	}
 	return &DeclTypeProvider{
 		typeMaps: typeMaps,
@@ -98,7 +91,7 @@ func NewDeclTypeProvider(cache *celcache.BuilderCache, rootTypes ...*apiserverce
 // DeclTypeProvider extends the CEL ref.TypeProvider interface and provides an Open API Schema-based
 // type-system.
 type DeclTypeProvider struct {
-	// typeMaps holds references to cached FieldTypeMap results for each root type.
+	// typeMaps holds references to FieldTypeMap results for each root type.
 	// We search across them lazily instead of pre-merging into a single map,
 	// which saves ~189MB of allocation at scale (50 RGDs x 50-100 resources).
 	typeMaps                    []map[string]*apiservercel.DeclType

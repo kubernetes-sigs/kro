@@ -32,20 +32,41 @@ import (
 )
 
 var _ = Describe("RGD Conditions", func() {
-	It("should report serving and graph revision conditions as true once an RGD is active", func(ctx SpecContext) {
+	It("should report the exact success condition contract once an RGD is active", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDConditions%s", rand.String(5))
 		rgd := configmapRGD(rgdName, kind)
 
 		createConditionTestRGD(ctx, rgd)
-		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateActive,
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionTrue,
-				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
-				resourcegraphdefinition.ControllerReady:        metav1.ConditionTrue,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
+		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
+			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
+			lastIssued: ptrToInt64(1),
+			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
+				krov1alpha1.ConditionType(apis.ConditionReady): {
+					status:  metav1.ConditionTrue,
+					reason:  apis.ConditionReady,
+					message: "",
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady): {
+					status:  metav1.ConditionTrue,
+					reason:  "Ready",
+					message: fmt.Sprintf("kind %s has been accepted and ready", kind),
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady): {
+					status:  metav1.ConditionTrue,
+					reason:  "Running",
+					message: "controller is running",
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+					status:  metav1.ConditionTrue,
+					reason:  "Valid",
+					message: "resource graph and schema are valid",
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+					status:  metav1.ConditionTrue,
+					reason:  "Resolved",
+					message: "revision 1 compiled and active",
+				},
 			},
 		})
 	})
@@ -60,6 +81,7 @@ var _ = Describe("RGD Conditions", func() {
 		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
 			conditions: map[string]metav1.ConditionStatus{
 				apis.ConditionReady:                            metav1.ConditionUnknown,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
 				resourcegraphdefinition.KindReady:              metav1.ConditionUnknown,
 				resourcegraphdefinition.ControllerReady:        metav1.ConditionUnknown,
 				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
@@ -77,20 +99,40 @@ var _ = Describe("RGD Conditions", func() {
 		})
 	})
 
-	It("should report serving as unavailable when the initial RGD spec is invalid", func(ctx SpecContext) {
+	It("should report the exact failure condition contract when the initial RGD spec is invalid", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-invalid-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDInvalidConditions%s", rand.String(5))
-		rgd := invalidConfigmapRGD(rgdName, kind)
+		rgd := unknownReferenceRGD(rgdName, kind)
 
 		createConditionTestRGD(ctx, rgd)
-		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
+		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
 			state: krov1alpha1.ResourceGraphDefinitionStateInactive,
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionFalse,
-				resourcegraphdefinition.KindReady:              metav1.ConditionUnknown,
-				resourcegraphdefinition.ControllerReady:        metav1.ConditionUnknown,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionFalse,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
+			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
+				krov1alpha1.ConditionType(apis.ConditionReady): {
+					status:  metav1.ConditionFalse,
+					reason:  "InvalidResourceGraph",
+					message: unknownReferenceRGDErrorMessage(),
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady): {
+					status:  metav1.ConditionUnknown,
+					reason:  "AwaitingReconciliation",
+					message: `condition "KindReady" is awaiting reconciliation`,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady): {
+					status:  metav1.ConditionUnknown,
+					reason:  "AwaitingReconciliation",
+					message: `condition "ControllerReady" is awaiting reconciliation`,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+					status:  metav1.ConditionFalse,
+					reason:  "InvalidResourceGraph",
+					message: unknownReferenceRGDErrorMessage(),
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+					status:  metav1.ConditionUnknown,
+					reason:  "AwaitingReconciliation",
+					message: `condition "GraphRevisionsResolved" is awaiting reconciliation`,
+				},
 			},
 		})
 	})
@@ -130,7 +172,7 @@ var _ = Describe("RGD Conditions", func() {
 		})
 	})
 
-	It("should report serving as unavailable when a later RGD update is invalid", func(ctx SpecContext) {
+	It("should report the exact failure condition contract when a later RGD update is invalid", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-invalid-update-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDInvalidUpdateConditions%s", rand.String(5))
 		rgd := configmapRGD(rgdName, kind)
@@ -139,7 +181,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		waitForRGDActive(ctx, rgdName)
 
-		invalidRGD := invalidConfigmapRGD(rgdName, kind)
+		invalidRGD := unknownReferenceRGD(rgdName, kind)
 		Eventually(func(g Gomega) {
 			fresh := &krov1alpha1.ResourceGraphDefinition{}
 			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
@@ -149,16 +191,38 @@ var _ = Describe("RGD Conditions", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
-		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
+		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateInactive,
 			lastIssued: ptrToInt64(1),
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionFalse,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionFalse,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
+			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
+				krov1alpha1.ConditionType(apis.ConditionReady): {
+					status:  metav1.ConditionFalse,
+					reason:  "InvalidResourceGraph",
+					message: unknownReferenceRGDErrorMessage(),
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady): {
+					status:                   metav1.ConditionTrue,
+					reason:                   "Ready",
+					message:                  fmt.Sprintf("kind %s has been accepted and ready", kind),
+					observedGenerationOffset: -1,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady): {
+					status:                   metav1.ConditionTrue,
+					reason:                   "Running",
+					message:                  "controller is running",
+					observedGenerationOffset: -1,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+					status:  metav1.ConditionFalse,
+					reason:  "InvalidResourceGraph",
+					message: unknownReferenceRGDErrorMessage(),
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+					status:  metav1.ConditionTrue,
+					reason:  "Resolved",
+					message: "revision 1 compiled and active",
+				},
 			},
-			reasonCondition: resourcegraphdefinition.GraphAccepted,
-			reason:          "InvalidResourceGraph",
 		})
 
 		Consistently(func(g Gomega) {
@@ -225,18 +289,59 @@ var _ = Describe("RGD Conditions", func() {
 
 		updateRGDTemplate(ctx, rgdName, "settling")
 
-		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateActive,
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionUnknown,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
+		expectExactRGDConditions(ctx, rgdName, 100*time.Millisecond, exactRGDExpectation{
+			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
+			lastIssued: ptrToInt64(1),
+			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
+				krov1alpha1.ConditionType(apis.ConditionReady): {
+					status:  metav1.ConditionUnknown,
+					reason:  "WaitingForGraphRevisionSettlement",
+					message: "waiting for terminating graph revisions to settle",
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+					status:                   metav1.ConditionTrue,
+					reason:                   "Valid",
+					message:                  "resource graph and schema are valid",
+					observedGenerationOffset: -1,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+					status:  metav1.ConditionUnknown,
+					reason:  "WaitingForGraphRevisionSettlement",
+					message: "waiting for terminating graph revisions to settle",
+				},
 			},
-			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
-			reason:          "WaitingForGraphRevisionSettlement",
 		})
 	})
 })
+
+type exactRGDExpectation struct {
+	state      krov1alpha1.ResourceGraphDefinitionState
+	lastIssued *int64
+	conditions map[krov1alpha1.ConditionType]conditionExpectation
+}
+
+func expectExactRGDConditions(
+	ctx SpecContext,
+	rgdName string,
+	interval time.Duration,
+	want exactRGDExpectation,
+) {
+	Eventually(func(g Gomega) {
+		fresh := &krov1alpha1.ResourceGraphDefinition{}
+		err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		if want.state != "" {
+			g.Expect(fresh.Status.State).To(Equal(want.state))
+		}
+		if want.lastIssued != nil {
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(*want.lastIssued))
+		}
+		for conditionType, expectation := range want.conditions {
+			assertConditionContract(g, fresh, conditionType, expectation)
+		}
+	}, 20*time.Second, interval).WithContext(ctx).Should(Succeed())
+}
 
 type rgdExpectation struct {
 	state           krov1alpha1.ResourceGraphDefinitionState
@@ -271,7 +376,7 @@ func expectRGDConditions(
 			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(*want.lastIssued))
 		}
 		for conditionType, status := range want.conditions {
-			assertRGDCondition(g, fresh, conditionType, status)
+			assertRGDConditionStatusOnly(g, fresh, conditionType, status)
 		}
 		if want.reasonCondition == "" {
 			return
@@ -291,7 +396,7 @@ func ptrToInt64(v int64) *int64 {
 	return &v
 }
 
-func assertRGDCondition(
+func assertRGDConditionStatusOnly(
 	g Gomega,
 	rgd *krov1alpha1.ResourceGraphDefinition,
 	conditionType string,
@@ -304,10 +409,6 @@ func assertRGDCondition(
 	g.ExpectWithOffset(1, cond.Status).To(Equal(status), "unexpected status for condition %s", conditionType)
 	g.ExpectWithOffset(
 		1,
-		cond.ObservedGeneration,
-	).To(Equal(rgd.GetGeneration()), "unexpected observedGeneration for condition %s", conditionType)
-	g.ExpectWithOffset(
-		1,
 		cond.LastTransitionTime,
 	).ToNot(BeNil(), "LastTransitionTime must be set for condition %s", conditionType)
 	g.ExpectWithOffset(
@@ -318,8 +419,88 @@ func assertRGDCondition(
 		1,
 		cond.Message,
 	).ToNot(BeNil(), "Message must be set for condition %s", conditionType)
-	g.ExpectWithOffset(
-		1,
-		*cond.Message,
-	).ToNot(BeEmpty(), "Message must not be empty for condition %s", conditionType)
+}
+
+type conditionExpectation struct {
+	status                   metav1.ConditionStatus
+	reason                   string
+	message                  string
+	observedGenerationOffset int64
+}
+
+func assertConditionContract(
+	g Gomega,
+	obj apis.Object,
+	conditionType krov1alpha1.ConditionType,
+	want conditionExpectation,
+) {
+	g.ExpectWithOffset(1, obj.GetGeneration()).To(BeNumerically(">", 0))
+
+	cond := findConditionByType(obj.GetConditions(), conditionType)
+	g.ExpectWithOffset(1, cond).ToNot(BeNil(), "expected condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.Status).To(Equal(want.status), "unexpected status for condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.ObservedGeneration).To(
+		Equal(obj.GetGeneration()+want.observedGenerationOffset),
+		"unexpected observedGeneration for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.LastTransitionTime).ToNot(
+		BeNil(),
+		"LastTransitionTime must be set for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.LastTransitionTime.Time).ToNot(
+		BeZero(),
+		"LastTransitionTime must not be zero for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.Reason).ToNot(BeNil(), "Reason must be set for condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.Message).ToNot(BeNil(), "Message must be set for condition %s", conditionType)
+	g.ExpectWithOffset(1, *cond.Reason).To(Equal(want.reason), "unexpected reason for condition %s", conditionType)
+	g.ExpectWithOffset(1, *cond.Message).To(Equal(want.message), "unexpected message for condition %s", conditionType)
+}
+
+func findConditionByType(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == t {
+			return &conditions[i]
+		}
+	}
+	return nil
+}
+
+func unknownReferenceRGD(name, kind string) *krov1alpha1.ResourceGraphDefinition {
+	rgd := configmapRGD(name, kind)
+	rgd.Spec.Resources[0].IncludeWhen = []string{"${missing.status.state == 'available'}"}
+	return rgd
+}
+
+func unknownReferenceRGDErrorMessage() string {
+	return "failed to build dependency graph: " +
+		"failed to extract dependencies from includeWhen: " +
+		"references unknown identifiers: [missing]"
+}
+
+func unknownReferenceGraphRevisionErrorMessage(grName string) string {
+	return fmt.Sprintf("failed to compile graph revision %q: %s", grName, unknownReferenceRGDErrorMessage())
+}
+
+func newGraphRevisionFromRGD(
+	name string,
+	revision int64,
+	rgd *krov1alpha1.ResourceGraphDefinition,
+) *internalv1alpha1.GraphRevision {
+	return &internalv1alpha1.GraphRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: internalv1alpha1.GraphRevisionSpec{
+			Revision: revision,
+			Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+				Name:       rgd.Name,
+				Generation: rgd.Generation,
+				Spec:       *rgd.Spec.DeepCopy(),
+			},
+		},
+	}
 }

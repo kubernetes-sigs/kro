@@ -71,7 +71,7 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 
 	revisionWithOldUID := &internalv1alpha1.GraphRevision{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "demo-r1",
+			Name: "demo-r00001",
 			Labels: map[string]string{
 				metadata.ResourceGraphDefinitionNameLabel: "demo",
 				metadata.ResourceGraphDefinitionIDLabel:   "old-uid",
@@ -86,7 +86,7 @@ func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
 	}
 	revisionWithNewUID := &internalv1alpha1.GraphRevision{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "demo-r2",
+			Name: "demo-r00002",
 			Labels: map[string]string{
 				metadata.ResourceGraphDefinitionNameLabel: "demo",
 				metadata.ResourceGraphDefinitionIDLabel:   "new-uid",
@@ -366,37 +366,47 @@ func TestGraphRevisionName(t *testing.T) {
 		revision    int64
 		wantExact   string // if set, assert exact match
 		wantMax     int    // max length (0 = no check)
+		wantHash    bool   // expect hash suffix (overflow path)
 		notContains []string
 	}{
 		{
-			name:      "simple name",
+			name:      "simple name — no hash suffix",
 			rgdName:   "demo",
 			revision:  1,
-			wantExact: "demo-r1-aefd3536",
+			wantExact: "demo-r00001",
 		},
 		{
-			name:      "larger revision number",
+			name:      "zero-padded revision number",
 			rgdName:   "demo",
 			revision:  1234,
-			wantExact: "demo-r1234-aefd3536",
+			wantExact: "demo-r01234",
 		},
 		{
-			name:     "long name truncates to 253",
+			name:      "large revision number beyond padding",
+			rgdName:   "demo",
+			revision:  100000,
+			wantExact: "demo-r100000",
+		},
+		{
+			name:     "long name triggers overflow with hash suffix",
 			rgdName:  strings.Repeat("a", 260),
 			revision: 1,
 			wantMax:  253,
+			wantHash: true,
 		},
 		{
 			name:     "different long names produce different hashes",
 			rgdName:  strings.Repeat("a", 250) + "bbbbbbbbbb",
 			revision: 1,
 			wantMax:  253,
+			wantHash: true,
 		},
 		{
 			name:        "truncation at dot boundary trims trailing dot",
 			rgdName:     strings.Repeat("a", 240) + "." + strings.Repeat("b", 20),
 			revision:    1,
 			wantMax:     253,
+			wantHash:    true,
 			notContains: []string{".-", "--"},
 		},
 		{
@@ -404,6 +414,7 @@ func TestGraphRevisionName(t *testing.T) {
 			rgdName:     strings.Repeat("a", 240) + "-" + strings.Repeat("b", 20),
 			revision:    1,
 			wantMax:     253,
+			wantHash:    true,
 			notContains: []string{"--r"},
 		},
 		{
@@ -411,7 +422,28 @@ func TestGraphRevisionName(t *testing.T) {
 			rgdName:     strings.Repeat("a", 238) + ".-." + strings.Repeat("b", 20),
 			revision:    1,
 			wantMax:     253,
+			wantHash:    true,
 			notContains: []string{".-", "--"},
+		},
+		{
+			name:     "degenerate name of only dots and hyphens uses fallback prefix",
+			rgdName:  strings.Repeat(".-", 130),
+			revision: 1,
+			wantMax:  253,
+			wantHash: true,
+		},
+		{
+			name:      "name at exact boundary does not trigger overflow",
+			rgdName:   strings.Repeat("a", 246),
+			revision:  1,
+			wantExact: strings.Repeat("a", 246) + "-r00001",
+		},
+		{
+			name:     "name one char over boundary triggers overflow",
+			rgdName:  strings.Repeat("a", 247),
+			revision: 1,
+			wantMax:  253,
+			wantHash: true,
 		},
 	}
 
@@ -423,6 +455,11 @@ func TestGraphRevisionName(t *testing.T) {
 			}
 			if tt.wantMax > 0 {
 				assert.LessOrEqual(t, len(result), tt.wantMax)
+			}
+			if tt.wantHash {
+				// Overflow path: name contains the hash suffix after the
+				// revision number (e.g. "-r00001-aefd3536").
+				assert.Regexp(t, `-r\d+-[0-9a-f]{8}$`, result)
 			}
 			for _, s := range tt.notContains {
 				assert.NotContains(t, result, s)

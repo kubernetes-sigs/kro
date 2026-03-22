@@ -494,32 +494,74 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	return graphRevision, nil
 }
 
+// graphRevisionName generates a deterministic name for a GraphRevision object.
+//
+// Naming follows the Knative ChildName pattern (used by Knative, Tekton, and
+// cert-manager): clean names for the common case, hash-based overflow for long
+// names. This was chosen over alternatives after surveying the ecosystem:
+//
+//	| Project              | Format                    | Conditional | Content-addressable |
+//	|----------------------|---------------------------|-------------|---------------------|
+//	| K8s Deployment→RS    | {name}-{hash}             | Yes         | Yes                 |
+//	| K8s ControllerRevision | {name}-{hash}           | No          | Yes                 |
+//	| Knative Revision     | {name}-{gen:05d}          | Yes         | No (sequential)     |
+//	| Crossplane           | {name}-{sha256[:7]}       | No          | Yes                 |
+//	| Helm                 | ...{name}.v{n}            | No          | No (sequential)     |
+//	| kro GraphRevision    | {name}-r{rev:05d}         | Yes         | No (sequential)     |
+//
+// kro's GraphRevisions are sequential immutable snapshots (like Knative), not
+// content-addressable (like Deployments/Crossplane). Content-addressable naming
+// is wrong here because reverts create new GRs — two GRs with identical specs
+// but different revision numbers are distinct history points.
+//
+// The zero-padded revision number gives free lexicographic sorting in kubectl
+// (up to 99,999 revisions per RGD).
+//
+// Common case (name + suffix ≤ 253):
+//
+//	my-webapp-r00001
+//
+// Overflow case (name would exceed 253):
+//
+//	{truncated-name}-r00001-{fnv32a(rgdName)}
+//
+// The hash suffix is only appended when truncation occurs, and is computed from
+// the full untruncated RGD name. This ensures two different RGD names that
+// truncate to the same prefix still produce unique revision names.
 func graphRevisionName(rgdName string, revision int64) string {
-	hash := graphRevisionNameHash(rgdName)
-	suffix := fmt.Sprintf("-r%d-%s", revision, hash)
-	maxPrefixLen := 253 - len(suffix)
-	if len(rgdName) > maxPrefixLen {
-		rgdName = rgdName[:maxPrefixLen]
+	suffix := fmt.Sprintf("-r%05d", revision)
+
+	// Common case: name fits without truncation — no hash needed.
+	if len(rgdName)+len(suffix) <= 253 {
+		return rgdName + suffix
 	}
+
+	// Overflow: truncate name and append hash for collision resistance.
+	hash := graphRevisionNameHash(rgdName)
+	suffix = fmt.Sprintf("-r%05d-%s", revision, hash)
+	rgdName = rgdName[:253-len(suffix)]
+
 	// Trim trailing dots/hyphens so the joined name stays DNS-1123 valid.
 	// RGD names can contain dots (DNS-1123 subdomains allow them), so
-	// truncation can land on a dot, producing "name.-r1-hash" which is invalid.
+	// truncation can land on a dot, producing "name.-r00001-hash" which is
+	// invalid.
 	rgdName = strings.TrimRight(rgdName, ".-")
+
+	// Guard against degenerate names that are entirely dots/hyphens after
+	// truncation (e.g. "a.---..." repeated 240 times).
+	if len(rgdName) == 0 {
+		rgdName = "gr"
+	}
+
 	return rgdName + suffix
 }
 
-// graphRevisionNameHash computes an FNV-32a hash of the RGD name for use in
-// GraphRevision object names.
+// graphRevisionNameHash computes an FNV-32a hash of the RGD name for use as a
+// collision guard in GraphRevision names during truncation overflow.
 //
-// This hash exists solely as a collision guard for truncated RGD names. When an
-// RGD name exceeds the Kubernetes 253-char name limit minus the suffix length,
-// the name is truncated. Two different RGD names that truncate to the same
-// prefix would produce identical revision names without this hash.
-//
-// The hash is based on the full, untruncated RGD name, so even truncated
-// prefixes produce unique revision names. It is NOT a content hash — the same
-// RGD always produces the same hash regardless of spec changes, giving
-// consistent naming across revisions (e.g. my-webapp-r1-aabb, my-webapp-r2-aabb).
+// This hash is only appended when the RGD name exceeds the Kubernetes 253-char
+// limit. It is based on the full, untruncated RGD name so that different RGD
+// names that truncate to the same prefix still produce unique revision names.
 func graphRevisionNameHash(rgdName string) string {
 	h := fnv.New32a()
 	h.Write([]byte(rgdName))

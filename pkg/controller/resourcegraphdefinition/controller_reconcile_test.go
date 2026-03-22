@@ -41,8 +41,8 @@ import (
 )
 
 // newFakeClientBuilder returns a fake client builder with the field indexer
-// for spec.snapshot.name pre-registered, matching the indexer registered in
-// SetupWithManager.
+// for spec.snapshot.name pre-registered, matching the RGD selectable-field
+// lookup used in tests.
 func newFakeClientBuilder() *fake.ClientBuilder {
 	scheme := runtime.NewScheme()
 	_ = internalv1alpha1.AddToScheme(scheme)
@@ -62,7 +62,7 @@ func newFakeClientBuilder() *fake.ClientBuilder {
 		)
 }
 
-func TestListGraphRevisions_UsesRGDNameLabel(t *testing.T) {
+func TestListGraphRevisions_UsesSnapshotNameSelector(t *testing.T) {
 	t.Parallel()
 
 	scheme := runtime.NewScheme()

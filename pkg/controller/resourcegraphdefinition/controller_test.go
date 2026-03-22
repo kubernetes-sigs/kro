@@ -182,15 +182,7 @@ func (m *stubManager) GetEventRecorderFor(name string) record.EventRecorder {
 	return newFakeEventRecorderFactory()(name)
 }
 
-func (m *stubManager) GetFieldIndexer() client.FieldIndexer {
-	return &stubFieldIndexer{}
-}
-
-type stubFieldIndexer struct{}
-
-func (s *stubFieldIndexer) IndexField(_ context.Context, _ client.Object, _ string, _ client.IndexerFunc) error {
-	return nil
-}
+func (m *stubManager) GetFieldIndexer() client.FieldIndexer { return nil }
 
 func (s *stubGraphBuilder) NewResourceGraphDefinition(rgd *v1alpha1.ResourceGraphDefinition, config graph.RGDConfig) (*graph.Graph, error) {
 	return s.build(rgd, config)
@@ -634,7 +626,6 @@ func TestSetupWithManager(t *testing.T) {
 			name: "registers the controller runnable",
 			check: func(t *testing.T, reconciler *ResourceGraphDefinitionReconciler, fakeSet *krofake.FakeSet, mgr *stubManager, fakeClient client.WithWatch, mapper apimeta.RESTMapper, rgd *v1alpha1.ResourceGraphDefinition) {
 				assert.Equal(t, fakeClient, reconciler.Client)
-				assert.Equal(t, fakeClient, reconciler.apiReader)
 				assert.Equal(t, mapper, fakeSet.RESTMapper())
 				assert.Equal(t, 1, mgr.addCalls)
 				assert.NotNil(t, mgr.lastRunnable)
@@ -684,7 +675,6 @@ func TestSetupWithManager(t *testing.T) {
 			wantErr: "add boom",
 			check: func(t *testing.T, reconciler *ResourceGraphDefinitionReconciler, fakeSet *krofake.FakeSet, mgr *stubManager, fakeClient client.WithWatch, mapper apimeta.RESTMapper, _ *v1alpha1.ResourceGraphDefinition) {
 				assert.Equal(t, fakeClient, reconciler.Client)
-				assert.Equal(t, fakeClient, reconciler.apiReader)
 				assert.Equal(t, mapper, fakeSet.RESTMapper())
 				assert.Equal(t, 1, mgr.addCalls)
 			},
@@ -708,7 +698,6 @@ func TestSetupWithManager(t *testing.T) {
 			}
 			mgr := &stubManager{
 				client:            fakeClient,
-				apiReader:         fakeClient,
 				restMapper:        mapper,
 				logger:            logr.Discard(),
 				scheme:            testScheme(t),

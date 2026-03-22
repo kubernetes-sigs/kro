@@ -237,6 +237,58 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 		}
 	})
 
+	It("should not issue duplicate graph revisions for an unchanged RGD across controller restart", func(ctx SpecContext) {
+		testEnv := newIsolatedGraphRevisionEnv(ctx, 20)
+		rgdName := fmt.Sprintf("gv-stable-%s", rand.String(5))
+		kind := fmt.Sprintf("GvStable%s", rand.String(5))
+		rgd := configmapRGD(rgdName, kind)
+
+		Expect(testEnv.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(testEnv.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(1)))
+
+			gvs := listGraphRevisionsInEnv(ctx, testEnv, rgdName)
+			g.Expect(gvs).To(HaveLen(1))
+			g.Expect(gvs[0].Spec.Revision).To(Equal(int64(1)))
+
+			selected := &internalv1alpha1.GraphRevisionList{}
+			err = testEnv.CtrlManager.GetAPIReader().List(ctx, selected, client.MatchingFields{
+				"spec.snapshot.name": rgdName,
+			})
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(selected.Items).To(HaveLen(1))
+			g.Expect(selected.Items[0].Spec.Revision).To(Equal(int64(1)))
+		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		Expect(testEnv.RestartControllers()).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(1)))
+
+			gvs := listGraphRevisionsInEnv(ctx, testEnv, rgdName)
+			g.Expect(gvs).To(HaveLen(1))
+			g.Expect(maxGraphRevisionNumber(gvs)).To(Equal(int64(1)))
+
+			selected := &internalv1alpha1.GraphRevisionList{}
+			err = testEnv.CtrlManager.GetAPIReader().List(ctx, selected, client.MatchingFields{
+				"spec.snapshot.name": rgdName,
+			})
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(selected.Items).To(HaveLen(1))
+			g.Expect(selected.Items[0].Spec.Revision).To(Equal(int64(1)))
+		}, 15*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 	It(
 		"should warm the registry on controller restart and continue issuing from the recovered watermark",
 		func(ctx SpecContext) {

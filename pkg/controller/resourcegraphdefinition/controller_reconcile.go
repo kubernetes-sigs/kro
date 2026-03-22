@@ -591,7 +591,10 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		return nil
 	}
 
-	minRevisionToKeep := graphRevisionRetentionFloor(graphRevisions, r.cfg.MaxGraphRevisions)
+	minRevisionToKeep, ok := graphRevisionRetentionFloor(graphRevisions, r.cfg.MaxGraphRevisions)
+	if !ok {
+		return nil
+	}
 	for i := range graphRevisions {
 		revision := graphRevisions[i]
 		if revision.Spec.Revision >= minRevisionToKeep {
@@ -610,11 +613,15 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 	return nil
 }
 
-func graphRevisionRetentionFloor(revisions []internalv1alpha1.GraphRevision, maxGraphRevisions int) int64 {
+func graphRevisionRetentionFloor(revisions []internalv1alpha1.GraphRevision, maxGraphRevisions int) (int64, bool) {
+	if maxGraphRevisions <= 0 || len(revisions) == 0 || len(revisions) < maxGraphRevisions {
+		return 0, false
+	}
+
 	revisionNumbers := make([]int64, len(revisions))
 	for i := range revisions {
 		revisionNumbers[i] = revisions[i].Spec.Revision
 	}
 	slices.Sort(revisionNumbers)
-	return revisionNumbers[len(revisionNumbers)-maxGraphRevisions]
+	return revisionNumbers[len(revisionNumbers)-maxGraphRevisions], true
 }

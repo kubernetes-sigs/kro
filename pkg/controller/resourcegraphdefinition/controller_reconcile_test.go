@@ -1712,30 +1712,56 @@ func TestGraphRevisionRetentionFloor(t *testing.T) {
 		revisions         []int64
 		maxGraphRevisions int
 		wantFloor         int64
+		wantOK            bool
 	}{
 		{
 			name:              "exact match: len equals max",
 			revisions:         []int64{3, 4},
 			maxGraphRevisions: 2,
 			wantFloor:         3,
+			wantOK:            true,
 		},
 		{
 			name:              "more revisions than max",
 			revisions:         []int64{1, 2, 3, 4},
 			maxGraphRevisions: 2,
 			wantFloor:         3,
+			wantOK:            true,
 		},
 		{
 			name:              "single revision kept",
 			revisions:         []int64{5, 6, 7},
 			maxGraphRevisions: 1,
 			wantFloor:         7,
+			wantOK:            true,
 		},
 		{
 			name:              "unsorted input",
 			revisions:         []int64{4, 1, 3, 2},
 			maxGraphRevisions: 3,
 			wantFloor:         2,
+			wantOK:            true,
+		},
+		{
+			name:              "empty input is invalid",
+			revisions:         nil,
+			maxGraphRevisions: 1,
+			wantFloor:         0,
+			wantOK:            false,
+		},
+		{
+			name:              "max zero is invalid",
+			revisions:         []int64{1, 2, 3},
+			maxGraphRevisions: 0,
+			wantFloor:         0,
+			wantOK:            false,
+		},
+		{
+			name:              "len less than max is invalid",
+			revisions:         []int64{1, 2},
+			maxGraphRevisions: 3,
+			wantFloor:         0,
+			wantOK:            false,
 		},
 	}
 
@@ -1747,7 +1773,8 @@ func TestGraphRevisionRetentionFloor(t *testing.T) {
 			for _, rev := range tt.revisions {
 				grs = append(grs, *newListedGraphRevision(rgd, rev, "hash"))
 			}
-			got := graphRevisionRetentionFloor(grs, tt.maxGraphRevisions)
+			got, ok := graphRevisionRetentionFloor(grs, tt.maxGraphRevisions)
+			assert.Equal(t, tt.wantOK, ok)
 			assert.Equal(t, tt.wantFloor, got)
 		})
 	}

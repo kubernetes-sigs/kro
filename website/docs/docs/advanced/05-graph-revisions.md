@@ -4,148 +4,116 @@ sidebar_position: 5
 
 # Graph Revisions
 
-When you update a ResourceGraphDefinition's spec, kro creates an immutable
-snapshot called a **GraphRevision** before applying the change. This gives you a
-durable record of every compiled graph that ran in your cluster - useful for
-debugging, auditing, and understanding what changed between deployments.
-
-:::warning Internal API GraphRevisions use the `internal.kro.run/v1alpha1` API
-group. This API is **not intended for programmatic consumption** - its schema,
-naming conventions, and behavior may change across kro releases without notice.
-You can safely observe GraphRevisions via `kubectl` for debugging and auditing
-purposes, but do not build tooling or automation that depends on their
-structure. :::
-
-## Why Revisions Exist
-
-Without revisions, updating an RGD immediately hot-swaps the compiled graph for
-all instances. There is no record of what ran before, no way to compare what
-changed, and no identity to pin a rollout to. GraphRevisions solve this by:
-
-- **Recording history** - Every distinct RGD spec produces a numbered, immutable
-  snapshot
-- **Decoupling compilation** - A dedicated controller compiles each revision
-  independently, so a broken spec doesn't corrupt the running graph
-- **Enabling future rollout controls** - Revision identity is a prerequisite for
-  features like canary migration and rollback (not yet implemented)
-
-## How It Works
-
-When you create or update an RGD:
-
-1. **Hash** - kro computes a deterministic hash of the RGD spec (normalizing
-   YAML formatting, key ordering, and other cosmetic differences while
-   preserving semantically meaningful order such as `forEach` dimensions)
-2. **Deduplicate** - If the hash matches the latest GraphRevision, nothing
-   happens
-3. **Pre-flight compile** - kro compiles the spec in-memory to catch errors
-   early
-4. **Issue revision** - On success, kro creates a new GraphRevision with a
-   monotonically increasing revision number
-5. **Compile and activate** - The GraphRevision controller compiles the snapshot
-   and makes it available to instance controllers
-6. **GC** - Old revisions beyond the retention limit are pruned
-
-```
-RGD spec change
-    │
-    ▼
-Hash current spec ──── matches latest GR? ──── yes ──▶ no-op
-    │
-    no
-    │
-    ▼
-Pre-flight compile ──── fails? ──▶ set condition, stop
-    │
-    ok
-    │
-    ▼
-Create GraphRevision (revision N+1)
-    │
-    ▼
-GR controller compiles ──── fails? ──▶ GR marked Failed
-    │
-    ok
-    │
-    ▼
-GR marked Active, instances use it
-```
-
-Instances always resolve the latest issued revision. If that revision is still
-compiling (`Pending`), instance reconciliation waits. If it fails compilation
-(`Failed`), instances do not fall back to an older revision; they remain blocked
-until a newer valid revision is issued.
-
-## Observing Revisions
-
-List all GraphRevisions:
+Every time you change an RGD's spec, kro creates a numbered, immutable snapshot
+called a **GraphRevision**. You can list them with `kubectl` to see what changed,
+when, and whether the change compiled successfully.
 
 ```bash
 $ kubectl get graphrevisions
-NAME                             REVISION   READY   AGE
-my-webapp-r1-a1b2c3d4e5f6        1          True    2d
-my-webapp-r2-a1b2c3d4e5f6        2          True    1d
-my-webapp-r3-a1b2c3d4e5f6        3          True    5m
+NAME                          REVISION   READY   AGE
+my-webapp-r1-a1b2c3d4e5f6     1          True    2d
+my-webapp-r2-a1b2c3d4e5f6     2          True    1d
+my-webapp-r3-a1b2c3d4e5f6     3          True    5m
 ```
 
-Inspect a specific revision:
+:::warning Internal API
+GraphRevisions use the `internal.kro.run/v1alpha1` API group. This API is **not
+intended for programmatic consumption** — its schema, naming conventions, and
+behavior may change across kro releases without notice. You can safely observe
+GraphRevisions via `kubectl` for debugging and auditing purposes, but do not
+build tooling or automation that depends on their structure.
+:::
+
+## What You See
+
+Each GraphRevision has a `READY` column that tells you its compilation state:
+
+| READY     | What it means                                             |
+| --------- | --------------------------------------------------------- |
+| `True`    | Compiled successfully — instances are using this revision  |
+| `Unknown` | Still compiling — instances wait until it finishes         |
+| `False`   | Compilation failed — instances are blocked (see below)     |
+
+Use `-o wide` to see which RGD a revision belongs to and its spec hash:
 
 ```bash
-$ kubectl get graphrevision my-webapp-r3-a1b2c3d4e5f6 -o wide
-NAME                             RGD        REVISION   HASH              READY   AGE
-my-webapp-r3-a1b2c3d4e5f6        my-webapp  3          a1b2c3d4e5f6...   True    5m
+$ kubectl get graphrevisions -o wide
+NAME                          RGD        REVISION   HASH              READY   AGE
+my-webapp-r3-a1b2c3d4e5f6     my-webapp  3          a1b2c3d4e5f6...   True    5m
 ```
 
-Check revision conditions:
+To see the full compilation error on a failed revision:
 
 ```bash
-$ kubectl describe graphrevision my-webapp-r3-a1b2c3d4e5f6
+kubectl describe graphrevision my-webapp-r3-a1b2c3d4e5f6
 ```
 
-Key fields in a GraphRevision:
+## What Happens When You Update an RGD
 
-| Field                                      | Description                                                 |
-| ------------------------------------------ | ----------------------------------------------------------- |
-| `spec.snapshot.name`                       | Source RGD name                                             |
-| `spec.revision`                            | Monotonic revision number within this RGD                   |
-| `metadata.labels.kro.run/graph-revision-hash` | FNV-128a hash of the normalized RGD spec, exposed as a label |
-| `spec.snapshot.spec`                       | Full immutable snapshot of the RGD spec                     |
-| `status.topologicalOrder`                  | Resource creation order from the compiled graph             |
-| `status.conditions`                        | `GraphVerified` (compilation result) and aggregate `Ready`  |
+1. kro hashes your new spec. If the hash matches the latest revision, nothing
+   happens — cosmetic YAML changes (key reordering, whitespace) are ignored.
+2. kro validates the spec. If it's invalid, the RGD is marked
+   `ResourceGraphAccepted=False` and no revision is created.
+3. A new GraphRevision is created with the next revision number.
+4. The GraphRevision controller compiles the snapshot independently.
+5. Once compiled, instances start using the new revision.
 
-### RGD Status
+:::danger Failed revisions block instances
+If the latest revision fails compilation, instances **do not fall back** to an
+older revision. They stop progressing until you push a new valid spec. Always
+check `kubectl get graphrevisions` if your RGD is stuck in `Inactive` after an
+update.
+:::
 
-The RGD's status includes a high-water mark for revision tracking:
+## Debugging
 
-| Field                       | Description                                                                                                     |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `status.lastIssuedRevision` | Highest revision number ever issued for this RGD. Persisted and monotonic - survives GC and controller restarts. |
+**RGD stuck in Inactive after a spec update:**
 
-## Revision States
+```bash
+# List revisions for a specific RGD
+kubectl get graphrevisions -l internal.kro.run/resource-graph-definition-name=<rgd-name>
 
-Each GraphRevision transitions through one of three states:
+# If the latest shows READY=False, inspect the error
+kubectl describe graphrevision <name>
+```
 
-| State       | Ready Condition | Meaning                                                                     |
-| ----------- | --------------- | --------------------------------------------------------------------------- |
-| **Pending** | `Unknown`       | Created but not yet compiled                                                |
-| **Active**  | `True`          | Compiled successfully, available to instances                               |
-| **Failed**  | `False`         | Compilation failed - check the `GraphVerified` condition message for details |
+**Revision number keeps incrementing without spec changes:**
 
-A Failed revision affects instance reconciliation for that lineage. Once it is
-the latest issued revision, instances stop progressing until a newer valid
-revision is issued.
+This shouldn't happen — kro deduplicates by spec hash. Check whether something
+is modifying the RGD spec (e.g., a GitOps tool reapplying with formatting that
+changes semantic content).
 
-## Lifecycle and Cleanup
+**Instances not picking up a new spec:**
 
-GraphRevisions are cleaned up through two mechanisms:
+Verify the latest GraphRevision shows `READY=True`. If it's `Unknown`, the
+GraphRevision controller may be backlogged — check controller logs.
 
-**Owner references** - Each GraphRevision has an `ownerReference` pointing to its
-source RGD. Deleting an RGD triggers Kubernetes garbage collection of all its
-revisions.
+## Ownership and Lifecycle
 
-**Retention limit** - kro retains a bounded number of revisions per RGD. When the
-count exceeds the limit, the oldest revisions are pruned. The newest issued
-revision is always retained regardless of the limit.
+Every GraphRevision carries an `ownerReference` pointing back to its source RGD.
+This has two consequences you should know about:
+
+**Deleting an RGD deletes all its revisions.** Kubernetes garbage collection
+cascades the delete. Each revision is finalized individually — kro evicts it from
+the in-memory registry before allowing the object to be removed, so instance
+controllers never read stale compiled graphs from a deleted revision.
+
+**Recreating an RGD with the same name starts fresh.** The new RGD gets a new
+UID, so it won't match the old ownerReferences. Any leftover registry entries
+from the old RGD are cleaned up on the first reconcile.
+
+GraphRevisions are also subject to a **retention limit** — kro keeps at most N
+revisions per RGD (default 5). When the count exceeds the limit, the oldest
+revisions are pruned. The latest revision is always retained regardless of the
+limit.
+
+### Immutability
+
+GraphRevision specs are immutable after creation. The API server rejects any
+update to the `spec` field via CEL validation (`self == oldSelf`). This
+guarantees that every revision is a faithful snapshot of the RGD spec at the
+time it was issued — there is no way to silently alter a revision's content
+after the fact.
 
 ## Configuration
 
@@ -154,7 +122,7 @@ GraphRevision behavior is controlled through Helm values:
 | Setting                                    | Default | Description                        |
 | ------------------------------------------ | ------- | ---------------------------------- |
 | `config.graphRevisionConcurrentReconciles` | `1`     | Parallel GraphRevision reconciles  |
-| `config.rgd.maxGraphRevisions`             | `5`    | Maximum revisions retained per RGD |
+| `config.rgd.maxGraphRevisions`             | `5`     | Maximum revisions retained per RGD |
 
 ```yaml
 config:
@@ -167,31 +135,54 @@ For most clusters the defaults are fine. Lower `maxGraphRevisions` if you have
 many frequently-updated RGDs and want to reduce object count. Raise it if you
 need deeper audit history.
 
-## Debugging
+## How It Works
 
-**RGD stuck in Inactive after spec update:**
+Under the hood, the RGD controller and the GraphRevision controller split
+responsibilities:
 
-Check whether the latest GraphRevision compiled successfully:
-
-```bash
-kubectl get graphrevisions -l internal.kro.run/resource-graph-definition-name=<rgd-name>
+```
+RGD spec change
+    │
+    ▼
+Hash current spec ──── matches latest revision? ──── yes ──▶ no-op
+    │
+    no
+    │
+    ▼
+Validate spec ──── invalid? ──▶ mark ResourceGraphAccepted=False, stop
+    │
+    ok
+    │
+    ▼
+Create GraphRevision (revision N+1)
+    │
+    ▼
+GR controller compiles snapshot ──── fails? ──▶ GR marked Failed
+    │
+    ok
+    │
+    ▼
+GR marked Active, instances use it
 ```
 
-If the latest revision shows `READY=False`, describe it for the compilation
-error:
+The RGD controller owns the revision lineage: hashing, dedup, issuance, and
+garbage collection. The GraphRevision controller owns compilation: it takes
+each snapshot, builds the graph, and writes the result into an in-memory
+registry that instance controllers read from.
 
-```bash
-kubectl describe graphrevision <rgd-name>-r<NNNNNN>
-```
+Instances always resolve the latest issued revision. The revision number is
+monotonic and persisted in `status.lastIssuedRevision` — it survives controller
+restarts and is not reset by garbage collection.
 
-**Revision number keeps incrementing without spec changes:**
+### GraphRevision Fields
 
-This shouldn't happen - kro deduplicates by spec hash. If you see this, check
-whether something is modifying the RGD spec (e.g., a GitOps tool reapplying with
-different YAML formatting that changes semantic content).
+| Field                    | Description                                        |
+| ------------------------ | -------------------------------------------------- |
+| `spec.revision`          | Monotonic revision number within this RGD          |
+| `spec.snapshot.name`     | Source RGD name                                    |
+| `spec.snapshot.spec`     | Full immutable copy of the RGD spec at issuance    |
+| `status.topologicalOrder`| Resource creation order from the compiled graph    |
+| `status.conditions`      | `GraphVerified` and aggregate `Ready`              |
 
-**Instances not picking up new spec:**
-
-Verify the latest GraphRevision is Active (`READY=True`). If it's Pending, the
-GraphRevision controller may not be running or may be backlogged - check
-controller logs.
+The spec hash is exposed as the label `kro.run/graph-revision-hash` for
+filtering convenience.

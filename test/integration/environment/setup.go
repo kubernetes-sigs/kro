@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
@@ -54,8 +55,10 @@ type Environment struct {
 	ClientSet        *kroclient.Set
 	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
-	ManagerResult    chan error
 	managerReady     <-chan struct{}
+	managerDone      chan struct{}
+	managerErrMu     sync.RWMutex
+	managerErr       error
 }
 
 type ControllerConfig struct {
@@ -65,10 +68,18 @@ type ControllerConfig struct {
 	LogWriter         io.Writer
 }
 
-func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, error) {
+func New(ctx context.Context, controllerConfig ControllerConfig) (_ *Environment, retErr error) {
 	env := &Environment{
 		ControllerConfig: controllerConfig,
 	}
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if cleanupErr := env.Stop(); cleanupErr != nil {
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 
 	if env.ControllerConfig.LogWriter == nil {
 		env.ControllerConfig.LogWriter = io.Discard
@@ -98,37 +109,44 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 	// Start the test environment
 	cfg, err := env.TestEnv.Start()
 	if err != nil {
-		return nil, fmt.Errorf("starting test environment: %w", err)
+		retErr = fmt.Errorf("starting test environment: %w", err)
+		return nil, retErr
 	}
 
 	clientSet, err := kroclient.NewSet(kroclient.Config{
 		RestConfig: cfg,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating client set: %w", err)
+		retErr = fmt.Errorf("creating client set: %w", err)
+		return nil, retErr
 	}
 	env.ClientSet = clientSet
 
 	// Setup scheme
 	if err := internalv1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		return nil, fmt.Errorf("adding internal kro scheme: %w", err)
+		retErr = fmt.Errorf("adding internal kro scheme: %w", err)
+		return nil, retErr
 	}
 	if err := krov1alpha1.AddToScheme(scheme.Scheme); err != nil {
-		return nil, fmt.Errorf("adding kro scheme: %w", err)
+		retErr = fmt.Errorf("adding kro scheme: %w", err)
+		return nil, retErr
 	}
 
 	// Initialize clients
 	if err := env.initializeClients(); err != nil {
-		return nil, fmt.Errorf("initializing clients: %w", err)
+		retErr = fmt.Errorf("initializing clients: %w", err)
+		return nil, retErr
 	}
 
 	// Setup and start controller
 	if err := env.setupController(); err != nil {
-		return nil, fmt.Errorf("setting up controller: %w", err)
+		retErr = fmt.Errorf("setting up controller: %w", err)
+		return nil, retErr
 	}
 
 	if err := env.waitForManagerReady(); err != nil {
-		return nil, fmt.Errorf("waiting for manager readiness: %w", err)
+		retErr = fmt.Errorf("waiting for manager readiness: %w", err)
+		return nil, retErr
 	}
 	return env, nil
 }
@@ -226,9 +244,16 @@ func (e *Environment) setupController() error {
 	}
 
 	e.managerReady = e.CtrlManager.Elected()
-	e.ManagerResult = make(chan error, 1)
+	e.managerErrMu.Lock()
+	e.managerErr = nil
+	e.managerErrMu.Unlock()
+	e.managerDone = make(chan struct{})
 	go func() {
-		e.ManagerResult <- e.CtrlManager.Start(e.context)
+		err := e.CtrlManager.Start(e.context)
+		e.managerErrMu.Lock()
+		e.managerErr = err
+		e.managerErrMu.Unlock()
+		close(e.managerDone)
 	}()
 
 	return nil
@@ -236,7 +261,7 @@ func (e *Environment) setupController() error {
 
 func (e *Environment) RestartControllers() error {
 	e.cancel()
-	if err := <-e.ManagerResult; err != nil && !errors.Is(err, context.Canceled) {
+	if err := e.waitForManagerStop(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("stopping manager: %w", err)
 	}
 
@@ -255,7 +280,8 @@ func (e *Environment) waitForManagerReady() error {
 	select {
 	case <-e.managerReady:
 		return nil
-	case err := <-e.ManagerResult:
+	case <-e.managerDone:
+		err := e.currentManagerErr()
 		return fmt.Errorf("manager exited before becoming ready: %w", err)
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("timed out waiting for manager readiness")
@@ -263,6 +289,36 @@ func (e *Environment) waitForManagerReady() error {
 }
 
 func (e *Environment) Stop() error {
-	e.cancel()
-	return errors.Join(e.TestEnv.Stop(), <-e.ManagerResult)
+	if e == nil {
+		return nil
+	}
+	if e.cancel != nil {
+		e.cancel()
+	}
+
+	var stopErr error
+	if e.TestEnv != nil {
+		stopErr = e.TestEnv.Stop()
+	}
+
+	managerErr := e.waitForManagerStop()
+	if errors.Is(managerErr, context.Canceled) {
+		managerErr = nil
+	}
+
+	return errors.Join(stopErr, managerErr)
+}
+
+func (e *Environment) waitForManagerStop() error {
+	if e == nil || e.managerDone == nil {
+		return nil
+	}
+	<-e.managerDone
+	return e.currentManagerErr()
+}
+
+func (e *Environment) currentManagerErr() error {
+	e.managerErrMu.RLock()
+	defer e.managerErrMu.RUnlock()
+	return e.managerErr
 }

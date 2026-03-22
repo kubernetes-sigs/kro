@@ -84,7 +84,10 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 			currentGRs := listGraphRevisions(ctx, rgdName)
 			g.Expect(currentGRs).To(HaveLen(1))
 
-			graphVerified := findGRCondition(currentGRs[0].Status.Conditions, krov1alpha1.GraphRevisionConditionTypeGraphVerified)
+			graphVerified := findGRCondition(
+				currentGRs[0].Status.Conditions,
+				krov1alpha1.GraphRevisionConditionTypeGraphVerified,
+			)
 			g.Expect(graphVerified).ToNot(BeNil())
 			g.Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
 

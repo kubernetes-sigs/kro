@@ -35,6 +35,7 @@ import (
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
@@ -215,9 +216,8 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	assert.Empty(t, stored.Labels[metadata.ResourceGraphDefinitionIDLabel])
 	assert.Equal(t, "hash-3", stored.Labels[metadata.GraphRevisionHashLabel])
 
-	entry, ok := registry.Get("demo", 3)
-	require.True(t, ok)
-	assert.Equal(t, revisions.RevisionStatePending, entry.State)
+	_, ok := registry.Get("demo", 3)
+	assert.False(t, ok, "RGD controller should not seed runtime revision state")
 }
 
 func TestCreateGraphRevision_AlreadyExistsReturnsError(t *testing.T) {
@@ -262,6 +262,48 @@ func TestCreateGraphRevision_AlreadyExistsReturnsError(t *testing.T) {
 
 	_, ok := registry.Get("demo", 3)
 	assert.False(t, ok)
+}
+
+func TestCreateGraphRevision_DoesNotOverwriteExistingRegistryEntry(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, internalv1alpha1.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	cl := newFakeClientBuilder().WithScheme(scheme).Build()
+	registry := revisions.NewRegistry()
+	compiledGraph := &graph.Graph{TopologicalOrder: []string{"deploy"}}
+	registry.Put(revisions.Entry{
+		RGDName:       "demo",
+		Revision:      3,
+		SpecHash:      "hash-3",
+		State:         revisions.RevisionStateActive,
+		CompiledGraph: compiledGraph,
+	})
+
+	reconciler := &ResourceGraphDefinitionReconciler{
+		Client:            cl,
+		apiReader:         cl,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		revisionsRegistry: registry,
+	}
+
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "demo",
+			UID:  types.UID("new-uid"),
+		},
+	}
+
+	created, err := reconciler.createGraphRevision(context.Background(), rgd, 3, "hash-3")
+	require.NoError(t, err)
+	assert.Equal(t, graphRevisionName("demo", 3), created.Name)
+
+	entry, ok := registry.Get("demo", 3)
+	require.True(t, ok)
+	assert.Equal(t, revisions.RevisionStateActive, entry.State)
+	assert.Same(t, compiledGraph, entry.CompiledGraph)
 }
 
 func TestCreateGraphRevision_HashLabelMergeError(t *testing.T) {
@@ -1264,13 +1306,8 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				require.Len(t, revisionList.Items, 2)
 				assert.Contains(t, []int64{revisionList.Items[0].Spec.Revision, revisionList.Items[1].Spec.Revision}, int64(10))
 
-				currentSpecHash, hashErr := graphhash.Spec(rgd.Spec)
-				require.NoError(t, hashErr)
-
-				entry, ok := reconciler.revisionsRegistry.Get(rgd.Name, 10)
-				require.True(t, ok)
-				assert.Equal(t, currentSpecHash, entry.SpecHash)
-				assert.Equal(t, revisions.RevisionStatePending, entry.State)
+				_, ok := reconciler.revisionsRegistry.Get(rgd.Name, 10)
+				assert.False(t, ok, "RGD controller should wait for the GR controller to warm the registry")
 				assert.True(t, conditionFor(t, rgd, GraphRevisionsResolved).IsUnknown())
 			},
 		},
@@ -1439,9 +1476,8 @@ func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRe
 	require.Len(t, revisionList.Items, 1)
 	assert.Equal(t, int64(1), revisionList.Items[0].Spec.Revision)
 
-	latest, ok := reconciler.revisionsRegistry.Latest(rgd.Name)
-	require.True(t, ok)
-	assert.Equal(t, int64(1), latest.Revision)
+	_, ok := reconciler.revisionsRegistry.Latest(rgd.Name)
+	assert.False(t, ok, "newly issued revisions should not appear in the registry until the GR controller processes them")
 }
 
 func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *testing.T) {
@@ -1574,11 +1610,8 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 				assert.Equal(t, int64(1), revisionList.Items[0].Spec.Revision,
 					"new revision should start from 1 after stale cleanup")
 
-				// The new revision 1 should be in the registry as Pending
-				// (the GR controller will compile and promote it to Active).
-				entry, ok := registry.Get(rgd.Name, 1)
-				require.True(t, ok, "new revision 1 should be in registry")
-				assert.Equal(t, revisions.RevisionStatePending, entry.State)
+				_, ok := registry.Get(rgd.Name, 1)
+				assert.False(t, ok, "RGD issuance should not seed runtime registry state")
 			}
 		})
 	}

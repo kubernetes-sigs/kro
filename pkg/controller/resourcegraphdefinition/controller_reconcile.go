@@ -483,12 +483,15 @@ func (r *ResourceGraphDefinitionReconciler) getLatestGraphRevisionView(
 	}, true
 }
 
-// createGraphRevision creates a new GraphRevision object and seeds the
-// in-memory registry entry as Pending.
+// createGraphRevision creates a new GraphRevision object.
 //
 // GraphRevisions are immutable snapshots of the RGD spec. The revision number
 // is monotonically increasing per RGD name, and the spec hash is stored
 // for duplicate-detection on subsequent reconciles.
+//
+// Runtime revision state is owned by the GraphRevision controller. The RGD
+// controller only creates the API object and waits for the GR controller to
+// warm the shared in-memory registry from there.
 func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	ctx context.Context,
 	rgd *v1alpha1.ResourceGraphDefinition,
@@ -530,12 +533,6 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	if err := r.Create(ctx, graphRevision); err != nil {
 		return nil, fmt.Errorf("creating graph revision %q: %w", graphRevision.Name, err)
 	}
-	r.revisionsRegistry.Put(revisions.Entry{
-		RGDName:  rgd.Name,
-		Revision: revision,
-		SpecHash: specHash,
-		State:    revisions.RevisionStatePending,
-	})
 	return graphRevision, nil
 }
 

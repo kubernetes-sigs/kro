@@ -31,7 +31,7 @@ import (
 // errors and cover error paths without needing real failures.
 var jsonMarshal = json.Marshal
 
-// Spec computes a deterministic FNV-128a hash for an RGD spec.
+// Spec computes a deterministic FNV-64a hash for an RGD spec.
 //
 // This hash is an internal dedup mechanism — it is not persisted on GraphRevision
 // specs or exposed as an API contract. It is only used in the in-memory registry
@@ -56,7 +56,7 @@ func Spec(spec v1alpha1.ResourceGraphDefinitionSpec) (string, error) {
 		return "", fmt.Errorf("marshal normalized spec: %w", err)
 	}
 
-	h := fnv.New128a()
+	h := fnv.New64a()
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

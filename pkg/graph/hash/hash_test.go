@@ -17,6 +17,7 @@ package hash
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -233,6 +234,19 @@ func TestSpecCases(t *testing.T) {
 				second, err := Spec(spec)
 				require.NoError(t, err)
 				assert.Equal(t, first, second)
+			},
+		},
+		{
+			name: "hash output is fixed-width lowercase hex",
+			run: func(t *testing.T) {
+				spec := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1", Group: "kro.run", Spec: raw(`{"name":"string"}`)},
+				}
+
+				h, err := Spec(spec)
+				require.NoError(t, err)
+				assert.Len(t, h, 16)
+				assert.True(t, regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(h))
 			},
 		},
 	}

@@ -104,6 +104,141 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should delete the oldest graph revision on each update past the retention limit", func(ctx SpecContext) {
+		testEnv := newIsolatedGraphRevisionEnv(ctx, isolatedGraphRevisionRetentionLimit)
+		rgdName := fmt.Sprintf("gv-gc-window-%s", rand.String(5))
+		kind := fmt.Sprintf("GvGCWindow%s", rand.String(5))
+		rgd := configmapRGD(rgdName, kind)
+
+		Expect(testEnv.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(testEnv.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		waitForRGDActiveInEnv(ctx, testEnv, rgdName)
+
+		const updatesPastRetention = 5
+		latestRevision := int64(isolatedGraphRevisionRetentionLimit + updatesPastRetention)
+		for revision := int64(2); revision <= latestRevision; revision++ {
+			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, fmt.Sprintf("gc-window-%d", revision))
+
+			Eventually(func(g Gomega) {
+				fresh := &krov1alpha1.ResourceGraphDefinition{}
+				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(revision))
+
+				gvs := listGraphRevisionsInEnv(ctx, testEnv, rgdName)
+				expectedCount := int(revision)
+				if expectedCount > isolatedGraphRevisionRetentionLimit {
+					expectedCount = isolatedGraphRevisionRetentionLimit
+				}
+				g.Expect(gvs).To(HaveLen(expectedCount))
+
+				if revision <= int64(isolatedGraphRevisionRetentionLimit) {
+					expectedNumbers := make([]int64, 0, revision)
+					for retained := int64(1); retained <= revision; retained++ {
+						expectedNumbers = append(expectedNumbers, retained)
+					}
+					g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(expectedNumbers))
+					return
+				}
+
+				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
+					expectedRetainedRevisionNumbers(isolatedGraphRevisionRetentionLimit, revision),
+				))
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}
+	})
+
+	It("should keep migrating a live instance while old graph revisions are garbage-collected", func(ctx SpecContext) {
+		testEnv := newIsolatedGraphRevisionEnv(ctx, isolatedGraphRevisionRetentionLimit)
+		namespace := fmt.Sprintf("test-%s", rand.String(5))
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+		Expect(testEnv.Client.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(testEnv.Client.Delete(ctx, ns)).To(Succeed())
+		})
+
+		rgdName := fmt.Sprintf("gv-live-gc-%s", rand.String(5))
+		kind := fmt.Sprintf("GvLiveGC%s", rand.String(5))
+		rgd := configmapRGD(rgdName, kind)
+		Expect(testEnv.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(testEnv.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		waitForRGDActiveInEnv(ctx, testEnv, rgdName)
+
+		instanceName := fmt.Sprintf("inst-%s", rand.String(5))
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": fmt.Sprintf("%s/%s", krov1alpha1.KRODomainName, "v1alpha1"),
+				"kind":       kind,
+				"metadata": map[string]interface{}{
+					"name":      instanceName,
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"data": "sticky-value",
+				},
+			},
+		}
+		Expect(testEnv.Client.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(testEnv.Client.Delete(ctx, instance)).To(Succeed())
+		})
+
+		configMapName := fmt.Sprintf("cm-%s", instanceName)
+		Eventually(func(g Gomega) {
+			cm := &corev1.ConfigMap{}
+			err := testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, cm)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(cm.Data).To(HaveKeyWithValue("key", "sticky-value"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		const updatesPastRetention = 5
+		latestRevision := int64(isolatedGraphRevisionRetentionLimit + updatesPastRetention)
+		for revision := int64(2); revision <= latestRevision; revision++ {
+			updateRGDTemplateLabelInEnv(ctx, testEnv, rgdName, fmt.Sprintf("rev-%d", revision))
+
+			Eventually(func(g Gomega) {
+				fresh := &krov1alpha1.ResourceGraphDefinition{}
+				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(revision))
+
+				cm := &corev1.ConfigMap{}
+				err = testEnv.Client.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, cm)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(cm.Data).To(HaveKeyWithValue("key", "sticky-value"))
+				g.Expect(cm.Labels).To(HaveKeyWithValue("revision", fmt.Sprintf("rev-%d", revision)))
+
+				gvs := listGraphRevisionsInEnv(ctx, testEnv, rgdName)
+				expectedCount := int(revision)
+				if expectedCount > isolatedGraphRevisionRetentionLimit {
+					expectedCount = isolatedGraphRevisionRetentionLimit
+				}
+				g.Expect(gvs).To(HaveLen(expectedCount))
+
+				if revision <= int64(isolatedGraphRevisionRetentionLimit) {
+					expectedNumbers := make([]int64, 0, revision)
+					for retained := int64(1); retained <= revision; retained++ {
+						expectedNumbers = append(expectedNumbers, retained)
+					}
+					g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(expectedNumbers))
+					return
+				}
+
+				g.Expect(graphRevisionNumbers(gvs)).To(ConsistOf(
+					expectedRetainedRevisionNumbers(isolatedGraphRevisionRetentionLimit, revision),
+				))
+			}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		}
+	})
+
 	It(
 		"should warm the registry on controller restart and continue issuing from the recovered watermark",
 		func(ctx SpecContext) {
@@ -471,6 +606,20 @@ func updateRGDDataDefaultInEnv(ctx SpecContext, testEnv *environment.Environment
 		err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
 		g.Expect(err).ToNot(HaveOccurred())
 		fresh.Spec.Schema.Spec.Raw = []byte(fmt.Sprintf(`{"data":"string | default=%s"}`, value))
+		err = testEnv.Client.Update(ctx, fresh)
+		g.Expect(err).ToNot(HaveOccurred())
+	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+}
+
+func updateRGDTemplateLabelInEnv(ctx SpecContext, testEnv *environment.Environment, rgdName, label string) {
+	Eventually(func(g Gomega) {
+		fresh := &krov1alpha1.ResourceGraphDefinition{}
+		err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+		g.Expect(err).ToNot(HaveOccurred())
+		template := `{"apiVersion":"v1","kind":"ConfigMap",` +
+			`"metadata":{"name":"cm-${schema.metadata.name}",` +
+			`"labels":{"revision":"%s"}},"data":{"key":"${schema.spec.data}"}}`
+		fresh.Spec.Resources[0].Template.Raw = []byte(fmt.Sprintf(template, label))
 		err = testEnv.Client.Update(ctx, fresh)
 		g.Expect(err).ToNot(HaveOccurred())
 	}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())

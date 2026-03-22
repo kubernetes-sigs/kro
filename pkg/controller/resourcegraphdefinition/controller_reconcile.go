@@ -86,14 +86,14 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 
 	latestRevision := latestRevisionView.Revision
 	noRevision := latestRevision == nil
-	notCompiled := !noRevision && latestRevisionView.RuntimeEntry == nil
-	specChanged := !noRevision && !notCompiled && latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash
-	if noRevision || notCompiled || specChanged {
+	// Safe to deref RuntimeEntry: reconcileRevisionLineage returns
+	// errRevisionLineagePending when RuntimeEntry is nil, so reaching
+	// here with a non-nil revision guarantees RuntimeEntry is set.
+	specChanged := !noRevision && latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash
+	if noRevision || specChanged {
 		reason := "spec changed"
 		if noRevision {
 			reason = "no existing revision"
-		} else if notCompiled {
-			reason = "validating spec"
 		}
 		log.V(1).Info("building resource graph definition", "reason", reason)
 		// TODO(amine): replace with a lighter validation-only pass that doesn't
@@ -170,13 +170,14 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 //
 // Decision order:
 //  1. Terminating revisions exist → wait for GC to settle before making decisions.
-//  2. Latest revision not in registry → wait for informer cache warmup.
+//  2. Latest revision not in informer cache → wait for cache warmup.
 //  3. No revisions exist → caller issues a fresh revision.
-//  4. Latest revision exists but hash doesn't match or isn't compiled → caller
-//     revalidates the spec and issues a new revision.
-//  5. Latest revision is Active → lineage resolved, proceed to serving.
-//  6. Latest revision is Pending → wait for GR controller to compile.
-//  7. Latest revision is Failed → surface the failure, no requeue.
+//  4. Latest revision in informer but not in registry → wait for GR controller
+//     to process it (avoids issuing a duplicate).
+//  5. Hash mismatch → caller revalidates the spec and issues a new revision.
+//  6. Latest revision is Active → lineage resolved, proceed to serving.
+//  7. Latest revision is Pending → wait for GR controller to compile.
+//  8. Latest revision is Failed → surface the failure, no requeue.
 //
 // Returns errRevisionLineagePending for cases that need a requeue, nil for
 // cases where the caller should proceed, and a real error for terminal failures.
@@ -204,7 +205,15 @@ func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
 	}
 
 	rgd.Status.LastIssuedRevision = max(rgd.Status.LastIssuedRevision, latestRevision.Spec.Revision)
-	if latestRevisionView.RuntimeEntry == nil || latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash {
+
+	// Revision exists in the informer but not yet in the registry — the GR
+	// controller hasn't processed it. Wait rather than re-issuing a duplicate.
+	if latestRevisionView.RuntimeEntry == nil {
+		mark.WaitingForGraphRevisionWarmup()
+		return errRevisionLineagePending
+	}
+
+	if latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash {
 		return nil
 	}
 

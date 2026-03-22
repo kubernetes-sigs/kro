@@ -1183,6 +1183,40 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 	}
 }
 
+func TestReconcileRevisionLineage_RequeuesWhenRevisionExistsButNotInRegistry(t *testing.T) {
+	t.Parallel()
+
+	rgd := newTestRGD("rgd-not-in-registry")
+
+	revision := &internalv1alpha1.GraphRevision{
+		ObjectMeta: metav1.ObjectMeta{Name: "rgd-not-in-registry-r3-abc"},
+		Spec:       internalv1alpha1.GraphRevisionSpec{Revision: 3},
+	}
+
+	// warmed=true but RuntimeEntry=nil: the revision exists in the informer
+	// and was found by getLatestGraphRevisionView, but the GR controller
+	// hasn't processed it into the registry yet.
+	view := latestGraphRevisionView{
+		RevisionNumber: 3,
+		Revision:       revision,
+		RuntimeEntry:   nil,
+	}
+
+	reconciler := &ResourceGraphDefinitionReconciler{}
+	mark := NewConditionsMarkerFor(rgd)
+
+	err := reconciler.reconcileRevisionLineage(rgd, "some-hash", view, false, true, mark)
+
+	require.ErrorIs(t, err, errRevisionLineagePending)
+	assert.Equal(t, int64(3), rgd.Status.LastIssuedRevision)
+
+	cond := conditionFor(t, rgd, RevisionLineageResolved)
+	require.NotNil(t, cond)
+	assert.True(t, cond.IsUnknown())
+	require.NotNil(t, cond.Reason)
+	assert.Equal(t, "WaitingForGraphRevisionWarmup", *cond.Reason)
+}
+
 func TestReconcileResourceGraphDefinition_RecreateWithEmptyLiveListClearsStaleRegistry(t *testing.T) {
 	t.Parallel()
 

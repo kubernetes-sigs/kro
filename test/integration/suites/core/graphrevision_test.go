@@ -75,6 +75,23 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 			grs = listGraphRevisions(ctx, rgdName)
 			g.Expect(grs).To(HaveLen(1))
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+		Consistently(func(g Gomega) {
+			currentRGD := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, currentRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(currentRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+			currentGRs := listGraphRevisions(ctx, rgdName)
+			g.Expect(currentGRs).To(HaveLen(1))
+
+			graphVerified := findGRCondition(currentGRs[0].Status.Conditions, krov1alpha1.GraphRevisionConditionTypeGraphVerified)
+			g.Expect(graphVerified).ToNot(BeNil())
+			g.Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
+
+			ready := findGRCondition(currentGRs[0].Status.Conditions, krov1alpha1.ConditionType(apis.ConditionReady))
+			g.Expect(ready).ToNot(BeNil())
+			g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+		}, 20*time.Second, 500*time.Millisecond).WithContext(ctx).Should(Succeed())
 
 		gr := grs[0]
 

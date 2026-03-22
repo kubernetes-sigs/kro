@@ -22,6 +22,7 @@ import (
 	"hash/fnv"
 	"slices"
 
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -63,8 +64,29 @@ func Spec(spec v1alpha1.ResourceGraphDefinitionSpec) (string, error) {
 
 func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.ResourceGraphDefinitionSpec, error) {
 	normalized := spec.DeepCopy()
+	if normalized.Resources == nil {
+		normalized.Resources = []*v1alpha1.Resource{}
+	}
 
 	if normalized.Schema != nil {
+		if normalized.Schema.Group == "" {
+			normalized.Schema.Group = "kro.run"
+		}
+		if normalized.Schema.Scope == "" {
+			normalized.Schema.Scope = v1alpha1.ResourceScopeNamespaced
+		}
+		if normalized.Schema.AdditionalPrinterColumns == nil {
+			normalized.Schema.AdditionalPrinterColumns = []extv1.CustomResourceColumnDefinition{}
+		}
+		if normalized.Schema.Metadata != nil {
+			if normalized.Schema.Metadata.Labels == nil {
+				normalized.Schema.Metadata.Labels = map[string]string{}
+			}
+			if normalized.Schema.Metadata.Annotations == nil {
+				normalized.Schema.Metadata.Annotations = map[string]string{}
+			}
+		}
+
 		var err error
 		normalized.Schema.Spec, err = normalizeRawExtension(normalized.Schema.Spec)
 		if err != nil {
@@ -108,8 +130,17 @@ func normalizeSpec(spec v1alpha1.ResourceGraphDefinitionSpec) (v1alpha1.Resource
 			return v1alpha1.ResourceGraphDefinitionSpec{}, fmt.Errorf("normalize resources[%d].template: %w", i, err)
 		}
 		normalized.Resources[i].Template = normalizedTemplate
+		if normalized.Resources[i].ReadyWhen == nil {
+			normalized.Resources[i].ReadyWhen = []string{}
+		}
 		slices.Sort(normalized.Resources[i].ReadyWhen)
+		if normalized.Resources[i].IncludeWhen == nil {
+			normalized.Resources[i].IncludeWhen = []string{}
+		}
 		slices.Sort(normalized.Resources[i].IncludeWhen)
+		if normalized.Resources[i].ForEach == nil {
+			normalized.Resources[i].ForEach = []v1alpha1.ForEachDimension{}
+		}
 	}
 
 	return *normalized, nil

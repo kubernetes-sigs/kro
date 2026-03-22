@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -55,6 +56,132 @@ func TestSpecCases(t *testing.T) {
 
 				assert.JSONEq(t, string(normAJSON), string(normBJSON))
 				assert.Equal(t, hashA, hashB)
+			},
+		},
+		{
+			name: "defaulted schema fields do not affect the hash",
+			run: func(t *testing.T) {
+				specWithoutDefaults := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{
+						Kind:       "App",
+						APIVersion: "v1alpha1",
+						Spec:       raw(`{"name":"string"}`),
+					},
+				}
+				specWithDefaults := *specWithoutDefaults.DeepCopy()
+				specWithDefaults.Schema.Group = "kro.run"
+				specWithDefaults.Schema.Scope = v1alpha1.ResourceScopeNamespaced
+
+				hashWithoutDefaults, err := Spec(specWithoutDefaults)
+				require.NoError(t, err)
+				hashWithDefaults, err := Spec(specWithDefaults)
+				require.NoError(t, err)
+
+				assert.Equal(t, hashWithDefaults, hashWithoutDefaults)
+			},
+		},
+		{
+			name: "nil resources and empty resources hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Resources = []*v1alpha1.Resource{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil additionalPrinterColumns and empty additionalPrinterColumns hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Schema.AdditionalPrinterColumns = []extv1.CustomResourceColumnDefinition{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil readyWhen and empty readyWhen hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:       "svc",
+						Template: raw(`{"apiVersion":"v1","kind":"Service"}`),
+					}},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Resources[0].ReadyWhen = []string{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil includeWhen and empty includeWhen hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:       "svc",
+						Template: raw(`{"apiVersion":"v1","kind":"Service"}`),
+					}},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Resources[0].IncludeWhen = []string{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil forEach and empty forEach hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:       "svc",
+						Template: raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
+					}},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Resources[0].ForEach = []v1alpha1.ForEachDimension{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil metadata labels and empty metadata labels hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{
+						Kind:       "App",
+						APIVersion: "v1alpha1",
+						Metadata:   &v1alpha1.CRDMetadata{},
+					},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Schema.Metadata.Labels = map[string]string{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
+			},
+		},
+		{
+			name: "nil metadata annotations and empty metadata annotations hash the same",
+			run: func(t *testing.T) {
+				specWithNil := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{
+						Kind:       "App",
+						APIVersion: "v1alpha1",
+						Metadata:   &v1alpha1.CRDMetadata{},
+					},
+				}
+				specWithEmpty := *specWithNil.DeepCopy()
+				specWithEmpty.Schema.Metadata.Annotations = map[string]string{}
+
+				assertSameHash(t, specWithNil, specWithEmpty)
 			},
 		},
 		{
@@ -470,6 +597,16 @@ func assertDifferentHashes(t *testing.T, first, second v1alpha1.ResourceGraphDef
 	hashSecond, err := Spec(second)
 	require.NoError(t, err)
 	assert.NotEqual(t, hashFirst, hashSecond)
+}
+
+func assertSameHash(t *testing.T, first, second v1alpha1.ResourceGraphDefinitionSpec) {
+	t.Helper()
+
+	hashFirst, err := Spec(first)
+	require.NoError(t, err)
+	hashSecond, err := Spec(second)
+	require.NoError(t, err)
+	assert.Equal(t, hashFirst, hashSecond)
 }
 
 func raw(s string) runtime.RawExtension {

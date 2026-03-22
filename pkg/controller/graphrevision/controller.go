@@ -97,7 +97,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 			// validity and would cause instance controllers to return terminal
 			// errors for a graph that actually compiled fine. Pending triggers
 			// a requeue, giving the next reconcile a chance to retry the status
-			// write.
+			// write. Hash error is discarded for the same reason as above.
 			specHash, _ := graphhash.Spec(obj.Spec.Snapshot.Spec)
 			r.registry.Put(revisions.Entry{
 				RGDName:  obj.Spec.Snapshot.Name,
@@ -120,6 +120,9 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 
 	// Compute the spec hash from the snapshot. The hash is an internal
 	// implementation detail — it is not persisted on the GraphRevision object.
+	// Error is discarded: the spec was validated and hashed by the RGD
+	// controller at issuance time; failure here would indicate memory
+	// corruption, not a recoverable condition.
 	specHash, _ := graphhash.Spec(revision.Spec.Snapshot.Spec)
 
 	// Only initialize Pending the first time this revision enters the registry.

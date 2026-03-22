@@ -311,4 +311,20 @@ func assertRGDCondition(
 		1,
 		cond.ObservedGeneration,
 	).To(Equal(rgd.GetGeneration()), "unexpected observedGeneration for condition %s", conditionType)
+	g.ExpectWithOffset(
+		1,
+		cond.LastTransitionTime,
+	).ToNot(BeNil(), "LastTransitionTime must be set for condition %s", conditionType)
+	g.ExpectWithOffset(
+		1,
+		cond.LastTransitionTime.Time,
+	).ToNot(BeZero(), "LastTransitionTime must not be zero for condition %s", conditionType)
+	g.ExpectWithOffset(
+		1,
+		cond.Message,
+	).ToNot(BeNil(), "Message must be set for condition %s", conditionType)
+	g.ExpectWithOffset(
+		1,
+		*cond.Message,
+	).ToNot(BeEmpty(), "Message must not be empty for condition %s", conditionType)
 }

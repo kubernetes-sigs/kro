@@ -55,6 +55,7 @@ type Environment struct {
 	CRDManager       kroclient.CRDClient
 	GraphBuilder     *graph.Builder
 	ManagerResult    chan error
+	managerReady     <-chan struct{}
 }
 
 type ControllerConfig struct {
@@ -126,7 +127,9 @@ func New(ctx context.Context, controllerConfig ControllerConfig) (*Environment, 
 		return nil, fmt.Errorf("setting up controller: %w", err)
 	}
 
-	time.Sleep(1 * time.Second)
+	if err := env.waitForManagerReady(); err != nil {
+		return nil, fmt.Errorf("waiting for manager readiness: %w", err)
+	}
 	return env, nil
 }
 
@@ -222,6 +225,7 @@ func (e *Environment) setupController() error {
 		return fmt.Errorf("setting up graph revision reconciler: %w", err)
 	}
 
+	e.managerReady = e.CtrlManager.Elected()
 	e.ManagerResult = make(chan error, 1)
 	go func() {
 		e.ManagerResult <- e.CtrlManager.Start(e.context)
@@ -241,12 +245,24 @@ func (e *Environment) RestartControllers() error {
 		return fmt.Errorf("restarting controller: %w", err)
 	}
 
-	time.Sleep(1 * time.Second)
-	return nil
+	return e.waitForManagerReady()
+}
+
+// waitForManagerReady blocks until the controller-runtime manager has synced
+// its caches and is ready to serve. Replaces hard time.Sleep with the
+// structural signal provided by Manager.Elected().
+func (e *Environment) waitForManagerReady() error {
+	select {
+	case <-e.managerReady:
+		return nil
+	case err := <-e.ManagerResult:
+		return fmt.Errorf("manager exited before becoming ready: %w", err)
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timed out waiting for manager readiness")
+	}
 }
 
 func (e *Environment) Stop() error {
 	e.cancel()
-	time.Sleep(1 * time.Second)
 	return errors.Join(e.TestEnv.Stop(), <-e.ManagerResult)
 }

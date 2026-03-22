@@ -1483,6 +1483,55 @@ func TestGarbageCollectGraphRevisionsPrunesObjects(t *testing.T) {
 	}
 }
 
+func TestGraphRevisionRetentionFloor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		revisions         []int64
+		maxGraphRevisions int
+		wantFloor         int64
+	}{
+		{
+			name:              "exact match: len equals max",
+			revisions:         []int64{3, 4},
+			maxGraphRevisions: 2,
+			wantFloor:         3,
+		},
+		{
+			name:              "more revisions than max",
+			revisions:         []int64{1, 2, 3, 4},
+			maxGraphRevisions: 2,
+			wantFloor:         3,
+		},
+		{
+			name:              "single revision kept",
+			revisions:         []int64{5, 6, 7},
+			maxGraphRevisions: 1,
+			wantFloor:         7,
+		},
+		{
+			name:              "unsorted input",
+			revisions:         []int64{4, 1, 3, 2},
+			maxGraphRevisions: 3,
+			wantFloor:         2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rgd := newTestRGD("floor-test")
+			var grs []internalv1alpha1.GraphRevision
+			for _, rev := range tt.revisions {
+				grs = append(grs, *newListedGraphRevision(rgd, rev, "hash"))
+			}
+			got := graphRevisionRetentionFloor(grs, tt.maxGraphRevisions)
+			assert.Equal(t, tt.wantFloor, got)
+		})
+	}
+}
+
 func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int64, specHash string) *internalv1alpha1.GraphRevision {
 	graphRevision := &internalv1alpha1.GraphRevision{
 		ObjectMeta: metav1.ObjectMeta{

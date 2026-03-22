@@ -528,7 +528,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 		Config{
 			AllowCRDDeletion:        true,
 			InstanceRequeueInterval: 9 * time.Second,
-			StabilizationInterval:   5 * time.Second,
+			ProgressRequeueDelay:    5 * time.Second,
 			MaxConcurrentReconciles: 7,
 			MaxGraphRevisions:       20,
 			RGDConfig:               graph.RGDConfig{MaxCollectionSize: 32},
@@ -539,7 +539,7 @@ func TestNewResourceGraphDefinitionReconciler(t *testing.T) {
 	assert.True(t, r.cfg.AllowCRDDeletion)
 	assert.NotNil(t, r.crdManager)
 	assert.Equal(t, 9*time.Second, r.cfg.InstanceRequeueInterval)
-	assert.Equal(t, 5*time.Second, r.cfg.StabilizationInterval)
+	assert.Equal(t, 5*time.Second, r.cfg.ProgressRequeueDelay)
 	assert.Equal(t, 7, r.cfg.MaxConcurrentReconciles)
 	assert.Equal(t, graph.RGDConfig{MaxCollectionSize: 32}, r.cfg.RGDConfig)
 	assert.Equal(t, metadata.NewKROMetaLabeler().Labels(), r.metadataLabeler.Labels())
@@ -716,7 +716,7 @@ func TestSetupWithManager(t *testing.T) {
 				Config{
 					AllowCRDDeletion:        true,
 					InstanceRequeueInterval: 5 * time.Second,
-					StabilizationInterval:   3 * time.Second,
+					ProgressRequeueDelay:    3 * time.Second,
 					MaxConcurrentReconciles: 3,
 					MaxGraphRevisions:       20,
 				},
@@ -1072,6 +1072,20 @@ func TestResourceGraphDefinitionPrimaryWatchPredicate(t *testing.T) {
 			t.Errorf("%s: got %t, want %t", tc.name, got, tc.want)
 		}
 	}
+}
+
+func TestResourceGraphDefinitionPrimaryWatchPredicateRejectsNilObjects(t *testing.T) {
+	t.Parallel()
+
+	pred := resourceGraphDefinitionPrimaryWatchPredicate()
+	assert.False(t, pred.Update(event.UpdateEvent{
+		ObjectOld: nil,
+		ObjectNew: newPredicateTestRGD(1, nil),
+	}))
+	assert.False(t, pred.Update(event.UpdateEvent{
+		ObjectOld: newPredicateTestRGD(1, nil),
+		ObjectNew: nil,
+	}))
 }
 
 func newPredicateTestRGD(generation int64, deletionTimestamp *metav1.Time) *v1alpha1.ResourceGraphDefinition {

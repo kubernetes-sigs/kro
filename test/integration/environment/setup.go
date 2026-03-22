@@ -201,7 +201,7 @@ func (e *Environment) setupController() error {
 		ctrlresourcegraphdefinition.Config{
 			AllowCRDDeletion:        e.ControllerConfig.AllowCRDDeletion,
 			InstanceRequeueInterval: e.ControllerConfig.ReconcileConfig.DefaultRequeueDuration,
-			StabilizationInterval:   3 * time.Second,
+			ProgressRequeueDelay:    3 * time.Second,
 			MaxConcurrentReconciles: 40,
 			MaxGraphRevisions:       maxGraphRevisions,
 			RGDConfig:               rgdConfig,

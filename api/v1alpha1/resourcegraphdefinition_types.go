@@ -253,15 +253,17 @@ const (
 // It provides information about the deployment state, resource ordering, and conditions.
 type ResourceGraphDefinitionStatus struct {
 	// State indicates whether the ResourceGraphDefinition is Active or Inactive.
-	// Active means the CRD has been created and the controller is running.
-	// Inactive means the ResourceGraphDefinition has been disabled or encountered an error.
+	// Active means the graph is accepted and the generated CRD and dynamic controller
+	// are currently serving.
+	// Inactive means the current graph is not accepted or the RGD is not currently serving.
 	State ResourceGraphDefinitionState `json:"state,omitempty"`
 	// TopologicalOrder is the ordered list of resource IDs based on their dependencies.
 	// Resources are created in this order to ensure dependencies are satisfied.
 	// Example: ["configmap", "deployment", "service"]
 	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of the ResourceGraphDefinition's state.
-	// Common condition types include "Ready", "Validated", and "ReconcilerDeployed".
+	// Common condition types include "Ready", "GraphRevisionsResolved", "GraphAccepted",
+	// "KindReady", and "ControllerReady".
 	Conditions Conditions `json:"conditions,omitempty"`
 	// Resources provides detailed information about each resource in the graph,
 	// including their dependencies.
@@ -295,6 +297,7 @@ type Dependency struct {
 // +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.schema.apiVersion`
 // +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.schema.kind`
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
+// +kubebuilder:printcolumn:name="READY",type=string,priority=0,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:shortName=rgd,scope=Cluster

@@ -85,11 +85,10 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 		Expect(gr.Spec.Snapshot.Spec.Schema).ToNot(BeNil())
 		Expect(gr.Spec.Snapshot.Spec.Schema.Kind).To(Equal(kind))
 
-		// Verify naming convention
-		Expect(gr.Name).To(HavePrefix(rgdName + "-"))
-		Expect(gr.Name).To(ContainSubstring("-r1-"))
+		// Short names are issued without a hash suffix and use zero-padded revisions.
+		Expect(gr.Name).To(Equal(rgdName + "-r00001"))
 
-		// Verify labels (UID label is not set on GraphRevisions — lineage is name-based)
+		// Verify labels (UID label is not set on GraphRevisions — tracking is name-based)
 		Expect(gr.Labels[metadata.ResourceGraphDefinitionNameLabel]).To(Equal(rgdName))
 		Expect(gr.Labels).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel))
 
@@ -530,35 +529,33 @@ var _ = Describe("GraphRevision Invalid Updates", func() {
 
 			accepted := findRGDCondition(
 				fresh.Status.Conditions,
-				krov1alpha1.ConditionType(resourcegraphdefinition.ResourceGraphAccepted),
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted),
 			)
 			g.Expect(accepted).ToNot(BeNil())
 			g.Expect(accepted.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(accepted.ObservedGeneration).To(Equal(fresh.GetGeneration()))
 
-			lineage := findRGDCondition(
+			graphRevisionsResolved := findRGDCondition(
 				fresh.Status.Conditions,
-				krov1alpha1.ConditionType(resourcegraphdefinition.RevisionLineageResolved),
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved),
 			)
-			g.Expect(lineage).ToNot(BeNil())
-			g.Expect(lineage.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(lineage.ObservedGeneration).To(Equal(fresh.GetGeneration()))
+			g.Expect(graphRevisionsResolved).ToNot(BeNil())
+			g.Expect(graphRevisionsResolved.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(graphRevisionsResolved.ObservedGeneration).To(Equal(fresh.GetGeneration()))
 
 			kindReady := findRGDCondition(
 				fresh.Status.Conditions,
 				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady),
 			)
 			g.Expect(kindReady).ToNot(BeNil())
-			g.Expect(kindReady.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(kindReady.ObservedGeneration).To(Equal(fresh.GetGeneration()))
+			g.Expect(kindReady.Status).To(Equal(metav1.ConditionTrue))
 
 			controllerReady := findRGDCondition(
 				fresh.Status.Conditions,
 				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady),
 			)
 			g.Expect(controllerReady).ToNot(BeNil())
-			g.Expect(controllerReady.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(controllerReady.ObservedGeneration).To(Equal(fresh.GetGeneration()))
+			g.Expect(controllerReady.Status).To(Equal(metav1.ConditionTrue))
 
 			ready := findRGDCondition(fresh.Status.Conditions, krov1alpha1.ConditionType(apis.ConditionReady))
 			g.Expect(ready).ToNot(BeNil())

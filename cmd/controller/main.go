@@ -88,7 +88,7 @@ func main() {
 		rgdMaxCollectionSize          int
 		rgdMaxCollectionDimensionSize int
 		rgdMaxGraphRevisions          int
-		rgdStabilizationInterval      time.Duration
+		rgdProgressRequeueDelay       time.Duration
 		featureGatesFlag              string
 	)
 
@@ -158,8 +158,8 @@ func main() {
 			"Known features: "+strings.Join(features.FeatureGate.KnownFeatures(), ", "))
 	flag.IntVar(&rgdMaxGraphRevisions, "rgd-max-graph-revisions", 5,
 		"Maximum number of GraphRevisions to retain per ResourceGraphDefinition")
-	flag.DurationVar(&rgdStabilizationInterval, "rgd-stabilization-interval", 3*time.Second,
-		"Delay before requeuing when waiting for revision state to stabilize")
+	flag.DurationVar(&rgdProgressRequeueDelay, "rgd-progress-requeue-delay", 3*time.Second,
+		"Delay before requeuing while an RGD is waiting for asynchronous progress")
 
 	opts := zap.Options{
 		Development: true,
@@ -254,7 +254,7 @@ func main() {
 		resourcegraphdefinitionctrl.Config{
 			AllowCRDDeletion:        allowCRDDeletion,
 			InstanceRequeueInterval: instanceRequeueInterval,
-			StabilizationInterval:   rgdStabilizationInterval,
+			ProgressRequeueDelay:    rgdProgressRequeueDelay,
 			MaxConcurrentReconciles: resourceGraphDefinitionConcurrentReconciles,
 			MaxGraphRevisions:       rgdMaxGraphRevisions,
 			RGDConfig: graph.RGDConfig{

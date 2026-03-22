@@ -38,12 +38,12 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
-var errRevisionLineagePending = errors.New("revision lineage pending")
+var errGraphRevisionsNotResolved = errors.New("graph revisions not resolved")
 
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition.
 //
 // See KREP-013 for the full design.
-//  1. Reconcile the GraphRevision lineage to determine whether serving can
+//  1. Reconcile graph revisions to determine whether serving can
 //     continue, must wait, or must issue a new revision.
 //  2. If issuance is required, build and validate the current graph, create a
 //     new GraphRevision, and wait for the GR controller to compile it.
@@ -55,11 +55,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 ) (ctrl.Result, []string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
-	mark.InitializeServingConditions(rgd.GetGeneration())
 
 	currentSpecHash, err := graphhash.Spec(rgd.Spec)
 	if err != nil {
-		mark.InvalidResourceGraph(err.Error())
+		mark.ResourceGraphInvalid(err.Error())
 		return ctrl.Result{}, nil, nil, err
 	}
 
@@ -77,17 +76,17 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	}
 
 	latestRevisionView, warmed := r.getLatestGraphRevisionView(rgd.Name, graphRevisions)
-	if err := r.reconcileRevisionLineage(rgd, currentSpecHash, latestRevisionView, hasTerminating, warmed, mark); err != nil {
-		if errors.Is(err, errRevisionLineagePending) {
-			return ctrl.Result{RequeueAfter: r.cfg.StabilizationInterval}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+	if err := r.resolveGraphRevisions(rgd, currentSpecHash, latestRevisionView, hasTerminating, warmed, mark); err != nil {
+		if errors.Is(err, errGraphRevisionsNotResolved) {
+			return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 		}
 		return ctrl.Result{}, rgd.Status.TopologicalOrder, rgd.Status.Resources, err
 	}
 
 	latestRevision := latestRevisionView.Revision
 	noRevision := latestRevision == nil
-	// Safe to deref RuntimeEntry: reconcileRevisionLineage returns
-	// errRevisionLineagePending when RuntimeEntry is nil, so reaching
+	// Safe to deref RuntimeEntry: resolveGraphRevisions returns
+	// errGraphRevisionsNotResolved when RuntimeEntry is nil, so reaching
 	// here with a non-nil revision guarantees RuntimeEntry is set.
 	specChanged := !noRevision && latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash
 	if noRevision || specChanged {
@@ -99,7 +98,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		// TODO(amine): replace with a lighter validation-only pass that doesn't
 		// produce a full compiled graph.
 		if _, _, err := r.buildResourceGraphDefinition(ctx, rgd); err != nil {
-			mark.InvalidResourceGraph(err.Error())
+			mark.ResourceGraphInvalid(err.Error())
 			return ctrl.Result{}, nil, nil, err
 		}
 		mark.ResourceGraphValid()
@@ -107,12 +106,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {
-			mark.CreateGraphRevisionFailed(createErr.Error())
+			mark.ResourceGraphInvalid(createErr.Error())
 			return ctrl.Result{}, nil, nil, createErr
 		}
 		rgd.Status.LastIssuedRevision = createdGR.Spec.Revision
-		mark.GraphRevisionIssuedPendingCompilation(createdGR.Spec.Revision)
-		return ctrl.Result{RequeueAfter: r.cfg.StabilizationInterval}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
+		mark.GraphRevisionsCompiling(createdGR.Spec.Revision)
+		return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
 
 	topologicalOrder, resourcesInfo, err := r.ensureServingState(
@@ -165,7 +164,7 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 	)
 }
 
-// reconcileRevisionLineage determines whether the RGD can proceed to serving
+// resolveGraphRevisions determines whether the RGD can proceed to serving
 // or must wait for revision state to stabilize.
 //
 // Decision order:
@@ -175,13 +174,13 @@ func (r *ResourceGraphDefinitionReconciler) setupMicroController(
 //  4. Latest revision in informer but not in registry → wait for GR controller
 //     to process it (avoids issuing a duplicate).
 //  5. Hash mismatch → caller revalidates the spec and issues a new revision.
-//  6. Latest revision is Active → lineage resolved, proceed to serving.
+//  6. Latest revision is Active → graph revisions resolved, proceed to serving.
 //  7. Latest revision is Pending → wait for GR controller to compile.
 //  8. Latest revision is Failed → surface the failure, no requeue.
 //
-// Returns errRevisionLineagePending for cases that need a requeue, nil for
+// Returns errGraphRevisionsNotResolved for cases that need a requeue, nil for
 // cases where the caller should proceed, and a real error for terminal failures.
-func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
+func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 	rgd *v1alpha1.ResourceGraphDefinition,
 	currentSpecHash string,
 	latestRevisionView latestGraphRevisionView,
@@ -190,13 +189,13 @@ func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
 	mark *ConditionsMarker,
 ) error {
 	if hasTerminating {
-		mark.WaitingForGraphRevisionSettlement()
-		return errRevisionLineagePending
+		mark.GraphRevisionsSettling()
+		return errGraphRevisionsNotResolved
 	}
 
 	if !warmed {
-		mark.WaitingForGraphRevisionWarmup()
-		return errRevisionLineagePending
+		mark.GraphRevisionsWarmingUp()
+		return errGraphRevisionsNotResolved
 	}
 
 	latestRevision := latestRevisionView.Revision
@@ -209,30 +208,33 @@ func (r *ResourceGraphDefinitionReconciler) reconcileRevisionLineage(
 	// Revision exists in the informer but not yet in the registry — the GR
 	// controller hasn't processed it. Wait rather than re-issuing a duplicate.
 	if latestRevisionView.RuntimeEntry == nil {
-		mark.WaitingForGraphRevisionWarmup()
-		return errRevisionLineagePending
+		mark.GraphRevisionsWarmingUp()
+		return errGraphRevisionsNotResolved
 	}
 
 	if latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash {
+		// Graph revisions are resolved (old revision Active) but spec changed.
+		// Caller will validate and issue a new revision.
+		mark.GraphRevisionsResolved(latestRevision.Spec.Revision)
 		return nil
 	}
 
 	switch latestRevisionView.RuntimeEntry.State {
 	case revisions.RevisionStateActive:
+		mark.GraphRevisionsResolved(latestRevision.Spec.Revision)
 		mark.ResourceGraphValid()
-		mark.RevisionLineageResolved(latestRevision.Spec.Revision)
 		return nil
 	case revisions.RevisionStatePending:
-		mark.ResourceGraphValid()
-		mark.WaitingForGraphRevisionCompilation(latestRevision.Spec.Revision)
-		return errRevisionLineagePending
+		mark.GraphRevisionsAwaitingCompilation(latestRevision.Spec.Revision)
+		return errGraphRevisionsNotResolved
 	case revisions.RevisionStateFailed:
-		failErr := fmt.Errorf("latest graph revision %d failed", latestRevision.Spec.Revision)
-		mark.InvalidResourceGraph(failErr.Error())
+		failErr := fmt.Errorf("latest graph revision %d failed compilation", latestRevision.Spec.Revision)
+		mark.GraphRevisionsUnresolved(failErr.Error())
+		mark.ResourceGraphInvalid(failErr.Error())
 		return failErr
 	default:
-		mark.WaitingForGraphRevisionState(latestRevision.Spec.Revision)
-		return errRevisionLineagePending
+		mark.GraphRevisionsAwaitingSettlement(latestRevision.Spec.Revision)
+		return errGraphRevisionsNotResolved
 	}
 }
 
@@ -369,11 +371,11 @@ func newGraphError(err error) error           { return &graphError{err} }
 func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
 
-// listGraphRevisions returns the revision lineage for an RGD, split into live
+// listGraphRevisions returns the graph revisions for an RGD, split into live
 // and terminating sets.
 //
 // GraphRevisions are grouped by RGD name (not UID) so a recreated RGD with the
-// same name can adopt the existing lineage. The caller uses the terminating
+// same name can adopt the existing revisions. The caller uses the terminating
 // flag to defer decisions while GC is in flight.
 func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, err error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
@@ -442,7 +444,7 @@ func (r *ResourceGraphDefinitionReconciler) getLatestGraphRevisionView(
 // in-memory registry entry as Pending.
 //
 // GraphRevisions are immutable snapshots of the RGD spec. The revision number
-// is monotonically increasing per RGD name lineage, and the spec hash is stored
+// is monotonically increasing per RGD name, and the spec hash is stored
 // for duplicate-detection on subsequent reconciles.
 func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	ctx context.Context,
@@ -450,7 +452,7 @@ func (r *ResourceGraphDefinitionReconciler) createGraphRevision(
 	revision int64,
 	specHash string,
 ) (*internalv1alpha1.GraphRevision, error) {
-	// GraphRevisions use name-based lineage, so the UID label is not needed.
+	// GraphRevisions are tracked by RGD name, so the UID label is not needed.
 	// The spec hash label is kept for user-facing queries (kubectl).
 	rgdNameLabeler := metadata.GenericLabeler{
 		metadata.ResourceGraphDefinitionNameLabel: rgd.Name,

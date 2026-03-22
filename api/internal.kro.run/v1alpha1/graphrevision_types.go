@@ -37,7 +37,7 @@ type GraphRevisionSpec struct {
 // ResourceGraphDefinition at a point in time.
 type ResourceGraphDefinitionSnapshot struct {
 	// Name identifies the source ResourceGraphDefinition by name.
-	// This is the authoritative identity for lineage/adoption decisions.
+	// This is the authoritative identity for adoption decisions.
 	//
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
@@ -53,11 +53,14 @@ type ResourceGraphDefinitionSnapshot struct {
 	Spec krov1alpha1.ResourceGraphDefinitionSpec `json:"spec"`
 }
 
-// GraphRevisionStatus defines the observed state of GraphRevision.
+// GraphRevisionStatus defines the observed API state of GraphRevision.
+// Internal runtime states such as Pending, Active, and Failed live in
+// kro's in-memory revision registry and are not persisted here.
 type GraphRevisionStatus struct {
 	// TopologicalOrder is the ordered list of resource IDs based on dependencies.
 	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of the GraphRevision state.
+	// GraphRevision exposes GraphVerified plus aggregate Ready.
 	Conditions krov1alpha1.Conditions `json:"conditions,omitempty"`
 	// Resources provides detailed information about each resource in the graph.
 	Resources []krov1alpha1.ResourceInformation `json:"resources,omitempty"`

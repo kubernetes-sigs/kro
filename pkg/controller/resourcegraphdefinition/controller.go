@@ -51,7 +51,7 @@ type resourceGraphBuilder interface {
 type Config struct {
 	AllowCRDDeletion        bool
 	InstanceRequeueInterval time.Duration
-	StabilizationInterval   time.Duration
+	ProgressRequeueDelay    time.Duration
 	MaxConcurrentReconciles int
 	MaxGraphRevisions       int
 	RGDConfig               graph.RGDConfig

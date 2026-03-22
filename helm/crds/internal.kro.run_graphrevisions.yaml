@@ -19,7 +19,6 @@ spec:
   - additionalPrinterColumns:
     - jsonPath: .spec.snapshot.name
       name: RGD
-      priority: 1
       type: string
     - jsonPath: .spec.revision
       name: REVISION
@@ -82,7 +81,7 @@ spec:
                   name:
                     description: |-
                       Name identifies the source ResourceGraphDefinition by name.
-                      This is the authoritative identity for lineage/adoption decisions.
+                      This is the authoritative identity for adoption decisions.
                     type: string
                   spec:
                     description: |-
@@ -417,11 +416,15 @@ spec:
             - message: spec is immutable
               rule: self == oldSelf
           status:
-            description: GraphRevisionStatus defines the observed state of GraphRevision.
+            description: |-
+              GraphRevisionStatus defines the observed API state of GraphRevision.
+              Internal runtime states such as Pending, Active, and Failed live in
+              kro's in-memory revision registry and are not persisted here.
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the GraphRevision state.
+                description: |-
+                  Conditions represent the latest available observations of the GraphRevision state.
+                  GraphRevision exposes GraphVerified plus aggregate Ready.
                 items:
                   description: |-
                     Condition is the common struct used by all CRDs managed by ACK service

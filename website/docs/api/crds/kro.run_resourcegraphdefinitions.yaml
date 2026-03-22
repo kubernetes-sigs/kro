@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.state
       name: STATE
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: READY
+      type: string
     - jsonPath: .status.topologicalOrder
       name: TOPOLOGICALORDER
       priority: 1
@@ -384,7 +387,8 @@ spec:
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the ResourceGraphDefinition's state.
-                  Common condition types include "Ready", "Validated", and "ReconcilerDeployed".
+                  Common condition types include "Ready", "GraphRevisionsResolved", "GraphAccepted",
+                  "KindReady", and "ControllerReady".
                 items:
                   description: |-
                     Condition is the common struct used by all CRDs managed by ACK service
@@ -463,8 +467,9 @@ spec:
               state:
                 description: |-
                   State indicates whether the ResourceGraphDefinition is Active or Inactive.
-                  Active means the CRD has been created and the controller is running.
-                  Inactive means the ResourceGraphDefinition has been disabled or encountered an error.
+                  Active means the graph is accepted and the generated CRD and dynamic controller
+                  are currently serving.
+                  Inactive means the current graph is not accepted or the RGD is not currently serving.
                 type: string
               topologicalOrder:
                 description: |-

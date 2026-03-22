@@ -32,7 +32,7 @@ import (
 )
 
 var _ = Describe("RGD Conditions", func() {
-	It("should report serving and lineage conditions as true once an RGD is active", func(ctx SpecContext) {
+	It("should report serving and graph revision conditions as true once an RGD is active", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDConditions%s", rand.String(5))
 		rgd := configmapRGD(rgdName, kind)
@@ -41,11 +41,11 @@ var _ = Describe("RGD Conditions", func() {
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state: krov1alpha1.ResourceGraphDefinitionStateActive,
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionTrue,
-				resourcegraphdefinition.KindReady:               metav1.ConditionTrue,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionTrue,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionTrue,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionTrue,
+				apis.ConditionReady:                            metav1.ConditionTrue,
+				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
+				resourcegraphdefinition.ControllerReady:        metav1.ConditionTrue,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
 			},
 		})
 	})
@@ -59,20 +59,20 @@ var _ = Describe("RGD Conditions", func() {
 
 		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionUnknown,
-				resourcegraphdefinition.KindReady:               metav1.ConditionUnknown,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionUnknown,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionUnknown,
+				apis.ConditionReady:                            metav1.ConditionUnknown,
+				resourcegraphdefinition.KindReady:              metav1.ConditionUnknown,
+				resourcegraphdefinition.ControllerReady:        metav1.ConditionUnknown,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
 			},
 		})
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state: krov1alpha1.ResourceGraphDefinitionStateActive,
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionTrue,
-				resourcegraphdefinition.KindReady:               metav1.ConditionTrue,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionTrue,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionTrue,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionTrue,
+				apis.ConditionReady:                            metav1.ConditionTrue,
+				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
+				resourcegraphdefinition.ControllerReady:        metav1.ConditionTrue,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
 			},
 		})
 	})
@@ -86,11 +86,11 @@ var _ = Describe("RGD Conditions", func() {
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state: krov1alpha1.ResourceGraphDefinitionStateInactive,
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionFalse,
-				resourcegraphdefinition.KindReady:               metav1.ConditionFalse,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionFalse,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionFalse,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionFalse,
+				apis.ConditionReady:                            metav1.ConditionFalse,
+				resourcegraphdefinition.KindReady:              metav1.ConditionUnknown,
+				resourcegraphdefinition.ControllerReady:        metav1.ConditionUnknown,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionFalse,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
 			},
 		})
 	})
@@ -107,27 +107,25 @@ var _ = Describe("RGD Conditions", func() {
 		updateRGDTemplate(ctx, rgdName, "rev-2")
 
 		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
-			state:      krov1alpha1.ResourceGraphDefinitionStateInactive,
+			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
 			lastIssued: ptrToInt64(2),
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionUnknown,
-				resourcegraphdefinition.KindReady:               metav1.ConditionUnknown,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionUnknown,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionTrue,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionUnknown,
+				apis.ConditionReady:                            metav1.ConditionUnknown,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
 			},
-			reasonCondition: resourcegraphdefinition.RevisionLineageResolved,
+			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
 			reason:          "WaitingForGraphRevisionCompilation",
 		})
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
 			lastIssued: ptrToInt64(2),
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionTrue,
-				resourcegraphdefinition.KindReady:               metav1.ConditionTrue,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionTrue,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionTrue,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionTrue,
+				apis.ConditionReady:                            metav1.ConditionTrue,
+				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
+				resourcegraphdefinition.ControllerReady:        metav1.ConditionTrue,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
 			},
 		})
 	})
@@ -155,14 +153,12 @@ var _ = Describe("RGD Conditions", func() {
 			state:      krov1alpha1.ResourceGraphDefinitionStateInactive,
 			lastIssued: ptrToInt64(1),
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionFalse,
-				resourcegraphdefinition.KindReady:               metav1.ConditionFalse,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionFalse,
-				resourcegraphdefinition.ResourceGraphAccepted:   metav1.ConditionFalse,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionFalse,
+				apis.ConditionReady:                            metav1.ConditionFalse,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionFalse,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionTrue,
 			},
-			reasonCondition: resourcegraphdefinition.RevisionLineageResolved,
-			reason:          "ResolutionFailed",
+			reasonCondition: resourcegraphdefinition.GraphAccepted,
+			reason:          "InvalidResourceGraph",
 		})
 
 		Consistently(func(g Gomega) {
@@ -230,14 +226,13 @@ var _ = Describe("RGD Conditions", func() {
 		updateRGDTemplate(ctx, rgdName, "settling")
 
 		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateInactive,
+			state: krov1alpha1.ResourceGraphDefinitionStateActive,
 			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                             metav1.ConditionUnknown,
-				resourcegraphdefinition.KindReady:               metav1.ConditionUnknown,
-				resourcegraphdefinition.ControllerReady:         metav1.ConditionUnknown,
-				resourcegraphdefinition.RevisionLineageResolved: metav1.ConditionUnknown,
+				apis.ConditionReady:                            metav1.ConditionUnknown,
+				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
 			},
-			reasonCondition: resourcegraphdefinition.RevisionLineageResolved,
+			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
 			reason:          "WaitingForGraphRevisionSettlement",
 		})
 	})

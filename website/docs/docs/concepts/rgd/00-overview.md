@@ -146,15 +146,22 @@ When your RGD is validated and accepted:
 
 ### RGD Status Conditions
 
-kro reports the RGD's state through three conditions in `status.conditions`:
+kro reports the RGD's state through five conditions in `status.conditions`:
 
-| Condition                            | Description                                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| **GraphVerified**                    | Whether the RGD spec passed validation. If `False`, the `message` field contains the validation error. |
-| **CustomResourceDefinitionSynced**   | Whether the CRD for your custom API has been generated and registered with Kubernetes.                 |
-| **ReconcilerReady**                  | Whether kro is actively watching for instances of your custom API.                                     |
+| Condition             | Description                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ready**             | Aggregate condition. `True` only when `GraphRevisionsResolved`, `GraphAccepted`, `KindReady`, and `ControllerReady` are all `True`.                |
+| **GraphRevisionsResolved**    | Whether graph revisions are settled and the latest revision is compiled and active. It may be `Unknown` while kro is still waiting. |
+| **GraphAccepted**     | Whether kro accepted the current graph for the latest revision path. `False` means the graph was rejected or the latest revision failed.    |
+| **KindReady**         | Whether the generated CRD has been created and accepted by the Kubernetes API server.                                                       |
+| **ControllerReady**   | Whether kro successfully registered the dynamic controller for the generated kind.                                                          |
 
-When all three conditions are `True`, the RGD is fully operational and ready to accept instances. You can check the status with:
+`status.state` reflects whether kro is serving an accepted graph for the API:
+
+- `Active` when `GraphAccepted=True`, `KindReady=True`, and `ControllerReady=True`
+- `Inactive` otherwise
+
+You can check the status with:
 
 ```bash
 kubectl get rgd <name> -o yaml

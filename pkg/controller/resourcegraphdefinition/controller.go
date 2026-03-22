@@ -57,7 +57,6 @@ type ResourceGraphDefinitionReconciler struct {
 	clientSet  kroclient.SetInterface
 	crdManager kroclient.CRDClient
 
-	metadataLabeler         metadata.Labeler
 	rgBuilder               resourceGraphBuilder
 	dynamicController       *dynamiccontroller.DynamicController
 	instanceRequeueInterval time.Duration
@@ -83,10 +82,9 @@ func NewResourceGraphDefinitionReconciler(
 		allowCRDDeletion:        allowCRDDeletion,
 		crdManager:              crdWrapper,
 		dynamicController:       dynamicController,
-		instanceRequeueInterval: instanceRequeueInterval,
-		metadataLabeler:         metadata.NewKROMetaLabeler(),
 		rgBuilder:               builder,
 		maxConcurrentReconciles: maxConcurrentReconciles,
+		instanceRequeueInterval: instanceRequeueInterval,
 		rgdConfig:               rgdConfig,
 	}
 }

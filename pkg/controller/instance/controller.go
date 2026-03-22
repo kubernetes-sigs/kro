@@ -89,10 +89,9 @@ type Controller struct {
 	gvr    schema.GroupVersionResource
 	rgd    *graph.Graph
 
-	instanceLabeler      metadata.Labeler
-	childResourceLabeler metadata.Labeler
-	reconcileConfig      ReconcileConfig
-	coordinator          *dynamiccontroller.WatchCoordinator
+	instanceLabeler metadata.Labeler
+	reconcileConfig ReconcileConfig
+	coordinator     *dynamiccontroller.WatchCoordinator
 
 	// eventRecorder emits K8s Events on condition transitions.
 	eventRecorder record.EventRecorder
@@ -106,20 +105,18 @@ func NewController(
 	rgd *graph.Graph,
 	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
-	childResourceLabeler metadata.Labeler,
 	coord *dynamiccontroller.WatchCoordinator,
 	eventRecorder record.EventRecorder,
 ) *Controller {
 	return &Controller{
-		log:                  log,
-		client:               client,
-		gvr:                  gvr,
-		rgd:                  rgd,
-		instanceLabeler:      instanceLabeler,
-		childResourceLabeler: childResourceLabeler,
-		reconcileConfig:      reconcileConfig,
-		coordinator:          coord,
-		eventRecorder:        eventRecorder,
+		log:             log,
+		client:          client,
+		gvr:             gvr,
+		rgd:             rgd,
+		instanceLabeler: instanceLabeler,
+		reconcileConfig: reconcileConfig,
+		coordinator:     coord,
+		eventRecorder:   eventRecorder,
 	}
 }
 
@@ -191,7 +188,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		ctx, log, c.gvr,
 		c.client.Dynamic(),
 		c.client.RESTMapper(),
-		c.childResourceLabeler,
 		runtimeObj,
 		c.reconcileConfig,
 		inst,

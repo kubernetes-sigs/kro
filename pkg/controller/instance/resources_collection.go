@@ -27,12 +27,6 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
-// CollectionInfo holds collection item metadata for decorator.
-type CollectionInfo struct {
-	Index int
-	Size  int
-}
-
 // processCollectionNode builds applyset inputs for a collection node and
 // aligns observed items to desired items. Returns resources, node state, and error.
 func (c *Controller) processCollectionNode(
@@ -96,7 +90,7 @@ func (c *Controller) processCollectionNode(
 	resources := make([]applyset.Resource, 0, collectionSize)
 	for i, expandedResource := range expandedResources {
 		// Apply decorator labels with collection info
-		collectionInfo := &CollectionInfo{Index: i, Size: collectionSize}
+		collectionInfo := &metadata.CollectionInfo{Index: i, Size: collectionSize}
 		c.applyDecoratorLabels(rcx, expandedResource, id, collectionInfo)
 
 		// Look up current revision from LIST results

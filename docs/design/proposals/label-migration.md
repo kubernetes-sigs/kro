@@ -2,13 +2,14 @@
 
 ## Summary
 
-kro uses a set of labels and CLI annotations, all prefixed with `kro.run/`,
-as controller implementation details for ownership tracking, resource
-reconciliation, and collection management. Because they share the `kro.run/`
-API group domain, they appear to be part of kro's public API contract. This
-proposal migrates all controller-owned `kro.run/` labels and CLI annotations to
-the `internal.kro.run/` prefix and establishes a two-release deprecation window
-for the old keys.
+kro uses a set of labels, all prefixed with `kro.run/`, as controller
+implementation details for ownership tracking, resource reconciliation, and
+collection management. Because they share the `kro.run/` API group domain, they
+appear to be part of kro's public API contract. This proposal migrates all
+controller-owned `kro.run/` labels to the `internal.kro.run/` prefix and
+establishes a two-release deprecation window for the old keys. User-set
+identifiers (`kro.run/reconcile`, `kro.run/allow-breaking-changes`) are
+intentionally kept at `kro.run/` since they are part of the public API.
 
 This is the first in a series of planned breaking changes to kro's internals.
 The migration is intentionally scoped as a low-risk starting point to establish
@@ -41,48 +42,38 @@ used for kro's API group (`kro.run/v1alpha1`). This creates two problems:
 
 ### Overview
 
-Migrate all controller-owned `kro.run/` labels and annotations to
-`internal.kro.run/`. Labels use a two-release phased approach that relies on
-natural reconciliation to propagate changes. CLI annotations are renamed
-atomically in Phase 1. No manual intervention is required from users.
+Migrate all controller-owned `kro.run/` labels to `internal.kro.run/` using a
+two-release phased approach that relies on natural reconciliation to propagate
+changes. User-set identifiers (`kro.run/reconcile`, `kro.run/allow-breaking-changes`)
+remain at `kro.run/`. No manual intervention is required from users.
 
 ### Identifiers in Scope
 
-All `kro.run/`-prefixed identifiers set by the controller or CLI.
+All controller-owned `kro.run/`-prefixed labels (excludes user-set identifiers
+like `kro.run/reconcile` and `kro.run/allow-breaking-changes`).
 
 #### Labels
 
-| Deprecated (`kro.run/`)                       | New (`internal.kro.run/`)                              |
-| --------------------------------------------- | ------------------------------------------------------ |
-| `kro.run/node-id`                             | `internal.kro.run/node-id`                             |
-| `kro.run/collection-index`                    | `internal.kro.run/collection-index`                    |
-| `kro.run/collection-size`                     | `internal.kro.run/collection-size`                     |
-| `kro.run/owned`                               | `internal.kro.run/owned`                               |
-| `kro.run/kro-version`                         | `internal.kro.run/kro-version`                         |
-| `kro.run/instance-id`                         | `internal.kro.run/instance-id`                         |
-| `kro.run/instance-name`                       | `internal.kro.run/instance-name`                       |
-| `kro.run/instance-namespace`                  | `internal.kro.run/instance-namespace`                  |
-| `kro.run/instance-group`                      | `internal.kro.run/instance-group`                      |
-| `kro.run/instance-version`                    | `internal.kro.run/instance-version`                    |
-| `kro.run/instance-kind`                       | `internal.kro.run/instance-kind`                       |
-| `kro.run/reconcile`                           | `internal.kro.run/reconcile`                           |
-| `kro.run/resource-graph-definition-id`        | `internal.kro.run/resource-graph-definition-id`        |
-| `kro.run/resource-graph-definition-name`      | `internal.kro.run/resource-graph-definition-name`      |
+| Deprecated (`kro.run/`)                  | New (`internal.kro.run/`)                         |
+| ---------------------------------------- | ------------------------------------------------- |
+| `kro.run/node-id`                        | `internal.kro.run/node-id`                        |
+| `kro.run/collection-index`               | `internal.kro.run/collection-index`               |
+| `kro.run/collection-size`                | `internal.kro.run/collection-size`                |
+| `kro.run/owned`                          | `internal.kro.run/owned`                          |
+| `kro.run/kro-version`                    | `internal.kro.run/kro-version`                    |
+| `kro.run/instance-id`                    | `internal.kro.run/instance-id`                    |
+| `kro.run/instance-name`                  | `internal.kro.run/instance-name`                  |
+| `kro.run/instance-namespace`             | `internal.kro.run/instance-namespace`             |
+| `kro.run/instance-group`                 | `internal.kro.run/instance-group`                 |
+| `kro.run/instance-version`               | `internal.kro.run/instance-version`               |
+| `kro.run/instance-kind`                  | `internal.kro.run/instance-kind`                  |
+| `kro.run/resource-graph-definition-id`   | `internal.kro.run/resource-graph-definition-id`   |
+| `kro.run/resource-graph-definition-name` | `internal.kro.run/resource-graph-definition-name` |
 
 `kro.run/resource-graph-definition-namespace` and
 `kro.run/resource-graph-definition-version` were originally listed here but
 removed during implementation — the constants were declared but never written
 by any labeler, so they are dead code and excluded from the migration.
-
-#### Controller-Read Annotations
-
-| Deprecated (`kro.run/`)             | New (`internal.kro.run/`)                        |
-| ----------------------------------- | ------------------------------------------------ |
-| `kro.run/allow-breaking-changes`    | `internal.kro.run/allow-breaking-changes`        |
-
-This annotation is set by users on ResourceGraphDefinition objects to opt into
-breaking schema changes. The controller reads it during RGD reconciliation.
-In Phase 1 we will accept both prefixes, and Phase 2 drops the old key.
 
 ### Phase 1: Dual-Write (v0.x.0)
 
@@ -100,11 +91,6 @@ In Phase 1 we will accept both prefixes, and Phase 2 drops the old key.
   labels. **Constraint**: Phase 1 code MUST NOT write `internal.kro.run/`
   labels without also writing `kro.run/` labels. This invariant guarantees
   that `kro.run/` point lookups are always valid during Phase 1.
-- **Reads (user-set labels)**: The `kro.run/reconcile` label is set by users
-  on instance objects to pause reconciliation — it is not controller-written,
-  so the dual-write invariant does not apply. During Phase 1, the controller
-  accepts both `kro.run/reconcile` and `internal.kro.run/reconcile` via an
-  inline check, allowing users to begin using the new prefix immediately.
 - **Reads (label selectors)**: All server-side label selectors (e.g., `List`
   with `LabelSelector`) **must continue to use the deprecated `kro.run/` keys**.
   Label selectors have no fallback mechanism, they match or they don't.
@@ -113,11 +99,6 @@ In Phase 1 we will accept both prefixes, and Phase 2 drops the old key.
 - **Validation**: Extend `validateNoKROOwnedLabels` to reserve both `kro.run/`
   and `internal.kro.run/` prefixes. Users cannot set labels with either prefix
   in RGD resource templates. Today only `kro.run/` is reserved.
-- **`allow-breaking-changes` annotation**: Dual-read during RGD reconciliation.
-  Accept both `kro.run/allow-breaking-changes` and
-  `internal.kro.run/allow-breaking-changes`, with either triggering the opt-in.
-  Document the new key in release notes so users can begin migrating their RGD
-  manifests.
 
 During this phase, natural reconciliation progressively stamps the new
 `internal.kro.run/` labels onto all existing resources. No forced
@@ -137,10 +118,6 @@ handles it.
 - **Reads (label selectors)**: Switch all label selectors to use
   `internal.kro.run/` keys.
 - **Cleanup**: Remove deprecated label constants from `pkg/metadata/labels.go`.
-- **`allow-breaking-changes` annotation**: Stop accepting
-  `kro.run/allow-breaking-changes`. Only read `internal.kro.run/allow-breaking-changes`.
-  Users who have not updated their RGD manifests will need to switch to the new
-  key.
 
 Regular (non-collection) resources are not affected: the controller discovers
 them by name via direct GET (`processRegularNode`), not label selectors. SSA
@@ -191,14 +168,10 @@ them explicitly using [Resource Lifecycles](https://github.com/kubernetes-sigs/k
 
 ### In Scope
 
-- Migration of all controller-owned `kro.run/` labels and CLI annotations to
-  `internal.kro.run/`
-- Migration of the `kro.run/allow-breaking-changes` annotation to
-  `internal.kro.run/allow-breaking-changes` with dual-read in Phase 1
+- Migration of all controller-owned `kro.run/` labels to `internal.kro.run/`
 - Dual-write implementation for labels in Phase 1
-- Atomic rename of CLI annotations in Phase 1
 - Point lookups switch from `kro.run/` to `internal.kro.run/` in Phase 2
-- Label and annotation validation to reserve both prefixes
+- Label validation to reserve both prefixes in RGD resource templates
 - Removal of deprecated identifiers in Phase 2
 
 ### Not in Scope
@@ -206,6 +179,12 @@ them explicitly using [Resource Lifecycles](https://github.com/kubernetes-sigs/k
 - Changes to the `kro.run/v1alpha1` API group or CRD schema
 - Changes to identifier keys or semantics beyond the prefix migration
 - Active migration tooling (jobs, scripts, forced re-reconciliation)
+- **User-set `kro.run/` identifiers.** The `kro.run/reconcile` (set by
+  users on instance objects to pause reconciliation) and the
+  `kro.run/allow-breaking-changes` annotations (set by users on RGDs to opt into
+  breaking schema changes) are intentionally kept at `kro.run/`. These are
+  user-facing identifiers that belong under the public API prefix, not internal
+  implementation details.
 - The `kro.run/finalizer` finalizer. Renaming a finalizer requires careful
   ordering (old finalizer must be removed before the new one is added, or the
   resource becomes undeletable). This has different migration mechanics and

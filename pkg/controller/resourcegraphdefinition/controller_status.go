@@ -148,11 +148,6 @@ func (m *ConditionsMarker) ResourceGraphInvalid(msg string) {
 	m.cs.SetFalse(ResourceGraphAccepted, "InvalidResourceGraph", msg)
 }
 
-// FailedLabelerSetup signals that the controller was unable to start the resource labeler and failed to continue.
-func (m *ConditionsMarker) FailedLabelerSetup(msg string) {
-	m.cs.SetFalse(ControllerReady, "FailedLabelerSetup", msg)
-}
-
 // KindUnready signals the CustomResourceDefinition has either not been synced or has not become ready to use.
 func (m *ConditionsMarker) KindUnready(msg string) {
 	m.cs.SetFalse(KindReady, "Failed", msg)

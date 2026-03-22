@@ -366,6 +366,9 @@ func validateNoKROOwnedLabels(resourceID string, resourceObject map[string]inter
 		if strings.HasPrefix(key, metadata.LabelKROPrefix) {
 			return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, metadata.LabelKROPrefix)
 		}
+		if strings.HasPrefix(key, metadata.InternalLabelKROPrefix) {
+			return fmt.Errorf("invalid label for resource %q. labels with prefix %q are reserved for internal use", resourceID, metadata.InternalLabelKROPrefix)
+		}
 	}
 
 	return nil

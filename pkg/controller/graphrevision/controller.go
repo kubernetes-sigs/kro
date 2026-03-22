@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -81,6 +82,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 		// Evict only after finalizer removal succeeds. If patching fails, the GR is
 		// still present in the API and must remain visible in cache for warmup paths.
 		r.registry.Delete(obj.Spec.Snapshot.Name, obj.Spec.Revision)
+		graphRevisionFinalizerEvictionsTotal.WithLabelValues().Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -91,6 +93,10 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 	topologicalOrder, resources, activeEntry, reconcileErr := r.reconcileGraphRevision(ctx, obj)
 
 	if err := r.updateStatus(ctx, obj, topologicalOrder, resources); err != nil {
+		graphRevisionStatusUpdateErrorsTotal.WithLabelValues().Inc()
+		if reconcileErr == nil && activeEntry != nil {
+			graphRevisionActivationDeferredTotal.WithLabelValues().Inc()
+		}
 		reconcileErr = errors.Join(reconcileErr, err)
 		return ctrl.Result{}, reconcileErr
 	}
@@ -158,6 +164,13 @@ func (r *GraphRevisionReconciler) compileGraphRevision(
 	_ context.Context,
 	revision *internalv1alpha1.GraphRevision,
 ) (*graph.Graph, []krov1alpha1.ResourceInformation, error) {
+	startTime := time.Now()
+	result := "failed"
+	defer func() {
+		graphRevisionCompileDuration.WithLabelValues(result).Observe(time.Since(startTime).Seconds())
+		graphRevisionCompileTotal.WithLabelValues(result).Inc()
+	}()
+
 	snapshotRGD := &krov1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: revision.Spec.Snapshot.Name,
@@ -178,6 +191,7 @@ func (r *GraphRevisionReconciler) compileGraphRevision(
 		}
 	}
 
+	result = "success"
 	return compiledGraph, resourcesInfo, nil
 }
 

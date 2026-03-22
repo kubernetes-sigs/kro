@@ -101,7 +101,18 @@ func (r *Registry) Put(entry Entry) {
 		r.byRGD[entry.RGDName] = bucket
 	}
 
+	if existing, ok := bucket.entries[entry.Revision]; ok {
+		graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(existing.State)).Dec()
+		if existing.State != entry.State {
+			graphRevisionRegistryTransitions.WithLabelValues(
+				revisionStateLabel(existing.State),
+				revisionStateLabel(entry.State),
+			).Inc()
+		}
+	}
+
 	bucket.entries[entry.Revision] = entry
+	graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Inc()
 	if !bucket.hasLatest || entry.Revision > bucket.latestRevision {
 		bucket.latestRevision = entry.Revision
 		bucket.hasLatest = true
@@ -184,11 +195,14 @@ func (r *Registry) Delete(rgdName string, revision int64) {
 		return
 	}
 
-	if _, ok := bucket.entries[revision]; !ok {
+	entry, ok := bucket.entries[revision]
+	if !ok {
 		return
 	}
 
 	delete(bucket.entries, revision)
+	graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
+	graphRevisionRegistryEvictions.WithLabelValues().Inc()
 	if len(bucket.entries) == 0 {
 		delete(r.byRGD, rgdName)
 		return
@@ -210,6 +224,15 @@ func (r *Registry) DeleteAll(rgdName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	bucket, ok := r.byRGD[rgdName]
+	if !ok {
+		return
+	}
+
+	for _, entry := range bucket.entries {
+		graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
+	}
+	graphRevisionRegistryEvictions.WithLabelValues().Add(float64(len(bucket.entries)))
 	delete(r.byRGD, rgdName)
 }
 
@@ -225,10 +248,16 @@ func (r *Registry) DeleteRevisionsBefore(rgdName string, minRevision int64) {
 		return
 	}
 
+	deleted := 0
 	for revision := range bucket.entries {
 		if revision < minRevision {
+			graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(bucket.entries[revision].State)).Dec()
 			delete(bucket.entries, revision)
+			deleted++
 		}
+	}
+	if deleted > 0 {
+		graphRevisionRegistryEvictions.WithLabelValues().Add(float64(deleted))
 	}
 
 	if len(bucket.entries) == 0 {

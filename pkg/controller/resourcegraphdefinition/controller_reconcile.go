@@ -40,6 +40,23 @@ import (
 
 var errGraphRevisionsNotResolved = errors.New("graph revisions not resolved")
 
+const (
+	graphRevisionIssueReasonNoRevision  = "no_revision"
+	graphRevisionIssueReasonSpecChanged = "spec_changed"
+
+	graphRevisionWaitReasonWarmingUp = "warming_up"
+	graphRevisionWaitReasonCompiling = "compiling"
+	graphRevisionWaitReasonSettling  = "settling"
+
+	graphRevisionResolutionResultServe  = "serve"
+	graphRevisionResolutionResultIssue  = "issue"
+	graphRevisionResolutionResultWait   = "wait"
+	graphRevisionResolutionResultFailed = "failed"
+
+	graphRevisionRegistryMissReasonLatestNotWarmed  = "latest_not_warmed"
+	graphRevisionRegistryMissReasonRuntimeEntryMiss = "runtime_entry_missing"
+)
+
 // reconcileResourceGraphDefinition orchestrates the reconciliation of a ResourceGraphDefinition.
 //
 // See KREP-013 for the full design.
@@ -55,15 +72,23 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 ) (ctrl.Result, []string, []v1alpha1.ResourceInformation, error) {
 	log := ctrl.LoggerFrom(ctx)
 	mark := NewConditionsMarkerFor(rgd)
+	resolutionResult := ""
+	defer func() {
+		if resolutionResult != "" {
+			graphRevisionResolutionTotal.WithLabelValues(resolutionResult).Inc()
+		}
+	}()
 
 	currentSpecHash, err := graphhash.Spec(rgd.Spec)
 	if err != nil {
+		resolutionResult = graphRevisionResolutionResultFailed
 		mark.ResourceGraphInvalid(err.Error())
 		return ctrl.Result{}, nil, nil, err
 	}
 
 	graphRevisions, hasTerminating, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
+		resolutionResult = graphRevisionResolutionResultFailed
 		return ctrl.Result{}, nil, nil, fmt.Errorf("listing graph revisions: %w", err)
 	}
 
@@ -78,8 +103,10 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	latestRevisionView, warmed := r.getLatestGraphRevisionView(rgd.Name, graphRevisions)
 	if err := r.resolveGraphRevisions(rgd, currentSpecHash, latestRevisionView, hasTerminating, warmed, mark); err != nil {
 		if errors.Is(err, errGraphRevisionsNotResolved) {
+			resolutionResult = graphRevisionResolutionResultWait
 			return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 		}
+		resolutionResult = graphRevisionResolutionResultFailed
 		return ctrl.Result{}, rgd.Status.TopologicalOrder, rgd.Status.Resources, err
 	}
 
@@ -91,13 +118,16 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	specChanged := !noRevision && latestRevisionView.RuntimeEntry.SpecHash != currentSpecHash
 	if noRevision || specChanged {
 		reason := "spec changed"
+		issueReason := graphRevisionIssueReasonSpecChanged
 		if noRevision {
 			reason = "no existing revision"
+			issueReason = graphRevisionIssueReasonNoRevision
 		}
 		log.V(1).Info("building resource graph definition", "reason", reason)
 		// TODO(amine): replace with a lighter validation-only pass that doesn't
 		// produce a full compiled graph.
 		if _, _, err := r.buildResourceGraphDefinition(ctx, rgd); err != nil {
+			resolutionResult = graphRevisionResolutionResultFailed
 			mark.ResourceGraphInvalid(err.Error())
 			return ctrl.Result{}, nil, nil, err
 		}
@@ -106,11 +136,14 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		revision := max(rgd.Status.LastIssuedRevision, latestRevisionView.RevisionNumber) + 1
 		createdGR, createErr := r.createGraphRevision(ctx, rgd, revision, currentSpecHash)
 		if createErr != nil {
+			resolutionResult = graphRevisionResolutionResultFailed
 			mark.ResourceGraphInvalid(createErr.Error())
 			return ctrl.Result{}, nil, nil, createErr
 		}
 		rgd.Status.LastIssuedRevision = createdGR.Spec.Revision
 		mark.GraphRevisionsCompiling(createdGR.Spec.Revision)
+		graphRevisionIssueTotal.WithLabelValues(issueReason).Inc()
+		resolutionResult = graphRevisionResolutionResultIssue
 		return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
 
@@ -124,8 +157,12 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	// Best-effort retention GC: runs inline after serving state is established.
 	// Failures are logged and recorded as a metric but do not block the reconcile.
 	if gcErr := r.garbageCollectGraphRevisions(ctx, rgd); gcErr != nil {
-		graphRevisionGCErrorsTotal.WithLabelValues(rgd.Name).Inc()
 		log.Error(gcErr, "failed to garbage collect graph revisions", "name", rgd.Name)
+	}
+	if err != nil {
+		resolutionResult = graphRevisionResolutionResultFailed
+	} else {
+		resolutionResult = graphRevisionResolutionResultServe
 	}
 
 	return ctrl.Result{}, topologicalOrder, resourcesInfo, err
@@ -189,11 +226,14 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 	mark *ConditionsMarker,
 ) error {
 	if hasTerminating {
+		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
 		mark.GraphRevisionsSettling()
 		return errGraphRevisionsNotResolved
 	}
 
 	if !warmed {
+		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
+		graphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonLatestNotWarmed).Inc()
 		mark.GraphRevisionsWarmingUp()
 		return errGraphRevisionsNotResolved
 	}
@@ -208,6 +248,8 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 	// Revision exists in the informer but not yet in the registry — the GR
 	// controller hasn't processed it. Wait rather than re-issuing a duplicate.
 	if latestRevisionView.RuntimeEntry == nil {
+		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
+		graphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonRuntimeEntryMiss).Inc()
 		mark.GraphRevisionsWarmingUp()
 		return errGraphRevisionsNotResolved
 	}
@@ -225,6 +267,7 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 		mark.ResourceGraphValid()
 		return nil
 	case revisions.RevisionStatePending:
+		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonCompiling).Inc()
 		mark.GraphRevisionsAwaitingCompilation(latestRevision.Spec.Revision)
 		return errGraphRevisionsNotResolved
 	case revisions.RevisionStateFailed:
@@ -233,6 +276,7 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 		mark.ResourceGraphInvalid(failErr.Error())
 		return failErr
 	default:
+		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
 		mark.GraphRevisionsAwaitingSettlement(latestRevision.Spec.Revision)
 		return errGraphRevisionsNotResolved
 	}
@@ -584,6 +628,7 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 
 	graphRevisions, _, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
+		graphRevisionGCErrorsTotal.WithLabelValues().Inc()
 		return fmt.Errorf("listing graph revisions for gc: %w", err)
 	}
 	if len(graphRevisions) <= r.cfg.MaxGraphRevisions {
@@ -602,9 +647,12 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		if err := r.Delete(ctx, &revision); err != nil {
 			ignoreNotFound := client.IgnoreNotFound(err)
 			if ignoreNotFound != nil {
+				graphRevisionGCErrorsTotal.WithLabelValues().Inc()
 				return fmt.Errorf("deleting graph revision %q: %w", revision.Name, err)
 			}
+			continue
 		}
+		graphRevisionGCDeletedTotal.WithLabelValues().Inc()
 	}
 
 	// Registry eviction is handled by the GR controller's finalizer as each

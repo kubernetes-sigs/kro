@@ -425,19 +425,16 @@ func (r *ResourceGraphDefinitionReconciler) getLatestGraphRevisionView(
 	}
 
 	latestRevision := graphRevisions[latestIdx].Spec.Revision
-	if _, ok := r.revisionsRegistry.Get(rgdName, latestRevision); !ok {
+	entry, ok := r.revisionsRegistry.Get(rgdName, latestRevision)
+	if !ok {
 		return latestGraphRevisionView{}, false
 	}
 
-	view := latestGraphRevisionView{
+	return latestGraphRevisionView{
 		RevisionNumber: latestRevision,
 		Revision:       &graphRevisions[latestIdx],
-	}
-	if entry, ok := r.revisionsRegistry.Get(rgdName, latestRevision); ok {
-		view.RuntimeEntry = &entry
-	}
-
-	return view, true
+		RuntimeEntry:   &entry,
+	}, true
 }
 
 // createGraphRevision creates a new GraphRevision object and seeds the

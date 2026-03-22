@@ -126,6 +126,35 @@ func TestSpecCases(t *testing.T) {
 			},
 		},
 		{
+			name: "forEach order affects the hash",
+			run: func(t *testing.T) {
+				specA := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:       "svc",
+						Template: raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
+						ForEach: []v1alpha1.ForEachDimension{
+							{"region": "${schema.spec.regions}"},
+							{"zone": "${schema.spec.zones}"},
+						},
+					}},
+				}
+				specB := v1alpha1.ResourceGraphDefinitionSpec{
+					Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+					Resources: []*v1alpha1.Resource{{
+						ID:       "svc",
+						Template: raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
+						ForEach: []v1alpha1.ForEachDimension{
+							{"zone": "${schema.spec.zones}"},
+							{"region": "${schema.spec.regions}"},
+						},
+					}},
+				}
+
+				assertDifferentHashes(t, specA, specB)
+			},
+		},
+		{
 			name: "resource list order does not affect the hash",
 			run: func(t *testing.T) {
 				first := v1alpha1.ResourceGraphDefinitionSpec{
@@ -258,6 +287,31 @@ func TestNormalizeSpecCases(t *testing.T) {
 				Resources: []*v1alpha1.Resource{{ID: "service", Template: raw(`{"broken":`)}},
 			},
 			wantErrContains: "normalize resources[0].template",
+		},
+		{
+			name: "forEach order is preserved while condition ordering is normalized",
+			spec: v1alpha1.ResourceGraphDefinitionSpec{
+				Schema: &v1alpha1.Schema{Kind: "App", APIVersion: "v1alpha1"},
+				Resources: []*v1alpha1.Resource{{
+					ID:          "service",
+					Template:    raw(`{"apiVersion":"v1","kind":"ConfigMap"}`),
+					ReadyWhen:   []string{"b", "a"},
+					IncludeWhen: []string{"y", "x"},
+					ForEach: []v1alpha1.ForEachDimension{
+						{"zone": "${schema.spec.zones}"},
+						{"region": "${schema.spec.regions}"},
+					},
+				}},
+			},
+			assertResult: func(t *testing.T, normalized v1alpha1.ResourceGraphDefinitionSpec) {
+				require.Len(t, normalized.Resources, 1)
+				assert.Equal(t, []string{"a", "b"}, normalized.Resources[0].ReadyWhen)
+				assert.Equal(t, []string{"x", "y"}, normalized.Resources[0].IncludeWhen)
+				assert.Equal(t, []v1alpha1.ForEachDimension{
+					{"zone": "${schema.spec.zones}"},
+					{"region": "${schema.spec.regions}"},
+				}, normalized.Resources[0].ForEach)
+			},
 		},
 	}
 

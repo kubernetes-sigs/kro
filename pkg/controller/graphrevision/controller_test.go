@@ -469,7 +469,7 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			},
 		}
 
-		_, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+		_, _, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
 
 		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
@@ -500,13 +500,54 @@ func TestReconcileGraphRevisionInitializesPendingOnlyForNewEntries(t *testing.T)
 			},
 		}
 
-		_, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+		_, _, _, err := reconciler.reconcileGraphRevision(context.Background(), revision)
 		require.NoError(t, err)
 
 		entry, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
 		require.True(t, ok)
 		assert.Equal(t, revisions.RevisionStateActive, entry.State)
 	})
+}
+
+func TestGraphRevisionReconcilerFailsCleanlyWhenSpecHashingFails(t *testing.T) {
+	t.Parallel()
+
+	revision := newTestGraphRevision("demo-rgd-rev-1")
+	revision.Spec.Snapshot.Spec.Schema.Spec = runtime.RawExtension{Raw: []byte(`{"broken":`)}
+
+	registry := revisions.NewRegistry()
+	reconciler := &GraphRevisionReconciler{
+		compileGraph: panicCompile,
+		registry:     registry,
+		rgdConfig:    graph.RGDConfig{},
+	}
+
+	topologicalOrder, resources, specHash, err := reconciler.reconcileGraphRevision(context.Background(), revision)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compute graph revision spec hash")
+	assert.Contains(t, err.Error(), "normalize schema.spec")
+	assert.Nil(t, topologicalOrder)
+	assert.Nil(t, resources)
+	assert.Empty(t, specHash)
+
+	verified := findCondition(revision.Status.Conditions, v1alpha1.GraphRevisionConditionTypeGraphVerified)
+	require.NotNil(t, verified)
+	assert.Equal(t, metav1.ConditionFalse, verified.Status)
+	require.NotNil(t, verified.Reason)
+	require.NotNil(t, verified.Message)
+	assert.Equal(t, "InvalidGraph", *verified.Reason)
+	assert.Equal(t, `compute graph revision spec hash: normalize schema.spec: parse raw extension payload: unexpected end of JSON input`, *verified.Message)
+
+	ready := findCondition(revision.Status.Conditions, v1alpha1.ConditionType(apis.ConditionReady))
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	require.NotNil(t, ready.Reason)
+	require.NotNil(t, ready.Message)
+	assert.Equal(t, "InvalidGraph", *ready.Reason)
+	assert.Equal(t, `compute graph revision spec hash: normalize schema.spec: parse raw extension payload: unexpected end of JSON input`, *ready.Message)
+
+	_, ok := registry.Get(revision.Spec.Snapshot.Name, revision.Spec.Revision)
+	assert.False(t, ok)
 }
 
 func assertStoredRevisionState(

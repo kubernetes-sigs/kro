@@ -88,7 +88,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resources, reconcileErr := r.reconcileGraphRevision(ctx, obj)
+	topologicalOrder, resources, specHash, reconcileErr := r.reconcileGraphRevision(ctx, obj)
 
 	if err := r.updateStatus(ctx, obj, topologicalOrder, resources); err != nil {
 		if reconcileErr == nil {
@@ -97,8 +97,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 			// validity and would cause instance controllers to return terminal
 			// errors for a graph that actually compiled fine. Pending triggers
 			// a requeue, giving the next reconcile a chance to retry the status
-			// write. Hash error is discarded for the same reason as above.
-			specHash, _ := graphhash.Spec(obj.Spec.Snapshot.Spec)
+			// write.
 			r.registry.Put(revisions.Entry{
 				RGDName:  obj.Spec.Snapshot.Name,
 				Revision: obj.Spec.Revision,
@@ -115,15 +114,15 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 func (r *GraphRevisionReconciler) reconcileGraphRevision(
 	ctx context.Context,
 	revision *internalv1alpha1.GraphRevision,
-) ([]string, []krov1alpha1.ResourceInformation, error) {
+) ([]string, []krov1alpha1.ResourceInformation, string, error) {
 	mark := NewConditionsMarkerFor(revision)
 
-	// Compute the spec hash from the snapshot. The hash is an internal
-	// implementation detail — it is not persisted on the GraphRevision object.
-	// Error is discarded: the spec was validated and hashed by the RGD
-	// controller at issuance time; failure here would indicate memory
-	// corruption, not a recoverable condition.
-	specHash, _ := graphhash.Spec(revision.Spec.Snapshot.Spec)
+	specHash, err := graphhash.Spec(revision.Spec.Snapshot.Spec)
+	if err != nil {
+		hashErr := fmt.Errorf("compute graph revision spec hash: %w", err)
+		mark.GraphInvalid(hashErr.Error())
+		return nil, nil, "", hashErr
+	}
 
 	// Only initialize Pending the first time this revision enters the registry.
 	// Re-reconcile should preserve the existing runtime state until compile finishes.
@@ -147,7 +146,7 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 			SpecHash: specHash,
 			State:    revisions.RevisionStateFailed,
 		})
-		return nil, nil, err
+		return nil, nil, specHash, err
 	}
 
 	mark.GraphVerified()
@@ -161,7 +160,7 @@ func (r *GraphRevisionReconciler) reconcileGraphRevision(
 		CompiledGraph: compiledGraph,
 	})
 
-	return compiledGraph.TopologicalOrder, resourcesInfo, nil
+	return compiledGraph.TopologicalOrder, resourcesInfo, specHash, nil
 }
 
 func (r *GraphRevisionReconciler) compileGraphRevision(

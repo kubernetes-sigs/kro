@@ -10,10 +10,10 @@ when, and whether the change compiled successfully.
 
 ```bash
 $ kubectl get graphrevisions
-NAME                          RGD        REVISION   READY   AGE
-my-webapp-r00001              my-webapp  1          True    2d
-my-webapp-r00002              my-webapp  2          True    1d
-my-webapp-r00003              my-webapp  3          True    5m
+NAME             REVISION   READY   AGE
+my-webapp-r00001 1          True    2d
+my-webapp-r00002 2          True    1d
+my-webapp-r00003 3          True    5m
 ```
 
 :::warning Internal API
@@ -38,7 +38,7 @@ For short RGD names, GraphRevision names use a zero-padded revision suffix like
 `-r00001`. If the name must be truncated to fit Kubernetes name limits, kro
 adds a hash suffix to keep the name deterministic and unique.
 
-Use `-o wide` to also see the spec hash label:
+Use `-o wide` to also see the source RGD and spec hash label:
 
 ```bash
 $ kubectl get graphrevisions -o wide

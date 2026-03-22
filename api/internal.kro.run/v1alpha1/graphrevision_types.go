@@ -68,7 +68,7 @@ type GraphRevisionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="RGD",type=string,priority=0,JSONPath=`.spec.snapshot.name`
+// +kubebuilder:printcolumn:name="RGD",type=string,priority=1,JSONPath=`.spec.snapshot.name`
 // +kubebuilder:printcolumn:name="REVISION",type=integer,priority=0,JSONPath=`.spec.revision`
 // +kubebuilder:printcolumn:name="HASH",type=string,priority=1,JSONPath=`.metadata.labels.kro\.run/graph-revision-hash`
 // +kubebuilder:printcolumn:name="READY",type=string,priority=0,JSONPath=`.status.conditions[?(@.type=="Ready")].status`

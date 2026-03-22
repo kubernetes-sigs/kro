@@ -30,7 +30,9 @@ import (
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/apis"
 	ctrlinstance "github.com/kubernetes-sigs/kro/pkg/controller/instance"
+	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
@@ -152,11 +154,28 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, "restart-value-2")
+			expectExactRGDConditionsInEnv(ctx, testEnv, rgdName, 100*time.Millisecond, exactRGDExpectationInEnv{
+				state:      krov1alpha1.ResourceGraphDefinitionStateActive,
+				lastIssued: ptrToInt64InEnv(2),
+				conditions: map[krov1alpha1.ConditionType]conditionExpectationInEnv{
+					krov1alpha1.ConditionType(apis.ConditionReady): {
+						status:  metav1.ConditionUnknown,
+						reason:  "WaitingForGraphRevisionCompilation",
+						message: "graph revision 2 issued and awaiting compilation",
+					},
+					krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+						status:  metav1.ConditionTrue,
+						reason:  "Valid",
+						message: "resource graph and schema are valid",
+					},
+					krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+						status:  metav1.ConditionUnknown,
+						reason:  "WaitingForGraphRevisionCompilation",
+						message: "graph revision 2 issued and awaiting compilation",
+					},
+				},
+			})
 			Eventually(func(g Gomega) {
-				fresh := &krov1alpha1.ResourceGraphDefinition{}
-				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">=", int64(2)))
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(2)))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
@@ -165,6 +184,28 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			Consistently(func(g Gomega) {
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(2)))
 			}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			expectExactRGDConditionsInEnv(ctx, testEnv, rgdName, 100*time.Millisecond, exactRGDExpectationInEnv{
+				state:      krov1alpha1.ResourceGraphDefinitionStateActive,
+				lastIssued: ptrToInt64InEnv(2),
+				conditions: map[krov1alpha1.ConditionType]conditionExpectationInEnv{
+					krov1alpha1.ConditionType(apis.ConditionReady): {
+						status:  metav1.ConditionTrue,
+						reason:  apis.ConditionReady,
+						message: "",
+					},
+					krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+						status:  metav1.ConditionTrue,
+						reason:  "Valid",
+						message: "resource graph and schema are valid",
+					},
+					krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+						status:  metav1.ConditionTrue,
+						reason:  "Resolved",
+						message: "revision 2 compiled and active",
+					},
+				},
+			})
 
 			Eventually(func(g Gomega) {
 				current := &unstructured.Unstructured{
@@ -460,4 +501,86 @@ func expectedRetainedRevisionNumbers(limit int, latest int64) []int64 {
 		numbers = append(numbers, revision)
 	}
 	return numbers
+}
+
+type exactRGDExpectationInEnv struct {
+	state      krov1alpha1.ResourceGraphDefinitionState
+	lastIssued *int64
+	conditions map[krov1alpha1.ConditionType]conditionExpectationInEnv
+}
+
+type conditionExpectationInEnv struct {
+	status                   metav1.ConditionStatus
+	reason                   string
+	message                  string
+	observedGenerationOffset int64
+}
+
+func expectExactRGDConditionsInEnv(
+	ctx SpecContext,
+	testEnv *environment.Environment,
+	rgdName string,
+	interval time.Duration,
+	want exactRGDExpectationInEnv,
+) {
+	Eventually(func(g Gomega) {
+		fresh := &krov1alpha1.ResourceGraphDefinition{}
+		err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		if want.state != "" {
+			g.Expect(fresh.Status.State).To(Equal(want.state))
+		}
+		if want.lastIssued != nil {
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(*want.lastIssued))
+		}
+		for conditionType, expectation := range want.conditions {
+			assertConditionContractInEnv(g, fresh, conditionType, expectation)
+		}
+	}, 20*time.Second, interval).WithContext(ctx).Should(Succeed())
+}
+
+func assertConditionContractInEnv(
+	g Gomega,
+	obj apis.Object,
+	conditionType krov1alpha1.ConditionType,
+	want conditionExpectationInEnv,
+) {
+	g.ExpectWithOffset(1, obj.GetGeneration()).To(BeNumerically(">", 0))
+
+	cond := findConditionByTypeInEnv(obj.GetConditions(), conditionType)
+	g.ExpectWithOffset(1, cond).ToNot(BeNil(), "expected condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.Status).To(Equal(want.status), "unexpected status for condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.ObservedGeneration).To(
+		Equal(obj.GetGeneration()+want.observedGenerationOffset),
+		"unexpected observedGeneration for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.LastTransitionTime).ToNot(
+		BeNil(),
+		"LastTransitionTime must be set for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.LastTransitionTime.Time).ToNot(
+		BeZero(),
+		"LastTransitionTime must not be zero for condition %s",
+		conditionType,
+	)
+	g.ExpectWithOffset(1, cond.Reason).ToNot(BeNil(), "Reason must be set for condition %s", conditionType)
+	g.ExpectWithOffset(1, cond.Message).ToNot(BeNil(), "Message must be set for condition %s", conditionType)
+	g.ExpectWithOffset(1, *cond.Reason).To(Equal(want.reason), "unexpected reason for condition %s", conditionType)
+	g.ExpectWithOffset(1, *cond.Message).To(Equal(want.message), "unexpected message for condition %s", conditionType)
+}
+
+func findConditionByTypeInEnv(conditions []krov1alpha1.Condition, t krov1alpha1.ConditionType) *krov1alpha1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == t {
+			return &conditions[i]
+		}
+	}
+	return nil
+}
+
+func ptrToInt64InEnv(v int64) *int64 {
+	return &v
 }

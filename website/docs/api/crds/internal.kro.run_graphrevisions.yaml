@@ -19,6 +19,7 @@ spec:
   - additionalPrinterColumns:
     - jsonPath: .spec.snapshot.name
       name: RGD
+      priority: 1
       type: string
     - jsonPath: .spec.revision
       name: REVISION

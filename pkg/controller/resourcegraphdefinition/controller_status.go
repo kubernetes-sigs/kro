@@ -117,25 +117,28 @@ func (r *ResourceGraphDefinitionReconciler) setUnmanaged(ctx context.Context, rg
 
 const (
 	Ready                  = "Ready"
-	GraphAccepted          = "GraphAccepted"
-	GraphRevisionsResolved = "GraphRevisionsResolved"
-	KindReady              = "KindReady"
-	ControllerReady        = "ControllerReady"
+	GraphAccepted          = string(v1alpha1.RGDConditionTypeGraphAccepted)
+	GraphRevisionsResolved = string(v1alpha1.RGDConditionTypeGraphRevisionsResolved)
+	KindReady              = string(v1alpha1.RGDConditionTypeKindReady)
+	ControllerReady        = string(v1alpha1.RGDConditionTypeControllerReady)
 
 	waitingForGraphRevisionSettlementReason  = "WaitingForGraphRevisionSettlement"
 	waitingForGraphRevisionWarmupReason      = "WaitingForGraphRevisionWarmup"
 	waitingForGraphRevisionCompilationReason = "WaitingForGraphRevisionCompilation"
 )
 
-var rgdConditionTypes = apis.NewReadyConditions(GraphRevisionsResolved, GraphAccepted, KindReady, ControllerReady)
+var rgdConditionTypes = apis.NewReadyConditions(GraphRevisionsResolved, GraphAccepted, KindReady, ControllerReady).
+	// ResourceGraphAccepted was renamed to GraphAccepted in v0.9. The old
+	// condition persists with a stale observedGeneration on upgraded RGDs.
+	Prunes("ResourceGraphAccepted")
 
 // NewConditionsMarkerFor creates a marker to manage conditions for ResourceGraphDefinitions.
 //
 // Ready
-// ├── GraphRevisionsResolved  — graph revisions settled and latest compiled
-// ├── GraphAccepted   — spec valid and revision created
-// ├── KindReady       — CRD established
-// └── ControllerReady — dynamic controller registered
+// ├── GraphRevisionsResolved — all revisions discovered and latest state known
+// ├── GraphAccepted          — spec schema and resources are valid
+// ├── KindReady              — generated CRD is established
+// └── ControllerReady        — instance reconciler registered and serving
 //
 // All four are dependents of Ready.
 
@@ -231,12 +234,12 @@ func (m *ConditionsMarker) KindUnready(msg string) {
 
 // --- ControllerReady ---
 
-// ControllerRunning signals the microcontroller is up and running for this RGD-Kind.
+// ControllerRunning signals the instance reconciler is registered and serving.
 func (m *ConditionsMarker) ControllerRunning() {
 	m.cs.SetTrueWithReason(ControllerReady, "Running", "controller is running")
 }
 
-// ControllerFailedToStart signals the microcontroller had an issue when starting.
+// ControllerFailedToStart signals the instance reconciler failed to register.
 func (m *ConditionsMarker) ControllerFailedToStart(msg string) {
 	m.cs.SetFalse(ControllerReady, "FailedToStart", msg)
 }

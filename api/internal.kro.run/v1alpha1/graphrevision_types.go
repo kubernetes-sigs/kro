@@ -18,6 +18,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// GraphRevision condition types.
+//
+// Ready (root)
+// └── GraphVerified — snapshot compiled successfully
+const (
+	// GraphRevisionConditionTypeGraphVerified is true when the immutable
+	// RGD snapshot in this GraphRevision has been compiled into a valid
+	// resource graph. False with reason "InvalidGraph" when compilation
+	// fails.
+	GraphRevisionConditionTypeGraphVerified krov1alpha1.ConditionType = "GraphVerified"
+)
+
 // GraphRevisionSpec defines the desired state of GraphRevision.
 // It captures an immutable snapshot of the source ResourceGraphDefinition.
 type GraphRevisionSpec struct {

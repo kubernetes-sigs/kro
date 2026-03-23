@@ -471,7 +471,7 @@ func TestGraphRevisionStatusCases(t *testing.T) {
 				assert.Equal(t, []string{"config", "deploy"}, stored.Status.TopologicalOrder)
 				require.Len(t, stored.Status.Resources, 1)
 				assert.Equal(t, "deploy", stored.Status.Resources[0].ID)
-				verified := findCondition(stored.Status.Conditions, v1alpha1.GraphRevisionConditionTypeGraphVerified)
+				verified := findCondition(stored.Status.Conditions, internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
 				require.NotNil(t, verified)
 				assert.Equal(t, metav1.ConditionTrue, verified.Status)
 			},
@@ -652,7 +652,7 @@ func TestGraphRevisionReconcilerFailsCleanlyWhenSpecHashingFails(t *testing.T) {
 	assert.Nil(t, resources)
 	assert.Nil(t, activeEntry)
 
-	verified := findCondition(revision.Status.Conditions, v1alpha1.GraphRevisionConditionTypeGraphVerified)
+	verified := findCondition(revision.Status.Conditions, internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
 	require.NotNil(t, verified)
 	assert.Equal(t, metav1.ConditionFalse, verified.Status)
 	require.NotNil(t, verified.Reason)
@@ -695,7 +695,7 @@ func assertStoredRevisionState(
 		assert.Equal(t, *wantFinalizer, metadata.HasGraphRevisionFinalizer(stored))
 	}
 	if wantVerified != nil {
-		verified := findCondition(stored.Status.Conditions, v1alpha1.GraphRevisionConditionTypeGraphVerified)
+		verified := findCondition(stored.Status.Conditions, internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
 		require.NotNil(t, verified)
 		assert.Equal(t, *wantVerified, verified.Status)
 	}

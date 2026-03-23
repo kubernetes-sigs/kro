@@ -32,7 +32,7 @@ import (
 const (
 	// GraphVerified is the condition type indicating whether a GraphRevision
 	// has been successfully compiled and validated.
-	GraphVerified = string(krov1alpha1.GraphRevisionConditionTypeGraphVerified)
+	GraphVerified = string(internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
 )
 
 var graphRevisionConditionTypes = apis.NewReadyConditions(GraphVerified)

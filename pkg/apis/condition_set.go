@@ -20,6 +20,7 @@ package apis
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,25 @@ import (
 type ConditionSet struct {
 	ConditionTypes
 	object Object
+}
+
+// pruneConditions removes condition types listed in ConditionTypes.prunes
+// from the object's conditions.
+func (c ConditionSet) pruneConditions() {
+	if c.object == nil || len(c.prunes) == 0 {
+		return
+	}
+	conditions := c.object.GetConditions()
+	filtered := conditions[:0:0]
+	for _, cond := range conditions {
+		if slices.Contains(c.prunes, cond.Type.String()) {
+			continue
+		}
+		filtered = append(filtered, cond)
+	}
+	if len(filtered) != len(conditions) {
+		c.object.SetConditions(filtered)
+	}
 }
 
 // Root returns the root Condition, typically "Ready" or "Succeeded"

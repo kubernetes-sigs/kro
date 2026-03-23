@@ -47,7 +47,7 @@ var _ = Describe("GraphRevision Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: grName}, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			assertConditionContract(g, fresh, krov1alpha1.GraphRevisionConditionTypeGraphVerified, conditionExpectation{
+			assertConditionContract(g, fresh, internalv1alpha1.GraphRevisionConditionTypeGraphVerified, conditionExpectation{
 				status:  metav1.ConditionTrue,
 				reason:  "Verified",
 				message: "graph revision compiled and verified",
@@ -80,7 +80,7 @@ var _ = Describe("GraphRevision Conditions", func() {
 			err := env.Client.Get(ctx, types.NamespacedName{Name: grName}, fresh)
 			g.Expect(err).ToNot(HaveOccurred())
 
-			assertConditionContract(g, fresh, krov1alpha1.GraphRevisionConditionTypeGraphVerified, conditionExpectation{
+			assertConditionContract(g, fresh, internalv1alpha1.GraphRevisionConditionTypeGraphVerified, conditionExpectation{
 				status:  metav1.ConditionFalse,
 				reason:  "InvalidGraph",
 				message: wantMessage,

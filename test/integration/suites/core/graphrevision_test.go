@@ -86,7 +86,7 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 
 			graphVerified := findGRCondition(
 				currentGRs[0].Status.Conditions,
-				krov1alpha1.GraphRevisionConditionTypeGraphVerified,
+				internalv1alpha1.GraphRevisionConditionTypeGraphVerified,
 			)
 			g.Expect(graphVerified).ToNot(BeNil())
 			g.Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
@@ -118,7 +118,7 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 		Expect(gr.OwnerReferences[0].UID).To(Equal(activeRGD.UID))
 
 		// Verify GR status conditions
-		graphVerified := findGRCondition(gr.Status.Conditions, krov1alpha1.GraphRevisionConditionTypeGraphVerified)
+		graphVerified := findGRCondition(gr.Status.Conditions, internalv1alpha1.GraphRevisionConditionTypeGraphVerified)
 		Expect(graphVerified).ToNot(BeNil())
 		Expect(graphVerified.Status).To(Equal(metav1.ConditionTrue))
 

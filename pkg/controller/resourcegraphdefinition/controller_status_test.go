@@ -560,3 +560,42 @@ func TestSetUnmanaged(t *testing.T) {
 		})
 	}
 }
+
+func TestPrunesDeprecatedConditions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("strips ResourceGraphAccepted on marker init", func(t *testing.T) {
+		t.Parallel()
+
+		rgd := newTestRGD("upgraded-rgd")
+		// Simulate v0.8.5 state: ResourceGraphAccepted present alongside current conditions.
+		rgd.Status.Conditions = v1alpha1.Conditions{
+			{Type: "ResourceGraphAccepted", Status: metav1.ConditionTrue, ObservedGeneration: 1},
+			{Type: v1alpha1.ConditionType(GraphAccepted), Status: metav1.ConditionTrue},
+			{Type: v1alpha1.ConditionType(KindReady), Status: metav1.ConditionTrue},
+			{Type: v1alpha1.ConditionType(ControllerReady), Status: metav1.ConditionTrue},
+		}
+
+		// NewConditionsMarkerFor calls For() which triggers Prunes.
+		NewConditionsMarkerFor(rgd)
+
+		for _, c := range rgd.Status.Conditions {
+			assert.NotEqual(t, v1alpha1.ConditionType("ResourceGraphAccepted"), c.Type,
+				"ResourceGraphAccepted should have been pruned")
+		}
+	})
+
+	t.Run("no-op when deprecated condition absent", func(t *testing.T) {
+		t.Parallel()
+
+		rgd := newTestRGD("fresh-rgd")
+		NewConditionsMarkerFor(rgd)
+
+		before := len(rgd.Status.Conditions)
+
+		// Second call should not change anything.
+		NewConditionsMarkerFor(rgd)
+
+		assert.Len(t, rgd.Status.Conditions, before)
+	})
+}

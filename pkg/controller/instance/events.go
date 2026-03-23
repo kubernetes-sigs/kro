@@ -66,11 +66,8 @@ func eventTypeForTransition(newStatus metav1.ConditionStatus) string {
 }
 
 // conditionsFromInstance extracts status conditions from an unstructured object.
-//
-// TODO(perf): This performs a JSON marshal/unmarshal round-trip via
-// unstructuredWrapper.GetConditions(). For better performance we could
-// keep raw []v1alpha1.Condition at the resource level to avoid the
-// conversion on every reconciliation.
+// It uses runtime.DefaultUnstructuredConverter to convert directly between
+// map[string]interface{} and typed structs, avoiding JSON serialization overhead.
 func conditionsFromInstance(inst *unstructured.Unstructured) []v1alpha1.Condition {
 	return (&unstructuredWrapper{inst}).GetConditions()
 }

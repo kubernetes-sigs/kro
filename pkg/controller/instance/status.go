@@ -16,11 +16,11 @@ package instance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -48,34 +48,34 @@ type unstructuredWrapper struct {
 }
 
 func (u *unstructuredWrapper) GetConditions() []v1alpha1.Condition {
-	if conditions, found, err := unstructured.NestedSlice(u.Object, "status", "conditions"); err == nil && found {
-		// Marshal the conditions slice to JSON and then unmarshal to []v1alpha1.Condition
-		conditionsJSON, err := json.Marshal(conditions)
-		if err != nil {
-			panic(err)
-		}
-
-		var result []v1alpha1.Condition
-		if err := json.Unmarshal(conditionsJSON, &result); err != nil {
-			panic(err)
-		}
-		return result
+	condSlice, found, err := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if err != nil || !found {
+		return []v1alpha1.Condition{}
 	}
-	return []v1alpha1.Condition{}
+	result := make([]v1alpha1.Condition, 0, len(condSlice))
+	for _, item := range condSlice {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var c v1alpha1.Condition
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(m, &c); err != nil {
+			continue
+		}
+		result = append(result, c)
+	}
+	return result
 }
 
 func (u *unstructuredWrapper) SetConditions(conditions []v1alpha1.Condition) {
-	// Marshal the conditions to JSON and then unmarshal to interface{} slice
-	conditionsJSON, err := json.Marshal(conditions)
-	if err != nil {
-		return // Fail silently - could log this in the future
+	conditionsInterface := make([]interface{}, 0, len(conditions))
+	for _, c := range conditions {
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&c)
+		if err != nil {
+			return // Fail silently - could log this in the future
+		}
+		conditionsInterface = append(conditionsInterface, raw)
 	}
-
-	var conditionsInterface []interface{}
-	if err := json.Unmarshal(conditionsJSON, &conditionsInterface); err != nil {
-		return // Fail silently - could log this in the future
-	}
-
 	if err := unstructured.SetNestedSlice(u.Object, conditionsInterface, "status", "conditions"); err != nil {
 		return // Fail silently - could log this in the future
 	}
@@ -212,15 +212,16 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 	inst := rcx.Instance
 
-	conds := condSet.For(&unstructuredWrapper{inst}).List()
+	cs := condSet.For(&unstructuredWrapper{inst})
+	conds := cs.List()
 
-	b, err := json.Marshal(conds)
-	if err != nil {
-		panic(err)
-	}
-	var arr []interface{}
-	if err := json.Unmarshal(b, &arr); err != nil {
-		panic(err)
+	arr := make([]interface{}, 0, len(conds))
+	for _, c := range conds {
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&c)
+		if err != nil {
+			panic(err)
+		}
+		arr = append(arr, raw)
 	}
 
 	// Start fresh - user-defined status fields come solely from current resolution,
@@ -229,7 +230,7 @@ func (rcx *ReconcileContext) initialStatus() map[string]interface{} {
 	status := map[string]interface{}{
 		"conditions": arr,
 	}
-	if condSet.For(&unstructuredWrapper{inst}).IsRootReady() {
+	if cs.IsRootReady() {
 		status["state"] = v1alpha1.InstanceStateActive
 	} else {
 		status["state"] = rcx.StateManager.State

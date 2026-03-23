@@ -15,6 +15,7 @@
 package instance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -28,11 +29,10 @@ import (
 )
 
 const (
-	Ready                   = "Ready"
-	InstanceManaged         = "InstanceManaged"
-	GraphResolved           = "GraphResolved"
-	ResourcesReady          = "ResourcesReady"
-	ReconciliationSuspended = "ReconciliationSuspended"
+	Ready           = "Ready"
+	InstanceManaged = "InstanceManaged"
+	GraphResolved   = "GraphResolved"
+	ResourcesReady  = "ResourcesReady"
 )
 
 var condSet = apis.NewReadyConditions(InstanceManaged, GraphResolved, ResourcesReady)
@@ -120,19 +120,44 @@ func (m *ConditionsMarker) ResourcesDeleting(msg string, args ...any) {
 	m.cs.SetFalse(ResourcesReady, "ResourceDeleting", fmt.Sprintf(msg, args...))
 }
 
-// ReconciliationSuspended signals that reconciliation is suspended
-func (m *ConditionsMarker) ReconciliationSuspended(msg string, args ...any) {
-	m.cs.SetTrueWithReason(ReconciliationSuspended, "Suspended", fmt.Sprintf(msg, args...))
-}
-
-// ReconciliationActive signals that reconciliation is active
-func (m *ConditionsMarker) ReconciliationActive() {
-	m.cs.SetFalse(ReconciliationSuspended, "Active", "Reconciliation is Active")
-}
-
 // ResourcesUnderDeletion signals the controller is currently deleting resources.
 func (m *ConditionsMarker) ResourcesUnderDeletion(msg string, args ...any) {
 	m.cs.SetUnknownWithReason(ResourcesReady, "UnderDeletion", fmt.Sprintf(msg, args...))
+}
+
+// updateConditionsStatus persists only the conditions and state from the
+// instance object. Used on early-exit paths (e.g. graph resolution failure)
+// where a full ReconcileContext is not available.
+func (c *Controller) updateConditionsStatus(ctx context.Context, inst *unstructured.Unstructured) error {
+	ri := c.client.Dynamic().Resource(c.gvr)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur *unstructured.Unstructured
+		var err error
+		if c.namespaced {
+			cur, err = ri.Namespace(inst.GetNamespace()).Get(ctx, inst.GetName(), metav1.GetOptions{})
+		} else {
+			cur, err = ri.Get(ctx, inst.GetName(), metav1.GetOptions{})
+		}
+		if err != nil {
+			return err
+		}
+		status, _, _ := unstructured.NestedMap(cur.Object, "status")
+		if status == nil {
+			status = map[string]interface{}{}
+		}
+		// Copy conditions from the marked instance.
+		if conds, found, _ := unstructured.NestedSlice(inst.Object, "status", "conditions"); found {
+			status["conditions"] = conds
+		}
+		status["state"] = string(v1alpha1.InstanceStateError)
+		cur.Object["status"] = status
+		if c.namespaced {
+			_, err = ri.Namespace(inst.GetNamespace()).UpdateStatus(ctx, cur, metav1.UpdateOptions{})
+		} else {
+			_, err = ri.UpdateStatus(ctx, cur, metav1.UpdateOptions{})
+		}
+		return err
+	})
 }
 
 func (c *Controller) updateStatus(rcx *ReconcileContext) error {

@@ -27,10 +27,14 @@ import (
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	clientfake "github.com/kubernetes-sigs/kro/pkg/client/fake"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
@@ -157,13 +161,6 @@ func TestReconcileStatusPaths(t *testing.T) {
 			wantConditionType:   Ready,
 			wantConditionStatus: metav1.ConditionTrue,
 		},
-		{
-			name:                "suspended reconciliation sets condition",
-			instanceAnnotations: map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
-			wantState:           string(v1alpha1.InstanceStateActive),
-			wantConditionType:   ReconciliationSuspended,
-			wantConditionStatus: metav1.ConditionTrue,
-		},
 	}
 
 	for _, tt := range tests {
@@ -184,6 +181,101 @@ func TestReconcileStatusPaths(t *testing.T) {
 			require.True(t, found)
 			assert.Equal(t, tt.wantState, state)
 			assert.Equal(t, tt.wantConditionStatus, conditionByType(t, stored, tt.wantConditionType).Status)
+		})
+	}
+}
+
+func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
+	tests := []struct {
+		name        string
+		entry       revisions.Entry
+		hasLatest   bool
+		wantReason  string
+		wantMessage string
+	}{
+		{
+			name:        "not available marks GraphResolved false",
+			hasLatest:   false,
+			wantReason:  "ResolutionFailed",
+			wantMessage: "latest issued graph revision not available",
+		},
+		{
+			name:      "pending revision marks GraphResolved false",
+			hasLatest: true,
+			entry: revisions.Entry{
+				RGDName:  "webapps",
+				Revision: 3,
+				State:    revisions.RevisionStatePending,
+			},
+			wantReason:  "ResolutionFailed",
+			wantMessage: "latest issued graph revision 3 is pending",
+		},
+		{
+			name:      "failed revision marks GraphResolved false",
+			hasLatest: true,
+			entry: revisions.Entry{
+				RGDName:  "webapps",
+				Revision: 5,
+				State:    revisions.RevisionStateFailed,
+			},
+			wantReason:  "ResolutionFailed",
+			wantMessage: "latest issued graph revision 5 failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := newInstanceObject("demo", "default")
+			raw := newControllerTestDynamicClient(t, instance.DeepCopy())
+			clientSet := clientfake.NewFakeSet(raw)
+			clientSet.SetRESTMapper(buildControllerTestRESTMapper())
+
+			controller := NewController(
+				zap.New(zap.UseDevMode(true)),
+				ReconcileConfig{DefaultRequeueDuration: 2 * time.Second},
+				controllerTestParentGVR,
+				testRevisionResolver{
+					getLatestRevision: func() (revisions.Entry, bool) {
+						return tt.entry, tt.hasLatest
+					},
+					getGraphRevision: func(int64) (revisions.Entry, bool) {
+						return revisions.Entry{}, false
+					},
+				},
+				true,
+				clientSet,
+				metadata.NewKROMetaLabeler(),
+				metadata.NewKROMetaLabeler(),
+				newControllerTestCoordinator(t),
+				record.NewFakeRecorder(100),
+			)
+
+			err := controller.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"},
+			})
+			require.Error(t, err)
+
+			stored := getStoredParentObject(t, raw)
+			cond := conditionByType(t, stored, GraphResolved)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			require.NotNil(t, cond.Reason)
+			assert.Equal(t, tt.wantReason, *cond.Reason)
+			require.NotNil(t, cond.Message)
+			assert.Contains(t, *cond.Message, tt.wantMessage)
+
+			ready := conditionByType(t, stored, Ready)
+			assert.Equal(t, metav1.ConditionFalse, ready.Status, "Ready should be false when GraphResolved is false")
+
+			im := conditionByType(t, stored, InstanceManaged)
+			assert.Equal(t, metav1.ConditionUnknown, im.Status, "InstanceManaged should be Unknown (never reached)")
+
+			rr := conditionByType(t, stored, ResourcesReady)
+			assert.Equal(t, metav1.ConditionUnknown, rr.Status, "ResourcesReady should be Unknown (never reached)")
+
+			state, found, err := unstructured.NestedString(stored.Object, "status", "state")
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, string(v1alpha1.InstanceStateError), state)
 		})
 	}
 }

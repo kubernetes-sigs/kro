@@ -1316,6 +1316,71 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 			},
 		},
 		{
+			name: "re-issues a revision when the latest graph revision is deleted",
+			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition) {
+				t.Helper()
+
+				rgd := newTestRGD("rgd-latest-deleted")
+				rgd.Status.LastIssuedRevision = 5
+
+				// No GRs in the fake client — the latest was deleted.
+				// Registry still has the stale entry from the old revision.
+				cl := newTestClient(t, interceptor.Funcs{})
+				registry := revisions.NewRegistry()
+				registry.Put(revisions.Entry{
+					RGDName:       rgd.Name,
+					Revision:      5,
+					SpecHash:      "old-hash",
+					State:         revisions.RevisionStateActive,
+					CompiledGraph: newProcessedGraph(),
+				})
+
+				return &ResourceGraphDefinitionReconciler{
+					Client:            cl,
+					apiReader:         cl,
+					metadataLabeler:   metadata.NewKROMetaLabeler(),
+					rgBuilder:         newTestBuilder(),
+					revisionsRegistry: registry,
+					cfg: Config{
+						MaxGraphRevisions:    20,
+						ProgressRequeueDelay: 3 * time.Second,
+					},
+				}, rgd
+			},
+			check: func(
+				t *testing.T,
+				result ctrl.Result,
+				topologicalOrder []string,
+				resourcesInfo []v1alpha1.ResourceInformation,
+				err error,
+				reconciler *ResourceGraphDefinitionReconciler,
+				rgd *v1alpha1.ResourceGraphDefinition,
+			) {
+				t.Helper()
+
+				require.NoError(t, err)
+				assert.Equal(t, 3*time.Second, result.RequeueAfter)
+
+				// Should issue revision 6 (LastIssuedRevision 5 + 1).
+				assert.Equal(t, int64(6), rgd.Status.LastIssuedRevision)
+
+				revisionList := &internalv1alpha1.GraphRevisionList{}
+				require.NoError(t, reconciler.Client.List(context.Background(), revisionList))
+				require.Len(t, revisionList.Items, 1)
+				assert.Equal(t, int64(6), revisionList.Items[0].Spec.Revision)
+
+				// Stale registry entries should have been cleared.
+				_, ok := reconciler.revisionsRegistry.Get(rgd.Name, 5)
+				assert.False(t, ok, "stale registry entry should be cleared when no live revisions exist")
+
+				// New revision should not be in registry — GR controller owns that.
+				_, ok = reconciler.revisionsRegistry.Get(rgd.Name, 6)
+				assert.False(t, ok, "RGD controller should not seed the registry for newly issued revisions")
+
+				assert.True(t, conditionFor(t, rgd, GraphRevisionsResolved).IsUnknown())
+			},
+		},
+		{
 			name: "marks CreateGraphRevisionFailed when revision creation fails",
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, *v1alpha1.ResourceGraphDefinition) {
 				t.Helper()

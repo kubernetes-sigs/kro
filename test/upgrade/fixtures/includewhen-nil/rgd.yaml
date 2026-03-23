@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-includewhen-nil
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeIncludeNil
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: configmap
+    # includeWhen intentionally omitted (nil) — always included
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        test: includewhen-nil

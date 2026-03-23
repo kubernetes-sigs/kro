@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeMetaNil
+metadata:
+  name: test-metanil
+  namespace: upgrade-test
+spec:
+  name: test-metanil

@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeForEachEmpty
+metadata:
+  name: test-foreachempty
+  namespace: upgrade-test
+spec:
+  name: test-foreachempty

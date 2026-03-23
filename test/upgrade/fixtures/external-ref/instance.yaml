@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeExtRef
+metadata:
+  name: test-extref
+  namespace: upgrade-test
+spec:
+  name: test-extref

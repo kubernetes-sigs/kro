@@ -1,0 +1,33 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-conditional
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeConditionalApp
+    spec:
+      name: string
+      enableMonitoring: boolean | default=false
+    status: {}
+  resources:
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        app-name: ${schema.spec.name}
+  - id: monitoring
+    includeWhen:
+    - ${schema.spec.enableMonitoring}
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-monitoring
+        namespace: ${schema.metadata.namespace}
+      data:
+        monitoring: "enabled"

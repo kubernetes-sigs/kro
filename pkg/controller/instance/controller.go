@@ -207,6 +207,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	compiledGraph, err := c.resolveCompiledGraph()
 	if err != nil {
 		log.Error(err, "failed to resolve graph revision")
+		mark := NewConditionsMarkerFor(inst)
+		mark.GraphResolutionFailed("%v", err)
+		if statusErr := c.updateConditionsStatus(ctx, inst); statusErr != nil {
+			log.Error(statusErr, "failed to update conditions status after graph resolution failure")
+		}
 		return err
 	}
 	runtimeObj, err := runtime.FromGraph(compiledGraph, inst, c.reconcileConfig.RGDConfig)
@@ -261,7 +266,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	annotations := inst.GetAnnotations()
 	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
 	if !ok || !strings.EqualFold(reconcileState, "disabled") {
-		rcx.Mark.ReconciliationActive()
 		if err := c.reconcileNodes(rcx); err != nil {
 			var deletingErr *resourceDeletingError
 			if errors.As(err, &deletingErr) {
@@ -273,8 +277,6 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 			_ = c.updateStatus(rcx)
 			return err
 		}
-	} else {
-		rcx.Mark.ReconciliationSuspended("annotation %s is set to %s", v1alpha1.InstanceReconcileAnnotation, reconcileState)
 	}
 	// Only mark ResourcesReady if all resources reached terminal state.
 	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
@@ -315,9 +317,17 @@ func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
 	return nil
 }
 
+const (
+	graphResolutionReasonNotAvailable = "not_available"
+	graphResolutionReasonFailed       = "failed"
+	graphResolutionReasonUnknown      = "unknown_state"
+)
+
 func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
+	gvr := c.gvr.String()
 	latest, ok := c.graphResolver.GetLatestRevision()
 	if !ok {
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonNotAvailable).Inc()
 		return nil, requeue.NeededAfter(fmt.Errorf("latest issued graph revision not available"), c.reconcileConfig.DefaultRequeueDuration)
 	}
 
@@ -326,15 +336,19 @@ func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
 		// Active implies the newest issued revision compiled successfully and its
 		// graph is present; this is guaranteed by the GR reconciler and registry
 		// invariant.
+		instanceGraphResolutionSuccessTotal.WithLabelValues(gvr).Inc()
 		return latest.CompiledGraph, nil
 	case revisions.RevisionStatePending:
+		instanceGraphResolutionPendingTotal.WithLabelValues(gvr).Inc()
 		return nil, requeue.NeededAfter(
 			fmt.Errorf("latest issued graph revision %d is pending", latest.Revision),
 			c.reconcileConfig.DefaultRequeueDuration,
 		)
 	case revisions.RevisionStateFailed:
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonFailed).Inc()
 		return nil, requeue.None(fmt.Errorf("latest issued graph revision %d failed", latest.Revision))
 	default:
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonUnknown).Inc()
 		return nil, requeue.NeededAfter(
 			fmt.Errorf("latest issued graph revision %d has unknown state %q", latest.Revision, latest.State),
 			c.reconcileConfig.DefaultRequeueDuration,

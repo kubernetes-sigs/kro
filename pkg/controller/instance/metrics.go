@@ -25,6 +25,9 @@ func init() {
 		instanceReconcileDurationSeconds,
 		instanceReconcileTotal,
 		instanceReconcileErrorsTotal,
+		instanceGraphResolutionSuccessTotal,
+		instanceGraphResolutionFailuresTotal,
+		instanceGraphResolutionPendingTotal,
 	)
 }
 
@@ -58,6 +61,30 @@ var (
 		prometheus.CounterOpts{
 			Name: "instance_reconcile_errors_total",
 			Help: "Total number of instance reconciliation errors per GVR",
+		},
+		[]string{"gvr"},
+	)
+
+	instanceGraphResolutionSuccessTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "instance_graph_resolution_success_total",
+			Help: "Total number of successful graph resolutions during instance reconciliation",
+		},
+		[]string{"gvr"},
+	)
+
+	instanceGraphResolutionFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "instance_graph_resolution_failures_total",
+			Help: "Total number of graph resolution failures during instance reconciliation",
+		},
+		[]string{"gvr", "reason"},
+	)
+
+	instanceGraphResolutionPendingTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "instance_graph_resolution_pending_total",
+			Help: "Total number of graph resolutions deferred due to pending revision",
 		},
 		[]string{"gvr"},
 	)

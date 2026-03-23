@@ -42,7 +42,6 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	marker := NewConditionsMarkerFor(instance)
 	marker.InstanceManaged()
 	marker.GraphResolved()
-	marker.ReconciliationActive()
 	marker.ResourcesReady()
 
 	rcx := &ReconcileContext{
@@ -53,7 +52,6 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	assert.Equal(t, v1alpha1.InstanceStateActive, status["state"])
 
 	marker.ResourcesNotReady("not yet")
-	marker.ReconciliationSuspended("paused")
 	marker.ResourcesUnderDeletion("cleanup")
 	marker.InstanceNotManaged("nope")
 	marker.GraphResolutionFailed("bad graph")
@@ -65,7 +63,6 @@ func TestConditionsMarkerAndInitialStatus(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, InstanceManaged).Status)
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, instance, GraphResolved).Status)
 	assert.Equal(t, metav1.ConditionUnknown, conditionByType(t, instance, ResourcesReady).Status)
-	assert.Equal(t, metav1.ConditionTrue, conditionByType(t, instance, ReconciliationSuspended).Status)
 }
 
 func TestUpdateStatusPaths(t *testing.T) {

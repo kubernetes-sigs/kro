@@ -81,6 +81,11 @@ var _ = ginkgo.Describe("Post-Upgrade", ginkgo.Ordered, func() {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "Should be able to load pre-upgrade snapshot")
 
 		for rgdName, preSnap := range snapshot.RGDs {
+			// The deletion test suite owns this RGD's lifecycle and may
+			// have already removed it.
+			if rgdName == deletionRGDName {
+				continue
+			}
 			rgd := &krov1alpha1.ResourceGraphDefinition{}
 			gomega.Eventually(func(g gomega.Gomega) {
 				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rgdName}, rgd)).To(gomega.Succeed(),

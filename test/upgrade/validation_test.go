@@ -244,6 +244,15 @@ var fixtures = []fixtureRGD{
 			{GVR: gvrCoreConfigMaps, Name: "test-reverseorder-zzsecond", Namespace: "upgrade-test"},
 		},
 	},
+	{
+		Name:                "upgrade-deletion-target",
+		ExpectedInstanceGVR: kroGVR("upgradedeletiontargets"),
+		InstanceName:        "test-deletion-target",
+		InstanceNamespace:   "upgrade-test",
+		ExpectedChildResources: []expectedChild{
+			{GVR: gvrCoreConfigMaps, Name: "test-deletion-target-configmap", Namespace: "upgrade-test"},
+		},
+	},
 }
 
 var _ = ginkgo.Describe("Shared Validation", ginkgo.Ordered, func() {

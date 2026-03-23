@@ -28,11 +28,11 @@ import (
 )
 
 const (
-	// Use group-default for deletion tests — simple, one ConfigMap child.
-	deletionRGDName    = "upgrade-group-default"
+	// Dedicated fixture for deletion tests — isolated from other test suites.
+	deletionRGDName    = "upgrade-deletion-target"
 	deletionInstanceNS = "upgrade-test"
-	deletionInstance   = "test-groupdefault"
-	deletionChild      = "test-groupdefault-configmap"
+	deletionInstance   = "test-deletion-target"
+	deletionChild      = "test-deletion-target-configmap"
 	deletionTimeout    = 2 * time.Minute
 	deletionInterval   = 2 * time.Second
 )
@@ -46,7 +46,7 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 
 	ginkgo.It("should delete an instance and see child resources garbage collected", func() {
 		ginkgo.By("Verifying instance and child exist before deletion")
-		_, err := dynamicClient.Resource(kroGVR("upgradegroupdefaults")).
+		_, err := dynamicClient.Resource(kroGVR("upgradedeletiontargets")).
 			Namespace(deletionInstanceNS).
 			Get(ctx, deletionInstance, metav1.GetOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -57,14 +57,14 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		ginkgo.By("Deleting the instance")
-		err = dynamicClient.Resource(kroGVR("upgradegroupdefaults")).
+		err = dynamicClient.Resource(kroGVR("upgradedeletiontargets")).
 			Namespace(deletionInstanceNS).
 			Delete(ctx, deletionInstance, metav1.DeleteOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		ginkgo.By("Waiting for instance to be gone")
 		gomega.Eventually(func(g gomega.Gomega) {
-			_, err := dynamicClient.Resource(kroGVR("upgradegroupdefaults")).
+			_, err := dynamicClient.Resource(kroGVR("upgradedeletiontargets")).
 				Namespace(deletionInstanceNS).
 				Get(ctx, deletionInstance, metav1.GetOptions{})
 			g.Expect(errors.IsNotFound(err)).To(gomega.BeTrue(),
@@ -88,7 +88,7 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 		newInstance := &unstructured.Unstructured{
 			Object: map[string]interface{}{
 				"apiVersion": "kro.run/v1alpha1",
-				"kind":       "UpgradeGroupDefault",
+				"kind":       "UpgradeDeletionTarget",
 				"metadata": map[string]interface{}{
 					"name":      deletionInstance,
 					"namespace": deletionInstanceNS,
@@ -99,14 +99,14 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 			},
 		}
 
-		_, err := dynamicClient.Resource(kroGVR("upgradegroupdefaults")).
+		_, err := dynamicClient.Resource(kroGVR("upgradedeletiontargets")).
 			Namespace(deletionInstanceNS).
 			Create(ctx, newInstance, metav1.CreateOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		ginkgo.By("Waiting for instance to be ACTIVE")
 		gomega.Eventually(func(g gomega.Gomega) {
-			obj, err := dynamicClient.Resource(kroGVR("upgradegroupdefaults")).
+			obj, err := dynamicClient.Resource(kroGVR("upgradedeletiontargets")).
 				Namespace(deletionInstanceNS).
 				Get(ctx, deletionInstance, metav1.GetOptions{})
 			g.Expect(err).NotTo(gomega.HaveOccurred())
@@ -130,7 +130,7 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 	ginkgo.It("should block RGD deletion from removing the generated CRD (allowCRDDeletion=false)", func() {
 		ginkgo.By("Verifying the CRD exists")
 		_, err := dynamicClient.Resource(gvrCRDs).
-			Get(ctx, "upgradegroupdefaults.kro.run", metav1.GetOptions{})
+			Get(ctx, "upgradedeletiontargets.kro.run", metav1.GetOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		ginkgo.By("Deleting the RGD")
@@ -149,7 +149,7 @@ var _ = ginkgo.Describe("Post-Upgrade Deletion", ginkgo.Ordered, func() {
 
 		ginkgo.By("Verifying the generated CRD still exists (allowCRDDeletion=false)")
 		_, err = dynamicClient.Resource(gvrCRDs).
-			Get(ctx, "upgradegroupdefaults.kro.run", metav1.GetOptions{})
+			Get(ctx, "upgradedeletiontargets.kro.run", metav1.GetOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred(),
 			"Generated CRD should still exist when allowCRDDeletion=false")
 

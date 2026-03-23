@@ -1,0 +1,32 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-resources-reverse-order
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeReverseOrder
+    spec:
+      name: string
+    status: {}
+  resources:
+  # Intentionally declared in reverse alphabetical order by ID.
+  # hash.go sorts by ID — this must not cause a spurious GR.
+  - id: zzsecond
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-zzsecond
+        namespace: ${schema.metadata.namespace}
+      data:
+        order: second
+  - id: aafirst
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-aafirst
+        namespace: ${schema.metadata.namespace}
+      data:
+        order: first

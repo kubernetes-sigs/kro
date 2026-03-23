@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-group-default
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeGroupDefault
+    # group intentionally omitted — defaults to kro.run
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        test: group-default

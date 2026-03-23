@@ -1,0 +1,59 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-multi-dependency
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeMultiDep
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: config
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-config
+        namespace: ${schema.metadata.namespace}
+      data:
+        app: ${schema.spec.name}
+  - id: deployment
+    readyWhen:
+    - ${deployment.status.availableReplicas == deployment.spec.replicas}
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${schema.spec.name}-deployment
+        namespace: ${schema.metadata.namespace}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ${schema.spec.name}
+        template:
+          metadata:
+            labels:
+              app: ${schema.spec.name}
+          spec:
+            containers:
+            - name: app
+              image: nginx:1.25
+              envFrom:
+              - configMapRef:
+                  name: ${config.metadata.name}
+  - id: service
+    template:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ${deployment.metadata.name}
+        namespace: ${schema.metadata.namespace}
+      spec:
+        selector:
+          app: ${schema.spec.name}
+        ports:
+        - port: 80
+          targetPort: 80

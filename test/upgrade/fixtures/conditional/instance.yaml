@@ -1,0 +1,17 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeConditionalApp
+metadata:
+  name: test-conditional-off
+  namespace: upgrade-test
+spec:
+  name: test-conditional-off
+  enableMonitoring: false
+---
+apiVersion: kro.run/v1alpha1
+kind: UpgradeConditionalApp
+metadata:
+  name: test-conditional-on
+  namespace: upgrade-test
+spec:
+  name: test-conditional-on
+  enableMonitoring: true

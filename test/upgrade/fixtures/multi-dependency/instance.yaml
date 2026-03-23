@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeMultiDep
+metadata:
+  name: test-multidep
+  namespace: upgrade-test
+spec:
+  name: test-multidep

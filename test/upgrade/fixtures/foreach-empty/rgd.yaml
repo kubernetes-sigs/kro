@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-foreach-empty
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeForEachEmpty
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: configmap
+    forEach: []
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        test: foreach-empty

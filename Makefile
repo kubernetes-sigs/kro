@@ -141,9 +141,14 @@ ifeq ($(WHAT),integration)
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
 	go test -race -v ./pkg/... -coverprofile unit-cover.out
+else ifeq ($(WHAT),upgrade)
+	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
+	KRO_UPGRADE_MODE=$(MODE) \
+	KRO_UPGRADE_SKIP_GR_ASSERTIONS=$(KRO_UPGRADE_SKIP_GR_ASSERTIONS) \
+		go tool ginkgo -v ./test/upgrade/...
 else
-	@echo "Error: WHAT must be either 'unit' or 'integration'"
-	@echo "Usage: make test WHAT=unit|integration"
+	@echo "Error: WHAT must be either 'unit', 'integration', or 'upgrade'"
+	@echo "Usage: make test WHAT=unit|integration|upgrade"
 	@exit 1
 endif
 
@@ -380,3 +385,43 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 # Default end to end tests uses helm deployments
 .PHONY: test-e2e-kind
 test-e2e-kind: deploy-kind-helm
+
+##@ Upgrade Tests
+
+MODE ?= post-upgrade
+KRO_UPGRADE_FROM_VERSION ?= $(shell curl -sL https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | jq -r '.tag_name')
+KRO_UPGRADE_SKIP_GR_ASSERTIONS ?= $(shell \
+	minor=$$(echo "$(KRO_UPGRADE_FROM_VERSION)" | sed 's/v0\.\([0-9]*\).*/\1/'); \
+	if [ "$$minor" -lt 9 ] 2>/dev/null; then echo true; else echo false; fi)
+
+.PHONY: test-e2e-upgrade-kind
+test-e2e-upgrade-kind: start-kind install-old-kro ## Run upgrade tests: install old version, setup+test, upgrade, test
+	@echo "=== Pre-upgrade: setup fixtures + validation ==="
+	$(MAKE) test WHAT=upgrade MODE=pre-upgrade
+	@echo "=== Upgrading kro ==="
+	$(MAKE) upgrade-kro
+	@echo "=== Post-upgrade validation ==="
+	$(MAKE) test WHAT=upgrade MODE=post-upgrade
+
+.PHONY: install-old-kro
+install-old-kro: ## Install old kro version from OCI registry and apply upgrade fixtures
+	@echo "Installing kro $(KRO_UPGRADE_FROM_VERSION)..."
+	$(HELM) install kro oci://registry.k8s.io/kro/charts/kro \
+		--version $(KRO_UPGRADE_FROM_VERSION:v%=%) \
+		--namespace kro-system \
+		--set config.allowCRDDeletion=false \
+		--set config.resourceGraphDefinitionConcurrentReconciles=10 \
+		--set config.dynamicControllerConcurrentReconciles=10
+	kubectl wait --for=condition=available --timeout=3m deployment/kro -n kro-system
+	@echo "Old kro $(KRO_UPGRADE_FROM_VERSION) installed"
+
+.PHONY: upgrade-kro
+upgrade-kro: export KO_DOCKER_REPO=kind.local
+upgrade-kro: ko ## Build current kro and upgrade the running deployment (no cluster wipe)
+	$(MAKE) install
+	${HELM} template kro ./helm --namespace kro-system \
+		--set image.pullPolicy=Never --set image.ko=true \
+		--set config.allowCRDDeletion=false \
+		--set config.resourceGraphDefinitionConcurrentReconciles=10 \
+		--set config.dynamicControllerConcurrentReconciles=10 | $(WITH_GOFLAGS) $(KO) apply -f -
+	kubectl wait --for=condition=available --timeout=3m deployment/kro -n kro-system

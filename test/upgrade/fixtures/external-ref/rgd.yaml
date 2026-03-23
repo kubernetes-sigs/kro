@@ -1,0 +1,29 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-external-ref
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeExtRef
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: extconfig
+    externalRef:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: external-data
+        namespace: upgrade-test
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        inheritedEnv: ${extconfig.data.appEnv}
+        inheritedLevel: ${extconfig.data.logLevel}

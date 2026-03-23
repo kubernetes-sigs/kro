@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeDeletionTarget
+metadata:
+  name: test-deletion-target
+  namespace: upgrade-test
+spec:
+  name: test-deletion-target

@@ -1,0 +1,348 @@
+.container {
+  margin: 2.5rem 0 3rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Graph ── */
+
+.graph {
+  position: relative;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  aspect-ratio: 900 / 340;
+  padding: 0.5rem;
+}
+
+/* ── SVG edges ── */
+
+.edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.edge {
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.visible .edge {
+  opacity: 1;
+  transition-delay: 0.25s;
+}
+
+.edgeLabel {
+  font-family: var(--ifm-font-family-base);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  opacity: 0.5;
+}
+
+/* ── Nodes ── */
+
+.nodes {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.node {
+  position: absolute;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.67rem;
+  text-align: center;
+  min-width: 110px;
+}
+
+/* ── K8s objects ── */
+
+.nodeK8s {
+  border: 1.5px solid var(--ifm-color-primary);
+  background: var(--ifm-background-color);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='dark'] .nodeK8s {
+  background: var(--ifm-background-surface-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.nodeRgd {
+  min-width: 140px;
+}
+
+/* ── In-memory nodes ── */
+
+.nodeMem {
+  border: 1.5px dashed #34a853;
+  background: rgba(52, 168, 83, 0.03);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme='dark'] .nodeMem {
+  background: rgba(52, 168, 83, 0.06);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+}
+
+/* ── Dim old revisions ── */
+
+.nodeOld {
+  opacity: 0.55;
+}
+
+/* unused but kept for class application */
+.nodeLatest {}
+.nodeActive {}
+
+/* ── Node content ── */
+
+.nodeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
+}
+
+.nodeName {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ifm-heading-color);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.nodeDetail {
+  font-size: 0.62rem;
+  color: var(--ifm-color-emphasis-700);
+  margin-top: 0.12rem;
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
+
+.nodeRevRef {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--ifm-color-primary);
+  margin-top: 0.15rem;
+  letter-spacing: 0.01em;
+}
+
+/* ── Badges ── */
+
+.badge {
+  font-size: 0.54rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.14rem 0.42rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.badgeRgd {
+  background: rgba(91, 127, 201, 0.12);
+  color: var(--ifm-color-primary);
+}
+
+[data-theme='dark'] .badgeRgd {
+  background: rgba(147, 197, 253, 0.14);
+}
+
+.badgeGr {
+  background: rgba(212, 148, 10, 0.12);
+  color: #9a7000;
+}
+
+[data-theme='dark'] .badgeGr {
+  background: rgba(240, 192, 64, 0.14);
+  color: #f0c040;
+}
+
+.badgeInstance {
+  background: rgba(234, 67, 53, 0.1);
+  color: #c5221f;
+}
+
+[data-theme='dark'] .badgeInstance {
+  background: rgba(234, 67, 53, 0.14);
+  color: #f28b82;
+}
+
+.memIcon {
+  font-size: 0.72rem;
+  color: #34a853;
+  line-height: 1;
+}
+
+.latestTag {
+  font-size: 0.4rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.06rem 0.26rem;
+  border-radius: 3px;
+  background: rgba(91, 127, 201, 0.08);
+  color: var(--ifm-color-primary);
+  line-height: 1;
+}
+
+.readyDot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #34a853;
+  box-shadow: 0 0 0 2px rgba(52, 168, 83, 0.15);
+}
+
+/* ── Legend (below) ── */
+
+.legend {
+  display: flex;
+  gap: 1.6rem;
+  justify-content: center;
+  margin-top: 1.2rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  max-width: 340px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legendSwatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.legendK8s {
+  border: 1.5px solid var(--ifm-color-primary);
+  background: var(--ifm-background-color);
+}
+
+.legendMem {
+  border: 1.5px dashed #34a853;
+  background: var(--ifm-background-color);
+}
+
+.legendText {
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.68rem;
+  color: var(--ifm-color-emphasis-700);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ── Vertical layout ── */
+
+.vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.vSection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.vSectionLabel {
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ifm-color-emphasis-500);
+  margin-bottom: 0.5rem;
+}
+
+.vGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.vGroup .node,
+.vSection > .node {
+  position: relative;
+  width: 100%;
+  max-width: 260px;
+}
+
+.vArrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.3rem 0;
+  color: var(--ifm-color-emphasis-400);
+}
+
+.vArrowLabel {
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.52rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ifm-color-emphasis-500);
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 768px) {
+  .container {
+    margin: 1.5rem 0 2rem;
+  }
+
+  .vertical {
+    max-width: 280px;
+  }
+
+  .vGroup .node,
+  .vSection > .node {
+    max-width: 220px;
+    padding: 0.4rem 0.6rem;
+  }
+
+  .nodeName {
+    font-size: 0.62rem;
+  }
+
+  .nodeDetail,
+  .nodeRevRef {
+    font-size: 0.5rem;
+  }
+
+  .legend {
+    gap: 1rem;
+    max-width: 240px;
+  }
+}

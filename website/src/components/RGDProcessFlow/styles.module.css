@@ -1,0 +1,117 @@
+.container {
+  margin: 2rem 0 2.5rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  max-width: 580px;
+  margin: 0 auto;
+}
+
+/* ── Headers ── */
+
+.headerLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ifm-color-emphasis-700);
+}
+
+.headerLabelKro {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 14px;
+  font-weight: 800;
+  fill: var(--ifm-color-primary);
+}
+
+/* ── Step rows ── */
+
+.step {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.visible .step {
+  opacity: 1;
+}
+
+.visible .delay0 { transition-delay: 0.05s; }
+.visible .delay1 { transition-delay: 0.1s; }
+.visible .delay2 { transition-delay: 0.15s; }
+.visible .delay3 { transition-delay: 0.2s; }
+.visible .delay4 { transition-delay: 0.25s; }
+.visible .delay5 { transition-delay: 0.3s; }
+.visible .delay6 { transition-delay: 0.35s; }
+.visible .delay7 { transition-delay: 0.4s; }
+
+/* ── Step labels ── */
+
+.stepLabel {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--ifm-color-emphasis-600);
+}
+
+.stepLabelKro {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--ifm-color-primary);
+}
+
+/* ── Number circles ── */
+
+.numBg {
+  fill: var(--ifm-color-emphasis-100);
+}
+
+.numBgKro {
+  fill: #e8eef8;
+}
+
+[data-theme='dark'] .numBgKro {
+  fill: #2a3554;
+}
+
+.numText {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 10px;
+  font-weight: 700;
+  fill: var(--ifm-color-emphasis-700);
+}
+
+.numBgKro + .numText {
+  fill: var(--ifm-color-primary);
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 768px) {
+  .svg {
+    max-width: 100%;
+  }
+
+  .headerLabel,
+  .headerLabelKro {
+    font-size: 12px;
+  }
+
+  .stepLabel,
+  .stepLabelKro {
+    font-size: 9px;
+  }
+
+  .numText {
+    font-size: 8px;
+  }
+}

@@ -136,6 +136,8 @@ config:
   healthProbeBindAddress: :8079
   # The number of resource graph definition reconciles to run in parallel
   resourceGraphDefinitionConcurrentReconciles: 1
+  # Delay before requeueing while an RGD is waiting for asynchronous progress
+  resourceGraphDefinitionProgressRequeueDelay: 3s
   # The number of graph revision reconciles to run in parallel
   graphRevisionConcurrentReconciles: 1
   # The maximum duration to wait for the controller manager to gracefully shutdown
@@ -146,6 +148,14 @@ config:
   dynamicControllerDefaultResyncPeriod: 36000
   # The maximum number of retries for an item in the queue will be retried before being dropped
   dynamicControllerDefaultQueueMaxRetries: 20
+  # Minimum retry delay before requeueing a dynamic controller item
+  dynamicControllerRateLimiterMinDelay: 200ms
+  # Maximum retry delay before requeueing a dynamic controller item
+  dynamicControllerRateLimiterMaxDelay: 1000s
+  # Events per second allowed through the dynamic controller rate limiter
+  dynamicControllerRateLimiterRateLimit: 10
+  # Burst size allowed through the dynamic controller rate limiter
+  dynamicControllerRateLimiterBurstLimit: 100
   # Log level verbosity: 'debug', 'info', 'error', 'panic', or integer > 0
   logLevel: "info"
   rgd:
@@ -173,7 +183,7 @@ metrics:
     create: false
     type: "ClusterIP"
     # Port for the metrics service
-    port: 8080
+    port: 8078
   serviceMonitor:
     # -- Whether to create a ServiceMonitor
     enabled: false

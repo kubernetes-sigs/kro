@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
@@ -132,6 +133,7 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 				MaxConcurrentReconciles: r.cfg.MaxConcurrentReconciles,
 			},
 		).
+		Owns(&internalv1alpha1.GraphRevision{}).
 		WatchesMetadata(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),

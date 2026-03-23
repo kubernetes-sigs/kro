@@ -1191,6 +1191,154 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("should re-issue a revision when the latest graph revision is deleted", func(ctx SpecContext) {
+		const numRevisions = 5
+		rgdName := fmt.Sprintf("gr-reissue-%s", rand.String(5))
+		kind := fmt.Sprintf("GrReissue%s", rand.String(5))
+
+		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
+
+		// Verify 5 revisions and RGD is active
+		var latestGR internalv1alpha1.GraphRevision
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
+
+			grs := listGraphRevisions(ctx, rgdName)
+			g.Expect(grs).To(HaveLen(numRevisions))
+
+			// Find the latest revision
+			for i := range grs {
+				if grs[i].Spec.Revision == numRevisions {
+					latestGR = grs[i]
+				}
+			}
+			g.Expect(latestGR.Spec.Revision).To(Equal(int64(numRevisions)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Delete the latest revision. The GR controller will handle finalizer
+		// removal and registry eviction. The RGD controller should then detect
+		// the missing revision and re-issue.
+		Expect(env.Client.Delete(ctx, &latestGR)).To(Succeed())
+
+		// Wait for the RGD controller to re-issue. The intermediate state
+		// (4 revisions) may not be observable because the controller reacts
+		// before we poll.
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 1)))
+
+			grs := listGraphRevisions(ctx, rgdName)
+			g.Expect(grs).To(HaveLen(numRevisions))
+
+			// Verify the re-issued revision exists with the right number
+			revNums := map[int64]bool{}
+			for _, gr := range grs {
+				revNums[gr.Spec.Revision] = true
+			}
+			g.Expect(revNums).To(HaveKey(int64(numRevisions + 1)),
+				"revision %d should be re-issued", numRevisions+1)
+			g.Expect(revNums).ToNot(HaveKey(int64(numRevisions)),
+				"deleted revision %d should not reappear", numRevisions)
+
+			// The latest revision in the list must be revision 6
+			var maxRevision int64
+			for rev := range revNums {
+				if rev > maxRevision {
+					maxRevision = rev
+				}
+			}
+			g.Expect(maxRevision).To(Equal(int64(numRevisions + 1)))
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		DeferCleanup(func(ctx SpecContext) {
+			for _, gr := range listGraphRevisions(ctx, rgdName) {
+				_ = env.Client.Delete(ctx, &gr)
+			}
+			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
+			})
+		})
+	})
+
+	It("should re-issue when a manually injected revision has a different spec", func(ctx SpecContext) {
+		const numRevisions = 5
+		rgdName := fmt.Sprintf("gr-inject-%s", rand.String(5))
+		kind := fmt.Sprintf("GrInject%s", rand.String(5))
+
+		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
+
+		// Wait for active at revision 5
+		var activeRGD krov1alpha1.ResourceGraphDefinition
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Inject a GR at revision 6 with a different snapshot spec.
+		// Use the original unmutated configmapRGD spec — valid but different
+		// hash from the current (mutated) RGD spec.
+		differentSpec := configmapRGD(rgdName, kind)
+		injectedGR := &internalv1alpha1.GraphRevision{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("%s-r%05d", rgdName, numRevisions+1),
+				Labels: map[string]string{
+					metadata.ResourceGraphDefinitionNameLabel: rgdName,
+				},
+				OwnerReferences: []metav1.OwnerReference{
+					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
+				},
+			},
+			Spec: internalv1alpha1.GraphRevisionSpec{
+				Revision: int64(numRevisions + 1),
+				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+					Name: rgdName,
+					Spec: differentSpec.Spec,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
+
+		// The GR controller compiles revision 6 (valid spec). The RGD
+		// controller sees it as latest but the hash doesn't match the
+		// current RGD spec, so it issues revision 7.
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 2)))
+
+			grs := listGraphRevisions(ctx, rgdName)
+			g.Expect(grs).To(HaveLen(numRevisions + 2))
+
+			var maxRevision int64
+			for _, gr := range grs {
+				if gr.Spec.Revision > maxRevision {
+					maxRevision = gr.Spec.Revision
+				}
+			}
+			g.Expect(maxRevision).To(Equal(int64(numRevisions + 2)))
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		DeferCleanup(func(ctx SpecContext) {
+			for _, gr := range listGraphRevisions(ctx, rgdName) {
+				_ = env.Client.Delete(ctx, &gr)
+			}
+			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
+			})
+		})
+	})
+
 	It("should serve instances using compiled graph from current revision", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("gr-serve-%s", rand.String(5))
 		kind := fmt.Sprintf("GrServe%s", rand.String(5))

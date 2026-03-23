@@ -1242,7 +1242,7 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			for _, gr := range grs {
 				revNums[gr.Spec.Revision] = true
 			}
-			g.Expect(revNums).To(HaveKey(int64(numRevisions + 1)),
+			g.Expect(revNums).To(HaveKey(int64(numRevisions+1)),
 				"revision %d should be re-issued", numRevisions+1)
 			g.Expect(revNums).ToNot(HaveKey(int64(numRevisions)),
 				"deleted revision %d should not reappear", numRevisions)
@@ -1267,6 +1267,7 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 		})
 	})
 
+	//nolint:dupl // Intentionally separate — valid vs invalid injected spec exercise different GR controller paths.
 	It("should re-issue when a manually injected revision has a different spec", func(ctx SpecContext) {
 		const numRevisions = 5
 		rgdName := fmt.Sprintf("gr-inject-%s", rand.String(5))
@@ -1336,6 +1337,275 @@ var _ = Describe("GraphRevision Spec Immutability", func() {
 			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
 				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
 			})
+		})
+	})
+
+	//nolint:dupl // See above — mirror test with invalid spec.
+	It("should re-issue when a manually injected revision has an invalid spec", func(ctx SpecContext) {
+		const numRevisions = 5
+		rgdName := fmt.Sprintf("gr-inject-invalid-%s", rand.String(5))
+		kind := fmt.Sprintf("GrInjInv%s", rand.String(5))
+
+		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
+
+		// Wait for active at revision 5
+		var activeRGD krov1alpha1.ResourceGraphDefinition
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Inject a GR at revision 6 with an invalid spec (circular dependency).
+		// The GR controller will fail to compile it, but the hash mismatch
+		// means the RGD controller re-issues regardless of the Failed state.
+		invalidSpec := invalidConfigmapRGD(rgdName, kind)
+		injectedGR := &internalv1alpha1.GraphRevision{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("%s-r%05d", rgdName, numRevisions+1),
+				Labels: map[string]string{
+					metadata.ResourceGraphDefinitionNameLabel: rgdName,
+				},
+				OwnerReferences: []metav1.OwnerReference{
+					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
+				},
+			},
+			Spec: internalv1alpha1.GraphRevisionSpec{
+				Revision: int64(numRevisions + 1),
+				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+					Name: rgdName,
+					Spec: invalidSpec.Spec,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
+
+		// The RGD controller should see revision 6 with a different hash
+		// and re-issue revision 7 with the correct spec.
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions + 2)))
+
+			grs := listGraphRevisions(ctx, rgdName)
+			g.Expect(grs).To(HaveLen(numRevisions + 2))
+
+			var maxRevision int64
+			for _, gr := range grs {
+				if gr.Spec.Revision > maxRevision {
+					maxRevision = gr.Spec.Revision
+				}
+			}
+			g.Expect(maxRevision).To(Equal(int64(numRevisions + 2)))
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		DeferCleanup(func(ctx SpecContext) {
+			for _, gr := range listGraphRevisions(ctx, rgdName) {
+				_ = env.Client.Delete(ctx, &gr)
+			}
+			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
+			})
+		})
+	})
+
+	It("should stay active but mark revisions unresolved when a terminating GR is stuck", func(ctx SpecContext) {
+		const numRevisions = 5
+		rgdName := fmt.Sprintf("gr-stuck-%s", rand.String(5))
+		kind := fmt.Sprintf("GrStuck%s", rand.String(5))
+
+		createRGDWithRevisions(ctx, rgdName, kind, numRevisions)
+
+		// Wait for active at revision 5
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(numRevisions)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Inject a custom finalizer on the latest GR so it hangs on deletion.
+		var latestGR internalv1alpha1.GraphRevision
+		Eventually(func(g Gomega) {
+			grs := listGraphRevisions(ctx, rgdName)
+			for i := range grs {
+				if grs[i].Spec.Revision == numRevisions {
+					latestGR = grs[i]
+				}
+			}
+			g.Expect(latestGR.Spec.Revision).To(Equal(int64(numRevisions)))
+
+			latestGR.Finalizers = append(latestGR.Finalizers, "test.kro.run/block-deletion")
+			g.Expect(env.Client.Update(ctx, &latestGR)).To(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Delete it — the GR controller removes its own finalizer but
+		// test.kro.run/block-deletion keeps the object alive.
+		Expect(env.Client.Delete(ctx, &latestGR)).To(Succeed())
+
+		// RGD should stay Active (CRD + controller still running) but
+		// GraphRevisionsResolved should be Unknown with settling reason.
+		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
+			state: krov1alpha1.ResourceGraphDefinitionStateActive,
+			conditions: map[string]metav1.ConditionStatus{
+				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
+			},
+			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
+			reason:          "WaitingForGraphRevisionSettlement",
+		})
+
+		// Verify it stays in this state consistently while the GR is stuck.
+		Consistently(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			assertRGDConditionStatusOnly(g, fresh, resourcegraphdefinition.GraphRevisionsResolved, metav1.ConditionUnknown)
+		}, 5*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Release the stuck finalizer — RGD should recover.
+		Eventually(func(g Gomega) {
+			fresh := &internalv1alpha1.GraphRevision{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: latestGR.Name}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			fresh.Finalizers = nil
+			g.Expect(env.Client.Update(ctx, fresh)).To(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// RGD should re-issue and become fully resolved again.
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(fresh.Status.LastIssuedRevision).To(BeNumerically(">", int64(numRevisions)))
+
+			cond := findRGDCondition(fresh.Status.Conditions, krov1alpha1.ConditionType(
+				resourcegraphdefinition.GraphRevisionsResolved,
+			))
+			g.Expect(cond).ToNot(BeNil())
+			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		}, 60*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		DeferCleanup(func(ctx SpecContext) {
+			// Clean up any remaining stuck GRs
+			for _, gr := range listGraphRevisions(ctx, rgdName) {
+				gr.Finalizers = nil
+				_ = env.Client.Update(ctx, &gr)
+				_ = env.Client.Delete(ctx, &gr)
+			}
+			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
+			})
+		})
+	})
+
+	It("should become inactive when the latest injected GR fails compilation with matching hash", func(ctx SpecContext) {
+		rgdName := fmt.Sprintf("gr-fail-compile-%s", rand.String(5))
+		kind := fmt.Sprintf("GrFailCmp%s", rand.String(5))
+
+		// Start with a valid RGD
+		rgd := configmapRGD(rgdName, kind)
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			for _, gr := range listGraphRevisions(ctx, rgdName) {
+				_ = env.Client.Delete(ctx, &gr)
+			}
+			_ = env.Client.Delete(ctx, &krov1alpha1.ResourceGraphDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: rgdName},
+			})
+		})
+
+		// Wait for active at revision 1
+		var activeRGD krov1alpha1.ResourceGraphDefinition
+		Eventually(func(g Gomega) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, &activeRGD)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(activeRGD.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			g.Expect(activeRGD.Status.LastIssuedRevision).To(Equal(int64(1)))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Update the RGD spec to something invalid (circular dependency).
+		// The RGD controller will fail to build and won't issue a new revision.
+		invalidSpec := invalidConfigmapRGD(rgdName, kind)
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			fresh.Spec = invalidSpec.Spec
+			g.Expect(env.Client.Update(ctx, fresh)).To(Succeed())
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Wait for Inactive — the RGD controller can't build the invalid spec.
+		Eventually(func(g Gomega) {
+			fresh := &krov1alpha1.ResourceGraphDefinition{}
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		// Now inject a GR at revision 2 with the same invalid spec.
+		// The hash will match the current (invalid) RGD spec. The GR controller
+		// will try to compile it and fail.
+		injectedGR := &internalv1alpha1.GraphRevision{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("%s-r%05d", rgdName, 2),
+				Labels: map[string]string{
+					metadata.ResourceGraphDefinitionNameLabel: rgdName,
+				},
+				OwnerReferences: []metav1.OwnerReference{
+					metadata.NewResourceGraphDefinitionOwnerReference(rgdName, activeRGD.UID),
+				},
+			},
+			Spec: internalv1alpha1.GraphRevisionSpec{
+				Revision: 2,
+				Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+					Name: rgdName,
+					Spec: invalidSpec.Spec,
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, injectedGR)).To(Succeed())
+
+		// The GR controller compiles → fails → registry marks Failed.
+		// The RGD sees latest revision 2 with matching hash and Failed state.
+		// GraphAccepted=False → Inactive.
+		failMsg := "latest graph revision 2 failed compilation"
+		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
+			state: krov1alpha1.ResourceGraphDefinitionStateInactive,
+			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
+					status:  metav1.ConditionFalse,
+					reason:  "Failed",
+					message: failMsg,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
+					status:  metav1.ConditionFalse,
+					reason:  "InvalidResourceGraph",
+					message: failMsg,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.KindReady): {
+					status:                   metav1.ConditionTrue,
+					reason:                   "Ready",
+					message:                  fmt.Sprintf("kind %s has been accepted and ready", kind),
+					observedGenerationOffset: -1,
+				},
+				krov1alpha1.ConditionType(resourcegraphdefinition.ControllerReady): {
+					status:                   metav1.ConditionTrue,
+					reason:                   "Running",
+					message:                  "controller is running",
+					observedGenerationOffset: -1,
+				},
+				krov1alpha1.ConditionType(apis.ConditionReady): {
+					status:  metav1.ConditionFalse,
+					reason:  "Failed",
+					message: failMsg,
+				},
+			},
 		})
 	})
 

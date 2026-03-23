@@ -3,6 +3,8 @@ sidebar_position: 1
 sidebar_label: Overview
 ---
 
+import RGDProcessFlow from '@site/src/components/RGDProcessFlow';
+
 # Overview
 
 A **ResourceGraphDefinition** (RGD) lets you create a custom Kubernetes API that deploys multiple resources together as a single unit. It's the only API you need to configure kro - you define the schema for your new API, the resources it should create, and how data flows between them using CEL expressions.
@@ -16,11 +18,7 @@ When you apply an RGD, kro configures itself to serve your new API. It generates
 3. **Users create instances** of your API
 4. **kro creates and manages** all the underlying resources
 
-<div style={{textAlign: 'center', marginTop: '2rem', marginBottom: '2rem'}}>
-
-<img src="/img/overview-diag.svg" alt="kro RGD Flow" style={{maxWidth: '600px', width: '100%'}} />
-
-</div>
+<RGDProcessFlow />
 
 ## Example
 
@@ -211,6 +209,32 @@ Breaking changes can invalidate existing instances. Ensure you understand the im
 - **Validation**: Users get immediate feedback if they provide invalid values
 - **Reusability**: Define once, use many times across teams
 
+## Graph Revisions
+
+Every time you change an RGD's spec, kro creates an immutable snapshot called a
+**GraphRevision** rather than compiling the spec inline. This separates
+validation from compilation and gives you a visible history of every spec change.
+
+The RGD controller hashes the new spec, deduplicates against the latest
+revision, and creates a new GraphRevision object if the spec actually changed. A
+separate GraphRevision controller then compiles the snapshot independently and
+writes the result into an in-memory registry that instance controllers read from.
+
+You can list revisions with `kubectl get gr`:
+
+```text
+NAME              REVISION   READY   AGE
+my-webapp-r00001  1          True    2d
+my-webapp-r00002  2          True    1d
+my-webapp-r00003  3          True    5m
+```
+
+If the latest revision fails compilation, instances stop progressing until you
+push a valid spec - there is no automatic fallback to an older revision.
+
+For the full details on naming, lifecycle, retention, and debugging, see
+[Graph Revisions](../../advanced/05-graph-revisions.md).
+
 ## Next Steps
 
 Explore the details of ResourceGraphDefinitions:
@@ -224,3 +248,4 @@ Explore the details of ResourceGraphDefinitions:
 - **[CEL Expressions](./03-cel-expressions.md)** - Reference data between resources
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - How kro infers dependencies and determines creation order
 - **[Static Type Checking](./05-static-type-checking.md)** - How kro validates RGDs before instances are created
+- **[Graph Revisions](../../advanced/05-graph-revisions.md)** - How kro snapshots and compiles RGD spec changes

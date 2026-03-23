@@ -203,6 +203,8 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	assert.Equal(t, metadata.KRORGOwnerReferenceAPIVersion, created.OwnerReferences[0].APIVersion)
 	assert.Equal(t, rgd.Name, created.OwnerReferences[0].Name)
 	assert.Equal(t, rgd.UID, created.OwnerReferences[0].UID)
+	require.NotNil(t, created.OwnerReferences[0].Controller)
+	assert.True(t, *created.OwnerReferences[0].Controller)
 
 	stored := &internalv1alpha1.GraphRevision{}
 	err = cl.Get(context.Background(), client.ObjectKey{Name: created.Name}, stored)
@@ -212,6 +214,8 @@ func TestCreateGraphRevision_SetsOwnerReferences(t *testing.T) {
 	assert.Equal(t, metadata.KRORGOwnerReferenceAPIVersion, stored.OwnerReferences[0].APIVersion)
 	assert.Equal(t, rgd.Name, stored.OwnerReferences[0].Name)
 	assert.Equal(t, rgd.UID, stored.OwnerReferences[0].UID)
+	require.NotNil(t, stored.OwnerReferences[0].Controller)
+	assert.True(t, *stored.OwnerReferences[0].Controller)
 	assert.Equal(t, "demo", stored.Labels[metadata.ResourceGraphDefinitionNameLabel])
 	assert.Empty(t, stored.Labels[metadata.ResourceGraphDefinitionIDLabel])
 	assert.Equal(t, "hash-3", stored.Labels[metadata.GraphRevisionHashLabel])

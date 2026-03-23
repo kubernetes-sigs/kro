@@ -33,7 +33,7 @@ func NewResourceGraphDefinitionOwnerReference(name string, uid types.UID) metav1
 		Name:       name,
 		Kind:       KRORGOwnerReferenceKind,
 		APIVersion: KRORGOwnerReferenceAPIVersion,
-		Controller: &[]bool{false}[0],
+		Controller: &[]bool{true}[0],
 		UID:        uid,
 	}
 }

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 5
 ---
 
 # Controller Tuning
@@ -89,6 +89,14 @@ More workers increase throughput but also increase concurrent API server load.
 
 The resync period triggers reconciliation for all resources periodically, even without changes. This catches any drift that might have been missed.
 
+### Instance Requeues
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `config.instance.requeueInterval` | `3s` | Fixed delay for delayed instance requeues when kro is waiting for resources, readiness, or deletion to settle. Set to `0` to disable delayed requeues |
+
+This setting is also available as the `--instance-requeue-interval` flag.
+
 ### Rate Limiting
 
 The queue uses a combined rate limiter with two strategies:
@@ -121,3 +129,67 @@ config:
   clientQps: 200
   clientBurst: 300
 ```
+
+## pprof Profiling
+
+For performance testing and troubleshooting, kro provides a debug image variant with [pprof](https://pkg.go.dev/net/http/pprof) profiling enabled.
+
+:::warning
+The debug image exposes sensitive performance data through pprof endpoints. **Do not use in production environments.**
+:::
+
+### Enable pprof in Helm
+
+Enable pprof in your Helm values:
+
+```yaml
+debug:
+  pprof:
+    enabled: true    # Uses the -debug tagged image
+    port: 6060       # Port for the pprof HTTP server
+    service:
+      enabled: true  # Create a Service for port-forwarding
+```
+
+This switches the chart to the `-debug` image tag and configures the controller to serve pprof on the configured port.
+
+### Build the pprof Image
+
+Use the dedicated Make targets when building or publishing the pprof-enabled image:
+
+```bash
+make build-debug-image RELEASE_VERSION=v0.8.6
+make publish-debug-image RELEASE_VERSION=v0.8.6
+```
+
+If you deploy with `image.ko=true` or use `ko apply` directly, build with `GOFLAGS="-tags=pprof"` so the pprof handlers are compiled into the controller binary.
+
+### Collect a Profile
+
+If you enabled the pprof Service, port-forward it locally:
+
+```bash
+kubectl -n kro-system port-forward service/<helm-release>-pprof 6060:6060
+```
+
+If you left the Service disabled, port-forward the controller Pod instead.
+
+Capture a CPU profile while reproducing the issue:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+```
+
+Inspect heap growth when chasing memory pressure:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+Inside the `pprof` shell, start with `top`, `top -cum`, and `list <function>` to find the hottest code paths.
+
+### What to Look For
+
+- High CPU time in reconciliation hot paths such as graph construction, CEL evaluation, or repeated object conversion.
+- Large retained heap in informer caches, unstructured object copies, or repeated allocations inside reconcile loops.
+- Excess time spent in Kubernetes client calls, which can indicate that `config.clientQps` and `config.clientBurst` are too low for the cluster size.

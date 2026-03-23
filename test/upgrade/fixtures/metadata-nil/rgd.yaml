@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-metadata-nil
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeMetaNil
+    # metadata intentionally omitted (nil)
+    spec:
+      name: string
+    status: {}
+  resources:
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        test: metadata-nil

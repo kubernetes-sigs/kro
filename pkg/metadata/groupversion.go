@@ -20,6 +20,7 @@ import (
 
 	"github.com/gobuffalo/flect"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
@@ -29,6 +30,9 @@ const (
 )
 
 // ExtractGVKFromUnstructured extracts the GroupVersionKind from an unstructured object.
+// It performs early validation to fail fast and avoid unnecessary API calls:
+// - apiVersion: parsed with schema.ParseGroupVersion for proper validation
+// - kind: validated as DNS-1035 label after lowercasing
 func ExtractGVKFromUnstructured(unstructured map[string]interface{}) (schema.GroupVersionKind, error) {
 	kind, ok := unstructured["kind"].(string)
 	if !ok {
@@ -40,21 +44,23 @@ func ExtractGVKFromUnstructured(unstructured map[string]interface{}) (schema.Gro
 		return schema.GroupVersionKind{}, fmt.Errorf("apiVersion not found or not a string")
 	}
 
-	parts := strings.Split(apiVersion, "/")
-	if len(parts) > 2 {
-		return schema.GroupVersionKind{}, fmt.Errorf("invalid apiVersion format: %s", apiVersion)
+	// Early validation: parse apiVersion using schema.ParseGroupVersion
+	// This validates the format before attempting schema resolution
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return schema.GroupVersionKind{}, fmt.Errorf("invalid apiVersion format %q: %w", apiVersion, err)
 	}
 
-	var group, version string
-	if len(parts) == 2 {
-		group, version = parts[0], parts[1]
-	} else {
-		version = parts[0]
+	// Early validation: validate kind as DNS-1035 label after lowercasing
+	// This ensures the kind is valid before attempting API lookups
+	kindLower := strings.ToLower(kind)
+	if errs := validation.IsDNS1035Label(kindLower); len(errs) > 0 {
+		return schema.GroupVersionKind{}, fmt.Errorf("invalid kind %q: %s (must be a valid DNS-1035 label when lowercased)", kind, strings.Join(errs, ", "))
 	}
 
 	return schema.GroupVersionKind{
-		Group:   group,
-		Version: version,
+		Group:   gv.Group,
+		Version: gv.Version,
 		Kind:    kind,
 	}, nil
 }

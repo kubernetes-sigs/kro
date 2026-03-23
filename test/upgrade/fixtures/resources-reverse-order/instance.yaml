@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeReverseOrder
+metadata:
+  name: test-reverseorder
+  namespace: upgrade-test
+spec:
+  name: test-reverseorder

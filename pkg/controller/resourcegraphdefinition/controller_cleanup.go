@@ -30,7 +30,8 @@ import (
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
 // microcontroller and cleaning up the CRD if enabled. It executes cleanup operations in order:
 // 1. Shuts down the microcontroller
-// 2. Deletes the associated CRD (if CRD deletion is enabled)
+// 2. Evicts all cached graph revisions from the in-memory registry
+// 3. Deletes the associated CRD (if CRD deletion is enabled)
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
@@ -39,6 +40,19 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 	}
+
+	// Registry eviction is NOT done here. The GraphRevision controller evicts
+	// individual entries as each revision is deleted by GC, and the bucket is
+	// automatically removed when the last entry is evicted.
+	//
+	// This is safe because:
+	// - The micro-controller is already stopped above, so no instance
+	//   reconciles can read from the registry for this RGD.
+	// - listGraphRevisions filters out terminating revisions.
+	// - New revision numbers are always higher than existing ones.
+	//
+	// Not evicting here allows orphaned revisions (cascade=orphan) to remain
+	// in the registry and be re-adopted by a recreated RGD with the same name.
 
 	// cleanup CRD
 	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
@@ -61,8 +75,11 @@ func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicro
 // cleanupResourceGraphDefinitionCRD deletes the CRD with the given name if CRD deletion is enabled.
 // If CRD deletion is disabled, it logs the skip and returns nil.
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
-	if !r.allowCRDDeletion {
-		ctrl.LoggerFrom(ctx).Info("skipping CRD deletion (disabled)", "crd", crdName)
+	if !r.cfg.AllowCRDDeletion {
+		ctrl.LoggerFrom(ctx).Info(
+			"skipping CRD deletion because allowCRDDeletion is disabled",
+			"crd", crdName,
+		)
 		return nil
 	}
 

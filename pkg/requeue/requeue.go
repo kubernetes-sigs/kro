@@ -18,6 +18,20 @@ import (
 	"time"
 )
 
+// IsRequeueError reports whether err is a requeue signal
+// (RequeueNeeded or RequeueNeededAfter). Returns false for nil.
+func IsRequeueError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch err.(type) {
+	case *RequeueNeeded, *RequeueNeededAfter:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	DefaultRequeueAfterDuration time.Duration = 30 * time.Second
 )

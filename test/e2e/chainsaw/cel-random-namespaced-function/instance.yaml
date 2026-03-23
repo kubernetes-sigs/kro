@@ -1,0 +1,6 @@
+apiVersion: test.kro.run/v1alpha1
+kind: RandomFnApp
+metadata:
+  name: random-fn-app
+spec:
+  namespace: default

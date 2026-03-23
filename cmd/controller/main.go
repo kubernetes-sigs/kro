@@ -17,6 +17,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -25,15 +26,21 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	xv1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	graphrevisionctrl "github.com/kubernetes-sigs/kro/pkg/controller/graphrevision"
 	resourcegraphdefinitionctrl "github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -45,18 +52,24 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(xv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
+	metrics.Register()
+
 	var (
 		metricsAddr                                 string
 		enableLeaderElection                        bool
+		enableControllerWarmup                      bool
 		leaderElectionNamespace                     string
 		probeAddr                                   string
+		pprofAddr                                   string
 		allowCRDDeletion                            bool
+		graphRevisionConcurrentReconciles           int
 		resourceGraphDefinitionConcurrentReconciles int
 		dynamicControllerConcurrentReconciles       int
 		// dynamic controller rate limiter parameters
@@ -65,19 +78,35 @@ func main() {
 		rateLimit     int
 		burstLimit    int
 		// reconciler parameters
+		instanceRequeueInterval time.Duration
 		resyncPeriod            int
 		queueMaxRetries         int
 		gracefulShutdownTimeout time.Duration
 		// var dynamicControllerDefaultResyncPeriod int
-		qps   float64
-		burst int
+		qps                           float64
+		burst                         int
+		rgdMaxCollectionSize          int
+		rgdMaxCollectionDimensionSize int
+		rgdMaxGraphRevisions          int
+		rgdProgressRequeueDelay       time.Duration
+		featureGatesFlag              string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8078", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8079", "The address the probe endpoint binds to.")
+	flag.StringVar(
+		&pprofAddr,
+		"pprof-bind-address",
+		":6060",
+		"The address the pprof endpoint binds to (only used in debug builds).",
+	)
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&enableControllerWarmup, "enable-controller-warmup", false,
+		"Enable controller warmup to start controller sources (watches/informers) before "+
+			"leader election is won. This pre-populates caches and improves leader failover time. "+
+			"Requires --leader-elect to be set.")
 	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
 		"Specific namespace that the controller will utilize to manage the coordination.k8s.io/lease object for"+
 			"leader election. By default it will try to use the namespace of the service account mounted"+
@@ -88,6 +117,10 @@ func main() {
 	flag.IntVar(&resourceGraphDefinitionConcurrentReconciles,
 		"resource-graph-definition-concurrent-reconciles", 1,
 		"The number of resource graph definition reconciles to run in parallel",
+	)
+	flag.IntVar(&graphRevisionConcurrentReconciles,
+		"graph-revision-concurrent-reconciles", 1,
+		"The number of graph revision reconciles to run in parallel",
 	)
 	flag.IntVar(&dynamicControllerConcurrentReconciles,
 		"dynamic-controller-concurrent-reconciles", 1,
@@ -105,6 +138,8 @@ func main() {
 		"Burst size of events for the dynamic controller rate limiter.")
 
 	// reconciler parameters
+	flag.DurationVar(&instanceRequeueInterval, "instance-requeue-interval", 3*time.Second,
+		"Fixed delay between delayed instance requeues while waiting for cluster state to settle.")
 	flag.IntVar(&resyncPeriod, "dynamic-controller-default-resync-period", 36000,
 		"interval at which the controller will re list resources even with no changes, in seconds.")
 	flag.IntVar(&queueMaxRetries, "dynamic-controller-default-queue-max-retries", 20,
@@ -113,6 +148,18 @@ func main() {
 	flag.Float64Var(&qps, "client-qps", 100, "The number of queries per second to allow")
 	flag.IntVar(&burst, "client-burst", 150,
 		"The number of requests that can be stored for processing before the server starts enforcing the QPS limit")
+	flag.IntVar(&rgdMaxCollectionSize, "rgd-max-collection-size", 1000,
+		"Maximum size of collections generated by forEach in ResourceGraphDefinitions")
+	flag.IntVar(&rgdMaxCollectionDimensionSize, "rgd-max-collection-dimension-size", 10,
+		"Maximum size of collection dimension per forEach defined in ResourceGraphDefinitions")
+	flag.StringVar(&featureGatesFlag, "feature-gates", "",
+		"A set of key=value pairs that describe feature gates for alpha/experimental features. "+
+			"For example: --feature-gates=InstanceConditionEvents=true. "+
+			"Known features: "+strings.Join(features.FeatureGate.KnownFeatures(), ", "))
+	flag.IntVar(&rgdMaxGraphRevisions, "rgd-max-graph-revisions", 5,
+		"Maximum number of GraphRevisions to retain per ResourceGraphDefinition")
+	flag.DurationVar(&rgdProgressRequeueDelay, "rgd-progress-requeue-delay", 3*time.Second,
+		"Delay before requeuing while an RGD is waiting for asynchronous progress")
 
 	opts := zap.Options{
 		Development: true,
@@ -121,8 +168,21 @@ func main() {
 
 	flag.Parse()
 
+	if featureGatesFlag != "" {
+		if err := features.FeatureGate.Set(featureGatesFlag); err != nil {
+			setupLog.Error(err, "unable to parse --feature-gates flag")
+			os.Exit(1)
+		}
+	}
+
 	rootLogger := zap.New(zap.UseFlagOptions(&opts))
 	ctrl.SetLogger(rootLogger)
+
+	setupLog.Info("feature gates", "knownFeatures", features.FeatureGate.KnownFeatures())
+	if pprofEnabled {
+		setupLog.Info("Starting pprof server", "address", pprofAddr)
+		startPprof(pprofAddr)
+	}
 
 	set, err := kroclient.NewSet(kroclient.Config{
 		QPS:   float32(qps),
@@ -147,6 +207,11 @@ func main() {
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "controller.kro.run",
 		LeaderElectionNamespace: leaderElectionNamespace,
+		Controller: ctrlconfig.Controller{
+			// EnableWarmup allows controllers to start their sources (watches/informers) before
+			// leader election is won. This pre-populates caches and improves leader failover time.
+			EnableWarmup: &enableControllerWarmup,
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -179,16 +244,41 @@ func main() {
 		setupLog.Error(err, "unable to create resource graph definition graph builder")
 		os.Exit(1)
 	}
+	graphRevisionRegistry := revisions.NewRegistry()
 
 	rgd := resourcegraphdefinitionctrl.NewResourceGraphDefinitionReconciler(
 		set,
-		allowCRDDeletion,
 		dc,
 		resourceGraphDefinitionGraphBuilder,
-		resourceGraphDefinitionConcurrentReconciles,
+		graphRevisionRegistry,
+		resourcegraphdefinitionctrl.Config{
+			AllowCRDDeletion:        allowCRDDeletion,
+			InstanceRequeueInterval: instanceRequeueInterval,
+			ProgressRequeueDelay:    rgdProgressRequeueDelay,
+			MaxConcurrentReconciles: resourceGraphDefinitionConcurrentReconciles,
+			MaxGraphRevisions:       rgdMaxGraphRevisions,
+			RGDConfig: graph.RGDConfig{
+				MaxCollectionSize:          rgdMaxCollectionSize,
+				MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
+			},
+		},
 	)
 	if err := rgd.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ResourceGraphDefinition")
+		os.Exit(1)
+	}
+
+	gv := graphrevisionctrl.NewGraphRevisionReconciler(
+		resourceGraphDefinitionGraphBuilder,
+		graphRevisionRegistry,
+		graphRevisionConcurrentReconciles,
+		graph.RGDConfig{
+			MaxCollectionSize:          rgdMaxCollectionSize,
+			MaxCollectionDimensionSize: rgdMaxCollectionDimensionSize,
+		},
+	)
+	if err := gv.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GraphRevision")
 		os.Exit(1)
 	}
 

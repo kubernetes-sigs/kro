@@ -17,9 +17,11 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/release-utils/version"
 
@@ -34,6 +36,11 @@ const (
 const (
 	NodeIDLabel = LabelKROPrefix + "node-id"
 
+	// Collection labels for tracking collection membership and position.
+	// These enable querying collection resources and understanding their position.
+	CollectionIndexLabel = LabelKROPrefix + "collection-index"
+	CollectionSizeLabel  = LabelKROPrefix + "collection-size"
+
 	OwnedLabel      = LabelKROPrefix + "owned"
 	KROVersionLabel = LabelKROPrefix + "kro-version"
 
@@ -43,11 +50,16 @@ const (
 	InstanceIDLabel        = LabelKROPrefix + "instance-id"
 	InstanceLabel          = LabelKROPrefix + "instance-name"
 	InstanceNamespaceLabel = LabelKROPrefix + "instance-namespace"
+	InstanceGroupLabel     = LabelKROPrefix + "instance-group"
+	InstanceVersionLabel   = LabelKROPrefix + "instance-version"
+	InstanceKindLabel      = LabelKROPrefix + "instance-kind"
 
 	ResourceGraphDefinitionIDLabel        = LabelKROPrefix + "resource-graph-definition-id"
 	ResourceGraphDefinitionNameLabel      = LabelKROPrefix + "resource-graph-definition-name"
 	ResourceGraphDefinitionNamespaceLabel = LabelKROPrefix + "resource-graph-definition-namespace"
 	ResourceGraphDefinitionVersionLabel   = LabelKROPrefix + "resource-graph-definition-version"
+	// GraphRevisionHashLabel stores a label-safe representation of the GraphRevision spec hash.
+	GraphRevisionHashLabel = LabelKROPrefix + "graph-revision-hash"
 )
 
 // IsKROOwned returns true if the resource is owned by KRO.
@@ -149,24 +161,61 @@ func NewResourceGraphDefinitionLabeler(rgMeta metav1.Object) GenericLabeler {
 	}
 }
 
-// NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
-// InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
-// and name of the instance that was reconciled to create the resource.
-func NewInstanceLabeler(instanceMeta metav1.Object) GenericLabeler {
+// NewGraphRevisionHashLabeler returns a new labeler that sets a label-safe
+// representation of the GraphRevision spec hash on a resource.
+func NewGraphRevisionHashLabeler(specHash string) GenericLabeler {
 	return map[string]string{
-		InstanceIDLabel:        string(instanceMeta.GetUID()),
-		InstanceLabel:          instanceMeta.GetName(),
-		InstanceNamespaceLabel: instanceMeta.GetNamespace(),
+		GraphRevisionHashLabel: specHash,
 	}
 }
 
-// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel,
-// KROVersion, and ManagedBy labels on a resource.
+// NewInstanceLabeler returns a new labeler that sets the InstanceLabel and
+// InstanceIDLabel labels on a resource. The InstanceLabel is the namespace
+// and name of the instance that was reconciled to create the resource.
+// It also includes the instance's GVK to allow child
+// resource handlers to filter events by parent instance type.
+func NewInstanceLabeler(instance *unstructured.Unstructured, namespaced bool) GenericLabeler {
+	gvk := instance.GroupVersionKind()
+	labels := map[string]string{
+		InstanceIDLabel:      string(instance.GetUID()),
+		InstanceLabel:        instance.GetName(),
+		InstanceGroupLabel:   gvk.Group,
+		InstanceVersionLabel: gvk.Version,
+		InstanceKindLabel:    gvk.Kind,
+	}
+	if namespaced {
+		labels[InstanceNamespaceLabel] = instance.GetNamespace()
+	}
+	return labels
+}
+
+// NewNodeLabeler returns a new labeler for child resources
+// Only includes app.kubernetes.io/managed-by label, as other labels come from the parent labeler.
+func NewNodeLabeler() GenericLabeler {
+	return map[string]string{
+		ManagedByLabelKey: ManagedByKROValue,
+	}
+}
+
+// NewKROMetaLabeler returns a new labeler that sets the OwnedLabel, and
+// KROVersion labels on a resource.
 func NewKROMetaLabeler() GenericLabeler {
 	return map[string]string{
-		OwnedLabel:        "true",
-		KROVersionLabel:   safeVersion(version.GetVersionInfo().GitVersion),
-		ManagedByLabelKey: ManagedByKROValue,
+		OwnedLabel:      "true",
+		KROVersionLabel: safeVersion(version.GetVersionInfo().GitVersion),
+	}
+}
+
+// NewCollectionItemLabeler returns a new labeler that sets collection-specific
+// labels on a resource that is part of a collection (forEach expansion).
+// - node-id: the resource ID from the RGD (e.g "workerPods")
+// - collection-index: the position in the collection (e.g "0", "1", "2")
+// - collection-size: the total number of items in the collection (e.g "3")
+func NewCollectionItemLabeler(nodeID string, index, size int) GenericLabeler {
+	return map[string]string{
+		NodeIDLabel:          nodeID,
+		CollectionIndexLabel: strconv.Itoa(index),
+		CollectionSizeLabel:  strconv.Itoa(size),
 	}
 }
 

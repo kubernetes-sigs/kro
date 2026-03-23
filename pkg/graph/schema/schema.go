@@ -18,12 +18,19 @@ import (
 	"fmt"
 
 	"k8s.io/apiextensions-apiserver/pkg/generated/openapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 // ObjectMeta holds the k8s ObjectMeta schema, populated once at startup.
 var ObjectMetaSchema spec.Schema
+
+// NamespacelessObjectMetaSchema is ObjectMeta without metadata.namespace.
+// Cluster-scoped instance CRDs use this when building the typed CEL schema for
+// the "schema" variable, so expressions cannot type-check against a field that
+// does not exist at runtime.
+var NamespacelessObjectMetaSchema spec.Schema
 
 func init() {
 	// Populate ObjectMeta schema once at startup to avoid repeated query operations.
@@ -35,6 +42,7 @@ func init() {
 		// critical build/dependency issue.
 		panic(fmt.Sprintf("failed to initialize ObjectMeta schema: %v", err))
 	}
+	NamespacelessObjectMetaSchema = buildNamespacelessObjectMetaSchema(ObjectMetaSchema)
 }
 
 // getObjectMetaSchema extracts the ObjectMeta schema from Kubernetes OpenAPI definitions.
@@ -50,9 +58,29 @@ func getObjectMetaSchema() (spec.Schema, error) {
 		}
 		s := def.Schema
 		return &s, true
-	}, "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta")
+	}, metav1.ObjectMeta{}.OpenAPIModelName())
 	if err != nil {
 		return spec.Schema{}, fmt.Errorf("failed to populate refs for ObjectMeta: %w", err)
 	}
 	return *populatedSchema, nil
+}
+
+func buildNamespacelessObjectMetaSchema(metaSchema spec.Schema) spec.Schema {
+	cloned := metaSchema
+	if metaSchema.Properties != nil {
+		cloned.Properties = make(map[string]spec.Schema, len(metaSchema.Properties))
+		for key, value := range metaSchema.Properties {
+			cloned.Properties[key] = value
+		}
+		delete(cloned.Properties, "namespace")
+	}
+	if metaSchema.Required != nil {
+		cloned.Required = make([]string, 0, len(metaSchema.Required))
+		for _, field := range metaSchema.Required {
+			if field != "namespace" {
+				cloned.Required = append(cloned.Required, field)
+			}
+		}
+	}
+	return cloned
 }

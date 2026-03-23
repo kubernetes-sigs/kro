@@ -1,3 +1,5 @@
+{{- $pprofEnabled := .Values.debug.pprof.enabled }}
+{{- $pprofPort := .Values.debug.pprof.port }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,12 +38,20 @@ spec:
           {{- if .Values.image.ko }}
           image: "ko://github.com/kubernetes-sigs/kro/cmd/controller"
           {{- else }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
+          {{- if $pprofEnabled }}
+          {{- $tag = printf "%s-debug" $tag }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ $tag }}"
           {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: metricsport
               containerPort: {{ .Values.deployment.containerPort }}
+            {{- if $pprofEnabled }}
+            - name: pprof
+              containerPort: {{ $pprofPort }}
+            {{- end }}
           resources:
             {{- toYaml .Values.deployment.resources | nindent 12 }}
           env:
@@ -51,6 +61,8 @@ spec:
               value: {{ .Values.config.healthProbeBindAddress | quote }}
             - name: KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES
               value: {{ .Values.config.resourceGraphDefinitionConcurrentReconciles | quote }}
+            - name: KRO_GRAPH_REVISION_CONCURRENT_RECONCILES
+              value: {{ .Values.config.graphRevisionConcurrentReconciles | quote }}
             - name: KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES
               value: {{ .Values.config.dynamicControllerConcurrentReconciles | quote }}
             - name: KRO_LOG_LEVEL
@@ -59,12 +71,30 @@ spec:
               value: {{ .Values.config.dynamicControllerDefaultResyncPeriod | quote }}
             - name: KRO_DYNAMIC_CONTROLLER_DEFAULT_QUEUE_MAX_RETRIES
               value: {{ .Values.config.dynamicControllerDefaultQueueMaxRetries | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MIN_DELAY
+              value: {{ .Values.config.dynamicControllerRateLimiterMinDelay | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MAX_DELAY
+              value: {{ .Values.config.dynamicControllerRateLimiterMaxDelay | quote }}
             - name: KRO_GRACEFUL_SHUTDOWN_TIMEOUT
               value: {{ .Values.config.gracefulShutdownTimeout | quote }}
+            - name: KRO_INSTANCE_REQUEUE_INTERVAL
+              value: {{ .Values.config.instance.requeueInterval | quote }}
             - name: KRO_CLIENT_QPS
               value: {{ .Values.config.clientQps | quote }}
             - name: KRO_CLIENT_BURST
               value: {{ .Values.config.clientBurst | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_RATE_LIMIT
+              value: {{ .Values.config.dynamicControllerRateLimiterRateLimit | quote }}
+            - name: KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_BURST_LIMIT
+              value: {{ .Values.config.dynamicControllerRateLimiterBurstLimit | quote }}
+            - name: KRO_RGD_MAX_COLLECTION_SIZE
+              value: {{ .Values.config.rgd.maxCollectionSize | quote }}
+            - name: KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE
+              value: {{ .Values.config.rgd.maxCollectionDimensionSize | quote }}
+            - name: KRO_RGD_MAX_GRAPH_REVISIONS
+              value: {{ .Values.config.rgd.maxGraphRevisions | quote }}
+            - name: KRO_RGD_PROGRESS_REQUEUE_DELAY
+              value: {{ .Values.config.resourceGraphDefinitionProgressRequeueDelay | quote }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
@@ -75,26 +105,61 @@ spec:
             - "$(KRO_HEALTH_PROBE_BIND_ADDRESS)"
             - --resource-graph-definition-concurrent-reconciles
             - "$(KRO_RESOURCE_GROUP_CONCURRENT_RECONCILES)"
+            - --graph-revision-concurrent-reconciles
+            - "$(KRO_GRAPH_REVISION_CONCURRENT_RECONCILES)"
             - --dynamic-controller-concurrent-reconciles
             - "$(KRO_DYNAMIC_CONTROLLER_CONCURRENT_RECONCILES)"
             - --zap-log-level
             - "$(KRO_LOG_LEVEL)"
             - --graceful-shutdown-timeout
             - "$(KRO_GRACEFUL_SHUTDOWN_TIMEOUT)"
+            - --instance-requeue-interval
+            - "$(KRO_INSTANCE_REQUEUE_INTERVAL)"
             - --dynamic-controller-default-resync-period
             - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_RESYNC_PERIOD)"
             - --dynamic-controller-default-queue-max-retries
             - "$(KRO_DYNAMIC_CONTROLLER_DEFAULT_QUEUE_MAX_RETRIES)"
+            - --dynamic-controller-rate-limiter-min-delay
+            - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MIN_DELAY)"
+            - --dynamic-controller-rate-limiter-max-delay
+            - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_MAX_DELAY)"
             - --client-qps
             - "$(KRO_CLIENT_QPS)"
             - --client-burst
             - "$(KRO_CLIENT_BURST)"
+            - --dynamic-controller-rate-limiter-rate-limit
+            - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_RATE_LIMIT)"
+            - --dynamic-controller-rate-limiter-burst-limit
+            - "$(KRO_DYNAMIC_CONTROLLER_RATE_LIMITER_BURST_LIMIT)"
+            - --rgd-max-collection-size
+            - "$(KRO_RGD_MAX_COLLECTION_SIZE)"
+            - --rgd-max-collection-dimension-size
+            - "$(KRO_RGD_MAX_COLLECTION_DIMENSION_SIZE)"
+            - --rgd-max-graph-revisions
+            - "$(KRO_RGD_MAX_GRAPH_REVISIONS)"
+            - --rgd-progress-requeue-delay
+            - "$(KRO_RGD_PROGRESS_REQUEUE_DELAY)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}
             - --leader-election-namespace
             - {{ .Values.config.leaderElectionNamespace | quote }}
             {{- end }}
+            {{- if .Values.config.enableControllerWarmup }}
+            - --enable-controller-warmup
+            {{- end }}
+            {{- end }}
+            {{- if .Values.config.featureGates }}
+            {{- $gates := list }}
+            {{- range $k, $v := .Values.config.featureGates }}
+            {{- $gates = append $gates (printf "%s=%t" $k $v) }}
+            {{- end }}
+            - --feature-gates
+            - {{ join "," $gates | quote }}
+            {{- end }}
+            {{- if $pprofEnabled }}
+            - --pprof-bind-address
+            - ":{{ $pprofPort }}"
             {{- end }}
           livenessProbe:
             httpGet:
@@ -114,6 +179,10 @@ spec:
       {{- end }}
       {{- with .Values.deployment.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.deployment.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.deployment.tolerations }}

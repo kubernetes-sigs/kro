@@ -45,6 +45,10 @@ This continuous loop ensures your resources stay in sync with your desired state
 - Consistent state management
 - Rich status tracking
 
+:::tip
+To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `disabled`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
+:::
+
 ### Reactive Reconciliation
 
 kro automatically watches all resources managed by an instance and triggers reconciliation when any of them change:
@@ -75,7 +79,6 @@ When kro manages an instance, it applies these labels and annotations:
 | `kro.run/kro-version` | Version of kro managing the instance |
 | `kro.run/resource-graph-definition-id` | UID of the ResourceGraphDefinition |
 | `kro.run/resource-graph-definition-name` | Name of the ResourceGraphDefinition |
-| `app.kubernetes.io/managed-by` | Set to `"kro"` (standard Kubernetes recommended label) |
 | `applyset.kubernetes.io/id` | Unique ApplySet identifier (hash of name.namespace.kind.group) |
 
 **Annotations:**
@@ -86,21 +89,41 @@ When kro manages an instance, it applies these labels and annotations:
 | `applyset.kubernetes.io/contains-group-kinds` | Comma-separated list of GroupKinds managed by this instance |
 | `applyset.kubernetes.io/additional-namespaces` | Comma-separated list of namespaces containing managed resources |
 
+**Debugging-specific annotations:** 
+
+| Annotation | Description |
+|------|-------------|
+| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
+
 </TabItem>
 <TabItem value="managed" label="Managed Resource Metadata">
 
-Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive all the instance labels, plus additional labels to trace back to the specific instance:
+Resources created by kro (Deployments, Services, ConfigMaps, etc.) receive labels for ownership tracking and resource discovery. These labels are distinct from the instance's own labels — notably, child resources do **not** carry `resource-graph-definition-*` labels since ownership is tracked via the [ApplySet specification](https://git.k8s.io/enhancements/keps/sig-cli/3659-kubectl-apply-prune).
 
-**Labels (in addition to instance labels):**
+**Labels:**
 
 | Label | Description |
 |-------|-------------|
+| `kro.run/owned` | Set to `"true"` to indicate kro manages this resource |
+| `kro.run/kro-version` | Version of kro managing the resource |
 | `kro.run/instance-id` | UID of the instance that created this resource |
 | `kro.run/instance-name` | Name of the instance |
-| `kro.run/instance-namespace` | Namespace of the instance |
+| `kro.run/instance-namespace` | Namespace of the instance (only for namespaced instances) |
+| `kro.run/instance-group` | API group of the instance |
+| `kro.run/instance-version` | API version of the instance |
+| `kro.run/instance-kind` | Kind of the instance |
+| `app.kubernetes.io/managed-by` | Set to `"kro"` |
+| `kro.run/node-id` | Resource ID from the RGD |
 | `applyset.kubernetes.io/part-of` | Links the resource to its parent instance (matches the instance's `applyset.kubernetes.io/id`) |
 
-These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster.
+**Collection-specific labels** (only on resources created via `forEach`):
+
+| Label | Description |
+|-------|-------------|
+| `kro.run/collection-index` | Position in the collection (0-indexed) |
+| `kro.run/collection-size` | Total number of items in the collection |
+
+These labels allow you to identify exactly which instance owns each managed resource, which is essential when multiple instances of the same RGD exist in a cluster. For collection resources, see [Collection Labels](./rgd/02-resource-definitions/04-collections.md#collection-labels) for more details.
 
 </TabItem>
 </Tabs>
@@ -115,7 +138,7 @@ kro does not set Kubernetes owner references on managed resources by default. Th
 
 1. **Ordered deletion** - kro deletes resources in reverse topological order, respecting dependencies between resources. Owner references trigger Kubernetes garbage collection, which deletes resources without ordering guarantees.
 
-2. **Cross-scope limitations** - Namespaced resources cannot own cluster-scoped resources. Since kro instances are namespaced but can manage cluster-scoped resources (like ClusterRoles or Namespaces), owner references cannot express this relationship.
+2. **Cross-scope limitations** - Namespaced resources cannot own cluster-scoped resources. When a namespaced kro instance manages cluster-scoped resources (like ClusterRoles or Namespaces), owner references cannot express this relationship.
 
 Instead, kro uses labels and the ApplySet specification for ownership tracking and resource cleanup.
 
@@ -204,7 +227,7 @@ High-level status showing what the instance is doing:
 
 ### 2. Conditions
 
-Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by three sub-conditions that track different phases:
+Detailed status information structured hierarchically. kro provides a top-level `Ready` condition that reflects overall instance health, supported by four sub-conditions that track different phases:
 
 - **`InstanceManaged`** - Instance finalizers and labels are properly set
   - Ensures the instance is under kro's management
@@ -221,14 +244,19 @@ Detailed status information structured hierarchically. kro provides a top-level 
   - Monitors the health of resources in topological order
   - Reports when all resources have reached their ready state
 
+- **`ReconciliationSuspended`** - Instance Reconciliation is Suspended
+  - Set to True when the annotation `kro.run/reconcile: "disabled"` annotation key and value are present. Otherwise set to false
+  - Explicitly shows if kro is actively reconciling an instance or not
+
 - **`Ready`** - Instance is fully operational (top-level condition)
   - Aggregates the state of all sub-conditions
   - Only becomes True when all sub-conditions are True
   - **The primary condition to monitor for instance health**
   - Use this condition in automation, CI/CD, and health checks
 
+
 :::tip
-Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
+Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`, `ReconciliationSuspended`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
 :::
 
 Each condition includes:
@@ -267,3 +295,44 @@ kubectl describe <your-kind> <instance-name>
 
 - If `observedGeneration` is less than `metadata.generation`, the controller hasn't processed the latest changes yet
 - If they match, the conditions reflect the current state of your instance
+
+**5. Check that all fields in the instance are specified**
+
+If any of the resources in your ResourceGraphDefinition reference any fields in `schema.spec`, they must have a value. By referencing them, you are declaring a hard dependency that the fields must exist.
+
+For example:
+```
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: optional
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Optional
+    spec:
+      # Implicit optional field.
+      str: string
+  resources:
+    - id: testConfigMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+          namespace: ${schema.metadata.namespace}
+        data:
+          str: ${schema.spec.str}
+---
+apiVersion: kro.run/v1alpha1
+kind: Optional
+metadata:
+  name: test-silent-failure
+  namespace: default
+spec:
+  # str unspecified
+```
+
+The `Optional` instance here *must* specify `str` in the Instance, otherwise reconciliation will fail.
+
+For truly optional fields you need to use optional field access: `${schema.spec.?<FIELD>.orValue("fallback")}`. For more information, see [The Optional Operator](./rgd/02-resource-definitions/03-readiness.md#the-optional-operator-)

@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -125,6 +127,26 @@ func TestGetValueFromPath(t *testing.T) {
 				"field.nested": "invalid",
 			},
 			path:    "field.nested",
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "invalid path parse error",
+			resource: map[string]interface{}{
+				"field": "value",
+			},
+			path:    `[invalid["path"]`,
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "expected array but got map",
+			resource: map[string]interface{}{
+				"field": map[string]interface{}{
+					"nested": "value",
+				},
+			},
+			path:    "field[0]",
 			want:    nil,
 			wantErr: true,
 		},
@@ -284,6 +306,50 @@ func TestSetValueAtPath(t *testing.T) {
 			want:     map[string]interface{}{},
 		},
 		{
+			name:     "empty path returns early",
+			resource: map[string]interface{}{"existing": "value"},
+			path:     "",
+			value:    "ignored",
+			wantErr:  false,
+			want:     map[string]interface{}{"existing": "value"},
+		},
+		{
+			name: "expected map but got string",
+			resource: map[string]interface{}{
+				"field": "string-value",
+			},
+			path:    "field.nested",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": "string-value",
+			},
+		},
+		{
+			name: "expected map but got array for field access",
+			resource: map[string]interface{}{
+				"field": []interface{}{"a", "b"},
+			},
+			path:    "field.nested",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": []interface{}{"a", "b"},
+			},
+		},
+		{
+			name: "array segment on non-array non-nil value",
+			resource: map[string]interface{}{
+				"field": "string-not-array",
+			},
+			path:    "field[0]",
+			value:   "test",
+			wantErr: true,
+			want: map[string]interface{}{
+				"field": "string-not-array",
+			},
+		},
+		{
 			name:     "nested arrays and field at the end",
 			resource: map[string]interface{}{},
 			path:     `matrix[0][0][0].value`,
@@ -327,6 +393,38 @@ func TestSetValueAtPath(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "array segment on nil value creates array",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"items": nil,
+				},
+			},
+			path:  "spec.items[0]",
+			value: "first",
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"items": []interface{}{"first"},
+				},
+			},
+		},
+		{
+			name: "nested nil array creation",
+			resource: map[string]interface{}{
+				"data": map[string]interface{}{
+					"matrix": []interface{}{nil},
+				},
+			},
+			path:  "data.matrix[0][2]",
+			value: "deep",
+			want: map[string]interface{}{
+				"data": map[string]interface{}{
+					"matrix": []interface{}{
+						[]interface{}{nil, nil, "deep"},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -362,13 +460,11 @@ func TestResolveField(t *testing.T) {
 				},
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.field",
-				Expressions:          []string{"notProvided"},
-				StandaloneExpression: true,
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("notProvided"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[notProvided]",
 				Resolved: false,
 				Error:    fmt.Errorf("no data provided for expression: notProvided"),
 			},
@@ -384,37 +480,13 @@ func TestResolveField(t *testing.T) {
 				"value": []float64{1, 2, 3.5},
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.field",
-				Expressions:          []string{"value"},
-				StandaloneExpression: true,
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.field",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: []float64{1, 2, 3.5},
-			},
-		},
-		{
-			name: "multiple expressions in string",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": "prefix-${value1}-${value2}-suffix",
-				},
-			},
-			data: map[string]interface{}{
-				"value1": "one",
-				"value2": "two",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: []string{"value1", "value2"},
-			},
-			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[value1 value2]",
-				Resolved: true,
-				Replaced: "prefix-one-two-suffix",
 			},
 		},
 		{
@@ -430,13 +502,11 @@ func TestResolveField(t *testing.T) {
 				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.array[0]",
-				Expressions:          []string{"value"},
-				StandaloneExpression: true,
+				Path:       "spec.array[0]",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.array[0]",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: "resolved",
 			},
@@ -450,14 +520,12 @@ func TestResolveField(t *testing.T) {
 			},
 			data: map[string]interface{}{},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.field",
-				Expressions:          []string{"missing"},
-				StandaloneExpression: true,
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("missing"),
 			},
 			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[missing]",
-				Error:    fmt.Errorf("no data provided for expression: missing"),
+				Path:  "spec.field",
+				Error: fmt.Errorf("no data provided for expression: missing"),
 			},
 		},
 		{
@@ -469,34 +537,12 @@ func TestResolveField(t *testing.T) {
 				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.nonexistent.field",
-				Expressions:          []string{"value"},
-				StandaloneExpression: true,
+				Path:       "spec.nonexistent.field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
-				Path:     "spec.nonexistent.field",
-				Original: "[value]",
-				Error:    fmt.Errorf("error getting value: key not found: nonexistent"),
-			},
-		},
-		{
-			name: "error - non-string value for template",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": 123,
-				},
-			},
-			data: map[string]interface{}{
-				"value": "resolved",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: []string{"value"},
-			},
-			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[value]",
-				Error:    fmt.Errorf("expected string value for path spec.field"),
+				Path:  "spec.nonexistent.field",
+				Error: fmt.Errorf("error getting value: key not found: nonexistent"),
 			},
 		},
 		{
@@ -516,66 +562,31 @@ func TestResolveField(t *testing.T) {
 				"value": "papa-ou-t-es",
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.nested.array[0].field",
-				Expressions:          []string{"value"},
-				StandaloneExpression: true,
+				Path:       "spec.nested.array[0].field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.nested.array[0].field",
-				Original: "[value]",
 				Resolved: true,
 				Replaced: "papa-ou-t-es",
 			},
 		},
 		{
-			name: "multiple expressions with different types",
+			name: "error - leading dot in path fails consistently",
 			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"field": "Count: ${count}, Name: ${name}, Active: ${active}",
-				},
+				"field": "${value}",
 			},
 			data: map[string]interface{}{
-				"count":  42,
-				"name":   "test",
-				"active": true,
+				"value": "resolved",
 			},
 			field: variable.FieldDescriptor{
-				Path:        "spec.field",
-				Expressions: []string{"count", "name", "active"},
+				Path:       ".field",
+				Expression: krocel.NewUncompiled("value"),
 			},
 			want: ResolutionResult{
-				Path:     "spec.field",
-				Original: "[count name active]",
-				Resolved: true,
-				Replaced: "Count: 42, Name: test, Active: true",
-			},
-		},
-		{
-			name: "nested array with multiple expressions",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"containers": []interface{}{
-						map[string]interface{}{},
-						nil,
-						map[string]interface{}{
-							"image": "${image.name}:${image.tag}",
-						},
-					},
-				},
-			},
-			data: map[string]interface{}{
-				"image.name": "nginx",
-				"image.tag":  "latest",
-			},
-			field: variable.FieldDescriptor{
-				Path:        `spec.containers[2].image`,
-				Expressions: []string{"image.name", "image.tag"},
-			},
-			want: ResolutionResult{
-				Path:     "spec.containers[2].image",
-				Original: "[image.name image.tag]",
-				Resolved: true,
-				Replaced: "nginx:latest",
+				Path:     ".field",
+				Resolved: false,
+				Error:    fmt.Errorf("error getting value: invalid path '.field': empty field name at position 0"),
 			},
 		},
 	}
@@ -586,7 +597,6 @@ func TestResolveField(t *testing.T) {
 			got := r.resolveField(tt.field)
 
 			assert.Equal(t, tt.want.Path, got.Path)
-			assert.Equal(t, tt.want.Original, got.Original)
 			assert.Equal(t, tt.want.Resolved, got.Resolved)
 			assert.Equal(t, tt.want.Replaced, got.Replaced)
 
@@ -621,9 +631,8 @@ func TestResolveDynamicArrayIndexes(t *testing.T) {
 	}
 
 	field := variable.FieldDescriptor{
-		Path:                 "spec.array[1]",
-		Expressions:          []string{"value"},
-		StandaloneExpression: true,
+		Path:       "spec.array[1]",
+		Expression: krocel.NewUncompiled("value"),
 	}
 
 	r := NewResolver(resource, data)
@@ -642,26 +651,91 @@ func TestResolveDynamicArrayIndexes(t *testing.T) {
 }
 
 func TestResolver(t *testing.T) {
-	r := NewResolver(
-		map[string]interface{}{
-			"spec": map[string]interface{}{
-				"field": "${value}-${suffix}",
+	t.Run("successful resolution", func(t *testing.T) {
+		r := NewResolver(
+			map[string]interface{}{
+				"spec": map[string]interface{}{
+					"field": "${value}-${suffix}",
+				},
 			},
-		},
-		map[string]interface{}{
-			"value":  "resolved",
-			"suffix": "done",
-		},
-	)
-	summary := r.Resolve([]variable.FieldDescriptor{
-		{
-			Path:        "spec.field",
-			Expressions: []string{"value", "suffix"},
-		},
+			map[string]interface{}{
+				"\"resolved-\" + \"done\"": "resolved-done",
+			},
+		)
+		summary := r.Resolve([]variable.FieldDescriptor{
+			{
+				Path:       "spec.field",
+				Expression: krocel.NewUncompiled("\"resolved-\" + \"done\""),
+			},
+		})
+		assert.Equal(t, 1, summary.TotalExpressions)
+		assert.Equal(t, 1, summary.ResolvedExpressions)
+		assert.Equal(t, "resolved-done", summary.Results[0].Replaced)
+		assert.Empty(t, summary.Errors)
 	})
-	assert.Equal(t, summary.TotalExpressions, 1)
-	assert.Equal(t, summary.ResolvedExpressions, 1)
-	assert.Equal(t, "resolved-done", summary.Results[0].Replaced)
+
+	t.Run("error aggregation", func(t *testing.T) {
+		r := NewResolver(
+			map[string]interface{}{
+				"spec": map[string]interface{}{
+					"field1": "${value1}",
+					"field2": "${value2}",
+				},
+			},
+			map[string]interface{}{
+				"value1": "resolved",
+				// value2 is missing - will cause error
+			},
+		)
+		summary := r.Resolve([]variable.FieldDescriptor{
+			{
+				Path:       "spec.field1",
+				Expression: krocel.NewUncompiled("value1"),
+			},
+			{
+				Path:       "spec.field2",
+				Expression: krocel.NewUncompiled("value2"),
+			},
+		})
+		assert.Equal(t, 2, summary.TotalExpressions)
+		assert.Equal(t, 1, summary.ResolvedExpressions)
+		assert.Len(t, summary.Errors, 1)
+		assert.Contains(t, summary.Errors[0].Error(), "no data provided for expression: value2")
+	})
+}
+
+func TestUpsertValueAtPath(t *testing.T) {
+	t.Run("creates nested structure", func(t *testing.T) {
+		resource := map[string]interface{}{}
+		r := NewResolver(resource, nil)
+
+		err := r.UpsertValueAtPath("status.conditions[0].type", "Ready")
+
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]interface{}{
+			"status": map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"type": "Ready",
+					},
+				},
+			},
+		}, resource)
+	})
+
+	t.Run("updates existing value", func(t *testing.T) {
+		resource := map[string]interface{}{
+			"status": map[string]interface{}{
+				"phase": "Pending",
+			},
+		}
+		r := NewResolver(resource, nil)
+
+		err := r.UpsertValueAtPath("status.phase", "Running")
+
+		assert.NoError(t, err)
+		assert.Equal(t, "Running", resource["status"].(map[string]interface{})["phase"])
+	})
 }
 
 // TestResolveFieldWithEmptyBraces tests the regression where strings.Trim() was
@@ -686,13 +760,11 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				"includeAnnotations ? annotations : {}": map[string]interface{}{},
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "metadata.annotations",
-				Expressions:          []string{"includeAnnotations ? annotations : {}"},
-				StandaloneExpression: true,
+				Path:       "metadata.annotations",
+				Expression: krocel.NewUncompiled("includeAnnotations ? annotations : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "metadata.annotations",
-				Original: "[includeAnnotations ? annotations : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{},
 			},
@@ -710,13 +782,11 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				},
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "spec.config",
-				Expressions:          []string{"has(schema.config) && includeConfig ? schema.config : {}"},
-				StandaloneExpression: true,
+				Path:       "spec.config",
+				Expression: krocel.NewUncompiled("has(schema.config) && includeConfig ? schema.config : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "spec.config",
-				Original: "[has(schema.config) && includeConfig ? schema.config : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{
 					"key": "value",
@@ -734,36 +804,13 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				"condition ? {} : {}": map[string]interface{}{},
 			},
 			field: variable.FieldDescriptor{
-				Path:                 "data.field",
-				Expressions:          []string{"condition ? {} : {}"},
-				StandaloneExpression: true,
+				Path:       "data.field",
+				Expression: krocel.NewUncompiled("condition ? {} : {}"),
 			},
 			want: ResolutionResult{
 				Path:     "data.field",
-				Original: "[condition ? {} : {}]",
 				Resolved: true,
 				Replaced: map[string]interface{}{},
-			},
-		},
-		{
-			name: "string template with expression ending in braces",
-			resource: map[string]interface{}{
-				"spec": map[string]interface{}{
-					"value": "prefix-${expr ? value : {}}-suffix",
-				},
-			},
-			data: map[string]interface{}{
-				"expr ? value : {}": "resolved",
-			},
-			field: variable.FieldDescriptor{
-				Path:        "spec.value",
-				Expressions: []string{"expr ? value : {}"},
-			},
-			want: ResolutionResult{
-				Path:     "spec.value",
-				Original: "[expr ? value : {}]",
-				Resolved: true,
-				Replaced: "prefix-resolved-suffix",
 			},
 		},
 	}
@@ -774,7 +821,6 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 			got := r.resolveField(tt.field)
 
 			assert.Equal(t, tt.want.Path, got.Path)
-			assert.Equal(t, tt.want.Original, got.Original)
 			assert.Equal(t, tt.want.Resolved, got.Resolved)
 			assert.Equal(t, tt.want.Replaced, got.Replaced)
 
@@ -789,6 +835,189 @@ func TestResolveFieldWithEmptyBraces(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tt.want.Replaced, value)
 			}
+		})
+	}
+}
+
+func TestResolveFieldOmit(t *testing.T) {
+	tests := []struct {
+		name         string
+		resource     map[string]interface{}
+		data         map[string]interface{}
+		field        variable.FieldDescriptor
+		wantResolved bool
+		wantSentinel bool
+	}{
+		{
+			name: "omit sentinel is placed in map field",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name":   "test",
+					"policy": "${expr}",
+				},
+			},
+			data: map[string]interface{}{
+				"expr": sentinels.Omit{},
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.policy",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: true,
+		},
+		{
+			name: "omit sentinel is placed in array element",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{"${expr}", "keep"},
+				},
+			},
+			data: map[string]interface{}{
+				"expr": sentinels.Omit{},
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.args[0]",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: true,
+		},
+		{
+			name: "non-sentinel value writes normally",
+			resource: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"policy": "${expr}",
+				},
+			},
+			data: map[string]interface{}{
+				"expr": "my-policy",
+			},
+			field: variable.FieldDescriptor{
+				Path:       "spec.policy",
+				Expression: krocel.NewUncompiled("expr"),
+			},
+			wantResolved: true,
+			wantSentinel: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewResolver(tt.resource, tt.data)
+			result := r.resolveField(tt.field)
+
+			assert.Equal(t, tt.wantResolved, result.Resolved)
+			assert.NoError(t, result.Error)
+
+			value, err := r.getValueFromPath(tt.field.Path)
+			assert.NoError(t, err)
+
+			if tt.wantSentinel {
+				assert.True(t, sentinels.IsOmit(value))
+				assert.True(t, sentinels.IsOmit(result.Replaced))
+			} else {
+				assert.False(t, sentinels.IsOmit(value))
+				assert.Equal(t, tt.data[tt.field.Expression.Original], value)
+			}
+		})
+	}
+}
+
+func TestCleanOmitSentinels(t *testing.T) {
+	tests := []struct {
+		name string
+		in   map[string]interface{}
+		want map[string]interface{}
+	}{
+		{
+			name: "removes top-level map key",
+			in: map[string]interface{}{
+				"keep": "value",
+				"drop": sentinels.Omit{},
+			},
+			want: map[string]interface{}{
+				"keep": "value",
+			},
+		},
+		{
+			name: "removes nested map key",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name":   "test",
+					"policy": sentinels.Omit{},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+				},
+			},
+		},
+		{
+			name: "filters array elements",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{sentinels.Omit{}, "keep1", sentinels.Omit{}, "keep2"},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"args": []interface{}{"keep1", "keep2"},
+				},
+			},
+		},
+		{
+			name: "filters single-element array to empty",
+			in: map[string]interface{}{
+				"items": []interface{}{sentinels.Omit{}},
+			},
+			want: map[string]interface{}{
+				"items": []interface{}{},
+			},
+		},
+		{
+			name: "cleans deeply nested array inside array",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"args": []interface{}{"keep", sentinels.Omit{}, "also-keep"},
+						},
+					},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"containers": []interface{}{
+						map[string]interface{}{
+							"args": []interface{}{"keep", "also-keep"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "no sentinels leaves resource unchanged",
+			in: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+					"args": []interface{}{"a", "b"},
+				},
+			},
+			want: map[string]interface{}{
+				"spec": map[string]interface{}{
+					"name": "test",
+					"args": []interface{}{"a", "b"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanOmitSentinels(tt.in)
+			assert.Equal(t, tt.want, tt.in)
 		})
 	}
 }

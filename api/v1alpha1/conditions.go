@@ -24,20 +24,34 @@ type ConditionType string
 
 func (c ConditionType) String() string { return string(c) }
 
+// ResourceGraphDefinition condition types.
+//
+// Ready (root)
+// ├── GraphRevisionsResolved — all revisions discovered and latest state known
+// ├── GraphAccepted          — RGD spec schema and resources are valid
+// ├── KindReady              — generated CRD is established
+// └── ControllerReady        — instance reconciler is registered and serving
 const (
-	// ResourceGraphDefinitionConditionTypeGraphVerified indicates the state of the directed
-	// acyclic graph (DAG) that kro uses to manage the resources in a
-	// ResourceGraphDefinition.
-	ResourceGraphDefinitionConditionTypeGraphVerified ConditionType = "GraphVerified"
-	// ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced indicates the state of the
-	// CustomResourceDefinition (CRD) that kro uses to manage the resources in a
-	// ResourceGraphDefinition.
-	ResourceGraphDefinitionConditionTypeCustomResourceDefinitionSynced ConditionType = "CustomResourceDefinitionSynced"
-	// ResourceGraphDefinitionConditionTypeReconcilerReady indicates the state of the reconciler.
-	// Whenever an ResourceGraphDefinition resource is created, kro will spin up a
-	// reconciler for that resource. This condition indicates the state of the
-	// reconciler.
-	ResourceGraphDefinitionConditionTypeReconcilerReady ConditionType = "ReconcilerReady"
+	// RGDConditionTypeGraphAccepted is true when the RGD spec (schema and
+	// resource templates) passes validation. False with reason
+	// "InvalidResourceGraph" when the spec contains errors.
+	RGDConditionTypeGraphAccepted ConditionType = "GraphAccepted"
+	// RGDConditionTypeGraphRevisionsResolved is true when all
+	// GraphRevisions for this RGD have been discovered, no terminating
+	// revisions remain in flight, and the latest revision's state in the
+	// in-memory registry is known. Unknown while revisions are settling
+	// (terminating GRs still deleting), warming (latest not yet in the
+	// cache or registry), or compiling (latest is Pending). False when
+	// the latest revision fails compilation.
+	RGDConditionTypeGraphRevisionsResolved ConditionType = "GraphRevisionsResolved"
+	// RGDConditionTypeKindReady is true when the generated
+	// CustomResourceDefinition has been applied and its Established
+	// condition is true.
+	RGDConditionTypeKindReady ConditionType = "KindReady"
+	// RGDConditionTypeControllerReady is true when the instance reconciler
+	// for this RGD's generated kind is registered with the dynamic
+	// controller and ready to reconcile instances.
+	RGDConditionTypeControllerReady ConditionType = "ControllerReady"
 )
 
 // Condition is the common struct used by all CRDs managed by ACK service

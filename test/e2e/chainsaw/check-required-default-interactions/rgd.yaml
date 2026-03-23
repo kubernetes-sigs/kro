@@ -1,0 +1,49 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: check-required-default
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ComplexApp
+    types:
+      RequiredString: string | required=true
+      Port: integer | default=8080 minimum=1 maximum=65535
+      DatabaseConfig:
+        host: string | required=true
+        port: Port
+        username: string | required=true
+        database: string | default="postgres"
+      RetryConfig:
+        maxRetries: integer | default=3 minimum=0 maximum=10
+        backoffMs: integer | default=1000
+        exponential: boolean | default=true
+      ServiceEndpoint:
+        name: RequiredString
+        url: string | required=true pattern="^https?://"
+        timeout: integer | default=30 minimum=1 maximum=300
+    spec:
+      appName: RequiredString
+      environment: string | default="development" enum="development,staging,production"
+      database: DatabaseConfig
+      retry: RetryConfig
+      endpoints: "[]ServiceEndpoint | minItems=1"
+      annotations: map[string]string
+      clusterId: string | immutable=true
+      replicas: integer | default=1 minimum=0 maximum=100 validation="self <= 10 || self % 2 == 0"
+      resources:
+        cpu: string | default="100m" pattern="^[0-9]+m?$"
+        memory: string | default="128Mi" pattern="^[0-9]+(Mi|Gi)$"
+  resources:
+    - id: configmap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.metadata.name}-config
+        data:
+          appName: ${schema.spec.appName}
+          environment: ${schema.spec.environment}
+          dbHost: ${schema.spec.database.host}
+          dbPort: ${string(schema.spec.database.port)}
+          replicas: ${string(schema.spec.replicas)}

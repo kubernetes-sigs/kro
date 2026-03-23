@@ -15,9 +15,19 @@
 package graph
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/google/cel-go/cel"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
+
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 func TestValidateRGResourceNames(t *testing.T) {
@@ -91,6 +101,7 @@ func TestIsKROReservedWord(t *testing.T) {
 	}{
 		{"resourcegraphdefinition", true},
 		{"instance", true},
+		{"each", true}, // Reserved for per-item readiness in collections
 		{"notReserved", false},
 		{"RESOURCEGRAPHDEFINITION", false}, // Case-sensitive check
 	}
@@ -252,48 +263,738 @@ func TestValidateKubernetesVersion(t *testing.T) {
 	}
 }
 
-func TestValidateResourceGraphDefinitionNamingConventions(t *testing.T) {
+func TestValidateResourceGraphDefinition(t *testing.T) {
+	defaultRGDConfig := RGDConfig{
+		MaxCollectionDimensionSize: 10,
+	}
 	tests := []struct {
-		name       string
-		resourceID string
-		kind       string
-		wantErr    bool
+		name      string
+		rgd       *v1alpha1.ResourceGraphDefinition
+		rgdConfig RGDConfig
+		wantErr   bool
 	}{
 		{
-			name:       "Valid naming conventions",
-			resourceID: "validResourceID",
-			kind:       "ValidKindName",
-			wantErr:    false,
+			name: "Valid naming conventions",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "validResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   false,
 		},
 		{
-			name:       "Invalid kind name",
-			resourceID: "validResourceID",
-			kind:       "invalidKindName",
-			wantErr:    true,
+			name: "Invalid kind name",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "validResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "invalidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
 		},
 		{
-			name:       "Invalid resource ID",
-			resourceID: "invalid_ResourceID",
-			kind:       "ValidKindName",
-			wantErr:    true,
+			name: "Invalid resource ID",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "invalid_ResourceID"},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
+		},
+		{
+			name: "Invalid foreach iterator name",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "validResourceID",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"invalid_IteratorName": "b"},
+							},
+						},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rgd := &v1alpha1.ResourceGraphDefinition{
+			if err := validateResourceGraphDefinition(tt.rgd, tt.rgdConfig); (err != nil) != tt.wantErr {
+				t.Errorf("validateResourceGraphDefinition() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInferListElementType(t *testing.T) {
+	tests := []struct {
+		name        string
+		celType     *cel.Type
+		wantElemTyp *cel.Type
+		wantErr     bool
+	}{
+		{
+			name:        "list of strings",
+			celType:     cel.ListType(cel.StringType),
+			wantElemTyp: cel.StringType,
+			wantErr:     false,
+		},
+		{
+			name:        "list of ints",
+			celType:     cel.ListType(cel.IntType),
+			wantElemTyp: cel.IntType,
+			wantErr:     false,
+		},
+		{
+			name:        "list of dyn",
+			celType:     cel.ListType(cel.DynType),
+			wantElemTyp: cel.DynType,
+			wantErr:     false,
+		},
+		{
+			name:    "not a list - string type",
+			celType: cel.StringType,
+			wantErr: true,
+		},
+		{
+			name:    "not a list - int type",
+			celType: cel.IntType,
+			wantErr: true,
+		},
+		{
+			name:    "not a list - map type",
+			celType: cel.MapType(cel.StringType, cel.IntType),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			elemType, err := krocel.ListElementType(tt.celType)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ListElementType() expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ListElementType() unexpected error: %v", err)
+				return
+			}
+			if !tt.wantElemTyp.IsAssignableType(elemType) {
+				t.Errorf("ListElementType() = %v, want %v", elemType, tt.wantElemTyp)
+			}
+		})
+	}
+}
+
+func TestValidateForEachDimensions(t *testing.T) {
+	defaultRGDConfig := RGDConfig{
+		MaxCollectionDimensionSize: 10,
+	}
+	tests := []struct {
+		name        string
+		rgd         *v1alpha1.ResourceGraphDefinition
+		rgdConfig   RGDConfig
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "Valid forEach iterator",
+			rgd: &v1alpha1.ResourceGraphDefinition{
 				Spec: v1alpha1.ResourceGraphDefinitionSpec{
 					Resources: []*v1alpha1.Resource{
-						{ID: tt.resourceID},
-					},
-					Schema: &v1alpha1.Schema{
-						Kind: tt.kind,
+						{
+							ID: "workers",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"name": "${schema.spec.workers}"},
+							},
+						},
 					},
 				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: false,
+		},
+		{
+			name: "Valid multiple forEach iterators",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "deployments",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"region": "${schema.spec.regions}"},
+								{"tier": "${schema.spec.tiers}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: false,
+		},
+		{
+			name: "Invalid iterator name - not lowerCamelCase",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "workers",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"Invalid_Name": "${schema.spec.workers}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: true,
+			errorMsg:    "forEach iterator name",
+		},
+		{
+			name: "Iterator name is reserved keyword (schema)",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "workers",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"schema": "${schema.spec.workers}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: true,
+			errorMsg:    "reserved keyword",
+		},
+		{
+			name: "Iterator name 'each' is reserved for per-item readiness",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "pods",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"each": "${schema.spec.podNames}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: true,
+			errorMsg:    "reserved keyword",
+		},
+		{
+			name: "Iterator name conflicts with resource ID",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "database"},
+						{
+							ID: "backups",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"database": "${schema.spec.databases}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: true,
+			errorMsg:    "conflicts with resource ID",
+		},
+		{
+			name: "Duplicate iterator names in same resource",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "workers",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"name": "${schema.spec.workers}"},
+								{"name": "${schema.spec.otherWorkers}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: true,
+			errorMsg:    "duplicate forEach iterator name",
+		},
+		{
+			name: "Same iterator name in different resources is valid",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "workers",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"name": "${schema.spec.workers}"},
+							},
+						},
+						{
+							ID: "backups",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"name": "${schema.spec.databases}"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: false,
+		},
+		{
+			name: "Resource without forEach is valid",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "deployment"},
+					},
+				},
+			},
+			rgdConfig:   defaultRGDConfig,
+			expectError: false,
+		},
+		{
+			name: "Resource with more than max forEach dimensions",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{
+							ID: "deployment",
+							ForEach: []v1alpha1.ForEachDimension{
+								{"a": "b"},
+							},
+						},
+					},
+				},
+			},
+			rgdConfig:   RGDConfig{MaxCollectionDimensionSize: 0},
+			expectError: true,
+			errorMsg:    "forEach cannot have more than 0 dimensions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resourceIDs := sets.NewString()
+			for _, res := range tt.rgd.Spec.Resources {
+				resourceIDs.Insert(res.ID)
 			}
-			if err := validateResourceGraphDefinitionNamingConventions(rgd); (err != nil) != tt.wantErr {
-				t.Errorf("validateResourceGraphDefinitionNamingConventions() error = %v, wantErr %v", err, tt.wantErr)
+			var err error
+			for _, res := range tt.rgd.Spec.Resources {
+				err = errors.Join(err, validateForEachDimensions(res, resourceIDs, tt.rgdConfig))
 			}
+			if (err != nil) != tt.expectError {
+				t.Errorf("validateResourceIDs() error = %v, expectError %v", err, tt.expectError)
+			}
+			if tt.expectError && err != nil && tt.errorMsg != "" {
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("validateResourceIDs() error = %v, should contain %q", err, tt.errorMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateNoKROOwnedLabels(t *testing.T) {
+	tests := []struct {
+		name        string
+		resourceID  string
+		obj         map[string]interface{}
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:       "no labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "empty labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name":   "test",
+					"labels": map[string]interface{}{},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "valid labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app": "test",
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:       "kro-owned labels",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app":           "test",
+						"kro.run/owned": "false",
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "kro.run/",
+		},
+		{
+			name:       "valid labels without kro.run/ prefix",
+			resourceID: "testResource",
+			obj: map[string]interface{}{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]interface{}{
+					"name": "test",
+					"labels": map[string]interface{}{
+						"app":           "test",
+						"kro-run-owned": "false",
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNoKROOwnedLabels(tt.resourceID, tt.obj)
+			if (err != nil) != tt.expectError {
+				t.Errorf("validateNoKROOwnedLabels() error = %v, expectError %v", err, tt.expectError)
+			}
+			if tt.expectError && err != nil && tt.errorMsg != "" {
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("validateNoKROOwnedLabels() error = %v, should contain %q", err, tt.errorMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateCombinableResourceFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		res     *v1alpha1.Resource
+		wantErr string
+	}{
+		{
+			name:    "missing both template and external ref",
+			res:     &v1alpha1.Resource{ID: "res"},
+			wantErr: "exactly one of template or externalRef must be provided",
+		},
+		{
+			name: "template and external ref together",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				Template:    runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+			wantErr: "cannot use externalRef with template",
+		},
+		{
+			name: "external ref and foreach together",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+				ForEach:     []v1alpha1.ForEachDimension{{"item": "${schema.spec.items}"}},
+			},
+			wantErr: "cannot use externalRef with forEach",
+		},
+		{
+			name: "template only is valid",
+			res: &v1alpha1.Resource{
+				ID:       "res",
+				Template: runtime.RawExtension{Raw: []byte("kind: ConfigMap")},
+			},
+		},
+		{
+			name: "external ref only is valid",
+			res: &v1alpha1.Resource{
+				ID:          "res",
+				ExternalRef: &v1alpha1.ExternalRef{APIVersion: "v1", Kind: "ConfigMap"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCombinableResourceFields(tt.res)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateTemplateConstraints(t *testing.T) {
+	tests := []struct {
+		name               string
+		resource           *v1alpha1.Resource
+		object             map[string]interface{}
+		namespaced         bool
+		instanceNamespaced bool
+		wantErr            string
+	}{
+		{
+			name: "invalid metadata namespace shape",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": "not-a-map",
+			},
+			instanceNamespaced: true,
+			wantErr:            "invalid metadata.namespace",
+		},
+		{
+			name: "cluster scoped resource must not set namespace",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+				},
+			},
+			instanceNamespaced: true,
+			wantErr:            "cluster-scoped and must not set metadata.namespace",
+		},
+		{
+			name: "cluster-scoped instance requires explicit namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
+			wantErr:            "namespaced and must set metadata.namespace when the instance CRD is cluster-scoped",
+		},
+		{
+			name: "cluster-scoped instance rejects empty namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "",
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
+			wantErr:            "namespaced and must set metadata.namespace when the instance CRD is cluster-scoped",
+		},
+		{
+			name: "reserved kro label bubbles up",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"labels": map[string]interface{}{
+						"kro.run/owned": "true",
+					},
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: true,
+			wantErr:            "reserved for internal use",
+		},
+		{
+			name: "valid namespaced object",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+					"labels": map[string]interface{}{
+						"app": "demo",
+					},
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: true,
+		},
+		{
+			name: "cluster-scoped instance allows explicit namespace on namespaced resource",
+			resource: &v1alpha1.Resource{
+				ID: "res",
+			},
+			object: map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"namespace": "${schema.spec.targetNamespace}",
+				},
+			},
+			namespaced:         true,
+			instanceNamespaced: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemplateConstraints(tt.resource, tt.object, tt.namespaced, tt.instanceNamespaced)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateIdentityFields(t *testing.T) {
+	inspector := newUnitInspector(t, "schema")
+
+	makeNode := func(id, path, expression string, namespaced bool) *Node {
+		return &Node{
+			Meta: NodeMeta{ID: id, Namespaced: namespaced},
+			Variables: []*variable.ResourceField{
+				{
+					FieldDescriptor: variable.FieldDescriptor{
+						Path:       path,
+						Expression: expr(expression),
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                 string
+		nodes                map[string]*Node
+		isInstanceNamespaced bool
+		wantErr              string
+	}{
+		{
+			name: "omit on metadata.name is rejected",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, "omit()", true),
+			},
+			isInstanceNamespaced: true,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "conditional omit on metadata.name is rejected",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, `schema.spec.name != "" ? schema.spec.name : omit()`, true),
+			},
+			isInstanceNamespaced: true,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "omit on metadata.namespace rejected for namespaced resource with cluster-scoped instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamespacePath, "omit()", true),
+			},
+			isInstanceNamespaced: false,
+			wantErr:              "omit() cannot be used at path \"metadata.namespace\"",
+		},
+		{
+			name: "omit on metadata.namespace allowed for namespaced instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamespacePath, "omit()", true),
+			},
+			isInstanceNamespaced: true,
+		},
+		{
+			name: "omit on metadata.namespace allowed for cluster-scoped resource",
+			nodes: map[string]*Node{
+				"crb": makeNode("crb", MetadataNamespacePath, "omit()", false),
+			},
+			isInstanceNamespaced: false,
+		},
+		{
+			name: "omit on non-required field is allowed",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", "spec.someField", "omit()", true),
+			},
+			isInstanceNamespaced: true,
+		},
+		{
+			name: "omit on metadata.name rejected for cluster-scoped instance",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, "omit()", true),
+			},
+			isInstanceNamespaced: false,
+			wantErr:              "omit() cannot be used at path \"metadata.name\"",
+		},
+		{
+			name: "non-omit expression on metadata.name is allowed",
+			nodes: map[string]*Node{
+				"cm": makeNode("cm", MetadataNamePath, `"my-resource"`, true),
+			},
+			isInstanceNamespaced: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentityFields(tt.nodes, inspector, tt.isInstanceNamespaced)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }

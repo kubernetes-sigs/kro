@@ -15,13 +15,14 @@
 package parser
 
 import (
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	schemacache "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -144,24 +145,24 @@ func TestParseResource(t *testing.T) {
 		}
 
 		expectedExpressions := []variable.FieldDescriptor{
-			{Path: "stringField", Expressions: []string{"string.value"}, StandaloneExpression: true},
-			{Path: "intField", Expressions: []string{"int.value"}, StandaloneExpression: true},
-			{Path: "boolField", Expressions: []string{"bool.value"}, StandaloneExpression: true},
-			{Path: "nestedObject.nestedString", Expressions: []string{"nested.string"}, StandaloneExpression: true},
-			{Path: "nestedObject.nestedStringMultiple", Expressions: []string{"nested.string1", "nested.string2"}, StandaloneExpression: false},
-			{Path: "simpleArray[0]", Expressions: []string{"array[0]"}, StandaloneExpression: true},
-			{Path: "simpleArray[1]", Expressions: []string{"array[1]"}, StandaloneExpression: true},
-			{Path: "mapField.key1", Expressions: []string{"map.key1"}, StandaloneExpression: true},
-			{Path: "mapField.key2", Expressions: []string{"map.key2"}, StandaloneExpression: true},
-			{Path: "specialCharacters.simpleAnnotation", Expressions: []string{"simpleannotation"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"doted.annotation.key\"]", Expressions: []string{"dotedannotationvalue"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"\"]", Expressions: []string{"emptyannotation"}, StandaloneExpression: true},
-			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expressions: []string{"value"}, StandaloneExpression: true},
-			{Path: "schemalessField.something", Expressions: []string{"schemaless.value"}, StandaloneExpression: true},
-			{Path: "schemalessField.nestedSomething.nested", Expressions: []string{"schemaless.nested.value"}, StandaloneExpression: true},
+			{Path: "stringField", Expression: krocel.NewUncompiled("string.value")},
+			{Path: "intField", Expression: krocel.NewUncompiled("int.value")},
+			{Path: "boolField", Expression: krocel.NewUncompiled("bool.value")},
+			{Path: "nestedObject.nestedString", Expression: krocel.NewUncompiled("nested.string")},
+			{Path: "nestedObject.nestedStringMultiple", Expression: krocel.NewUncompiled("(nested.string1) + \"-\" + (nested.string2)")},
+			{Path: "simpleArray[0]", Expression: krocel.NewUncompiled("array[0]")},
+			{Path: "simpleArray[1]", Expression: krocel.NewUncompiled("array[1]")},
+			{Path: "mapField.key1", Expression: krocel.NewUncompiled("map.key1")},
+			{Path: "mapField.key2", Expression: krocel.NewUncompiled("map.key2")},
+			{Path: "specialCharacters.simpleAnnotation", Expression: krocel.NewUncompiled("simpleannotation")},
+			{Path: "specialCharacters[\"doted.annotation.key\"]", Expression: krocel.NewUncompiled("dotedannotationvalue")},
+			{Path: "specialCharacters[\"\"]", Expression: krocel.NewUncompiled("emptyannotation")},
+			{Path: "specialCharacters[\"array.name.with.dots\"][0]", Expression: krocel.NewUncompiled("value")},
+			{Path: "schemalessField.something", Expression: krocel.NewUncompiled("schemaless.value")},
+			{Path: "schemalessField.nestedSomething.nested", Expression: krocel.NewUncompiled("schemaless.nested.value")},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -184,17 +185,10 @@ func TestParseResource(t *testing.T) {
 				t.Errorf("Expression[%d] path mismatch:\n  got:  %s\n  want: %s", i, actual.Path, expected.Path)
 			}
 
-			if !equalStrings(actual.Expressions, expected.Expressions) {
+			if actual.Expression.Original != expected.Expression.Original {
 				t.Errorf(
 					"Expression[%d] expressions mismatch for path %s:\n  got:  %v\n  want: %v",
-					i, expected.Path, actual.Expressions, expected.Expressions,
-				)
-			}
-
-			if actual.StandaloneExpression != expected.StandaloneExpression {
-				t.Errorf(
-					"Expression[%d] StandaloneExpression mismatch for path %s:\n  got:  %v\n  want: %v",
-					i, expected.Path, actual.StandaloneExpression, expected.StandaloneExpression,
+					i, expected.Path, actual.Expression.Original, expected.Expression.Original,
 				)
 			}
 		}
@@ -214,7 +208,7 @@ func TestParseResource(t *testing.T) {
 			},
 		}
 
-		_, err := ParseResource(resource, schema)
+		_, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err == nil {
 			t.Errorf("ParseResource() expected error, got nil")
 		}
@@ -444,7 +438,7 @@ func TestTypeMismatches(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseResource(tc.resource, tc.schema)
+			_, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("ParseResource() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -528,18 +522,18 @@ func TestParseWithExpectedSchema(t *testing.T) {
 		},
 	}
 
-	expressions, err := ParseResource(resource, schema)
+	expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 	if err != nil {
 		t.Fatalf("ParseResource() error = %v", err)
 	}
 
 	expectedExpressions := map[string]variable.FieldDescriptor{
-		"stringField":                               {Path: "stringField", Expressions: []string{"string.value"}, StandaloneExpression: true},
-		"objectField":                               {Path: "objectField", Expressions: []string{"object.value"}, StandaloneExpression: true},
-		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expressions: []string{"nested.string"}, StandaloneExpression: true},
-		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expressions: []string{"deep.nested"}, StandaloneExpression: true},
-		"arrayField[0]":                             {Path: "arrayField[0]", Expressions: []string{"array[0]"}, StandaloneExpression: true},
-		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expressions: []string{"object.in.array"}, StandaloneExpression: true},
+		"stringField":                               {Path: "stringField", Expression: krocel.NewUncompiled("string.value")},
+		"objectField":                               {Path: "objectField", Expression: krocel.NewUncompiled("object.value")},
+		"nestedObjectField.nestedString":            {Path: "nestedObjectField.nestedString", Expression: krocel.NewUncompiled("nested.string")},
+		"nestedObjectField.nestedObject.deepNested": {Path: "nestedObjectField.nestedObject.deepNested", Expression: krocel.NewUncompiled("deep.nested")},
+		"arrayField[0]":                             {Path: "arrayField[0]", Expression: krocel.NewUncompiled("array[0]")},
+		"arrayField[1].objectInArray":               {Path: "arrayField[1].objectInArray", Expression: krocel.NewUncompiled("object.in.array")},
 	}
 
 	if len(expressions) != len(expectedExpressions) {
@@ -553,11 +547,8 @@ func TestParseWithExpectedSchema(t *testing.T) {
 			continue
 		}
 
-		if !reflect.DeepEqual(expr.Expressions, expected.Expressions) {
-			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, expected.Expressions, expr.Expressions)
-		}
-		if expr.StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("Path %s: expected OneShotCEL %v, got %v", expr.Path, expected.StandaloneExpression, expr.StandaloneExpression)
+		if expr.Expression.Original != expected.Expression.Original {
+			t.Errorf("Path %s: expected expressions %v, got %v", expr.Path, expected.Expression.Original, expr.Expression.Original)
 		}
 
 		// remove the matched expression from the map
@@ -752,7 +743,7 @@ func TestParserEdgeCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseResource(tc.resource, tc.schema, "")
+			_, err := New(schemacache.NewCache()).parseResource(tc.resource, tc.schema, "")
 			if tc.expectedError == "" {
 				if err != nil {
 					t.Errorf("Expected no error, but got: %s", err.Error())
@@ -873,7 +864,7 @@ func TestXKubernetesIntOrString(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseResource(tc.resource, schema)
+			_, err := New(schemacache.NewCache()).ParseResource(tc.resource, schema)
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error but got none")
 			} else if !tc.wantErr && err != nil {
@@ -954,7 +945,7 @@ func TestNestedXKubernetesIntOrString(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				_, err := ParseResource(tc.resource, schema)
+				_, err := New(schemacache.NewCache()).ParseResource(tc.resource, schema)
 				if tc.wantErr && err == nil {
 					t.Errorf("Expected error, but got none")
 				} else if !tc.wantErr && err != nil {
@@ -1176,7 +1167,7 @@ func TestOneOfAndAnyOf(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseResource(tc.resource, tc.schema, "")
+			_, err := New(schemacache.NewCache()).parseResource(tc.resource, tc.schema, "")
 			if tc.wantErr && err == nil {
 				t.Errorf("Expected error but got none")
 			} else if !tc.wantErr && err != nil {
@@ -1249,7 +1240,7 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -1259,21 +1250,16 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 
 		expected := variable.FieldDescriptor{
-			Path:                 "networkRef.name",
-			Expressions:          []string{"network.metadata.name"},
-			StandaloneExpression: true,
+			Path:       "networkRef.name",
+			Expression: krocel.NewUncompiled("network.metadata.name"),
 		}
 
-		if !reflect.DeepEqual(expressions[0].Path, expected.Path) {
+		if expressions[0].Path != expected.Path {
 			t.Errorf("Expected path %s, got %s", expected.Path, expressions[0].Path)
 		}
 
-		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
-			t.Errorf("Expressions mismatch: got %v, want %v", expressions[0].Expressions, expected.Expressions)
-		}
-
-		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
+		if expressions[0].Expression.Original != expected.Expression.Original {
+			t.Errorf("Expressions mismatch: got %v, want %v", expressions[0].Expression.Original, expected.Expression.Original)
 		}
 	})
 
@@ -1338,7 +1324,7 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 			},
 		}
 
-		expressions, err := ParseResource(resource, schema)
+		expressions, err := New(schemacache.NewCache()).ParseResource(resource, schema)
 		if err != nil {
 			t.Fatalf("ParseResource() error = %v", err)
 		}
@@ -1348,20 +1334,15 @@ func TestOneOfWithStructuralConstraints(t *testing.T) {
 		}
 
 		expected := variable.FieldDescriptor{
-			Path:                 "networkRef.external",
-			Expressions:          []string{"network.selfLink"},
-			StandaloneExpression: true,
+			Path:       "networkRef.external",
+			Expression: krocel.NewUncompiled("network.selfLink"),
 		}
 
-		if !reflect.DeepEqual(expressions[0].Path, expected.Path) {
+		if expressions[0].Path != expected.Path {
 			t.Errorf("Expected path %s, got %s", expected.Path, expressions[0].Path)
 		}
-		if !reflect.DeepEqual(expressions[0].Expressions, expected.Expressions) {
-			t.Errorf("Expected expressions %v, got %v", expected.Expressions, expressions[0].Expressions)
-		}
-
-		if expressions[0].StandaloneExpression != expected.StandaloneExpression {
-			t.Errorf("StandaloneExpression mismatch: got %v, want %v", expressions[0].StandaloneExpression, expected.StandaloneExpression)
+		if expressions[0].Expression.Original != expected.Expression.Original {
+			t.Errorf("Expected expressions %v, got %v", expected.Expression.Original, expressions[0].Expression.Original)
 		}
 	})
 }
@@ -1392,9 +1373,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "spec.template",
-					Expressions:          []string{"template.value"},
-					StandaloneExpression: true,
+					Path:       "spec.template",
+					Expression: krocel.NewUncompiled("template.value"),
 				},
 			},
 		},
@@ -1422,9 +1402,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "spec.template.nested[0].key",
-					Expressions:          []string{"template.value"},
-					StandaloneExpression: true,
+					Path:       "spec.template.nested[0].key",
+					Expression: krocel.NewUncompiled("template.value"),
 				},
 			},
 		},
@@ -1489,24 +1468,20 @@ func TestPreserveUnknownFields(t *testing.T) {
 			wantErr: false,
 			expectedExpressions: []variable.FieldDescriptor{
 				{
-					Path:                 "program.resources.app.properties.spec.name",
-					Expressions:          []string{"schema.spec.name"},
-					StandaloneExpression: true,
+					Path:       "program.resources.app.properties.spec.name",
+					Expression: krocel.NewUncompiled("schema.spec.name"),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.region",
-					Expressions:          []string{"schema.spec.region"},
-					StandaloneExpression: true,
+					Path:       "program.resources.app.properties.spec.region",
+					Expression: krocel.NewUncompiled("schema.spec.region"),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.services[0].name",
-					Expressions:          []string{"schema.spec.name"},
-					StandaloneExpression: false,
+					Path:       "program.resources.app.properties.spec.services[0].name",
+					Expression: krocel.NewUncompiled("(schema.spec.name) + \"-service\""),
 				},
 				{
-					Path:                 "program.resources.app.properties.spec.services[0].instanceCount",
-					Expressions:          []string{"schema.spec.instanceCount"},
-					StandaloneExpression: true,
+					Path:       "program.resources.app.properties.spec.services[0].instanceCount",
+					Expression: krocel.NewUncompiled("schema.spec.instanceCount"),
 				},
 			},
 		},
@@ -1514,7 +1489,7 @@ func TestPreserveUnknownFields(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			expressions, err := ParseResource(tc.resource, tc.schema)
+			expressions, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if tc.wantErr {
 				if err == nil {
 					t.Error("Expected error but got none")
@@ -1554,11 +1529,8 @@ func TestPreserveUnknownFields(t *testing.T) {
 						continue
 					}
 
-					if !reflect.DeepEqual(actualExpr.Expressions, expectedExpr.Expressions) {
-						t.Errorf("Path %s: expected expressions %v, got %v", path, expectedExpr.Expressions, actualExpr.Expressions)
-					}
-					if actualExpr.StandaloneExpression != expectedExpr.StandaloneExpression {
-						t.Errorf("Path %s: expected StandaloneExpression %v, got %v", path, expectedExpr.StandaloneExpression, actualExpr.StandaloneExpression)
+					if actualExpr.Expression.Original != expectedExpr.Expression.Original {
+						t.Errorf("Path %s: expected expressions %v, got %v", path, expectedExpr.Expression.Original, actualExpr.Expression.Original)
 					}
 				}
 			}
@@ -1742,7 +1714,7 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fields, err := ParseResource(tc.resource, tc.schema)
+			fields, err := New(schemacache.NewCache()).ParseResource(tc.resource, tc.schema)
 			if err != nil {
 				t.Fatalf("ParseResource() error = %v", err)
 			}
@@ -1752,20 +1724,74 @@ func TestEmptyBracesInExpressions(t *testing.T) {
 			for _, field := range fields {
 				if field.Path == tc.expectedExprPath {
 					found = true
-					if len(field.Expressions) != 1 {
-						t.Errorf("Expected 1 expression, got %d", len(field.Expressions))
-						continue
-					}
-					if field.Expressions[0] != tc.expectedExpr {
-						t.Errorf("Expression mismatch:\ngot:  %q\nwant: %q", field.Expressions[0], tc.expectedExpr)
-					}
-					if !field.StandaloneExpression {
-						t.Error("Expected StandaloneExpression to be true")
+					if field.Expression.Original != tc.expectedExpr {
+						t.Errorf("Expression mismatch:\ngot:  %q\nwant: %q", field.Expression.Original, tc.expectedExpr)
 					}
 				}
 			}
 			if !found {
 				t.Errorf("Expected to find field descriptor for path %q", tc.expectedExprPath)
+			}
+		})
+	}
+}
+
+func TestBuildStringTemplate(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		matches []exprMatch
+		want    string
+	}{
+		{
+			name:    "prefix only",
+			input:   "prefix-${expr}",
+			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
+			want:    `"prefix-" + (expr)`,
+		},
+		{
+			name:    "suffix only",
+			input:   "${expr}-suffix",
+			matches: []exprMatch{{expr: "expr", start: 0, end: 7}},
+			want:    `(expr) + "-suffix"`,
+		},
+		{
+			name:    "prefix and suffix",
+			input:   "prefix-${expr}-suffix",
+			matches: []exprMatch{{expr: "expr", start: 7, end: 14}},
+			want:    `"prefix-" + (expr) + "-suffix"`,
+		},
+		{
+			name:  "multiple expressions",
+			input: "a-${expr1}-b-${expr2}-c",
+			matches: []exprMatch{
+				{expr: "expr1", start: 2, end: 10},
+				{expr: "expr2", start: 13, end: 21},
+			},
+			want: `"a-" + (expr1) + "-b-" + (expr2) + "-c"`,
+		},
+		{
+			name:  "adjacent expressions",
+			input: "${expr1}${expr2}",
+			matches: []exprMatch{
+				{expr: "expr1", start: 0, end: 8},
+				{expr: "expr2", start: 8, end: 16},
+			},
+			want: `(expr1) + (expr2)`,
+		},
+		{
+			name:    "literal with quotes",
+			input:   `say "hello" ${expr}`,
+			matches: []exprMatch{{expr: "expr", start: 12, end: 19}},
+			want:    `"say \"hello\" " + (expr)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildStringTemplate(tt.input, tt.matches)
+			if got != tt.want {
+				t.Errorf("buildStringTemplate() = %q, want %q", got, tt.want)
 			}
 		})
 	}

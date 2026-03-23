@@ -482,6 +482,24 @@ var _ = Describe("Dependency Readiness", func() {
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		now := metav1.Now()
+		job1.Status.Conditions = append(job1.Status.Conditions,
+			batchv1.JobCondition{
+				Type:               batchv1.JobSuccessCriteriaMet,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Reason:             "JobSuccessCriteriaMet",
+				Message:            "Job has successfully completed all of its specified success criteria",
+			},
+			batchv1.JobCondition{
+				Type:               batchv1.JobComplete,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Reason:             batchv1.JobReasonCompletionsReached,
+				Message:            "Job has reached the specified number of completions",
+			})
+		job1.Status.StartTime = &now
 		job1.Status.CompletionTime = &now
 		job1.Status.Succeeded = 1
 		Expect(env.Client.Status().Update(ctx, job1)).To(Succeed())
@@ -496,6 +514,15 @@ var _ = Describe("Dependency Readiness", func() {
 		}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 		now = metav1.Now()
+		job2.Status.Conditions = append(job1.Status.Conditions, batchv1.JobCondition{
+			Type:               batchv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      now,
+			LastTransitionTime: now,
+			Reason:             batchv1.JobReasonCompletionsReached,
+			Message:            "Job has reached the specified number of completions",
+		})
+		job2.Status.StartTime = &now
 		job2.Status.CompletionTime = &now
 		job2.Status.Succeeded = 1
 		Expect(env.Client.Status().Update(ctx, job2)).To(Succeed())

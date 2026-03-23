@@ -149,9 +149,7 @@ func SchemaDeclTypeWithMetadata(s common.Schema, isResourceRoot bool) *apiserver
 		for name, prop := range s.Properties() {
 			var enumValues []interface{}
 			if prop.Enum() != nil {
-				for _, e := range prop.Enum() {
-					enumValues = append(enumValues, e)
-				}
+				enumValues = append(enumValues, prop.Enum()...)
 			}
 			if fieldType := SchemaDeclTypeWithMetadata(prop, prop.IsXEmbeddedResource()); fieldType != nil {
 				if propName, ok := apiservercel.Escape(name); ok {

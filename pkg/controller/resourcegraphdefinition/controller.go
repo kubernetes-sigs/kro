@@ -17,11 +17,13 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,53 +37,71 @@ import (
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
 	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
+type resourceGraphBuilder interface {
+	NewResourceGraphDefinition(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
+}
+
+// Config holds tunable parameters for the RGD reconciler.
+type Config struct {
+	AllowCRDDeletion        bool
+	InstanceRequeueInterval time.Duration
+	ProgressRequeueDelay    time.Duration
+	MaxConcurrentReconciles int
+	MaxGraphRevisions       int
+	RGDConfig               graph.RGDConfig
+}
+
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
-	allowCRDDeletion bool
-
-	// Client and instanceLogger are set with SetupWithManager
-
+	// Client, apiReader, and instanceLogger are set with SetupWithManager
 	client.Client
-
+	apiReader      client.Reader
 	instanceLogger logr.Logger
 
-	clientSet  kroclient.SetInterface
-	crdManager kroclient.CRDClient
+	clientSet         kroclient.SetInterface
+	crdManager        kroclient.CRDClient
+	metadataLabeler   metadata.Labeler
+	rgBuilder         resourceGraphBuilder
+	dynamicController *dynamiccontroller.DynamicController
+	revisionsRegistry *revisions.Registry
+	cfg               Config
 
-	metadataLabeler         metadata.Labeler
-	rgBuilder               *graph.Builder
-	dynamicController       *dynamiccontroller.DynamicController
-	maxConcurrentReconciles int
+	newEventRecorder func(string) record.EventRecorder
 }
 
 func NewResourceGraphDefinitionReconciler(
 	clientSet kroclient.SetInterface,
-	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
-	maxConcurrentReconciles int,
+	revisionsRegistry *revisions.Registry,
+	cfg Config,
 ) *ResourceGraphDefinitionReconciler {
 	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
-		clientSet:               clientSet,
-		allowCRDDeletion:        allowCRDDeletion,
-		crdManager:              crdWrapper,
-		dynamicController:       dynamicController,
-		metadataLabeler:         metadata.NewKROMetaLabeler(),
-		rgBuilder:               builder,
-		maxConcurrentReconciles: maxConcurrentReconciles,
+		clientSet:         clientSet,
+		crdManager:        crdWrapper,
+		dynamicController: dynamicController,
+		revisionsRegistry: revisionsRegistry,
+		metadataLabeler:   metadata.NewKROMetaLabeler(),
+		rgBuilder:         builder,
+		cfg:               cfg,
 	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Client = mgr.GetClient()
+	// GraphRevision selection relies on a CRD selectable field, so use the
+	// direct API reader instead of a cache-only field index.
+	r.apiReader = mgr.GetAPIReader()
 	r.clientSet.SetRESTMapper(mgr.GetRESTMapper())
 	r.instanceLogger = mgr.GetLogger()
+	r.newEventRecorder = mgr.GetEventRecorderFor
 
 	logConstructor := func(req *reconcile.Request) logr.Logger {
 		log := mgr.GetLogger().WithName("rgd-controller").WithValues(
@@ -97,12 +117,19 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("ResourceGraphDefinition").
-		For(&v1alpha1.ResourceGraphDefinition{}).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		For(
+			&v1alpha1.ResourceGraphDefinition{},
+			builder.WithPredicates(
+				predicate.Or(
+					resourceGraphDefinitionPrimaryWatchPredicate(),
+					annotationChangedPredicate(),
+				),
+			),
+		).
 		WithOptions(
 			ctrlrtcontroller.Options{
 				LogConstructor:          logConstructor,
-				MaxConcurrentReconciles: r.maxConcurrentReconciles,
+				MaxConcurrentReconciles: r.cfg.MaxConcurrentReconciles,
 			},
 		).
 		WatchesMetadata(
@@ -116,11 +143,63 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 					return false
 				},
 				DeleteFunc: func(e event.DeleteEvent) bool {
-					return false
+					return true
 				},
 			}),
 		).
 		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+}
+
+// resourceGraphDefinitionPrimaryWatchPredicate returns a predicate that decides
+// which ResourceGraphDefinition events trigger a reconcile.
+//
+// The default GenerationChangedPredicate is insufficient here because Kubernetes
+// does NOT bump .metadata.generation when .metadata.deletionTimestamp is set.
+// That means a plain generation check silently drops the update that kicks off
+// finalizer-driven cleanup, and the controller never runs its delete path until
+// the final delete event — by which point the object is already gone from the API
+// server.
+//
+// This predicate reconciles when:
+//   - spec changes  (generation changed), or
+//   - deletion begins (deletionTimestamp transitions from zero to non-zero).
+//
+// It skips:
+//   - status-only updates (generation and deletion state unchanged),
+//   - delete events (object is already removed; nothing left to reconcile).
+func resourceGraphDefinitionPrimaryWatchPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+
+			oldDeleting := !e.ObjectOld.GetDeletionTimestamp().IsZero()
+			newDeleting := !e.ObjectNew.GetDeletionTimestamp().IsZero()
+			return e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() || oldDeleting != newDeleting
+		},
+		DeleteFunc: func(event.DeleteEvent) bool {
+			return false
+		},
+	}
+}
+
+// annotationChangedPredicate triggers a reconcile only when the
+// allow-breaking-changes annotation is changed between "true" and "false"
+// Adding the annotation as "false" from no annotation or vice versa, is the same
+// and we do not trigger a reconcile.
+// Delete events are suppressed to avoid redundant reconciles
+func annotationChangedPredicate() predicate.Predicate {
+	return predicate.TypedFuncs[client.Object]{
+		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
+			oldVal := e.ObjectOld.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+			newVal := e.ObjectNew.GetAnnotations()[v1alpha1.AllowBreakingChangesAnnotation] == "true"
+			return oldVal != newVal
+		},
+		DeleteFunc: func(event.TypedDeleteEvent[client.Object]) bool {
+			return false
+		},
+	}
 }
 
 // findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
@@ -156,12 +235,15 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
+		startTime := time.Now()
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
+		deletionDuration.WithLabelValues(o.Name).Observe(time.Since(startTime).Seconds())
+		deletionsTotal.WithLabelValues(o.Name).Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -169,11 +251,11 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
+	reconcileResult, topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
 	if err := r.updateStatus(ctx, o, topologicalOrder, resourcesInformation); err != nil {
 		reconcileErr = errors.Join(reconcileErr, err)
 	}
 
-	return ctrl.Result{}, reconcileErr
+	return reconcileResult, reconcileErr
 }

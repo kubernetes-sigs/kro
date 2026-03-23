@@ -1,0 +1,14 @@
+apiVersion: kro.run/v1alpha1
+kind: FullAccountInfrastructure
+metadata:
+  name: acme-demo
+spec:
+  accountName: acme-demo
+  accountEmail: acme-demo@examplen.com
+  region: us-west-2
+  vpcCidr: "172.16.0.0/16"
+  availabilityZones:
+    - us-west-2a
+    - us-west-2b
+  clusterVersion: "1.35"
+  nodeInstanceType: t3.medium

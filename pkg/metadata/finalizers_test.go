@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestResourceGraphDefinitionFinalizer(t *testing.T) {
@@ -68,12 +69,58 @@ func TestResourceGraphDefinitionFinalizer(t *testing.T) {
 	}
 }
 
+func TestGraphRevisionFinalizer(t *testing.T) {
+	cases := []struct {
+		name          string
+		initialObject metav1.Object
+		operation     func(metav1.Object)
+		check         func(metav1.Object) bool
+		expected      bool
+	}{
+		{
+			name:          "Set finaliser on empty object",
+			initialObject: &metav1.ObjectMeta{},
+			operation:     SetGraphRevisionFinalizer,
+			check:         HasGraphRevisionFinalizer,
+			expected:      true,
+		},
+		{
+			name:          "Add finalizer to object w/ existing finalizers",
+			initialObject: &metav1.ObjectMeta{Finalizers: []string{"some-other-finalizer"}},
+			operation:     SetGraphRevisionFinalizer,
+			check:         HasGraphRevisionFinalizer,
+			expected:      true,
+		},
+		{
+			name:          "Remove finalizer from object w/ finalizer",
+			initialObject: &metav1.ObjectMeta{Finalizers: []string{kroFinalizer}},
+			operation:     RemoveGraphRevisionFinalizer,
+			check:         HasGraphRevisionFinalizer,
+			expected:      false,
+		},
+		{
+			name:          "Remove finalizer from object without finazlier",
+			initialObject: &metav1.ObjectMeta{Finalizers: []string{"some-other-finalizer"}},
+			operation:     RemoveGraphRevisionFinalizer,
+			check:         HasGraphRevisionFinalizer,
+			expected:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.operation(tc.initialObject)
+			assert.Equal(t, tc.expected, tc.check(tc.initialObject))
+		})
+	}
+}
+
 func TestInstanceFinalizerUnstructured(t *testing.T) {
 	cases := []struct {
 		name          string
-		initialObject *unstructured.Unstructured
-		operation     func(*unstructured.Unstructured) error
-		check         func(*unstructured.Unstructured) (bool, error)
+		initialObject client.Object
+		operation     func(object client.Object)
+		check         func(object client.Object) bool
 		expected      bool
 		expectError   bool
 	}{
@@ -84,8 +131,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					"metadata": map[string]interface{}{},
 				},
 			},
-			operation: SetInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: SetInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  true,
 		},
 		{
@@ -97,8 +144,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: SetInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: SetInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  true,
 		},
 		{
@@ -110,8 +157,8 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: RemoveInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: RemoveInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  false,
 		},
 		{
@@ -123,23 +170,17 @@ func TestInstanceFinalizerUnstructured(t *testing.T) {
 					},
 				},
 			},
-			operation: RemoveInstanceFinalizerUnstructured,
-			check:     HasInstanceFinalizerUnstructured,
+			operation: RemoveInstanceFinalizer,
+			check:     HasInstanceFinalizer,
 			expected:  false,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.operation(tc.initialObject)
-			if tc.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				hasF, err := tc.check(tc.initialObject)
-				assert.NoError(t, err)
-				assert.Equal(t, tc.expected, hasF)
-			}
+			tc.operation(tc.initialObject)
+			hasF := tc.check(tc.initialObject)
+			assert.Equal(t, tc.expected, hasF)
 		})
 	}
 }

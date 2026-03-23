@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: external-data
+  namespace: upgrade-test
+data:
+  appEnv: "production"
+  logLevel: "info"

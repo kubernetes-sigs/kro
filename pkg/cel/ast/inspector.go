@@ -83,6 +83,16 @@ type ExpressionInspection struct {
 	UnknownFunctions []UnknownFunction
 }
 
+// UsesOmit reports whether the inspected expression contains a call to omit().
+func (e *ExpressionInspection) UsesOmit() bool {
+	for _, fc := range e.FunctionCalls {
+		if fc.Name == "omit" {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *ExpressionInspection) merge(other ExpressionInspection) {
 	e.ResourceDependencies = append(e.ResourceDependencies, other.ResourceDependencies...)
 	e.FunctionCalls = append(e.FunctionCalls, other.FunctionCalls...)
@@ -106,14 +116,11 @@ type Inspector struct {
 	loopVars map[string]struct{}
 }
 
-// knownFunctions contains the list of all CEL functions that are supported
-var knownFunctions = []string{
-	"random.seededString",
-	"base64.decode",
-	"base64.encode",
-}
-
 // NewInspectorWithEnv creates a new Inspector with the given CEL environment and resource names.
+//
+// The set of known functions is derived automatically from the environment,
+// so adding new CEL libraries or functions does not require updating a
+// hardcoded list.
 func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	resourceMap := map[string]struct{}{}
 	for _, r := range resources {
@@ -121,8 +128,10 @@ func NewInspectorWithEnv(env *cel.Env, resources []string) *Inspector {
 	}
 
 	functionMap := map[string]struct{}{}
-	for _, fn := range knownFunctions {
-		functionMap[fn] = struct{}{}
+	if env != nil {
+		for fnName := range env.Functions() {
+			functionMap[fnName] = struct{}{}
+		}
 	}
 
 	return &Inspector{
@@ -249,11 +258,11 @@ func (a *Inspector) inspectIdent(expr celast.Expr, path string) ExpressionInspec
 func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path string) ExpressionInspection {
 	out := ExpressionInspection{}
 
+	fn := call.FunctionName()
+
 	for _, arg := range call.Args() {
 		out.merge(a.inspectExpr(ast, arg, ""))
 	}
-
-	fn := call.FunctionName()
 
 	// Namespaced (member) function: target.method
 	if call.IsMemberFunction() {
@@ -262,10 +271,11 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 			targetName := a.exprToString(ast, t)
 			full := fmt.Sprintf("%s.%s", targetName, fn)
 
-			// Still inspect target for resource usage
-			out.merge(a.inspectExpr(ast, t, path))
-
-			// Treat chained method call as unknown unless known
+			// Inspect when its not a known namespaced function
+			if _, ok := a.functions[full]; !ok {
+				out.merge(a.inspectExpr(ast, t, path))
+			}
+			// Treat chained method calls as unknown unless they resolve to a known namespaced function
 			out.FunctionCalls = append(out.FunctionCalls, FunctionCall{
 				Name: full,
 			})
@@ -308,10 +318,48 @@ func (a *Inspector) inspectCall(ast *celast.AST, call celast.CallExpr, path stri
 func (a *Inspector) inspectComprehension(ast *celast.AST, comp celast.ComprehensionExpr, path string) ExpressionInspection {
 	out := ExpressionInspection{}
 
-	iterVar := comp.IterVar()
-	a.loopVars[iterVar] = struct{}{}
-	defer delete(a.loopVars, iterVar)
+	// Track loop variables using a depth counter to handle nested
+	// comprehensions that reuse the same variable name (e.g. sortBy
+	// expands to nested comprehensions both using iterVar "c").
+	pushLoopVar := func(name string) {
+		a.loopVars[name] = struct{}{}
+	}
+	popLoopVar := func(name string) {
+		delete(a.loopVars, name)
+	}
 
+	// Save which variables were already in scope so we only remove
+	// the ones we introduced.
+	iterVar := comp.IterVar()
+	_, iterVarWasSet := a.loopVars[iterVar]
+	pushLoopVar(iterVar)
+	defer func() {
+		if !iterVarWasSet {
+			popLoopVar(iterVar)
+		}
+	}()
+
+	if comp.HasIterVar2() {
+		iterVar2 := comp.IterVar2()
+		_, iterVar2WasSet := a.loopVars[iterVar2]
+		pushLoopVar(iterVar2)
+		defer func() {
+			if !iterVar2WasSet {
+				popLoopVar(iterVar2)
+			}
+		}()
+	}
+
+	accuVar := comp.AccuVar()
+	_, accuVarWasSet := a.loopVars[accuVar]
+	pushLoopVar(accuVar)
+	defer func() {
+		if !accuVarWasSet {
+			popLoopVar(accuVar)
+		}
+	}()
+
+	out.merge(a.inspectExpr(ast, comp.AccuInit(), ""))
 	out.merge(a.inspectExpr(ast, comp.IterRange(), path))
 
 	if cond := comp.LoopCondition(); cond != nil {
@@ -454,5 +502,7 @@ func (a *Inspector) listExpressionToString(ast *celast.AST, expr celast.Expr) st
 }
 
 func isInternalIdentifier(name string) bool {
-	return name == "@result" || strings.HasPrefix(name, "$$")
+	return name == "@result" ||
+		strings.HasPrefix(name, "$$") ||
+		strings.HasPrefix(name, "@__")
 }

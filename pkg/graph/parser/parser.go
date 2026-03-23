@@ -17,10 +17,12 @@ package parser
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
@@ -30,6 +32,32 @@ const (
 	schemaTypeAny                    = "any"
 )
 
+var (
+	typesAny             = []string{schemaTypeAny}
+	typesStringOrInteger = []string{"string", "integer"}
+)
+
+// SchemaLookup abstracts pointer-stable schema field resolution.
+type SchemaLookup interface {
+	LookupField(parent *spec.Schema, field string) *spec.Schema
+	LookupAdditionalProperties(parent *spec.Schema) *spec.Schema
+}
+
+// Parser extracts CEL expressions from resources using OpenAPI schemas.
+// When a SchemaLookup is provided, field lookups go through it to
+// produce pointer-stable results suitable for downstream caching.
+type Parser struct {
+	schemas SchemaLookup
+}
+
+// New creates a Parser with the given schema lookup.
+func New(schemas SchemaLookup) *Parser {
+	if schemas == nil {
+		panic("parser: SchemaLookup must not be nil")
+	}
+	return &Parser{schemas: schemas}
+}
+
 // ParseResource extracts CEL expressions from a resource based on
 // the schema. The resource is expected to be a map[string]interface{}.
 //
@@ -38,15 +66,15 @@ const (
 // expressions are found, they are extracted and returned with the schema
 // of the field. The caller is responsible for converting schemas to CEL types
 // with appropriate type naming.
-func ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
-	return parseResource(resource, resourceSchema, "")
+func (p *Parser) ParseResource(resource map[string]interface{}, resourceSchema *spec.Schema) ([]variable.FieldDescriptor, error) {
+	return p.parseResource(resource, resourceSchema, "")
 }
 
 // parseResource is a helper function that recursively extracts CEL expressions
 // from a resource. It uses a depth first search to traverse the resource and
 // extract expressions from string fields.
 // The path parameter includes array indices for error reporting (e.g., "spec.containers[0]").
-func parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseResource(resource interface{}, schema *spec.Schema, path string) ([]variable.FieldDescriptor, error) {
 	if err := validateSchema(schema, path); err != nil {
 		return nil, err
 	}
@@ -58,9 +86,9 @@ func parseResource(resource interface{}, schema *spec.Schema, path string) ([]va
 
 	switch field := resource.(type) {
 	case map[string]interface{}:
-		return parseObject(field, schema, path, expectedTypes)
+		return p.parseObject(field, schema, path, expectedTypes)
 	case []interface{}:
-		return parseArray(field, schema, path, expectedTypes)
+		return p.parseArray(field, schema, path, expectedTypes)
 	case string:
 		return parseString(field, path, expectedTypes)
 	case nil:
@@ -93,7 +121,7 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 		// NOTE(a-hilaly): I don't like the type "any", we might want to change this to "object"
 		// in the future; just haven't really thought about it yet.
 		// Basically "any" means that the field can be of any type.
-		return []string{schemaTypeAny}, nil
+		return typesAny, nil
 	}
 
 	return nil, fmt.Errorf("unknown schema type")
@@ -104,12 +132,12 @@ func getExpectedTypes(schema *spec.Schema) ([]string, error) {
 func handleSchemaExtensions(schema *spec.Schema) ([]string, bool) {
 	// Handle "x-kubernetes-preserve-unknown-fields" extension
 	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-		return []string{schemaTypeAny}, true
+		return typesAny, true
 	}
 
 	// Handle "x-kubernetes-int-or-string" extension
 	if hasStructuralSchemaMarkerEnabled(schema, xKubernetesIntOrString) {
-		return []string{"string", "integer"}, true
+		return typesStringOrInteger, true
 	}
 
 	return nil, false
@@ -178,7 +206,7 @@ func validateSchema(schema *spec.Schema, path string) error {
 	return nil
 }
 
-func parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseObject(field map[string]interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -187,7 +215,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}
@@ -199,14 +227,14 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 		return nil, fmt.Errorf("expected %s type for path %s, got object", strings.Join(expectedTypes, " or "), path)
 	}
 
-	var expressionsFields []variable.FieldDescriptor
+	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for fieldName, value := range field {
-		fieldSchema, err := getFieldSchema(schema, fieldName)
+		fieldSchema, err := p.getFieldSchema(schema, fieldName)
 		if err != nil {
 			return nil, fmt.Errorf("error getting field schema for path %s: %v", path+"."+fieldName, err)
 		}
 		fieldPath := joinPathAndFieldName(path, fieldName)
-		fieldExpressions, err := parseResource(value, fieldSchema, fieldPath)
+		fieldExpressions, err := p.parseResource(value, fieldSchema, fieldPath)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +243,7 @@ func parseObject(field map[string]interface{}, schema *spec.Schema, path string,
 	return expressionsFields, nil
 }
 
-func parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
+func (p *Parser) parseArray(field []interface{}, schema *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
 	// Look for vendor schema extensions first
 	if len(schema.Extensions) > 0 {
 		// If the schema has the x-kubernetes-preserve-unknown-fields extension, we need to parse
@@ -224,7 +252,7 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 		// fields. This is particularly important for handling custom resources and fields that
 		// may contain arbitrary nested structures with potential CEL expressions.
 		if hasStructuralSchemaMarkerEnabled(schema, xKubernetesPreserveUnknownFields) {
-			expressions, err := parseSchemalessResource(field, path)
+			expressions, _, err := parseSchemalessResource(field, path)
 			if err != nil {
 				return nil, err
 			}
@@ -241,10 +269,10 @@ func parseArray(field []interface{}, schema *spec.Schema, path string, expectedT
 		return nil, err
 	}
 
-	var expressionsFields []variable.FieldDescriptor
+	expressionsFields := make([]variable.FieldDescriptor, 0, len(field))
 	for i, item := range field {
-		itemPath := fmt.Sprintf("%s[%d]", path, i)
-		itemExpressions, err := parseResource(item, itemSchema, itemPath)
+		itemPath := path + "[" + strconv.Itoa(i) + "]"
+		itemExpressions, err := p.parseResource(item, itemSchema, itemPath)
 		if err != nil {
 			return nil, err
 		}
@@ -260,16 +288,11 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 	}
 
 	if ok {
-		// Standalone CEL expression: "${expr}"
-		// ExpectedType will be set by builder based on schema
-		// StandaloneExpression=true tells builder to derive type from schema
 		expr := strings.TrimPrefix(field, "${")
 		expr = strings.TrimSuffix(expr, "}")
 		return []variable.FieldDescriptor{{
-			Expressions:          []string{expr},
-			ExpectedType:         nil, // Builder will set this based on schema
-			Path:                 path,
-			StandaloneExpression: true, // Single expression - type from schema
+			Expression: &krocel.Expression{Original: expr},
+			Path:       path,
 		}}, nil
 	}
 
@@ -282,17 +305,32 @@ func parseString(field string, path string, expectedTypes []string) ([]variable.
 		return nil, err
 	}
 	if len(expressions) > 0 {
-		// String template: "foo-${expr1}-${expr2}"
-		// ExpectedType will be set by builder to cel.StringType
-		// StandaloneExpression=false tells builder this is string concatenation
+		celExpr := buildStringTemplate(field, expressions)
 		return []variable.FieldDescriptor{{
-			Expressions:          expressions,
-			ExpectedType:         nil, // Builder will set this to cel.StringType
-			Path:                 path,
-			StandaloneExpression: false, // Multiple expressions - always string
+			Expression: &krocel.Expression{Original: celExpr, OriginalTemplate: field},
+			Path:       path,
 		}}, nil
 	}
 	return nil, nil
+}
+
+// buildStringTemplate builds a CEL concatenation expression from a string
+// template with embedded expressions.
+// e.g. "prefix-${expr1}-${expr2}" → `"prefix-" + expr1 + "-" + expr2`
+func buildStringTemplate(original string, matches []exprMatch) string {
+	var parts []string
+	pos := 0
+	for _, m := range matches {
+		if m.start > pos {
+			parts = append(parts, strconv.Quote(original[pos:m.start]))
+		}
+		parts = append(parts, "("+m.expr+")")
+		pos = m.end
+	}
+	if pos < len(original) {
+		parts = append(parts, strconv.Quote(original[pos:]))
+	}
+	return strings.Join(parts, " + ")
 }
 
 func parseScalarTypes(field interface{}, _ *spec.Schema, path string, expectedTypes []string) ([]variable.FieldDescriptor, error) {
@@ -337,19 +375,13 @@ func getSchemaTypeName(v interface{}) string {
 	}
 }
 
-func getFieldSchema(schema *spec.Schema, field string) (*spec.Schema, error) {
-	if schema.Properties != nil {
-		if fieldSchema, ok := schema.Properties[field]; ok {
-			return &fieldSchema, nil
-		}
+func (p *Parser) getFieldSchema(s *spec.Schema, field string) (*spec.Schema, error) {
+	if result := p.schemas.LookupField(s, field); result != nil {
+		return result, nil
 	}
 
-	if schema.AdditionalProperties != nil {
-		if schema.AdditionalProperties.Schema != nil {
-			return schema.AdditionalProperties.Schema, nil
-		} else if schema.AdditionalProperties.Allows {
-			return &spec.Schema{}, nil
-		}
+	if result := p.schemas.LookupAdditionalProperties(s); result != nil {
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("schema not found for field %s", field)
@@ -397,12 +429,12 @@ func isInteger(v interface{}) bool {
 // .fieldName to avoid ambiguity and simplify parsing back the path.
 func joinPathAndFieldName(path, fieldName string) string {
 	if fieldName == "" || strings.Contains(fieldName, ".") {
-		return fmt.Sprintf("%s[%q]", path, fieldName)
+		return path + "[\"" + fieldName + "\"]"
 	}
 	if path == "" {
 		return fieldName
 	}
-	return fmt.Sprintf("%s.%s", path, fieldName)
+	return path + "." + fieldName
 }
 
 // hasStructuralSchemaMarkerEnabled checks if a schema has a specific marker enabled.

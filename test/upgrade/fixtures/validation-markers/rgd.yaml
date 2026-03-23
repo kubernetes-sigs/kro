@@ -1,0 +1,23 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: upgrade-validation-markers
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: UpgradeValidated
+    spec:
+      name: string
+      environment: string | default=dev
+      replicas: integer | default=1
+    status: {}
+  resources:
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.spec.name}-configmap
+        namespace: ${schema.metadata.namespace}
+      data:
+        environment: ${schema.spec.environment}

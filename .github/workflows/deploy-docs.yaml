@@ -1,12 +1,18 @@
 name: Deploy docs
 
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
 on:
   push:
     branches:
       - main
     paths:
       - "website/**"
-      - "images/archiecture-diagrams"
+      - "tools/krep-crawl/**"
+      - ".github/workflows/deploy-docs.yaml"
 
 jobs:
   build:
@@ -23,6 +29,16 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
+
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6
+        with:
+          go-version-file: ./tools/krep-crawl/go.mod
+
+      - name: Generate roadmap data
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: go run .
+        working-directory: ./tools/krep-crawl
 
       - name: Install dependencies
         run: npm install --frozen-lockfile

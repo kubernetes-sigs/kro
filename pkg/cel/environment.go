@@ -15,7 +15,9 @@
 package cel
 
 import (
+	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -78,19 +80,85 @@ func WithTypedResources(schemas map[string]*spec.Schema) EnvOption {
 	}
 }
 
+// WithListVariables adds list-typed variable declarations to the CEL environment.
+// Used for collection resources so they support list operations/macros like all()
+// exists(), filter(), and map() etc...
+func WithListVariables(names []string) EnvOption {
+	return func(opts *envOptions) {
+		for _, name := range names {
+			opts.customDeclarations = append(opts.customDeclarations, cel.Variable(name, cel.ListType(cel.DynType)))
+		}
+	}
+}
+
+var (
+	baseDeclarationsOnce   sync.Once
+	cachedBaseDeclarations []cel.EnvOption
+)
+
+// BaseDeclarations returns the base CEL environment options shared by all kro
+// CEL environments. Includes list/string extensions, optional types, encoders,
+// and Kubernetes CEL libraries (URLs, Regex, Random).
+// The result is cached via sync.Once since these options are stateless.
+func BaseDeclarations() []cel.EnvOption {
+	baseDeclarationsOnce.Do(func() {
+		cachedBaseDeclarations = []cel.EnvOption{
+			ext.TwoVarComprehensions(),
+			ext.Lists(),
+			ext.Strings(),
+			ext.Bindings(),
+			cel.OptionalTypes(),
+			ext.Encoders(),
+			// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
+			// See https://kubernetes.io/docs/reference/using-api/cel/ and
+			// https://github.com/kubernetes-sigs/kro/issues/880.
+			k8scellib.Lists(),
+			k8scellib.URLs(),
+			k8scellib.Regex(),
+			k8scellib.Quantity(),
+			library.Random(),
+			library.Maps(),
+			library.JSON(),
+			library.Lists(),
+			// Omit() is registered globally so CEL can parse and type-check it
+			// everywhere. The graph builder rejects it in restricted contexts
+			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted
+			// and validateAndCompileForEach.
+			library.Omit(),
+		}
+	})
+	return cachedBaseDeclarations
+}
+
+var (
+	baseEnvOnce   sync.Once
+	cachedBaseEnv *cel.Env
+	baseEnvErr    error
+)
+
+// baseEnv returns a cached base CEL environment containing only the base
+// declarations. Use env.Extend() on the result to add custom declarations,
+// which is cheaper than building a full environment from scratch.
+func baseEnv() (*cel.Env, error) {
+	baseEnvOnce.Do(func() {
+		cachedBaseEnv, baseEnvErr = cel.NewEnv(BaseDeclarations()...)
+	})
+	return cachedBaseEnv, baseEnvErr
+}
+
 // DefaultEnvironment returns the default CEL environment.
 func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
-	declarations := []cel.EnvOption{
-		ext.Lists(),
-		ext.Strings(),
-		cel.OptionalTypes(),
-		ext.Encoders(),
-		// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
-		// See https://kubernetes.io/docs/reference/using-api/cel/ and
-		// https://github.com/kubernetes-sigs/kro/issues/880.
-		k8scellib.URLs(),
-		k8scellib.Regex(),
-		library.Random(),
+	env, _, err := defaultEnvironment(options...)
+	return env, err
+}
+
+// defaultEnvironment is the shared implementation that builds the CEL environment
+// and returns both the environment and the DeclTypeProvider (if typed resources
+// were configured).
+func defaultEnvironment(options ...EnvOption) (*cel.Env, *DeclTypeProvider, error) {
+	base, err := baseEnv()
+	if err != nil {
+		return nil, nil, fmt.Errorf("base environment: %w", err)
 	}
 
 	opts := &envOptions{}
@@ -98,7 +166,11 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		opt(opts)
 	}
 
+	// Only non-base declarations go here; base declarations are in the cached base env.
+	var declarations []cel.EnvOption
 	declarations = append(declarations, opts.customDeclarations...)
+
+	var provider *DeclTypeProvider
 
 	if len(opts.typedResources) > 0 {
 		// We need both a TypeProvider (for field resolution) and variable declarations.
@@ -125,14 +197,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		}
 
 		if len(declTypes) > 0 {
-			baseProvider := NewDeclTypeProvider(declTypes...)
+			provider = NewDeclTypeProvider(declTypes...)
 			// Enable recognition of CEL reserved keywords as field names
-			baseProvider.SetRecognizeKeywordAsFieldName(true)
+			provider.SetRecognizeKeywordAsFieldName(true)
 
 			registry := types.NewEmptyRegistry()
-			wrappedProvider, err := baseProvider.WithTypeProvider(registry)
+			wrappedProvider, err := provider.WithTypeProvider(registry)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			declarations = append(declarations, cel.CustomTypeProvider(wrappedProvider))
@@ -143,7 +215,14 @@ func DefaultEnvironment(options ...EnvOption) (*cel.Env, error) {
 		declarations = append(declarations, cel.Variable(name, cel.AnyType))
 	}
 
-	return cel.NewEnv(declarations...)
+	env, err := base.Extend(declarations...)
+	return env, provider, err
+}
+
+// TypedEnvironmentWithProvider creates a typed CEL environment.
+// It returns both the environment and the DeclTypeProvider.
+func TypedEnvironmentWithProvider(schemas map[string]*spec.Schema) (*cel.Env, *DeclTypeProvider, error) {
+	return defaultEnvironment(WithTypedResources(schemas))
 }
 
 // TypedEnvironment creates a CEL environment with type checking enabled.
@@ -154,38 +233,19 @@ func TypedEnvironment(schemas map[string]*spec.Schema) (*cel.Env, error) {
 	return DefaultEnvironment(WithTypedResources(schemas))
 }
 
-// UntypedEnvironment creates a CEL environment without type declarations.
-//
-// This is theoretically cheaper to use as there are no Schema conversions
-// required. NOTE(a-hilaly): maybe use this for runtime? undecided.
-func UntypedEnvironment(resourceIDs []string) (*cel.Env, error) {
-	return DefaultEnvironment(WithResourceIDs(resourceIDs))
-}
-
-// CreateDeclTypeProvider creates a DeclTypeProvider from OpenAPI schemas.
-// This is used for deep introspection of type structures when generating schemas.
-// The provider maps CEL type names to their full DeclType definitions with all fields.
-func CreateDeclTypeProvider(schemas map[string]*spec.Schema) *DeclTypeProvider {
-	if len(schemas) == 0 {
-		return nil
+// ListElementType extracts the element type from a CEL list type.
+// Returns the element type if the input is a list type, or an error otherwise.
+// This is useful for inferring the type of forEach iterator variables from
+// the forEach expression's return type.
+func ListElementType(listType *cel.Type) (*cel.Type, error) {
+	params := listType.Parameters()
+	if len(params) != 1 {
+		return nil, fmt.Errorf("type %q is not a list type", listType.String())
 	}
-
-	declTypes := make([]*apiservercel.DeclType, 0, len(schemas))
-	for name, schema := range schemas {
-		declType := SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: schema}, false)
-		if declType != nil {
-			declType = declType.MaybeAssignTypeName(name)
-			declTypes = append(declTypes, declType)
-		}
+	// Verify it's actually a list by checking if list(elemType) matches
+	elemType := params[0]
+	if cel.ListType(elemType).IsAssignableType(listType) {
+		return elemType, nil
 	}
-
-	if len(declTypes) == 0 {
-		return nil
-	}
-
-	provider := NewDeclTypeProvider(declTypes...)
-	// Enable recognition of CEL reserved keywords as field names.
-	// This allows users to write "schema.metadata.namespace" instead of "schema.metadata.__namespace__"
-	provider.SetRecognizeKeywordAsFieldName(true)
-	return provider
+	return nil, fmt.Errorf("type %q is not a list type", listType.String())
 }

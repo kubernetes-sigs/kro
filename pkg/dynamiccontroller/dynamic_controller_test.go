@@ -18,26 +18,26 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/metadata/fake"
-	k8stesting "k8s.io/client-go/testing"
+	clienttesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/util/workqueue"
 	controllerruntime "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
 // NOTE(a-hilaly): I'm just playing around with the dynamic controller code here
@@ -47,11 +47,31 @@ import (
 
 func noopLogger() logr.Logger {
 	opts := zap.Options{
-		// Write to dev/null
 		DestWriter: io.Discard,
 	}
-	logger := zap.New(zap.UseFlagOptions(&opts))
-	return logger
+	return zap.New(zap.UseFlagOptions(&opts))
+}
+
+func testConfig() Config {
+	return Config{
+		Workers:         1,
+		ResyncPeriod:    1 * time.Hour,
+		QueueMaxRetries: 3,
+		MinRetryDelay:   10 * time.Millisecond,
+		MaxRetryDelay:   100 * time.Millisecond,
+		RateLimit:       100,
+		BurstLimit:      1000,
+	}
+}
+
+type blockingQueue struct {
+	workqueue.TypedRateLimitingInterface[ObjectIdentifiers]
+	blockCh chan struct{}
+}
+
+func (b *blockingQueue) ShutDown() {
+	<-b.blockCh
+	b.TypedRateLimitingInterface.ShutDown()
 }
 
 func setupFakeClient(t testing.TB) (*fake.FakeMetadataClient, meta.RESTMapper) {
@@ -62,157 +82,6 @@ func setupFakeClient(t testing.TB) (*fake.FakeMetadataClient, meta.RESTMapper) {
 	obj := &v1.PartialObjectMetadata{}
 	obj.SetGroupVersionKind(gvk)
 	return fake.NewSimpleMetadataClient(scheme, obj), meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
-}
-
-func TestDynamicController_WatchBehavior(t *testing.T) {
-	deploy := &appsv1.Deployment{
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "test-configmap",
-			Namespace: "default",
-		},
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: v1.ObjectMeta{
-			Name:      "test-secret",
-			Namespace: "default",
-		},
-		Data: map[string][]byte{
-			"test": []byte("bar"),
-		},
-	}
-
-	scheme := runtime.NewScheme()
-	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-	require.NoError(t, v1.AddMetaToScheme(scheme))
-
-	pdeploy := &v1.PartialObjectMetadata{}
-	pdeploy.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"})
-	pdeploy.SetName(deploy.Name)
-	pdeploy.SetNamespace(deploy.Namespace)
-
-	psecret := &v1.PartialObjectMetadata{}
-	psecret.SetGroupVersionKind(schema.GroupVersionKind{Version: "v1", Kind: "Secret"})
-	psecret.SetName(secret.Name)
-	psecret.SetNamespace(secret.Namespace)
-
-	client := fake.NewSimpleMetadataClient(scheme, pdeploy, psecret)
-	deploymentUpdates := make(chan watch.Event, 10)
-	client.PrependWatchReactor("deployments", func(action k8stesting.Action) (handled bool, ret watch.Interface, err error) {
-		return true, watch.NewProxyWatcher(deploymentUpdates), nil
-	})
-	secretUpdates := make(chan watch.Event, 10)
-	client.PrependWatchReactor("secrets", func(action k8stesting.Action) (handled bool, ret watch.Interface, err error) {
-		return true, watch.NewProxyWatcher(secretUpdates), nil
-	})
-
-	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
-	deployGVK, err := apiutil.GVKForObject(deploy, scheme)
-	require.NoError(t, err)
-	mapper.Add(deployGVK, meta.RESTScopeNamespace)
-	deployRESTMapping, err := mapper.RESTMapping(deployGVK.GroupKind(), deployGVK.Version)
-	require.NoError(t, err)
-	deployGVR := deployRESTMapping.Resource
-
-	secretGVK, err := apiutil.GVKForObject(secret, scheme)
-	require.NoError(t, err)
-	mapper.Add(secretGVK, meta.RESTScopeNamespace)
-	secretRESTMapping, err := mapper.RESTMapping(secretGVK.GroupKind(), secretGVK.Version)
-	require.NoError(t, err)
-	secretGVR := secretRESTMapping.Resource
-
-	ctrl := NewDynamicController(noopLogger(), Config{
-		Workers:              1,
-		ResyncPeriod:         1 * time.Hour,
-		QueueMaxRetries:      5,
-		MinRetryDelay:        100 * time.Millisecond,
-		MaxRetryDelay:        1 * time.Second,
-		RateLimit:            10,
-		BurstLimit:           100,
-		QueueShutdownTimeout: 5 * time.Second,
-	}, client, mapper)
-
-	var mu sync.Mutex
-	reconciled := make(map[string]int)
-
-	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
-		mu.Lock()
-		defer mu.Unlock()
-		reconciled[req.Namespace+"/"+req.Name]++
-		return nil
-	})
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		if err := ctrl.Start(ctx); err != nil {
-			require.ErrorIs(t, err, context.Canceled)
-		}
-	}()
-	require.Eventually(t, func() bool {
-		return ctrl.ctx != nil
-	}, 5*time.Second, 100*time.Millisecond)
-
-	// Register parent (ConfigMap) watching child (Secret)
-	require.NoError(t, ctrl.Register(ctx, deployGVR, handler, secretGVR))
-
-	// Simulate Secret update triggering ConfigMap reconciliation
-	// first propagate a modification (like adding a finalizer, without adding any ownership)
-	psecret.SetFinalizers(append(psecret.GetFinalizers(), "test"))
-	secretUpdates <- watch.Event{
-		Type:   watch.Modified,
-		Object: psecret.DeepCopy(),
-	}
-	psecret.SetLabels(map[string]string{
-		metadata.OwnedLabel:             "true",
-		metadata.InstanceLabel:          deploy.GetName(),
-		metadata.InstanceNamespaceLabel: deploy.GetNamespace(),
-	})
-	secretUpdates <- watch.Event{
-		Type:   watch.Modified,
-		Object: psecret.DeepCopy(),
-	}
-
-	// Wait for initial reconciliation of parent
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 1
-	}, 5*time.Second, 100*time.Millisecond)
-
-	pdeploy = pdeploy.DeepCopy()
-	pdeploy.Labels = map[string]string{
-		"some-label": "some-value",
-	}
-	pdeploy.SetGeneration(deploy.GetGeneration() + 1)
-	deploymentUpdates <- watch.Event{
-		Type:   watch.Modified,
-		Object: pdeploy.DeepCopy(),
-	}
-	// Wait for parent to reconcile again due to parent generation change
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return reconciled[fmt.Sprintf("%s/%s", deploy.GetNamespace(), deploy.GetName())] == 2
-	}, 5*time.Second, 100*time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.GreaterOrEqual(t, reconciled["default/test-configmap"], 2)
-
-	_, registrationExists := ctrl.registrations[deployGVR]
-	assert.True(t, registrationExists)
-	_, watchExists := ctrl.watches[deployGVR]
-	assert.True(t, watchExists)
-
-	// Deregister and verify cleanup
-	require.NoError(t, ctrl.Deregister(ctx, deployGVR))
-	_, registrationExists = ctrl.registrations[deployGVR]
-	assert.False(t, registrationExists)
-	_, watchExists = ctrl.watches[deployGVR]
-	assert.False(t, watchExists)
 }
 
 func TestNewDynamicController(t *testing.T) {
@@ -275,7 +144,7 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err := dc.Register(t.Context(), gvr, handlerFunc)
 	require.NoError(t, err)
 
-	_, exists := dc.registrations[gvr]
+	_, exists := dc.parentWatches.Load(gvr)
 	assert.True(t, exists)
 
 	// Try to register again (should not fail)
@@ -288,27 +157,103 @@ func TestRegisterAndUnregisterGVK(t *testing.T) {
 	err = dc.Deregister(shutdownContext, gvr)
 	require.NoError(t, err)
 
-	_, exists = dc.registrations[gvr]
+	_, exists = dc.parentWatches.Load(gvr)
 	assert.False(t, exists)
+
+	// Parent informer should be stopped after deregister.
+	assert.Nil(t, dc.watches.GetInformer(gvr), "parent informer should stop after deregister")
 }
 
 func TestEnqueueObject(t *testing.T) {
 	logger := noopLogger()
 	client, mapper := setupFakeClient(t)
 
-	dc := NewDynamicController(logger, Config{MinRetryDelay: 200 * time.Millisecond,
+	dc := NewDynamicController(logger, Config{
+		MinRetryDelay: 200 * time.Millisecond,
 		MaxRetryDelay: 1000 * time.Second,
 		RateLimit:     10,
-		BurstLimit:    100}, client, mapper)
+		BurstLimit:    100,
+	}, client, mapper)
 
-	obj := &v1.PartialObjectMetadata{}
-	obj.SetName("test-object")
-	obj.SetNamespace("default")
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "test", Version: "v1", Kind: "Test"})
+	parentGVR := schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}
 
-	dc.enqueueParent(schema.GroupVersionResource{Group: "group", Version: "version", Resource: "resource"}, obj, "add")
+	dc.enqueueParent(parentGVR, Event{
+		Type:      EventAdd,
+		GVR:       parentGVR,
+		Name:      "test-object",
+		Namespace: "default",
+	})
 
 	assert.Equal(t, 1, dc.queue.Len())
+}
+
+func TestChildCleanup_DoesNotStopParentInformer(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	consumerParentGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "parent informer should be running after register")
+
+	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "external",
+		GVR:       parentGVR,
+		Name:      "target",
+		Namespace: "default",
+	}))
+	watcher.Done(true)
+
+	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child cleanup must not stop a registered parent informer")
+
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+	assert.Nil(t, dc.watches.GetInformer(parentGVR), "informer should stop once both parent and child users are gone")
+}
+
+func TestDeregister_KeepsInformerWhileChildWatchRemains(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	consumerParentGVR := schema.GroupVersionResource{Group: "kro.run", Version: "v1alpha1", Resource: "consumers"}
+
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+
+	instance := types.NamespacedName{Name: "consumer", Namespace: "default"}
+	watcher := dc.coordinator.ForInstance(consumerParentGVR, instance)
+	require.NoError(t, watcher.Watch(WatchRequest{
+		NodeID:    "external",
+		GVR:       parentGVR,
+		Name:      "target",
+		Namespace: "default",
+	}))
+	watcher.Done(true)
+
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+	assert.NotNil(t, dc.watches.GetInformer(parentGVR), "child watch should keep informer alive after parent deregister")
+
+	dc.coordinator.RemoveInstance(consumerParentGVR, instance)
+	assert.Nil(t, dc.watches.GetInformer(parentGVR), "informer should stop after the remaining child watch is removed")
 }
 
 func TestInstanceUpdatePolicy(t *testing.T) {
@@ -338,7 +283,8 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	dc := NewDynamicController(logger, Config{}, client, mapper)
-	dc.ctx = t.Context() // simulate a start through dc.Run
+	ctx := t.Context()
+	dc.ctx.Store(&ctx) // simulate a start through dc.Run
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		fmt.Println("reconciling instance", req)
@@ -367,4 +313,502 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 		_, ok := objs[name.String()]
 		assert.True(t, ok)
 	}
+}
+
+func TestStart_AlreadyRunning(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	startedCh := make(chan struct{})
+	go func() {
+		close(startedCh)
+		_ = dc.Start(ctx)
+	}()
+
+	<-startedCh
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
+
+	err := dc.Start(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already running")
+}
+
+func TestProcessNextWorkItem_RequeueBehaviors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	oi := ObjectIdentifiers{
+		NamespacedName: types.NamespacedName{Name: "test", Namespace: "default"},
+		GVR:            parentGVR,
+	}
+
+	t.Run("no handler registered", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.queue.Add(oi)
+		assert.Equal(t, 1, dc.queue.Len())
+
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+	})
+
+	t.Run("handler returns nil", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			return nil
+		}))
+
+		dc.queue.Add(oi)
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+	})
+
+	t.Run("handler returns NoRequeue", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			return requeue.None(fmt.Errorf("terminal error"))
+		}))
+
+		dc.queue.Add(oi)
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+	})
+
+	t.Run("handler returns RequeueNeeded", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		callCount := 0
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			callCount++
+			if callCount == 1 {
+				return requeue.Needed(fmt.Errorf("need requeue"))
+			}
+			return nil
+		}))
+
+		dc.queue.Add(oi)
+
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 1, dc.queue.Len())
+
+		result = dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("handler returns RequeueNeededAfter", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			return requeue.NeededAfter(fmt.Errorf("retry later"), 50*time.Millisecond)
+		}))
+
+		dc.queue.Add(oi)
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+
+		time.Sleep(100 * time.Millisecond)
+		assert.Equal(t, 1, dc.queue.Len())
+	})
+
+	t.Run("handler returns NotFound error", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			return apierrors.NewNotFound(schema.GroupResource{Group: "test", Resource: "tests"}, "test")
+		}))
+
+		dc.queue.Add(oi)
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		assert.Equal(t, 0, dc.queue.Len())
+	})
+
+	t.Run("handler returns generic error rate limited then dropped", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.QueueMaxRetries = 2
+		cfg.MinRetryDelay = 1 * time.Millisecond
+		cfg.MaxRetryDelay = 5 * time.Millisecond
+		cfg.RateLimit = 1000
+		dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+		dc.handlers.Store(parentGVR, Handler(func(ctx context.Context, req controllerruntime.Request) error {
+			return fmt.Errorf("transient error")
+		}))
+
+		dc.queue.Add(oi)
+
+		// First attempt (NumRequeues=0): should be requeued with rate limiting
+		result := dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		require.Eventually(t, func() bool {
+			return dc.queue.Len() == 1
+		}, 100*time.Millisecond, 1*time.Millisecond, "item should be requeued after first failure")
+
+		// Second attempt (NumRequeues=1): should be requeued again
+		result = dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		require.Eventually(t, func() bool {
+			return dc.queue.Len() == 1
+		}, 100*time.Millisecond, 1*time.Millisecond, "item should be requeued after second failure")
+
+		// Third attempt (NumRequeues=2 >= QueueMaxRetries): should be dropped
+		result = dc.processNextWorkItem(t.Context())
+		assert.True(t, result)
+		// Give a brief moment for any async operations, then verify item was dropped
+		time.Sleep(10 * time.Millisecond)
+		assert.Equal(t, 0, dc.queue.Len(), "item should be dropped after max retries")
+	})
+
+	t.Run("queue shutdown returns false", func(t *testing.T) {
+		dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+		dc.queue.ShutDown()
+		result := dc.processNextWorkItem(t.Context())
+		assert.False(t, result)
+	})
+}
+
+func TestGracefulShutdown_Timeout(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	cfg := testConfig()
+	cfg.QueueShutdownTimeout = 10 * time.Millisecond
+	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+
+	blockCh := make(chan struct{})
+	dc.queue = &blockingQueue{
+		TypedRateLimitingInterface: dc.queue,
+		blockCh:                    blockCh,
+	}
+
+	err := dc.gracefulShutdown()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+	close(blockCh)
+}
+
+func TestGracefulShutdown_NoTimeout(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	cfg := testConfig()
+	cfg.QueueShutdownTimeout = 0
+	dc := NewDynamicController(noopLogger(), cfg, client, mapper)
+
+	err := dc.gracefulShutdown()
+	assert.NoError(t, err)
+}
+
+func TestDeregister_NotRegistered(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	err := dc.Deregister(t.Context(), gvr)
+	assert.NoError(t, err)
+}
+
+func TestKeyFromGVR(t *testing.T) {
+	tests := []struct {
+		name     string
+		gvr      schema.GroupVersionResource
+		expected string
+	}{
+		{
+			name:     "full gvr",
+			gvr:      schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+			expected: "apps/v1/deployments",
+		},
+		{
+			name:     "core api (empty group)",
+			gvr:      schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+			expected: "/v1/pods",
+		},
+		{
+			name:     "empty gvr",
+			gvr:      schema.GroupVersionResource{},
+			expected: "",
+		},
+		{
+			name:     "only group",
+			gvr:      schema.GroupVersionResource{Group: "apps"},
+			expected: "apps",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := keyFromGVR(tt.gvr)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEnqueueFromInformer_GenerationSkip(t *testing.T) {
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	makeObj := func(name, ns string, gen int64, annotations map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetName(name)
+		obj.SetNamespace(ns)
+		obj.SetGeneration(gen)
+		obj.SetAnnotations(annotations)
+		return obj
+	}
+
+	tests := []struct {
+		name        string
+		oldObj      *v1.PartialObjectMetadata
+		newObj      *v1.PartialObjectMetadata
+		expectQueue int
+	}{
+		{
+			name:        "generation changed — enqueues",
+			oldObj:      makeObj("a", "default", 1, nil),
+			newObj:      makeObj("a", "default", 2, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation — skips",
+			oldObj:      makeObj("a", "default", 5, nil),
+			newObj:      makeObj("a", "default", 5, nil),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation but reconcile re-enabled — enqueues",
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
+			newObj:      makeObj("a", "default", 5, nil),
+			expectQueue: 1,
+		},
+		{
+			name:        "same generation, reconcile stays disabled — skips",
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation, reconcile disabled on new only — skips",
+			oldObj:      makeObj("a", "default", 5, nil),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"}),
+			expectQueue: 0,
+		},
+		{
+			name:        "same generation, reconcile re-enabled case-insensitive — enqueues",
+			oldObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "Disabled"}),
+			newObj:      makeObj("a", "default", 5, map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"}),
+			expectQueue: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1.AddMetaToScheme(scheme))
+			client := fake.NewSimpleMetadataClient(scheme)
+			mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+			dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+			dc.enqueueFromInformer(parentGVR, tt.oldObj, tt.newObj, EventUpdate)
+			assert.Equal(t, tt.expectQueue, dc.queue.Len())
+		})
+	}
+}
+
+func TestEnqueueFromInformer_AddAndDelete(t *testing.T) {
+	// Add and Delete pass nil for oldObject — generation skip is bypassed,
+	// so these events should always enqueue.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	obj := &v1.PartialObjectMetadata{}
+	obj.SetName("a")
+	obj.SetNamespace("default")
+	obj.SetGeneration(1)
+
+	// AddFunc passes nil as oldObject — should enqueue
+	dc.enqueueFromInformer(parentGVR, nil, obj, EventAdd)
+	assert.Equal(t, 1, dc.queue.Len(), "Add events should be enqueued")
+
+	// Drain
+	item, _ := dc.queue.Get()
+	dc.queue.Done(item)
+	dc.queue.Forget(item)
+
+	// DeleteFunc passes nil as oldObject — should enqueue
+	dc.enqueueFromInformer(parentGVR, nil, obj, EventDelete)
+	assert.Equal(t, 1, dc.queue.Len(), "Delete events should be enqueued")
+}
+
+func TestEnqueueFromInformer_NilNewObject(t *testing.T) {
+	// If newObject is nil, meta.Accessor fails and we return early.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	client := fake.NewSimpleMetadataClient(scheme)
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+
+	dc.enqueueFromInformer(parentGVR, nil, nil, EventDelete)
+	assert.Equal(t, 0, dc.queue.Len(), "nil newObject should cause early return")
+}
+
+func TestReconcileEnabledInUpdate(t *testing.T) {
+	makeObj := func(annotations map[string]string) *v1.PartialObjectMetadata {
+		obj := &v1.PartialObjectMetadata{}
+		obj.SetAnnotations(annotations)
+		return obj
+	}
+
+	tests := []struct {
+		name   string
+		old    map[string]string
+		new    map[string]string
+		expect bool
+	}{
+		{
+			name:   "disabled -> enabled (label removed)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    nil,
+			expect: true,
+		},
+		{
+			name:   "disabled -> enabled (label changed)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "enabled"},
+			expect: true,
+		},
+		{
+			name:   "disabled -> disabled",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			expect: false,
+		},
+		{
+			name:   "enabled -> disabled",
+			old:    nil,
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			expect: false,
+		},
+		{
+			name:   "no labels on either",
+			old:    nil,
+			new:    nil,
+			expect: false,
+		},
+		{
+			name:   "case insensitive disabled",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "DISABLED"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := reconcileEnabledInUpdate(makeObj(tt.old), makeObj(tt.new))
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestRegister_EnsureWatchSyncError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+
+	client := fake.NewSimpleMetadataClient(scheme)
+	// Fail all list calls so the informer cannot sync.
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated list error")
+	})
+	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	dc := NewDynamicController(noopLogger(), testConfig(), client, mapper)
+	// Short sync timeout so test doesn't wait 30s.
+	dc.watches.SyncTimeout = 200 * time.Millisecond
+
+	ctx := t.Context()
+	go func() {
+		_ = dc.Start(ctx)
+	}()
+	require.Eventually(t, func() bool { return dc.ctx.Load() != nil }, 2*time.Second, 10*time.Millisecond)
+
+	handler := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		return nil
+	})
+
+	err := dc.Register(ctx, gvr, handler)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cache sync timeout")
+}
+
+func TestGetInformer_ReturnsNil_ForMissingWatch(t *testing.T) {
+	// Verify that GetInformer returns nil when no watch exists, and
+	// non-nil when a watch is active. This is the condition the nil
+	// guard in Register protects against.
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1.AddMetaToScheme(scheme))
+	wm := NewWatchManager(fake.NewSimpleMetadataClient(scheme), 1*time.Hour, func(Event) {}, noopLogger())
+
+	gvr := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil for unwatched GVR")
+
+	require.NoError(t, wm.EnsureWatch(gvr, "owner"))
+	assert.NotNil(t, wm.GetInformer(gvr))
+
+	wm.forceStopWatch(gvr)
+	assert.Nil(t, wm.GetInformer(gvr), "GetInformer should return nil after forceStopWatch")
+}
+
+func TestDeregister_HandlerNoLongerReceivesEvents(t *testing.T) {
+	logger := noopLogger()
+	client, mapper := setupFakeClient(t)
+
+	dc := NewDynamicController(logger, testConfig(), client, mapper)
+	ctx := t.Context()
+	dc.ctx.Store(&ctx)
+
+	parentGVR := schema.GroupVersionResource{Group: "test", Version: "v1", Resource: "tests"}
+
+	handlerCalled := false
+	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
+		handlerCalled = true
+		return nil
+	})
+
+	require.NoError(t, dc.Register(ctx, parentGVR, handlerFunc))
+	require.NoError(t, dc.Deregister(ctx, parentGVR))
+
+	// After deregister, handler lookup should fail.
+	_, ok := dc.handlers.Load(parentGVR)
+	assert.False(t, ok, "handler should be removed after deregister")
+	assert.False(t, handlerCalled)
 }

@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import yaml from 'js-yaml';
 import styles from './styles.module.css';
-// @ts-ignore - imported as raw string via webpack
-import crdYaml from '@site/static/crds/kro.run_resourcegraphdefinitions.yaml';
 
 interface Field {
   name: string;
@@ -171,7 +169,7 @@ function FieldTable({ fields, title }: { fields: Field[]; title: string }) {
   );
 }
 
-export default function RGDReference(): JSX.Element {
+export default function RGDReference({ crdYaml }: { crdYaml: string }): JSX.Element {
   const crdData = yaml.load(crdYaml);
   const { specFields, statusFields } = parseFieldsFromCRD(crdData);
 

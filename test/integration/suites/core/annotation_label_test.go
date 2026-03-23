@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kubernetes-sigs/kro/pkg/applyset"
+	"github.com/kubernetes-sigs/kro/pkg/controller/instance/applyset"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -123,8 +123,9 @@ var _ = Describe("Labels and Annotations", func() {
 				Not(BeNil()),
 				HaveKeyWithValue(applyset.ApplySetGKsAnnotation, "ConfigMap"),
 				HaveKeyWithValue(applyset.ApplySetToolingAnnotation, "kro/devel"),
-				HaveKeyWithValue(applyset.ApplySetAdditionalNamespacesAnnotation, namespace),
-			), "instance should have group kind for owned resource")
+				// Per KEP-3659, additional-namespaces excludes parent namespace (implicit)
+				HaveKeyWithValue(applyset.ApplySetAdditionalNamespacesAnnotation, ""),
+			), "instance should have correct applyset annotations")
 
 			g.Expect(instance.GetLabels()).To(SatisfyAll(
 				Not(BeNil()),
@@ -137,6 +138,9 @@ var _ = Describe("Labels and Annotations", func() {
 				HaveKeyWithValue(metadata.ResourceGraphDefinitionIDLabel, string(rgd.GetUID())),
 				HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.GetName()),
 			), "default kro labels should also be present")
+
+			g.Expect(instance.GetLabels()).ToNot(HaveKey(metadata.ManagedByLabelKey),
+				"instance should not have app.kubernetes.io/managed-by label it may be used by other application lifecycle tooling")
 
 		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
@@ -151,11 +155,16 @@ var _ = Describe("Labels and Annotations", func() {
 			HaveKeyWithValue(metadata.InstanceNamespaceLabel, instance.GetNamespace()),
 			HaveKeyWithValue(metadata.InstanceLabel, instance.GetName()),
 			HaveKeyWithValue(metadata.InstanceIDLabel, string(instance.GetUID())),
+			HaveKeyWithValue(metadata.InstanceGroupLabel, krov1alpha1.KRODomainName),
+			HaveKeyWithValue(metadata.InstanceVersionLabel, "v1alpha1"),
+			HaveKeyWithValue(metadata.InstanceKindLabel, "TestApply"),
 			HaveKeyWithValue(metadata.KROVersionLabel, "devel"),
 			HaveKeyWithValue(metadata.OwnedLabel, "true"),
-			HaveKeyWithValue(metadata.ResourceGraphDefinitionIDLabel, string(rgd.GetUID())),
-			HaveKeyWithValue(metadata.ResourceGraphDefinitionNameLabel, rgd.GetName()),
 		), "config map should be created as part of apply set managed by instance created through rgd")
+		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionIDLabel),
+			"child resource should not have RGD ID label (RGD labels are only applied to CRDs)")
+		Expect(cfgMap.GetLabels()).ToNot(HaveKey(metadata.ResourceGraphDefinitionNameLabel),
+			"child resource should not have RGD name label (RGD labels are only applied to CRDs)")
 	})
 
 })

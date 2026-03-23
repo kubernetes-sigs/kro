@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: catalog
-data:
-  DB_NAME: catalog
-  DB_ENDPOINT: catalog-mysql:3306
-  DB_READ_ENDPOINT: catalog-mysql:3306

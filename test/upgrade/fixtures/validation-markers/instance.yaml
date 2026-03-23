@@ -1,0 +1,8 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeValidated
+metadata:
+  name: test-validated
+  namespace: upgrade-test
+spec:
+  name: test-validated
+  environment: prod

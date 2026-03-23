@@ -87,6 +87,14 @@ type Schema struct {
 	// Example: {"connectionName": "${database.status.connectionName}", "endpoint": "${service.status.loadBalancer.ingress[0].hostname}"}
 	Status runtime.RawExtension `json:"status,omitempty"`
 
+	// Scope determines whether the generated instance CRD is Namespaced or Cluster scoped.
+	// Defaults to Namespaced to preserve existing behaviour. This field is immutable after creation.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:default="Namespaced"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="scope is immutable"
+	Scope ResourceScope `json:"scope,omitempty"`
+
 	// AdditionalPrinterColumns defines additional printer columns
 	// that will be passed down to the created CRD. If set, no
 	// default printer columns will be added to the created CRD,
@@ -95,19 +103,43 @@ type Schema struct {
 	//
 	// +kubebuilder:validation:Optional
 	AdditionalPrinterColumns []extv1.CustomResourceColumnDefinition `json:"additionalPrinterColumns,omitempty"`
+
+	// Metadata to apply to the generated CRD
+	// +kubebuilder:validation:Optional
+	Metadata *CRDMetadata `json:"metadata,omitempty"`
 }
 
+// CRDMetadata defines metadata to be applied to the generated CRD.
+type CRDMetadata struct {
+	// Labels to apply to the generated CRD
+	// +kubebuilder:validation:Optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations to apply to the generated CRD
+	// +kubebuilder:validation:Optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="(has(self.name) && !has(self.selector)) || (!has(self.name) && has(self.selector))",message="exactly one of name or selector must be provided"
 type ExternalRefMetadata struct {
 	// Name is the name of the external resource to reference.
-	// This field is required.
+	// Mutually exclusive with Selector.
 	//
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name,omitempty"`
 	// Namespace is the namespace of the external resource.
-	// If empty, the instance's namespace will be used.
+	// For single external refs (Name), defaults to the instance's namespace.
+	// For external collections (Selector), empty means list across all namespaces.
 	//
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
+	// Selector is a label selector for collection external references.
+	// When set, all resources matching the selector are included.
+	// Mutually exclusive with Name.
+	//
+	// +kubebuilder:validation:Optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
 // ExternalRef is a reference to an external resource that already exists in the cluster.
@@ -130,6 +162,15 @@ type ExternalRef struct {
 	// +kubebuilder:validation:Required
 	Metadata ExternalRefMetadata `json:"metadata"`
 }
+
+// ForEachDimension defines a single expansion axis in a forEach block.
+// Each dimension is a map with exactly one entry where the key is the variable name
+// and the value is the CEL expression. Example: {"region": "${schema.spec.regions}"}
+// Multiple dimensions create a cartesian product of expansions.
+//
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MaxProperties=1
+type ForEachDimension map[string]string
 
 // Resource represents a Kubernetes resource that is part of the ResourceGraphDefinition.
 // Each resource can either be created using a template or reference an existing resource.
@@ -158,18 +199,45 @@ type Resource struct {
 	// ReadyWhen is a list of CEL expressions that determine when this resource is considered ready.
 	// All expressions must evaluate to true for the resource to be ready.
 	// If not specified, the resource is considered ready when it exists.
-	// Example: ["self.status.phase == 'Running'", "self.status.readyReplicas > 0"]
+	// Examples:
+	// - Single resource: ["database.status.phase == 'Running'", "database.status.readyReplicas > 0"]
+	// - Collection: ["each.status.phase == 'Running'"]
 	//
 	// +kubebuilder:validation:Optional
 	ReadyWhen []string `json:"readyWhen,omitempty"`
 	// IncludeWhen is a list of CEL expressions that determine whether this resource should be created.
 	// All expressions must evaluate to true for the resource to be included.
 	// If not specified, the resource is always included.
-	// Example: ["schema.spec.enableMonitoring == true"]
+	// Expressions may reference schema fields and/or fields in other resources in the RGD. They are
+	// re-evaluated during reconciliation, so resources may be created later or
+	// pruned later as conditions change.
+	// Example: ["schema.spec.enableMonitoring == true", "network.status.ready == true"]
 	//
 	// +kubebuilder:validation:Optional
 	IncludeWhen []string `json:"includeWhen,omitempty"`
+	// ForEach expands this resource into a collection of resources.
+	// Each entry binds a variable name to a CEL expression that evaluates to an array.
+	// kro creates one resource instance for each element in the array.
+	// With multiple entries, kro creates the cartesian product of all combinations.
+	// Use the variable directly in template expressions (e.g., ${region}).
+	// Example: [{"region": "${schema.spec.regions}"}, {"tier": "${schema.spec.tiers}"}]
+	//
+	// +kubebuilder:validation:Optional
+	ForEach []ForEachDimension `json:"forEach,omitempty"`
 }
+
+// ResourceScope defines whether the generated instance CRD is Namespaced or Cluster scoped.
+//
+// +kubebuilder:validation:Enum=Namespaced;Cluster
+type ResourceScope string
+
+const (
+	// ResourceScopeNamespaced means the generated instance CRD will be namespace-scoped.
+	// This is the default.
+	ResourceScopeNamespaced ResourceScope = "Namespaced"
+	// ResourceScopeCluster means the generated instance CRD will be cluster-scoped.
+	ResourceScopeCluster ResourceScope = "Cluster"
+)
 
 // ResourceGraphDefinitionState defines the state of the resource graph definition.
 type ResourceGraphDefinitionState string
@@ -185,19 +253,24 @@ const (
 // It provides information about the deployment state, resource ordering, and conditions.
 type ResourceGraphDefinitionStatus struct {
 	// State indicates whether the ResourceGraphDefinition is Active or Inactive.
-	// Active means the CRD has been created and the controller is running.
-	// Inactive means the ResourceGraphDefinition has been disabled or encountered an error.
+	// Active means the graph is accepted and the generated CRD and dynamic controller
+	// are currently serving.
+	// Inactive means the current graph is not accepted or the RGD is not currently serving.
 	State ResourceGraphDefinitionState `json:"state,omitempty"`
 	// TopologicalOrder is the ordered list of resource IDs based on their dependencies.
 	// Resources are created in this order to ensure dependencies are satisfied.
 	// Example: ["configmap", "deployment", "service"]
 	TopologicalOrder []string `json:"topologicalOrder,omitempty"`
 	// Conditions represent the latest available observations of the ResourceGraphDefinition's state.
-	// Common condition types include "Ready", "Validated", and "ReconcilerDeployed".
+	// Common condition types include "Ready", "GraphRevisionsResolved", "GraphAccepted",
+	// "KindReady", and "ControllerReady".
 	Conditions Conditions `json:"conditions,omitempty"`
 	// Resources provides detailed information about each resource in the graph,
 	// including their dependencies.
 	Resources []ResourceInformation `json:"resources,omitempty"`
+	// LastIssuedRevision is the highest GraphRevision revision number ever issued for this RGD.
+	// It is a persisted high-water mark used to keep revision allocation monotonic across GC.
+	LastIssuedRevision int64 `json:"lastIssuedRevision,omitempty"`
 }
 
 // ResourceInformation provides detailed information about a specific resource
@@ -224,6 +297,7 @@ type Dependency struct {
 // +kubebuilder:printcolumn:name="APIVERSION",type=string,priority=0,JSONPath=`.spec.schema.apiVersion`
 // +kubebuilder:printcolumn:name="KIND",type=string,priority=0,JSONPath=`.spec.schema.kind`
 // +kubebuilder:printcolumn:name="STATE",type=string,priority=0,JSONPath=`.status.state`
+// +kubebuilder:printcolumn:name="READY",type=string,priority=0,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="TOPOLOGICALORDER",type=string,priority=1,JSONPath=`.status.topologicalOrder`
 // +kubebuilder:printcolumn:name="AGE",type="date",priority=0,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:shortName=rgd,scope=Cluster

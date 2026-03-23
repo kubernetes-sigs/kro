@@ -36,7 +36,7 @@ Install a specific version for reproducible deployments:
 
 ```bash
 # Set the version you want to install
-export KRO_VERSION=0.6.2
+export KRO_VERSION=0.8.1
 
 # Install kro
 helm install kro oci://registry.k8s.io/kro/charts/kro \
@@ -87,7 +87,7 @@ echo $KRO_VERSION
 
 ```bash
 kubectl create namespace kro-system
-kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
   </TabItem>
 </Tabs>
@@ -122,10 +122,6 @@ kro-7d98bc6f46-jvjl5   1/1     Running   0          30s
 ```
   </TabItem>
   <TabItem value="kubectl" label="Raw manifest installation">
-Check the Helm release:
-
-```bash
-
 Check the kro pod is running:
 
 ```bash
@@ -154,7 +150,7 @@ helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   <TabItem value="specific" label="Specific Version">
 
 ```bash
-export KRO_VERSION=0.6.2
+export KRO_VERSION=0.8.1
 
 helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro-system \
@@ -175,7 +171,7 @@ export KRO_VARIANT=kro-core-install-manifests
 ```
 
 ```
-kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
 
 :::info[**Removal of dangling objects**]
@@ -198,7 +194,7 @@ helm uninstall kro -n kro-system
   </TabItem>
   <TabItem value="kubectl" label="Raw manifest installation">
 ```bash
-kubectl delete -f https://github.com/kubernetes-sigs/kro/releases/download/$KRO_VERSION/$KRO_VARIANT.yaml
+kubectl delete -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
   </TabItem>
 </Tabs>

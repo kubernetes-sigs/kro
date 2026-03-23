@@ -407,6 +407,24 @@ var _ = Describe("Readiness", func() {
 
 		// Patch job completionTime to simulate job completion
 		now := metav1.Now()
+		job.Status.Conditions = append(job.Status.Conditions,
+			batchv1.JobCondition{
+				Type:               batchv1.JobSuccessCriteriaMet,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Reason:             "JobSuccessCriteriaMet",
+				Message:            "Job has successfully completed all of its specified success criteria",
+			},
+			batchv1.JobCondition{
+				Type:               batchv1.JobComplete,
+				Status:             corev1.ConditionTrue,
+				LastProbeTime:      now,
+				LastTransitionTime: now,
+				Reason:             batchv1.JobReasonCompletionsReached,
+				Message:            "Job has reached the specified number of completions",
+			})
+		job.Status.StartTime = &now
 		job.Status.CompletionTime = &now
 		Expect(env.Client.Status().Update(ctx, job)).To(Succeed())
 

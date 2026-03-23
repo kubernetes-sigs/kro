@@ -1,0 +1,9 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeSimpleApp
+metadata:
+  name: test-simple
+  namespace: upgrade-test
+spec:
+  name: test-simple
+  image: nginx:1.25
+  replicas: 1

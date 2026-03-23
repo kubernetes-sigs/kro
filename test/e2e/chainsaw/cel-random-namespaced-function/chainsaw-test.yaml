@@ -1,0 +1,27 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: cel-random-namespaced-function
+spec:
+  steps:
+  - name: Apply RGD
+    try:
+    - apply:
+        file: rgd.yaml
+    - assert:
+        file: assert-rgd-active.yaml
+  - name: Create instance
+    try:
+    - apply:
+        file: instance.yaml
+    - wait:
+        apiVersion: test.kro.run/v1alpha1
+        kind: RandomFnApp
+        name: random-fn-app
+        namespace: ($namespace)
+        timeout: 2m
+        for:
+          jsonPath:
+            path: "{.status.conditions[?(@.type=='Ready')].status}"
+            value: "True"
+

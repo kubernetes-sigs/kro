@@ -36,6 +36,8 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 func TestNewReadyConditions(t *testing.T) {
@@ -102,6 +104,80 @@ func TestNewSucceededConditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrunes(t *testing.T) {
+	const (
+		oldFoo     = "OldFoo"
+		ancientFoo = "AncientFoo"
+	)
+
+	t.Run("removes listed condition types on For", func(t *testing.T) {
+		set := NewReadyConditions("Foo").Prunes(oldFoo, ancientFoo)
+		dut := &TestResource{}
+		dut.SetConditions([]v1alpha1.Condition{
+			{Type: v1alpha1.ConditionType(oldFoo), Status: metav1.ConditionTrue},
+			{Type: v1alpha1.ConditionType(ancientFoo), Status: metav1.ConditionFalse},
+			{Type: "Foo", Status: metav1.ConditionTrue},
+		})
+
+		set.For(dut)
+
+		for _, c := range dut.GetConditions() {
+			if string(c.Type) == oldFoo || string(c.Type) == ancientFoo {
+				t.Errorf("condition %q should have been pruned", c.Type)
+			}
+		}
+		// Foo + Ready (initialized by For)
+		if got := dut.GetConditions(); len(got) != 2 {
+			t.Errorf("expected 2 conditions, got %d: %v", len(got), got)
+		}
+	})
+
+	t.Run("no-op when pruned types absent", func(t *testing.T) {
+		set := NewReadyConditions("Foo").Prunes(oldFoo)
+		dut := &TestResource{}
+
+		cs := set.For(dut)
+		cs.SetTrue("Foo")
+
+		before := len(dut.GetConditions())
+		set.For(dut)
+
+		if got := len(dut.GetConditions()); got != before {
+			t.Errorf("expected %d conditions, got %d", before, got)
+		}
+	})
+
+	t.Run("does not affect original ConditionTypes", func(t *testing.T) {
+		original := NewReadyConditions("Foo")
+		withPrunes := original.Prunes(oldFoo)
+
+		dut := &TestResource{}
+		dut.SetConditions([]v1alpha1.Condition{
+			{Type: v1alpha1.ConditionType(oldFoo), Status: metav1.ConditionTrue},
+		})
+
+		// Original should not prune.
+		original.For(dut)
+		found := false
+		for _, c := range dut.GetConditions() {
+			if string(c.Type) == oldFoo {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("original ConditionTypes should not have pruned OldFoo")
+		}
+
+		// With prunes should prune.
+		withPrunes.For(dut)
+		for _, c := range dut.GetConditions() {
+			if string(c.Type) == oldFoo {
+				t.Error("Prunes variant should have removed OldFoo")
+			}
+		}
+	})
 }
 
 func TestNonTerminalCondition(t *testing.T) {

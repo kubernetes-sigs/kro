@@ -1,0 +1,22 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: cel-random-fn
+spec:
+  schema:
+    apiVersion: v1alpha1
+    group: test.kro.run
+    kind: RandomFnApp
+    spec:
+      namespace: string
+  resources:
+  - id: cm
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${random.seededString(10, schema.metadata.uid)}
+        namespace: ${schema.spec.namespace}
+      data:
+        uid: ${schema.metadata.uid}
+

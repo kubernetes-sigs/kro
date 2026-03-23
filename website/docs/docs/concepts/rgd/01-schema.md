@@ -11,6 +11,7 @@ The schema section of a ResourceGraphDefinition defines the shape of your custom
 The schema section specifies:
 
 - **API identification**: The `apiVersion`, `kind`, and optionally `group` for your custom resource
+- **Scope**: Whether instances are namespaced or cluster-scoped
 - **Spec fields**: What inputs users provide when creating instances
 - **Status fields**: What runtime information kro surfaces from managed resources
 - **Custom types**: Reusable type definitions for complex schemas
@@ -52,6 +53,58 @@ schema:
 ```
 
 This allows you to organize your custom APIs under your own domain, making the full API `mycompany.io/v1alpha1`.
+
+### Scope
+
+The `scope` field determines whether the generated CRD is namespaced or cluster-scoped:
+
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: ClusterPolicy
+  scope: Cluster  # or "Namespaced" (default)
+```
+
+| Value | Description |
+|-------|-------------|
+| `Namespaced` | Instances exist within a namespace (default) |
+| `Cluster` | Instances are cluster-wide, with no namespace |
+
+:::warning Cluster-Scoped Instances
+When using `scope: Cluster`, all namespaced resources must explicitly set `metadata.namespace` (hardcoded or via CEL). kro validates this at RGD creation time.
+:::
+
+```yaml
+schema:
+  apiVersion: v1alpha1
+  kind: Tenant
+  scope: Cluster
+  spec:
+    targetNamespace: string | required=true
+
+resources:
+  # Template with explicit namespace
+  - id: configmap
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ${schema.metadata.name}-config
+        namespace: ${schema.spec.targetNamespace}  # Required
+
+  # External ref also requires explicit namespace
+  - id: existingSecret
+    externalRef:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: db-credentials
+        namespace: ${schema.spec.targetNamespace}  # Required
+```
+
+:::note
+The `scope` field is immutable after creation.
+:::
 
 ## The spec Section
 
@@ -255,6 +308,26 @@ spec:
                   type: string
               required: [name]
 ```
+#### Adding Labels and Annotations to CRDs
+
+You can also apply custom labels and annotations to the generated CRD using the `metadata` field.
+This is useful for organizing CRDs and integrating with external tools.
+
+```kro
+schema:
+  apiVersion: v1alpha1
+  kind: Application
+  metadata:
+    labels:
+      team: platform
+      managed-by: kro
+      environment: production
+    annotations:
+      description: "Application resource for managing web applications"
+  spec:
+    name: string | required=true
+```
+The labels and annotations you define here will be applied to the CRD itself (not to instances of the CRD).
 
 ### 2. Instance Validation
 
@@ -266,6 +339,10 @@ When users create instances, Kubernetes validates them against the generated CRD
 ### 3. Status Updates
 
 kro continuously evaluates status expressions and updates instance status as resources change. If a deployment's replica count changes, the corresponding status field updates automatically.
+
+### 4. Schema Updates
+
+When you update an RGD's schema, kro checks whether the changes are compatible with existing instances. Changes like removing fields, changing types, or adding required fields without defaults are considered breaking and will be blocked by default. See [Breaking Changes](./00-overview.md#breaking-changes) for how to allow breaking changes when needed.
 
 ## Custom Types
 
@@ -285,6 +362,25 @@ schema:
 ```
 
 Custom types are expanded inline when kro generates the CRD.
+
+### Recursive Custom Types
+
+Custom types can reference other custom types. kro resolves dependencies automatically and detects cyclic references:
+
+```yaml
+schema:
+  types:
+    Address:
+      street: string
+      city: string
+    Person:
+      name: string
+      address: Address
+  spec:
+    owner: Person
+```
+
+For more details about SimpleSchema syntax and custom types, see the [SimpleSchema Specification](../../../api/specifications/simple-schema.md).
 
 ## Additional Printer Columns
 

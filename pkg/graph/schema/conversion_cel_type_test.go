@@ -144,7 +144,7 @@ func TestGenerateSchemaFromCELTypes_Timestamp(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, "string", prop.Type)
-	assert.Equal(t, "datetime", prop.Format)
+	assert.Equal(t, "date-time", prop.Format)
 	assert.Equal(t, "Timestamp representing a creation time", prop.Description)
 }
 
@@ -168,7 +168,7 @@ func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 		"extra":    apiservercel.NewDeclField("extra", apiservercel.DynType, false, nil, nil),
 	}
 	userType := apiservercel.NewObjectType("User", userFields)
-	provider := krocel.NewDeclTypeProvider(userType, addressType)
+	provider := krocel.NewDeclTypeProvider(nil, userType, addressType)
 
 	typeMap := map[string]*cel.Type{
 		"user": userType.CelType(),

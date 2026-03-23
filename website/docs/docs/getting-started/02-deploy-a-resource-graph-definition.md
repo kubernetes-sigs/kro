@@ -146,8 +146,8 @@ spec:
    information to help you understand your application:
 
    ```bash
-   NAME             APIVERSION   KIND          STATE    TOPOLOGICALORDER                     AGE
-   my-application   v1alpha1     Application   Active   ["deployment","service","ingress"]   49
+   NAME             APIVERSION   KIND          STATE    READY   TOPOLOGICALORDER                     AGE
+   my-application   v1alpha1     Application   Active   True    ["deployment","service","ingress"]   49
    ```
 
 ### Create your Application Instance

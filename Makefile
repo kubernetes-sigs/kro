@@ -3,7 +3,7 @@ OCI_REPO ?= registry.k8s.io/kro
 HELM_IMAGE ?= ${OCI_REPO}/charts/kro
 KO_DOCKER_REPO ?= ${OCI_REPO}/kro
 
-HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.0
+HELM ?= go run helm.sh/helm/v3/cmd/helm@v3.19.5
 
 KOCACHE ?= ~/.ko
 KO_PUSH ?= true
@@ -43,6 +43,8 @@ LDFLAGS="-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=$(GIT_VERSION
         -X sigs.k8s.io/release-utils/version.buildDate=$(BUILD_DATE)"
 
 WITH_GOFLAGS = GOFLAGS="$(GOFLAGS)"
+PPROF_GOFLAGS ?= -tags=pprof
+PPROF_IMAGE_TAG_SUFFIX ?= -debug
 
 HELM_STATIC_MANIFESTS_FLAGS ?= --set metadata.includeHelmChart=false --set metadata.includeManagedBy=false --include-crds --namespace kro-system
 HELM_STATIC_MANIFEST_IMAGE_FLAGS ?= --set image.tag=${RELEASE_VERSION}
@@ -99,10 +101,11 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) crd webhook paths="./..." output:crd:artifacts:config=helm/crds
-	@echo "Copying CRD to website docs..."
-	@mkdir -p website/static/crds
-	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/static/crds/kro.run_resourcegraphdefinitions.yaml
-	@echo "CRD copied successfully"
+	@echo "Copying CRDs to website docs..."
+	@mkdir -p website/docs/api/crds
+	@cp helm/crds/kro.run_resourcegraphdefinitions.yaml website/docs/api/crds/kro.run_resourcegraphdefinitions.yaml
+	@cp helm/crds/internal.kro.run_graphrevisions.yaml website/docs/api/crds/internal.kro.run_graphrevisions.yaml
+	@echo "CRDs copied successfully"
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -110,6 +113,10 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 
 tt:
 	$(CONTROLLER_GEN) object paths="./pkg/controller/resourcegraphdefinition"
+
+.PHONY: verify-codegen
+verify-codegen: ## Verify generated code is up-to-date.
+	./scripts/hack/verify-codegen.sh
 
 .PHONY: fmt
 fmt: go-generate ## Run go fmt against code and add licenses.
@@ -126,17 +133,40 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests. Use WHAT=unit or WHAT=integration
 ifeq ($(WHAT),integration)
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./test/integration/suites/... -coverprofile integration-cover.out -ginkgo.v
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go tool ginkgo -p -v \
+		--cover \
+		--coverprofile=integration-cover.out \
+		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
+		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -v ./pkg/... -coverprofile unit-cover.out
+	go test -race -v ./pkg/... -coverprofile unit-cover.out
+else ifeq ($(WHAT),upgrade)
+	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
+	KRO_UPGRADE_MODE=$(MODE) \
+	KRO_UPGRADE_SKIP_GR_ASSERTIONS=$(KRO_UPGRADE_SKIP_GR_ASSERTIONS) \
+		go tool ginkgo -v ./test/upgrade/...
 else
-	@echo "Error: WHAT must be either 'unit' or 'integration'"
-	@echo "Usage: make test WHAT=unit|integration"
+	@echo "Error: WHAT must be either 'unit', 'integration', or 'upgrade'"
+	@echo "Usage: make test WHAT=unit|integration|upgrade"
 	@exit 1
 endif
 
+.PHONY: test-coverage
+test-coverage: ## Run all tests and report coverage
+	@$(MAKE) test WHAT=unit
+	@$(MAKE) test WHAT=integration
+	@head -1 unit-cover.out > combined-cover.out
+	@tail -n +2 unit-cover.out >> combined-cover.out
+	@tail -n +2 integration-cover.out >> combined-cover.out
+	@echo ""
+	@echo "=== Coverage Summary ==="
+	@echo "Unit:        $$(go tool cover -func=unit-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Integration: $$(go tool cover -func=integration-cover.out | grep total | awk '{print $$NF}')"
+	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
+
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.6.1
+GOLANGCI_LINT_VERSION ?= v2.8.0
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\
@@ -178,10 +208,10 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 CHAINSAW ?= $(LOCALBIN)/chainsaw
 
 ## Tool Versions
-KO_VERSION ?= v0.17.1
-KUSTOMIZE_VERSION ?= v5.2.1
-CONTROLLER_TOOLS_VERSION ?= v0.19.0
-CHAINSAW_VERSION ?= v0.2.12
+KO_VERSION ?= v0.18.1
+KUSTOMIZE_VERSION ?= v5.8.0
+CONTROLLER_TOOLS_VERSION ?= v0.20.0
+CHAINSAW_VERSION ?= v0.2.14
 
 .PHONY: chainsaw
 chainsaw: $(CHAINSAW) ## Download chainsaw locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -192,7 +222,7 @@ $(CHAINSAW): $(LOCALBIN)
 	fi
 	test -s $(LOCALBIN)/chainsaw || GOBIN=$(LOCALBIN) GO111MODULE=on go install github.com/kyverno/chainsaw@$(CHAINSAW_VERSION)
 
-ENVTEST_VERSION ?= 1.31.x
+ENVTEST_VERSION ?= 1.35.x
 
 .PHONY: ko
 ko: $(KO) ## Download ko locally if necessary. If wrong version is installed, it will be removed before downloading.
@@ -223,19 +253,27 @@ envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) $(GOPREFIX) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
-.PHONY: image
-build-image: ko ## Build the kro controller images using ko build
-	echo "Building kro image $(RELEASE_VERSION).."
+.PHONY: build-image
+build-image: ko ## Build kro controller image.
+	@echo "Building kro image ${RELEASE_VERSION}..."
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) build --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		$(if $(filter true,$(KO_LOCAL)),--local,--oci-layout-path rendered/oci/layout) \
 		--push=false --tags ${RELEASE_VERSION} --sbom=none
 
-.PHONY: publish
-publish-image: ko ## Publish the kro controller images
+.PHONY: build-debug-image
+build-debug-image: ## Build kro controller debug image with pprof enabled.
+	$(MAKE) build-image GOFLAGS="$(PPROF_GOFLAGS)" RELEASE_VERSION=${RELEASE_VERSION}${PPROF_IMAGE_TAG_SUFFIX}
+
+.PHONY: publish-image
+publish-image: ko ## Publish kro controller image.
 	$(WITH_GOFLAGS) KOCACHE=$(KOCACHE) KO_DOCKER_REPO=$(KO_DOCKER_REPO) \
 		$(KO) publish --bare github.com/kubernetes-sigs/kro/cmd/controller \
 		--tags ${RELEASE_VERSION} --sbom=none
+
+.PHONY: publish-debug-image
+publish-debug-image: ## Publish kro controller debug image with pprof enabled.
+	$(MAKE) publish-image GOFLAGS="$(PPROF_GOFLAGS)" RELEASE_VERSION=${RELEASE_VERSION}${PPROF_IMAGE_TAG_SUFFIX}
 
 .PHONY: inject-helm-version
 inject-helm-version:
@@ -264,8 +302,13 @@ render-static-manifests: inject-helm-version
 		rm -f $$tmpfile; \
 	done
 
-.PHONY:
-release: build-image publish-image package-helm publish-helm
+.PHONY: release
+release: ko package-helm ## Full release pipeline (images + pprof images + helm)
+	@echo "Building and publishing standard image..."
+	$(MAKE) build-image publish-image
+	@echo "Building and publishing pprof image..."
+	$(MAKE) build-debug-image publish-debug-image
+	$(MAKE) publish-helm
 
 ##@ Deployment
 
@@ -293,7 +336,7 @@ deploy-kind-helm: ko start-kind
 	make install
 	# This generates deployment with ko://... used in image.
 	# ko then intercepts it builds image, pushes to kind node, replaces the image in deployment and applies it
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true --set config.allowCRDDeletion=true | $(WITH_GOFLAGS) $(KO) apply -f -
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
@@ -302,13 +345,17 @@ deploy-kind-%: export KO_DOCKER_REPO=kind.local
 deploy-kind-%: export HELM_STATIC_MANIFEST_IMAGE_FLAGS=--set image.pullPolicy=Never --set image.ko=true
 deploy-kind-%: export RELEASE_VERSION=v0.0.0-dev
 deploy-kind-%: ko start-kind render-static-manifests ## Apply the static manifests for the given variant
-	$(KO) apply -f manifests/rendered/kro-$*.yaml
+	@ko_goflags='$(GOFLAGS)'; \
+	if [[ "$*" == *pprof* ]]; then \
+		ko_goflags="$${ko_goflags:+$${ko_goflags} }$(PPROF_GOFLAGS)"; \
+	fi; \
+	GOFLAGS="$$ko_goflags" $(KO) apply -f manifests/rendered/kro-$*.yaml
 	kubectl wait --for=condition=ready --timeout=1m pod -n kro-system -l app.kubernetes.io/component=controller
 	$(KUBECTL) --context kind-${KIND_CLUSTER_NAME} get pods -A
 
 .PHONY: ko-apply
 ko-apply: ko
-	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(KO) apply -f -
+	${HELM} template kro ./helm --namespace kro-system --set image.pullPolicy=Never --set image.ko=true | $(WITH_GOFLAGS) $(KO) apply -f -
 
 ## CLI
 .PHONY: cli
@@ -338,3 +385,43 @@ deploy-kind: ko deploy-kind-helm ## Deploy kro to a kind cluster
 # Default end to end tests uses helm deployments
 .PHONY: test-e2e-kind
 test-e2e-kind: deploy-kind-helm
+
+##@ Upgrade Tests
+
+MODE ?= post-upgrade
+KRO_UPGRADE_FROM_VERSION ?= $(shell curl -sL https://api.github.com/repos/kubernetes-sigs/kro/releases/latest | jq -r '.tag_name')
+KRO_UPGRADE_SKIP_GR_ASSERTIONS ?= $(shell \
+	minor=$$(echo "$(KRO_UPGRADE_FROM_VERSION)" | sed 's/v0\.\([0-9]*\).*/\1/'); \
+	if [ "$$minor" -lt 9 ] 2>/dev/null; then echo true; else echo false; fi)
+
+.PHONY: test-e2e-upgrade-kind
+test-e2e-upgrade-kind: start-kind install-old-kro ## Run upgrade tests: install old version, setup+test, upgrade, test
+	@echo "=== Pre-upgrade: setup fixtures + validation ==="
+	$(MAKE) test WHAT=upgrade MODE=pre-upgrade
+	@echo "=== Upgrading kro ==="
+	$(MAKE) upgrade-kro
+	@echo "=== Post-upgrade validation ==="
+	$(MAKE) test WHAT=upgrade MODE=post-upgrade
+
+.PHONY: install-old-kro
+install-old-kro: ## Install old kro version from OCI registry and apply upgrade fixtures
+	@echo "Installing kro $(KRO_UPGRADE_FROM_VERSION)..."
+	$(HELM) install kro oci://registry.k8s.io/kro/charts/kro \
+		--version $(KRO_UPGRADE_FROM_VERSION:v%=%) \
+		--namespace kro-system \
+		--set config.allowCRDDeletion=false \
+		--set config.resourceGraphDefinitionConcurrentReconciles=10 \
+		--set config.dynamicControllerConcurrentReconciles=10
+	kubectl wait --for=condition=available --timeout=3m deployment/kro -n kro-system
+	@echo "Old kro $(KRO_UPGRADE_FROM_VERSION) installed"
+
+.PHONY: upgrade-kro
+upgrade-kro: export KO_DOCKER_REPO=kind.local
+upgrade-kro: ko ## Build current kro and upgrade the running deployment (no cluster wipe)
+	$(MAKE) install
+	${HELM} template kro ./helm --namespace kro-system \
+		--set image.pullPolicy=Never --set image.ko=true \
+		--set config.allowCRDDeletion=false \
+		--set config.resourceGraphDefinitionConcurrentReconciles=10 \
+		--set config.dynamicControllerConcurrentReconciles=10 | $(WITH_GOFLAGS) $(KO) apply -f -
+	kubectl wait --for=condition=available --timeout=3m deployment/kro -n kro-system

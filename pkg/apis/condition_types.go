@@ -40,12 +40,29 @@ func NewSucceededConditions(d ...string) ConditionTypes {
 type ConditionTypes struct {
 	root       string
 	dependents []string
+	// prunes lists condition types from previous releases that should be
+	// removed when the condition set is initialized. This handles upgrades
+	// where a condition was renamed or dropped — the old entry would
+	// otherwise persist with a stale observedGeneration forever.
+	prunes []string
+}
+
+// Prunes returns a copy of ConditionTypes that will remove the listed condition
+// types when For() initializes a ConditionSet. Use this to clean up condition
+// types that were renamed or dropped in previous releases.
+func (ct ConditionTypes) Prunes(types ...string) ConditionTypes {
+	ct.prunes = append(ct.prunes[:len(ct.prunes):len(ct.prunes)], types...)
+	return ct
 }
 
 // For creates a ConditionSet from an object using the original
 // ConditionTypes as a reference. Status must be a pointer to a struct.
 func (ct ConditionTypes) For(object Object) ConditionSet {
 	cs := ConditionSet{object: object, ConditionTypes: ct}
+	// Remove deprecated condition types before initializing the current set.
+	if len(ct.prunes) > 0 {
+		cs.pruneConditions()
+	}
 	// Set known conditions Unknown if not set.
 	// Set the root condition first to get consistent timing for LastTransitionTime
 	for _, t := range append([]string{ct.root}, ct.dependents...) {

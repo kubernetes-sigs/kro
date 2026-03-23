@@ -1,0 +1,95 @@
+# Full Account Infrastructure Nested RGD (Orchestrator)
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: full-account-infrastructure
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: FullAccountInfrastructure
+    spec:
+    # Input parameters
+      accountName: string
+      accountEmail: string
+      accountRoleName: string | default="OrganizationAccountAccessRole"
+      region: string
+      vpcCidr: string
+      availabilityZones: '[]string'
+      clusterVersion: string
+      nodeGroupDesiredSize: integer | default=1
+      nodeGroupMinSize: integer | default=0
+      nodeGroupMaxSize: integer | default=2
+      nodeInstanceType: string
+    status:
+      accountId: ${account.status.accountID}
+      vpcId: ${network.status.vpcId}
+      clusterEndpoint: ${eksCluster.status.clusterEndpoint}
+  resources:
+    - id: accountNamespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.accountName}
+    
+    - id: account
+      template:
+        apiVersion: organizations.services.k8s.aws/v1alpha1
+        kind: Account
+        metadata:
+          name: ${schema.spec.accountName}
+          namespace: ${accountNamespace.metadata.name}
+        spec:
+          name: ${schema.spec.accountName}
+          email: ${schema.spec.accountEmail}
+          roleName: ${schema.spec.accountRoleName}
+    
+    - id: iamRoleSelector
+      template:
+        apiVersion: services.k8s.aws/v1alpha1
+        kind: IAMRoleSelector
+        metadata:
+          name: ${schema.spec.accountName}
+        spec:
+          arn: arn:aws:iam::${account.status.accountID}:role/${schema.spec.accountRoleName}
+          namespaceSelector:
+            names:
+              - ${accountNamespace.metadata.name}
+    
+    - id: network
+      # Depends on iamRoleSelector (via name label) to ensure cross-account
+      # role selection is configured before ACK creates resources
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: NetworkStack
+        metadata:
+          name: ${schema.spec.accountName}
+          namespace: ${accountNamespace.metadata.name}
+          labels:
+            app.kubernetes.io/depends-on-iam-role-selector: ${iamRoleSelector.metadata.name}
+        spec:
+          vpcName: ${schema.spec.accountName}
+          cidrBlock: ${schema.spec.vpcCidr}
+          region: ${schema.spec.region}
+          availabilityZones: ${schema.spec.availabilityZones}
+
+    - id: eksCluster
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: EKSClusterStack
+        metadata:
+          name: ${schema.spec.accountName}
+          namespace: ${accountNamespace.metadata.name}
+          labels:
+            app.kubernetes.io/depends-on-iam-role-selector: ${iamRoleSelector.metadata.name}
+        spec:
+          clusterName: ${schema.spec.accountName}
+          region: ${schema.spec.region}
+          version: ${schema.spec.clusterVersion}
+          subnetIds: ${network.status.privateSubnetIds}
+          securityGroupIds:
+            - ${network.status.securityGroupId}
+          nodeGroupDesiredSize: ${schema.spec.nodeGroupDesiredSize}
+          nodeGroupMinSize: ${schema.spec.nodeGroupMinSize}
+          nodeGroupMaxSize: ${schema.spec.nodeGroupMaxSize}
+          nodeInstanceType: ${schema.spec.nodeInstanceType}

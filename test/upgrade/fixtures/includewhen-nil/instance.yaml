@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeIncludeNil
+metadata:
+  name: test-includenil
+  namespace: upgrade-test
+spec:
+  name: test-includenil

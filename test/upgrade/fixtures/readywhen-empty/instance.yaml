@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeReadyEmpty
+metadata:
+  name: test-readyempty
+  namespace: upgrade-test
+spec:
+  name: test-readyempty

@@ -2,18 +2,18 @@ module "eks" {
   #checkov:skip=CKV_TF_1:We are using version control for those modules
   #checkov:skip=CKV_TF_2:We are using version control for those modules
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.31.6"
+  version = "~> 21.10.1"
 
-  cluster_name                   = local.name
-  cluster_version                = local.cluster_version
-  cluster_endpoint_public_access = true
+  name                            = local.name
+  kubernetes_version              = local.cluster_version
+  endpoint_public_access  = true
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
   enable_cluster_creator_admin_permissions = true
 
-  cluster_compute_config = {
+  compute_config = {
     enabled    = true
     node_pools = ["general-purpose", "system"]
   }

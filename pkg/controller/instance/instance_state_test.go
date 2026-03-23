@@ -17,21 +17,23 @@ package instance
 import (
 	"errors"
 	"testing"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
-func TestNewInstanceState(t *testing.T) {
-	state := newInstanceState()
+func TestNewStateManager(t *testing.T) {
+	state := newStateManager()
 
-	if state.State != InstanceStateInProgress {
-		t.Errorf("expected State to be %q, got %q", InstanceStateInProgress, state.State)
+	if state.State != v1alpha1.InstanceStateInProgress {
+		t.Errorf("expected State to be %q, got %q", v1alpha1.InstanceStateInProgress, state.State)
 	}
 
-	if state.ResourceStates == nil {
-		t.Error("expected ResourceStates to be initialized, got nil")
+	if state.NodeStates == nil {
+		t.Error("expected NodeStates to be initialized, got nil")
 	}
 
-	if len(state.ResourceStates) != 0 {
-		t.Errorf("expected ResourceStates to be empty, got %d items", len(state.ResourceStates))
+	if len(state.NodeStates) != 0 {
+		t.Errorf("expected NodeStates to be empty, got %d items", len(state.NodeStates))
 	}
 
 	if state.ReconcileErr != nil {
@@ -39,69 +41,63 @@ func TestNewInstanceState(t *testing.T) {
 	}
 }
 
-func TestResourceErrors(t *testing.T) {
+func TestNodeErrors(t *testing.T) {
 	err1 := errors.New("error 1")
 	err2 := errors.New("error 2")
-	singleErr := errors.New("resource failed")
+	singleErr := errors.New("node failed")
 
-	tests := map[string]struct {
-		resourceStates map[string]*ResourceState
-		expectError    bool
-		expectedErrors []error
+	tests := []struct {
+		name       string
+		nodeStates map[string]*NodeState
+		wantErrors []error
 	}{
-		"no errors": {
-			resourceStates: map[string]*ResourceState{
+		{
+			name: "no errors",
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "ACTIVE", Err: nil},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
-			expectError:    false,
-			expectedErrors: nil,
 		},
-		"single error": {
-			resourceStates: map[string]*ResourceState{
+		{
+			name: "single error",
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: singleErr},
 				"resource2": {State: "ACTIVE", Err: nil},
 			},
-			expectError:    true,
-			expectedErrors: []error{singleErr},
+			wantErrors: []error{singleErr},
 		},
-		"multiple errors": {
-			resourceStates: map[string]*ResourceState{
+		{
+			name: "multiple errors",
+			nodeStates: map[string]*NodeState{
 				"resource1": {State: "FAILED", Err: err1},
 				"resource2": {State: "FAILED", Err: err2},
 			},
-			expectError:    true,
-			expectedErrors: []error{err1, err2},
+			wantErrors: []error{err1, err2},
 		},
-		"empty resource states": {
-			resourceStates: map[string]*ResourceState{},
-			expectError:    false,
-			expectedErrors: nil,
+		{
+			name:       "empty node states",
+			nodeStates: map[string]*NodeState{},
 		},
 	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			state := &InstanceState{
-				ResourceStates: tt.resourceStates,
-			}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &StateManager{NodeStates: tt.nodeStates}
+			err := state.NodeErrors()
 
-			err := state.ResourceErrors()
-
-			if tt.expectError {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-
-				// Check that all expected errors are contained in the result
-				for _, expectedErr := range tt.expectedErrors {
-					if !errors.Is(err, expectedErr) {
-						t.Errorf("expected error to contain %v, got %v", expectedErr, err)
-					}
-				}
-			} else {
+			if len(tt.wantErrors) == 0 {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			for _, wantErr := range tt.wantErrors {
+				if !errors.Is(err, wantErr) {
+					t.Errorf("expected error to contain %v, got %v", wantErr, err)
 				}
 			}
 		})

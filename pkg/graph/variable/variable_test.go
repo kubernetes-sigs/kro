@@ -20,54 +20,63 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestResourceFieldAddDependencies(t *testing.T) {
+func TestResourceVariableKind(t *testing.T) {
 	tests := []struct {
-		name              string
-		initialDeps       []string
-		depsToAdd         []string
-		expectedFinalDeps []string
+		name          string
+		kind          ResourceVariableKind
+		expectedStr   string
+		isStatic      bool
+		isDynamic     bool
+		isIncludeWhen bool
 	}{
 		{
-			name:              "add new dependencies",
-			initialDeps:       []string{"resource1", "resource2"},
-			depsToAdd:         []string{"resource3", "resource4"},
-			expectedFinalDeps: []string{"resource1", "resource2", "resource3", "resource4"},
+			name:          "Static Kind",
+			kind:          ResourceVariableKindStatic,
+			expectedStr:   "static",
+			isStatic:      true,
+			isDynamic:     false,
+			isIncludeWhen: false,
 		},
 		{
-			name:              "add duplicate dependencies",
-			initialDeps:       []string{"resource1", "resource2"},
-			depsToAdd:         []string{"resource2", "resource3"},
-			expectedFinalDeps: []string{"resource1", "resource2", "resource3"},
+			name:          "Dynamic Kind",
+			kind:          ResourceVariableKindDynamic,
+			expectedStr:   "dynamic",
+			isStatic:      false,
+			isDynamic:     true,
+			isIncludeWhen: false,
 		},
 		{
-			name:              "add to empty dependencies",
-			initialDeps:       []string{},
-			depsToAdd:         []string{"resource1", "resource2"},
-			expectedFinalDeps: []string{"resource1", "resource2"},
+			name:          "ReadyWhen Kind",
+			kind:          ResourceVariableKindReadyWhen,
+			expectedStr:   "readyWhen",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
 		},
 		{
-			name:              "add empty dependencies",
-			initialDeps:       []string{"resource1", "resource2"},
-			depsToAdd:         []string{},
-			expectedFinalDeps: []string{"resource1", "resource2"},
+			name:          "IncludeWhen Kind",
+			kind:          ResourceVariableKindIncludeWhen,
+			expectedStr:   "includeWhen",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: true,
+		},
+		{
+			name:          "Unknown Kind",
+			kind:          ResourceVariableKind("unknown"),
+			expectedStr:   "unknown",
+			isStatic:      false,
+			isDynamic:     false,
+			isIncludeWhen: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rf := ResourceField{
-				Dependencies: tc.initialDeps,
-			}
-
-			rf.AddDependencies(tc.depsToAdd...)
-
-			assert.ElementsMatch(t, tc.expectedFinalDeps, rf.Dependencies)
-
-			seen := make(map[string]bool)
-			for _, dep := range rf.Dependencies {
-				assert.False(t, seen[dep], "Duplicate dependency found: %s", dep)
-				seen[dep] = true
-			}
+			assert.Equal(t, tc.expectedStr, tc.kind.String())
+			assert.Equal(t, tc.isStatic, tc.kind.IsStatic())
+			assert.Equal(t, tc.isDynamic, tc.kind.IsDynamic())
+			assert.Equal(t, tc.isIncludeWhen, tc.kind.IsIncludeWhen())
 		})
 	}
 }

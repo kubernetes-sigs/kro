@@ -3,6 +3,8 @@ sidebar_position: 1
 sidebar_label: Overview
 ---
 
+import RGDProcessFlow from '@site/src/components/RGDProcessFlow';
+
 # Overview
 
 A **ResourceGraphDefinition** (RGD) lets you create a custom Kubernetes API that deploys multiple resources together as a single unit. It's the only API you need to configure kro - you define the schema for your new API, the resources it should create, and how data flows between them using CEL expressions.
@@ -16,11 +18,7 @@ When you apply an RGD, kro configures itself to serve your new API. It generates
 3. **Users create instances** of your API
 4. **kro creates and manages** all the underlying resources
 
-<div style={{textAlign: 'center', marginTop: '2rem', marginBottom: '2rem'}}>
-
-<img src="/img/overview-diag.svg" alt="kro RGD Flow" style={{maxWidth: '600px', width: '100%'}} />
-
-</div>
+<RGDProcessFlow />
 
 ## Example
 
@@ -146,15 +144,22 @@ When your RGD is validated and accepted:
 
 ### RGD Status Conditions
 
-kro reports the RGD's state through three conditions in `status.conditions`:
+kro reports the RGD's state through five conditions in `status.conditions`:
 
-| Condition | Description |
-|-----------|-------------|
-| **ResourceGraphAccepted** | Whether the RGD spec passed validation. If `False`, the `message` field contains the validation error. |
-| **KindReady** | Whether the CRD for your custom API has been generated and registered with Kubernetes. |
-| **ControllerReady** | Whether kro is actively watching for instances of your custom API. |
+| Condition             | Description                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ready**             | Aggregate condition. `True` only when `GraphRevisionsResolved`, `GraphAccepted`, `KindReady`, and `ControllerReady` are all `True`.                |
+| **GraphRevisionsResolved**    | Whether graph revisions are settled and the latest revision is compiled and active. It may be `Unknown` while kro is still waiting. |
+| **GraphAccepted**     | Whether kro accepted the current graph for the latest revision path. `False` means the graph was rejected or the latest revision failed.    |
+| **KindReady**         | Whether the generated CRD has been created and accepted by the Kubernetes API server.                                                       |
+| **ControllerReady**   | Whether kro successfully registered the dynamic controller for the generated kind.                                                          |
 
-When all three conditions are `True`, the RGD is fully operational and ready to accept instances. You can check the status with:
+`status.state` reflects whether kro is serving an accepted graph for the API:
+
+- `Active` when `GraphAccepted=True`, `KindReady=True`, and `ControllerReady=True`
+- `Inactive` otherwise
+
+You can check the status with:
 
 ```bash
 kubectl get rgd <name> -o yaml
@@ -162,12 +167,73 @@ kubectl get rgd <name> -o yaml
 
 For complete status field documentation, see the [RGD API Reference](../../../api/crds/resourcegraphdefinition.md).
 
+### Annotations
+
+kro supports the following annotations on ResourceGraphDefinitions:
+
+| Annotation                       | Description                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `kro.run/allow-breaking-changes` | When set to `"true"`, allows RGD updates that would normally be blocked due to breaking changes. Use with caution. |
+
+#### Breaking Changes
+
+kro detects breaking changes when you update an RGD and blocks them by default to protect existing instances. If you need to force a breaking change, add the annotation:
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: my-rgd
+  annotations:
+    kro.run/allow-breaking-changes: "true"
+spec:
+  # ...
+```
+
+Currently, kro only detects breaking changes in the schema section of an RGD:
+
+- Field removal
+- Type changes
+- New required fields without defaults
+- Enum restrictions
+- Pattern changes
+
+:::warning
+Breaking changes can invalidate existing instances. Ensure you understand the impact before using this annotation.
+:::
+
 ## What RGDs Provide
 
 - **Type safety**: All CEL expressions are validated when you create the RGD
 - **Dependency management**: kro automatically determines the order to create resources
 - **Validation**: Users get immediate feedback if they provide invalid values
 - **Reusability**: Define once, use many times across teams
+
+## Graph Revisions
+
+Every time you change an RGD's spec, kro creates an immutable snapshot called a
+**GraphRevision** rather than compiling the spec inline. This separates
+validation from compilation and gives you a visible history of every spec change.
+
+The RGD controller hashes the new spec, deduplicates against the latest
+revision, and creates a new GraphRevision object if the spec actually changed. A
+separate GraphRevision controller then compiles the snapshot independently and
+writes the result into an in-memory registry that instance controllers read from.
+
+You can list revisions with `kubectl get gr`:
+
+```text
+NAME              REVISION   READY   AGE
+my-webapp-r00001  1          True    2d
+my-webapp-r00002  2          True    1d
+my-webapp-r00003  3          True    5m
+```
+
+If the latest revision fails compilation, instances stop progressing until you
+push a valid spec - there is no automatic fallback to an older revision.
+
+For the full details on naming, lifecycle, retention, and debugging, see
+[Graph Revisions](../../advanced/05-graph-revisions.md).
 
 ## Next Steps
 
@@ -177,7 +243,9 @@ Explore the details of ResourceGraphDefinitions:
 - **[Resource Basics](./02-resource-definitions/01-resource-basics.md)** - Define resources with CEL expressions
 - **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Create resources conditionally with `includeWhen`
 - **[Readiness](./02-resource-definitions/03-readiness.md)** - Control when resources are considered ready
-- **[External References](./02-resource-definitions/04-external-references.md)** - Reference resources outside your RGD
+- **[Collections](./02-resource-definitions/04-collections.md)** - Create multiple resources with `forEach`
+- **[External References](./02-resource-definitions/05-external-references.md)** - Reference resources outside your RGD
 - **[CEL Expressions](./03-cel-expressions.md)** - Reference data between resources
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - How kro infers dependencies and determines creation order
 - **[Static Type Checking](./05-static-type-checking.md)** - How kro validates RGDs before instances are created
+- **[Graph Revisions](../../advanced/05-graph-revisions.md)** - How kro snapshots and compiles RGD spec changes

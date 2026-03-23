@@ -297,7 +297,7 @@ func TestStructTypes(t *testing.T) {
 	}
 	personWrongTypeType := apiservercel.NewObjectType(TypeNamePrefix+"personWrongType", personWrongTypeFields)
 
-	provider := NewDeclTypeProvider(personType, personSubsetType, personWithExtraType, personWrongTypeType)
+	provider := NewDeclTypeProvider(nil, personType, personSubsetType, personWithExtraType, personWrongTypeType)
 
 	tests := []struct {
 		name        string
@@ -389,7 +389,7 @@ func TestNestedTypes(t *testing.T) {
 	}
 	userWrongType := apiservercel.NewObjectType(TypeNamePrefix+"userWrongType", userWrongTypeFields)
 
-	provider := NewDeclTypeProvider(
+	provider := NewDeclTypeProvider(nil,
 		addressType, addressSubsetType, addressWrongType,
 		userType, userSubsetType, userWrongType,
 	)
@@ -461,7 +461,7 @@ func TestMapToStructCompatibility(t *testing.T) {
 		"nested": apiservercel.NewDeclField("nested", nestedObjectType, false, nil, nil),
 	})
 
-	provider := NewDeclTypeProvider(intStruct, stringStruct, parentObjectType, nestedObjectType)
+	provider := NewDeclTypeProvider(nil, intStruct, stringStruct, parentObjectType, nestedObjectType)
 
 	tests := []struct {
 		name        string
@@ -545,7 +545,7 @@ func TestStructToMapCompatibility(t *testing.T) {
 	}
 	stringStruct := apiservercel.NewObjectType(TypeNamePrefix+"stringStruct", stringStructFields)
 
-	provider := NewDeclTypeProvider(intStruct, stringStruct)
+	provider := NewDeclTypeProvider(nil, intStruct, stringStruct)
 
 	tests := []struct {
 		name        string
@@ -768,7 +768,7 @@ func TestOptionalStructTypes(t *testing.T) {
 	optionalString := cel.OptionalType(cel.StringType)
 	optionalPerson := cel.OptionalType(personType.CelType())
 
-	provider := NewDeclTypeProvider(personType, otherType, unknownFieldsType)
+	provider := NewDeclTypeProvider(nil, personType, otherType, unknownFieldsType)
 
 	tests := []struct {
 		name        string

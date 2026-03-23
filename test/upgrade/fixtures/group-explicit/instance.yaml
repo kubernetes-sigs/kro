@@ -1,0 +1,7 @@
+apiVersion: kro.run/v1alpha1
+kind: UpgradeGroupExplicit
+metadata:
+  name: test-groupexplicit
+  namespace: upgrade-test
+spec:
+  name: test-groupexplicit

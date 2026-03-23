@@ -16,19 +16,255 @@ package graph
 
 import (
 	"net/http"
+	"os"
 	"testing"
 
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	apiservercel "k8s.io/apiserver/pkg/cel"
 	memory2 "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
+
+	"github.com/kubernetes-sigs/kro/pkg/features"
+	"github.com/kubernetes-sigs/kro/pkg/graph/fieldpath"
+	"github.com/kubernetes-sigs/kro/pkg/graph/parser"
+	graphschema "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	"github.com/kubernetes-sigs/kro/pkg/testutil/k8s"
 )
+
+func TestMain(m *testing.M) {
+	// Enable CELOmitFunction by default for all graph package tests.
+	// Tests that verify gate-off behavior disable it locally.
+	_ = features.FeatureGate.Set("CELOmitFunction=true")
+	os.Exit(m.Run())
+}
+
+// disableOmitFeatureGate disables the CELOmitFunction feature gate for the
+// duration of the test and restores it on cleanup.
+func disableOmitFeatureGate(t *testing.T) {
+	t.Helper()
+	require.NoError(t, features.FeatureGate.Set("CELOmitFunction=false"))
+	t.Cleanup(func() {
+		require.NoError(t, features.FeatureGate.Set("CELOmitFunction=true"))
+	})
+}
+
+var defaultRGDConfig = RGDConfig{MaxCollectionDimensionSize: 5}
+
+func TestLookupSchemaAtField_AdditionalProperties(t *testing.T) {
+	tests := []struct {
+		name         string
+		schema       *spec.Schema
+		field        string
+		expectNil    bool
+		expectedType string
+	}{
+		{
+			name: "direct property lookup works",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				},
+			},
+			field:        "name",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "additionalProperties lookup should return value schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+						},
+					},
+				},
+			},
+			field:        "anyDynamicKey",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "ConfigMap.data style schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"data": {
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "data",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "labels style map[string]string",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+						},
+					},
+				},
+			},
+			field:        "app",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name: "nested map - first level",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"integer"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "outerKey",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "array items with additionalProperties",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"array"},
+					Items: &spec.SchemaOrArray{
+						Schema: &spec.Schema{
+							SchemaProps: spec.SchemaProps{
+								Type: []string{"object"},
+								AdditionalProperties: &spec.SchemaOrBool{
+									Allows: true,
+									Schema: &spec.Schema{
+										SchemaProps: spec.SchemaProps{Type: []string{"string"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			field:        "dynamicKey",
+			expectNil:    false,
+			expectedType: "string",
+		},
+		{
+			name:      "nil schema returns nil",
+			schema:    nil,
+			field:     "anything",
+			expectNil: true,
+		},
+		{
+			name: "empty field returns original schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+				},
+			},
+			field:        "",
+			expectNil:    false,
+			expectedType: "object",
+		},
+		{
+			name: "additionalProperties allows without schema returns empty schema",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					AdditionalProperties: &spec.SchemaOrBool{
+						Allows: true,
+					},
+				},
+			},
+			field:        "dynamicKey",
+			expectNil:    false,
+			expectedType: "",
+		},
+		{
+			name: "missing field returns nil",
+			schema: &spec.Schema{
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"object"},
+					Properties: map[string]spec.Schema{
+						"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+					},
+				},
+			},
+			field:     "missing",
+			expectNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := lookupSchemaAtField(graphschema.NewCache(), tt.schema, tt.field)
+
+			if tt.expectNil {
+				assert.Nil(t, result, "expected nil schema")
+				return
+			}
+
+			require.NotNil(t, result, "expected non-nil schema but got nil (AdditionalProperties not handled?)")
+			if tt.expectedType != "" && len(result.Type) > 0 {
+				assert.Equal(t, tt.expectedType, result.Type[0], "unexpected schema type")
+			}
+		})
+	}
+}
+
+// exprOriginals extracts Original strings from expressions for test comparison.
+func exprOriginals(exprs []*krocel.Expression) []string {
+	result := make([]string, len(exprs))
+	for i, e := range exprs {
+		result[i] = e.Original
+	}
+	return result
+}
 
 func TestGraphBuilder_Validation(t *testing.T) {
 	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
@@ -44,6 +280,20 @@ func TestGraphBuilder_Validation(t *testing.T) {
 		wantErr                     bool
 		errMsg                      string
 	}{
+		{
+			name: "invalid status",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					nil,
+					map[string]interface{}{
+						"status": "string", // Invalid reference
+					},
+				),
+			},
+			wantErr: true,
+			errMsg:  "status fields without expressions are not supported",
+		},
 		{
 			name: "invalid resource type",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
@@ -118,6 +368,28 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "is not a valid Kubernetes object",
 		},
 		{
+			name: "cluster-scoped resource with namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("crd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name":      "tests.kro.run",
+						"namespace": "default",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cluster-scoped and must not set metadata.namespace",
+		},
+		{
 			name: "invalid CEL syntax in readyWhen",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -160,7 +432,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "failed to parse includeWhen expressions",
 		},
 		{
-			name: "includeWhen expression reference a different resource",
+			name: "includeWhen expression references unknown resource",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
 					"Test", "v1alpha1",
@@ -169,23 +441,16 @@ func TestGraphBuilder_Validation(t *testing.T) {
 					},
 					nil,
 				),
-				generator.WithResource("vpc", map[string]interface{}{
-					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
-					"kind":       "VPC",
-					"metadata": map[string]interface{}{
-						"name": "test-vpc",
-					},
-				}, nil, []string{"invalid ! syntax"}),
 				generator.WithResource("subnet", map[string]interface{}{
 					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
 					"kind":       "VPC",
 					"metadata": map[string]interface{}{
 						"name": "test-vpc",
 					},
-				}, nil, []string{"${vpc.status.state == 'available'}"}),
+				}, nil, []string{"${missing.status.state == 'available'}"}),
 			},
 			wantErr: true,
-			errMsg:  "failed to parse includeWhen expressions",
+			errMsg:  "references unknown identifiers: [missing]",
 		},
 		{
 			name: "missing required field",
@@ -231,7 +496,7 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "found unknown resources",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "valid VPC with valid conditional subnets",
@@ -336,7 +601,23 @@ func TestGraphBuilder_Validation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "undeclared reference to 'nonexistent'",
+			errMsg:  "references unknown identifiers: [nonexistent]",
+		},
+		{
+			name: "instance status field must reference a resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					map[string]interface{}{
+						"ready": "${true}",
+					},
+				),
+			},
+			wantErr: true,
+			errMsg:  "failed to create instance node",
 		},
 		{
 			name: "invalid field type in resource spec",
@@ -446,6 +727,38 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "crds with string template in metadata.name work",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"crdName": "string",
+					},
+					nil,
+				),
+				generator.WithResource("somecrd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						// Non-standalone expression (string template) - should not panic
+						"name": "crd-${schema.spec.crdName}",
+					},
+					"spec": map[string]interface{}{
+						"group":   "ec2.services.k8s.aws",
+						"version": "v1alpha1",
+						"names": map[string]interface{}{
+							"kind":     "VPC",
+							"listKind": "VPCList",
+							"singular": "vpc",
+							"plural":   "vpcs",
+						},
+						"scope": "Namespaced",
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+		},
+		{
 			name: "valid instance definition with complex types",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -500,12 +813,35 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "invalid externalRef with forEach",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithExternalRefAndForEach("vpcs", &krov1alpha1.ExternalRef{
+					APIVersion: "ec2.services.k8s.aws/v1alpha1",
+					Kind:       "VPC",
+					Metadata: krov1alpha1.ExternalRefMetadata{
+						Name: "external-vpc",
+					},
+				}, []krov1alpha1.ForEachDimension{
+					{"value": "${schema.spec.items}"},
+				}),
+			},
+			wantErr: true,
+			errMsg:  "cannot use externalRef with forEach",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-group", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -618,14 +954,14 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil)},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Validate dependencies
-				assert.Empty(t, g.Resources["vpc"].GetDependencies())
-				assert.Empty(t, g.Resources["clusterpolicy"].GetDependencies())
+				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["clusterpolicy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].GetDependencies())
-				assert.Equal(t, []string{"clusterpolicy"}, g.Resources["clusterrole"].GetDependencies())
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"clusterpolicy"}, g.Resources["clusterrole"].Meta.Dependencies)
 
-				clusterDeps := g.Resources["cluster"].GetDependencies()
+				clusterDeps := g.Resources["cluster"].Meta.Dependencies
 				assert.Len(t, clusterDeps, 3)
 				assert.Contains(t, clusterDeps, "clusterrole")
 				assert.Contains(t, clusterDeps, "subnet1")
@@ -658,7 +994,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 				}, nil, nil),
 			},
 			wantErr: true,
-			errMsg:  "found unknown resources",
+			errMsg:  "references unknown identifiers",
 		},
 		{
 			name: "cyclic dependency",
@@ -769,10 +1105,10 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
 				assert.Len(t, g.Resources, 4)
-				assert.Empty(t, g.Resources["pod1"].GetDependencies())
-				assert.Empty(t, g.Resources["pod2"].GetDependencies())
-				assert.Empty(t, g.Resources["pod3"].GetDependencies())
-				assert.Empty(t, g.Resources["pod4"].GetDependencies())
+				assert.Empty(t, g.Resources["pod1"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod2"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod3"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["pod4"].Meta.Dependencies)
 				// Order doesn't matter as they're all independent
 				assert.Len(t, g.TopologicalOrder, 4)
 			},
@@ -1021,24 +1357,24 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			},
 			validateDeps: func(t *testing.T, g *Graph) {
 				// Base infrastructure dependencies
-				assert.Empty(t, g.Resources["vpc"].GetDependencies())
-				assert.Empty(t, g.Resources["policy"].GetDependencies())
+				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
+				assert.Empty(t, g.Resources["policy"].Meta.Dependencies)
 
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["subnet3"].GetDependencies())
-				assert.Equal(t, []string{"vpc"}, g.Resources["secgroup"].GetDependencies())
-				assert.Equal(t, []string{"policy"}, g.Resources["role"].GetDependencies())
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet1"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet2"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet3"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["secgroup"].Meta.Dependencies)
+				assert.Equal(t, []string{"policy"}, g.Resources["role"].Meta.Dependencies)
 
 				// Cluster dependencies
 				clusterDeps := []string{"role", "subnet1", "subnet2", "subnet3"}
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster1"].GetDependencies())
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster2"].GetDependencies())
-				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster3"].GetDependencies())
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster1"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster2"].Meta.Dependencies)
+				assert.ElementsMatch(t, clusterDeps, g.Resources["cluster3"].Meta.Dependencies)
 
 				// Monitor pod dependencies
 				monitorDeps := []string{"cluster1", "cluster2", "cluster3"}
-				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].GetDependencies())
+				assert.ElementsMatch(t, monitorDeps, g.Resources["monitor"].Meta.Dependencies)
 
 				// Validate topological order
 				assert.Equal(t, []string{
@@ -1061,7 +1397,7 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -1207,104 +1543,95 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			validateVars: func(t *testing.T, g *Graph) {
 				// Verify resource with no expressions
 				policy := g.Resources["policy"]
-				assert.Empty(t, policy.variables)
-				assert.Empty(t, policy.GetReadyWhenExpressions())
-				assert.Empty(t, policy.GetIncludeWhenExpressions())
+				assert.Empty(t, policy.Variables)
+				assert.Empty(t, policy.ReadyWhen)
+				assert.Empty(t, policy.IncludeWhen)
 
 				// Verify resource with only readyWhen
 				vpc := g.Resources["vpc"]
-				assert.Empty(t, vpc.variables)
+				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.GetReadyWhenExpressions())
-				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+				}, exprOriginals(vpc.ReadyWhen))
+				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
 				subnet := g.Resources["subnet"]
-				assert.Len(t, subnet.variables, 2)
+				assert.Len(t, subnet.Variables, 2)
 				// Create expected variables to match against
-				validateVariables(t, subnet.variables, []expectedVar{
+				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.status.vpcID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.vpcID",
+						expression: "vpc.status.vpcID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.tags[0].value",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "spec.tags[0].value",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
 
 				// Verify resource with multiple expressions in one field
 				cluster := g.Resources["cluster"]
-				assert.Len(t, cluster.variables, 2)
-				validateVariables(t, cluster.variables, []expectedVar{
+				assert.Len(t, cluster.Variables, 2)
+				validateVariables(t, cluster.Variables, []expectedVar{
 					{
-						path:                 "metadata.name",
-						expressions:          []string{"vpc.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.name",
+						expression: "(vpc.metadata.name) + \"cluster\" + (schema.spec.environment)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.resourcesVPCConfig.subnetIDs[0]",
-						expressions:          []string{"subnet.status.subnetID"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.resourcesVPCConfig.subnetIDs[0]",
+						expression: "subnet.status.subnetID",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
-				assert.Equal(t, []string{"schema.spec.createMonitoring"}, cluster.GetIncludeWhenExpressions())
+				assert.Equal(t, []string{"schema.spec.createMonitoring"}, exprOriginals(cluster.IncludeWhen))
 
 				// Verify monitor pod with all types of expressions
 				monitor := g.Resources["monitor"]
-				assert.Len(t, monitor.variables, 7)
-				validateVariables(t, monitor.variables, []expectedVar{
+				assert.Len(t, monitor.Variables, 7)
+				validateVariables(t, monitor.Variables, []expectedVar{
 					{
-						path:                 "metadata.labels.environment",
-						expressions:          []string{"schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "metadata.labels.environment",
+						expression: "schema.spec.environment",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels.cluster",
-						expressions:          []string{"cluster.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "metadata.labels.cluster",
+						expression: "cluster.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels.combined",
-						expressions:          []string{"cluster.metadata.name", "schema.spec.environment"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.labels.combined",
+						expression: "(cluster.metadata.name) + \"-\" + (schema.spec.environment)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "metadata.labels[\"two.statics\"]",
-						expressions:          []string{"schema.spec.environment", "schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: false,
+						path:       "metadata.labels[\"two.statics\"]",
+						expression: "(schema.spec.environment) + \"-\" + (schema.spec.region)",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 					{
-						path:                 "metadata.labels[\"two.dynamics\"]",
-						expressions:          []string{"vpc.metadata.name", "cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: false,
+						path:       "metadata.labels[\"two.dynamics\"]",
+						expression: "(vpc.metadata.name) + \"-\" + (cluster.status.ackResourceMetadata.arn)",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[0].value",
-						expressions:          []string{"cluster.status.ackResourceMetadata.arn"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.containers[0].env[0].value",
+						expression: "cluster.status.ackResourceMetadata.arn",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 					{
-						path:                 "spec.containers[0].env[1].value",
-						expressions:          []string{"schema.spec.region"},
-						kind:                 variable.ResourceVariableKindStatic,
-						standaloneExpression: true,
+						path:       "spec.containers[0].env[1].value",
+						expression: "schema.spec.region",
+						kind:       variable.ResourceVariableKindStatic,
 					},
 				})
+				assert.Equal(t, []string{"monitor.status.phase == 'Running'"}, exprOriginals(monitor.ReadyWhen))
+				assert.Equal(t, []string{"schema.spec.createMonitoring == true"}, exprOriginals(monitor.IncludeWhen))
 			},
 		},
 		{
@@ -1362,29 +1689,28 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 			},
 			validateVars: func(t *testing.T, g *Graph) {
 				somecrd := g.Resources["somecrd"]
-				assert.Empty(t, somecrd.variables)
-				assert.Empty(t, somecrd.GetReadyWhenExpressions())
-				assert.Empty(t, somecrd.GetIncludeWhenExpressions())
+				assert.Empty(t, somecrd.Variables)
+				assert.Empty(t, somecrd.ReadyWhen)
+				assert.Empty(t, somecrd.IncludeWhen)
 
 				// Verify resource with only readyWhen
 				vpc := g.Resources["vpc"]
-				assert.Empty(t, vpc.variables)
+				assert.Empty(t, vpc.Variables)
 				assert.Equal(t, []string{
 					"vpc.status.state == 'available'",
 					"vpc.status.vpcID != ''",
-				}, vpc.GetReadyWhenExpressions())
-				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+				}, exprOriginals(vpc.ReadyWhen))
+				assert.Empty(t, vpc.IncludeWhen)
 
 				// Verify resource with mixed expressions
 				subnet := g.Resources["subnet1"]
-				assert.Len(t, subnet.variables, 1)
+				assert.Len(t, subnet.Variables, 1)
 				// Create expected variables to match against
-				validateVariables(t, subnet.variables, []expectedVar{
+				validateVariables(t, subnet.Variables, []expectedVar{
 					{
-						path:                 "spec.vpcID",
-						expressions:          []string{"vpc.metadata.name"},
-						kind:                 variable.ResourceVariableKindDynamic,
-						standaloneExpression: true,
+						path:       "spec.vpcID",
+						expression: "vpc.metadata.name",
+						kind:       variable.ResourceVariableKindDynamic,
 					},
 				})
 
@@ -1395,7 +1721,7 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			g, err := builder.NewResourceGraphDefinition(rgd)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 			require.NoError(t, err)
 			if tt.validateVars != nil {
 				tt.validateVars(t, g)
@@ -1405,10 +1731,9 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 }
 
 type expectedVar struct {
-	path                 string
-	expressions          []string
-	kind                 variable.ResourceVariableKind
-	standaloneExpression bool
+	path       string
+	expression string
+	kind       variable.ResourceVariableKind
 }
 
 func validateVariables(t *testing.T, actual []*variable.ResourceField, expected []expectedVar) {
@@ -1417,10 +1742,9 @@ func validateVariables(t *testing.T, actual []*variable.ResourceField, expected 
 	actualVars := make([]expectedVar, len(actual))
 	for i, v := range actual {
 		actualVars[i] = expectedVar{
-			path:                 v.Path,
-			expressions:          v.Expressions,
-			kind:                 v.Kind,
-			standaloneExpression: v.StandaloneExpression,
+			path:       v.Path,
+			expression: v.Expression.Original,
+			kind:       v.Kind,
 		}
 	}
 
@@ -1794,12 +2118,72 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "ConfigMap.data type mismatch - list where string expected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "test-config",
+					},
+					"data": map[string]interface{}{
+						"items": "${schema.spec.items}",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
+		},
+		{
+			name: "ConfigMap.data type mismatch - map() result where string expected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"ForEachTest", "v1alpha1",
+					map[string]interface{}{
+						"queues": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("queues", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${schema.metadata.name + '-' + queue}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"queue": "${schema.spec.queues}"},
+					},
+					nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name":      "${schema.metadata.name}-output",
+						"namespace": "${schema.metadata.namespace}",
+					},
+					"data": map[string]interface{}{
+						"queues": "${queues.map(q, {\"name\": q.metadata.name, \"queueARN\": q.status.phase})}",
+					},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "type mismatch",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("test-cel-types", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -1812,9 +2196,30 @@ func TestGraphBuilder_CELTypeChecking(t *testing.T) {
 }
 
 func TestNewBuilder(t *testing.T) {
-	builder, err := NewBuilder(&rest.Config{}, &http.Client{})
-	assert.Nil(t, err)
-	assert.NotNil(t, builder)
+	tests := []struct {
+		name    string
+		config  *rest.Config
+		client  *http.Client
+		wantErr string
+	}{
+		{name: "success", config: &rest.Config{}, client: &http.Client{}},
+		{name: "schema resolver creation failure", config: &rest.Config{Host: "://bad"}, client: &http.Client{}, wantErr: "failed to create schema resolver"},
+		{name: "rest mapper creation failure", config: &rest.Config{}, client: nil, wantErr: "failed to create dynamic REST mapper"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, err := NewBuilder(tt.config, tt.client)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, builder)
+		})
+	}
 }
 
 func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
@@ -2144,7 +2549,7 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
-			_, err := builder.NewResourceGraphDefinition(rgd)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
 			if tt.wantErr {
 				if !assert.Error(t, err) {
 					t.Logf("Expected error but got nil")
@@ -2157,5 +2562,1817 @@ func TestGraphBuilder_StructuralTypeCompatibility(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestGraphBuilder_ForEachParsing(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		validateGraph               func(t *testing.T, graph *Graph)
+	}{
+		{
+			name: "valid forEach with single iterator from schema",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"WorkerPool", "v1alpha1",
+					map[string]interface{}{
+						"workers": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("workerPods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${workerName}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "worker",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"workerName": "${schema.spec.workers}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+			validateGraph: func(t *testing.T, graph *Graph) {
+				resource := graph.Resources["workerPods"]
+				require.NotNil(t, resource)
+				iterators := resource.ForEach
+				require.Len(t, iterators, 1)
+				assert.Equal(t, "workerName", iterators[0].Name)
+				assert.Equal(t, "schema.spec.workers", iterators[0].Expression.Original)
+			},
+		},
+		{
+			name: "valid forEach with multiple iterators (cartesian product)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"MultiRegion", "v1alpha1",
+					map[string]interface{}{
+						"regions": "[]string",
+						"tiers":   "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${region}-${tier}-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"region": "${schema.spec.regions}"},
+						{"tier": "${schema.spec.tiers}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+			validateGraph: func(t *testing.T, graph *Graph) {
+				resource := graph.Resources["pods"]
+				require.NotNil(t, resource)
+				iterators := resource.ForEach
+				require.Len(t, iterators, 2)
+				assert.Equal(t, "region", iterators[0].Name)
+				assert.Equal(t, "tier", iterators[1].Name)
+			},
+		},
+		{
+			name: "forEach with collection chaining (depends on another resource)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"WorkerPool", "v1alpha1",
+					map[string]interface{}{
+						"workers": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("workerPods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${worker}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "worker",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"worker": "${schema.spec.workers}"},
+					},
+					nil, nil),
+				// monitorPod depends on workerPods collection
+				// Since workerPods is a collection, it's typed as list(Pod)
+				// We use size() to reference the collection and create a dependency
+				generator.WithResource("monitorPod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${string(size(workerPods))}-monitor",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "monitor",
+								"image": "monitor:latest",
+							},
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+			validateGraph: func(t *testing.T, graph *Graph) {
+				// monitorPod should depend on workerPods
+				monitorPod := graph.Resources["monitorPod"]
+				require.NotNil(t, monitorPod)
+				assert.Contains(t, monitorPod.Meta.Dependencies, "workerPods")
+			},
+		},
+		{
+			name: "forEach expression must be standalone - embedded expression rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"WorkerPool", "v1alpha1",
+					map[string]interface{}{
+						"workers": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("workerPods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "worker",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "worker",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						// Non-standalone: expression embedded in string
+						{"name": "prefix-${schema.spec.workers}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "only standalone expressions are allowed",
+		},
+		{
+			name: "forEach expression must be standalone - multiple expressions rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"WorkerPool", "v1alpha1",
+					map[string]interface{}{
+						"workers": "[]string",
+						"prefix":  "string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("workerPods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "worker",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "worker",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						// Non-standalone: multiple expressions
+						{"name": "${schema.spec.prefix}-${schema.spec.workers}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "only standalone expressions are allowed",
+		},
+		{
+			name: "resource without forEach has empty iterators",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Simple", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("pod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "simple-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, nil),
+			},
+			wantErr: false,
+			validateGraph: func(t *testing.T, graph *Graph) {
+				resource := graph.Resources["pod"]
+				require.NotNil(t, resource)
+				assert.Empty(t, resource.ForEach)
+			},
+		},
+		{
+			name: "collection cannot reference itself in readyWhen",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"PodCollection", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${name}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					// Self-reference: using pods.all() instead of each
+					[]string{"${pods.all(p, p.status.phase == 'Running')}"},
+					nil),
+			},
+			wantErr: true,
+			errMsg:  "resource \"pods\" readyWhen: references unknown identifiers: [pods]",
+		},
+		{
+			name: "collection readyWhen cannot reference other resources",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"PodCollection", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				// First resource: a regular Pod
+				generator.WithResource("mainPod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "main-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "main",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				}, nil, nil),
+				// Second resource: collection that incorrectly references mainPod in readyWhen
+				generator.WithResourceCollection("workerPods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${name}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "worker",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					// Invalid: referencing another resource instead of each
+					[]string{"${mainPod.status.phase == 'Running'}"},
+					nil),
+			},
+			wantErr: true,
+			errMsg:  "resource \"workerPods\" readyWhen: references unknown identifiers: [mainPod]",
+		},
+		{
+			name: "collection with valid each-based readyWhen",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"PodCollection", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${name}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					// Valid: using each keyword for per-item readiness
+					[]string{"${each.status.phase == 'Running'}"},
+					nil),
+			},
+			wantErr: false,
+			validateGraph: func(t *testing.T, graph *Graph) {
+				resource := graph.Resources["pods"]
+				require.NotNil(t, resource)
+				assert.True(t, resource.Meta.Type == NodeTypeCollection)
+				assert.Equal(t, []string{"each.status.phase == 'Running'"}, exprOriginals(resource.ReadyWhen))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validateGraph != nil {
+					tt.validateGraph(t, graph)
+				}
+			}
+		})
+	}
+}
+
+func TestGraphBuilder_CollectionChaining(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		checkGraph                  func(t *testing.T, g *Graph)
+	}{
+		{
+			name: "collection with forEach referencing another resource (dynamic forEach)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"CollectionChaining", "v1alpha1",
+					map[string]interface{}{
+						"name":       "string",
+						"cidrBlocks": "[]string",
+					},
+					nil,
+				),
+				// First resource: a regular VPC
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				// Second resource: collection with forEach that references the first resource
+				// The expression uses a ternary that checks vpc, making it a dynamic dependency
+				generator.WithResourceCollection("chainedSubnets", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${cidr}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr}",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						// forEach expression references vpc (another resource)
+						{"cidr": "${has(vpc.status.vpcID) ? schema.spec.cidrBlocks : []}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+			checkGraph: func(t *testing.T, g *Graph) {
+				// Verify the collection resource depends on vpc
+				chainedResource := g.Resources["chainedSubnets"]
+				assert.NotNil(t, chainedResource)
+				assert.True(t, chainedResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, chainedResource.Meta.Dependencies, "vpc",
+					"collection with forEach referencing vpc should have vpc as dependency")
+			},
+		},
+		{
+			name: "collection-to-collection chaining (forEach iterating over another collection)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"CollectionToCollection", "v1alpha1",
+					map[string]interface{}{
+						"name":       "string",
+						"cidrBlocks": "[]string",
+					},
+					nil,
+				),
+				// First collection: creates multiple subnets
+				generator.WithResourceCollection("subnets", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${cidr}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr}",
+						"vpcID":     "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"cidr": "${schema.spec.cidrBlocks}"},
+					},
+					nil, nil),
+				// Second collection: iterates over the first collection
+				// ${subnets} is typed as list(Subnet) so we can iterate over it
+				generator.WithResourceCollection("securityGroups", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "SecurityGroup",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-sg-${subnet.metadata.name}",
+					},
+					"spec": map[string]interface{}{
+						"description": "${subnet.status.subnetID}",
+						"vpcID":       "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						// forEach iterates over another collection - ${subnets} returns list(Subnet)
+						{"subnet": "${subnets}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+			checkGraph: func(t *testing.T, g *Graph) {
+				// Verify first collection exists
+				subnetsResource := g.Resources["subnets"]
+				assert.NotNil(t, subnetsResource)
+				assert.True(t, subnetsResource.Meta.Type == NodeTypeCollection)
+
+				// Verify second collection depends on first collection
+				sgResource := g.Resources["securityGroups"]
+				assert.NotNil(t, sgResource)
+				assert.True(t, sgResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, sgResource.Meta.Dependencies, "subnets",
+					"securityGroups should depend on subnets collection")
+
+				// Verify topological order: subnets before securityGroups
+				subnetsIdx := -1
+				sgIdx := -1
+				for i, id := range g.TopologicalOrder {
+					if id == "subnets" {
+						subnetsIdx = i
+					}
+					if id == "securityGroups" {
+						sgIdx = i
+					}
+				}
+				assert.True(t, subnetsIdx < sgIdx,
+					"subnets should come before securityGroups in topological order")
+			},
+		},
+		{
+			name: "collection with filter on another collection",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"FilteredCollection", "v1alpha1",
+					map[string]interface{}{
+						"name":       "string",
+						"cidrBlocks": "[]string",
+					},
+					nil,
+				),
+				// First collection: creates multiple subnets
+				generator.WithResourceCollection("subnets", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${cidr}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr}",
+						"vpcID":     "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"cidr": "${schema.spec.cidrBlocks}"},
+					},
+					nil, nil),
+				// Second collection: uses filter() on the first collection
+				generator.WithResourceCollection("filteredSecurityGroups", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "SecurityGroup",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-sg-${subnet.metadata.name}",
+					},
+					"spec": map[string]interface{}{
+						"description": "${subnet.status.subnetID}",
+						"vpcID":       "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						// forEach uses filter() on collection - CEL list function on list(Subnet)
+						{"subnet": "${subnets.filter(s, has(s.status.subnetID))}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+			checkGraph: func(t *testing.T, g *Graph) {
+				// Verify second collection depends on first collection
+				filteredResource := g.Resources["filteredSecurityGroups"]
+				assert.NotNil(t, filteredResource)
+				assert.True(t, filteredResource.Meta.Type == NodeTypeCollection)
+				assert.Contains(t, filteredResource.Meta.Dependencies, "subnets",
+					"filteredSecurityGroups should depend on subnets collection")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, graph)
+
+			if tt.checkGraph != nil {
+				tt.checkGraph(t, graph)
+			}
+		})
+	}
+}
+
+func TestGraphBuilder_IncludeWhenReferences(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		checkGraph                  func(t *testing.T, g *Graph)
+	}{
+		{
+			name: "adds dependency from includeWhen resource reference",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenDeps", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("source", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-source",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, nil),
+				generator.WithResource("dependent", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-dependent",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, []string{"${source.data.enabled == 'true'}"}),
+			},
+			checkGraph: func(t *testing.T, g *Graph) {
+				dependent := g.Resources["dependent"]
+				require.NotNil(t, dependent)
+				assert.Contains(t, dependent.Meta.Dependencies, "source")
+
+				sourceIdx := -1
+				dependentIdx := -1
+				for i, id := range g.TopologicalOrder {
+					if id == "source" {
+						sourceIdx = i
+					}
+					if id == "dependent" {
+						dependentIdx = i
+					}
+				}
+				assert.GreaterOrEqual(t, sourceIdx, 0)
+				assert.GreaterOrEqual(t, dependentIdx, 0)
+				assert.Less(t, sourceIdx, dependentIdx)
+			},
+		},
+		{
+			name: "detects cycle created only by includeWhen references",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenCycle", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("a", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-a",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, []string{"${b.data.enabled == 'true'}"}),
+				generator.WithResource("b", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-b",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, []string{"${a.data.enabled == 'true'}"}),
+			},
+			wantErr: true,
+			errMsg:  "graph contains a cycle",
+		},
+		{
+			name: "detects cycle between template dependency and includeWhen dependency",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"IncludeWhenTemplateCycle", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("a", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${b.metadata.name}-a",
+					},
+					"data": map[string]interface{}{
+						"enabled": "true",
+					},
+				}, nil, nil),
+				generator.WithResource("b", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-b",
+					},
+					"data": map[string]interface{}{
+						"key": "value",
+					},
+				}, nil, []string{"${a.data.enabled == 'true'}"}),
+			},
+			wantErr: true,
+			errMsg:  "graph contains a cycle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-includewhen-refs", tt.resourceGraphDefinitionOpts...)
+			g, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, g)
+
+			if tt.checkGraph != nil {
+				tt.checkGraph(t, g)
+			}
+		})
+	}
+}
+
+func TestGraphBuilder_CollectionValidation(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	builder := &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+	}{
+		{
+			name: "valid collection with single iterator from schema list",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"MultiZoneVPC", "v1alpha1",
+					map[string]interface{}{
+						"name":       "string",
+						"cidrBlocks": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("zonedSubnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${cidr}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr}",
+						"vpcID":     "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"cidr": "${schema.spec.cidrBlocks}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid collection with multiple iterators (cartesian product)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"MultiRegionTierDeployment", "v1alpha1",
+					map[string]interface{}{
+						"name":       "string",
+						"cidrBlocks": "[]string",
+						"vpcIDs":     "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("regionTierSubnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${cidr}-${vpcID}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${cidr}",
+						"vpcID":     "${vpcID}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"cidr": "${schema.spec.cidrBlocks}"},
+						{"vpcID": "${schema.spec.vpcIDs}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid collection - forEach expression does not return a list",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"InvalidCollection", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("badSubnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${element}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${element}",
+						"vpcID":     "vpc-123",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"element": "${schema.spec.name}"}, // string, not a list
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "must return a list",
+		},
+		{
+			name: "collection with iterator variable used in template",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"WorkerPool", "v1alpha1",
+					map[string]interface{}{
+						"name":    "string",
+						"workers": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("workerSubnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${worker}",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${worker}",
+						"vpcID":     "${schema.spec.name}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"worker": "${schema.spec.workers}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid collection - forEach iterator references another iterator",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"InvalidIteratorRef", "v1alpha1",
+					map[string]interface{}{
+						"name":  "string",
+						"items": "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("badPod", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name": "${schema.spec.name}-${element}-${derived}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "main",
+								"image": "nginx",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"element": "${schema.spec.items}"},
+						// This references the 'element' iterator - not allowed
+						{"derived": "${element}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cannot reference other iterators",
+		},
+		{
+			name: "invalid collection - forEach dimension not used in identity",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"UnusedIterator", "v1alpha1",
+					map[string]interface{}{
+						"regions": "[]string",
+						"tiers":   "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						// Only uses 'region', not 'tier' - should fail
+						"name": "${region}-pod",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"region": "${schema.spec.regions}"},
+						{"tier": "${schema.spec.tiers}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "all forEach dimensions must be used to produce a unique resource identity, missing: [tier]",
+		},
+		{
+			name: "valid collection - all iterators used in name and namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"MultiDimension", "v1alpha1",
+					map[string]interface{}{
+						"namespaces": "[]string",
+						"names":      "[]string",
+					},
+					nil,
+				),
+				generator.WithResourceCollection("pods", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "Pod",
+					"metadata": map[string]interface{}{
+						"name":      "${name}",
+						"namespace": "${ns}",
+					},
+					"spec": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{
+								"name":  "app",
+								"image": "nginx:latest",
+							},
+						},
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"ns": "${schema.spec.namespaces}"},
+						{"name": "${schema.spec.names}"},
+					},
+					nil, nil),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid collection - cluster-scoped resource with iterator only in namespace",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"ClusterScoped", "v1alpha1",
+					map[string]interface{}{
+						"names": "[]string",
+					},
+					nil,
+				),
+				// CRD is cluster-scoped, so namespace field doesnt count for identity
+				generator.WithResourceCollection("crds", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "static-name",
+						// Iterator in namespace field doesn't count for cluster-scoped resources
+						"namespace": "${name}",
+					},
+				},
+					[]krov1alpha1.ForEachDimension{
+						{"name": "${schema.spec.names}"},
+					},
+					nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cluster-scoped and must not set metadata.namespace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-rgd", tt.resourceGraphDefinitionOpts...)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotNil(t, graph)
+		})
+	}
+}
+
+func newUnitTestBuilder() *Builder {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(memory2.NewMemCacheClient(fakeDiscovery))
+	return &Builder{
+		schemaResolver: fakeResolver,
+		restMapper:     restMapper,
+	}
+}
+
+func newUnitInspector(t *testing.T, ids ...string) *ast.Inspector {
+	t.Helper()
+	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs(ids))
+	require.NoError(t, err)
+	return ast.NewInspectorWithEnv(env, ids)
+}
+
+func newTypedEnvWithProvider(t *testing.T, schemas map[string]*spec.Schema) (*cel.Env, *krocel.DeclTypeProvider) {
+	t.Helper()
+	env, provider, err := krocel.TypedEnvironmentWithProvider(schemas)
+	require.NoError(t, err)
+	return env, provider
+}
+
+func newTestBuildContext(t *testing.T, env *cel.Env, provider *krocel.DeclTypeProvider) *buildContext {
+	t.Helper()
+	return &buildContext{
+		env:          env,
+		typeProvider: provider,
+		schemaCache:  graphschema.NewCache(),
+		declTypes:    make(map[*spec.Schema]*apiservercel.DeclType),
+		checkedASTs:  make(map[checkedASTKey]*cel.Ast),
+		extendedEnvs: make(map[extendedEnvKey]*cel.Env),
+	}
+}
+
+func rawExt(raw string) runtime.RawExtension {
+	return runtime.RawExtension{Raw: []byte(raw)}
+}
+
+func expr(original string) *krocel.Expression {
+	return &krocel.Expression{Original: original}
+}
+
+func objectSchema(fields map[string]spec.Schema) *spec.Schema {
+	return &spec.Schema{
+		SchemaProps: spec.SchemaProps{
+			Type:       []string{"object"},
+			Properties: fields,
+		},
+	}
+}
+
+func TestBuildRGResourceErrorPaths(t *testing.T) {
+	testParser := parser.New(graphschema.NewCache())
+	t.Run("template unmarshal error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID:       "bad",
+			Template: rawExt("["),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal resource")
+	})
+
+	t.Run("extract gvk error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "badGVK",
+			Template: rawExt(`
+apiVersion: not/a/valid/apiVersion
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to extract GVK")
+	})
+
+	t.Run("rest mapping error", func(t *testing.T) {
+		fakeResolver, _ := k8s.NewFakeResolver()
+		builder := &Builder{
+			schemaResolver: fakeResolver,
+			restMapper:     meta.NewDefaultRESTMapper([]schema.GroupVersion{}),
+		}
+
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "cm",
+			Template: rawExt(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get REST mapping")
+	})
+
+	t.Run("external ref parse error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Name: "${outer(${inner})}",
+				},
+			},
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse external ref resource")
+	})
+
+	t.Run("crd schemaless parse error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "crd",
+			Template: rawExt(`
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ${outer(${inner})}
+spec:
+  group: tests.kro.run
+`),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse schemaless resource")
+	})
+
+	t.Run("crd only allows metadata expressions", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "crd",
+			Template: rawExt(`
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tests.kro.run
+spec:
+  group: ${schema.spec.group}
+`),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "only supported for metadata fields")
+	})
+
+	t.Run("schema based parsing error", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "vpc",
+			Template: rawExt(`
+apiVersion: ec2.services.k8s.aws/v1alpha1
+kind: VPC
+metadata:
+  name: test
+spec:
+  unknownField: ${schema.spec.name}
+`),
+		}, 0, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to extract CEL expressions from schema")
+	})
+
+	t.Run("external selector becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "demo"},
+					},
+				},
+			},
+		}, 0, true)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+
+	t.Run("cluster-scoped instance requires namespace on namespaced resource", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "cm",
+			Template: rawExt(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test
+`),
+		}, 0, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
+	})
+
+	t.Run("cluster-scoped instance requires namespace on namespaced external ref", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		_, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Name: "test",
+				},
+			},
+		}, 0, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must set metadata.namespace when the instance CRD is cluster-scoped")
+	})
+}
+
+func TestClusterScopedInstanceRejectsSchemaMetadataNamespace(t *testing.T) {
+	builder := newUnitTestBuilder()
+	rgd := generator.NewResourceGraphDefinition("test-rgd",
+		generator.WithSchema(
+			"ClusterPolicy", "v1alpha1",
+			map[string]interface{}{
+				"name": "string",
+			},
+			nil,
+			generator.WithScope(krov1alpha1.ResourceScopeCluster),
+		),
+		generator.WithResource("config", map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]interface{}{
+				"name":      "${schema.spec.name}",
+				"namespace": "${schema.metadata.namespace}",
+			},
+		}, nil, nil),
+	)
+
+	_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema.metadata.namespace")
+}
+
+func TestBuildInstanceNode(t *testing.T) {
+	inspector := newUnitInspector(t, "resource")
+	tests := []struct {
+		name      string
+		variables []variable.FieldDescriptor
+		template  map[string]interface{}
+		wantErr   string
+		wantPath  string
+		wantDeps  []string
+	}{
+		{
+			name: "dependency extraction failure",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("resource +"),
+			}},
+			template: map[string]interface{}{"field": "${resource +}"},
+			wantErr:  "failed to extract dependencies",
+		},
+		{
+			name: "status field must reference a resource",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("true"),
+			}},
+			template: map[string]interface{}{"field": "${true}"},
+			wantErr:  "must refer to a resource",
+		},
+		{
+			name: "successful node prefixes status path",
+			variables: []variable.FieldDescriptor{{
+				Path:       "field",
+				Expression: expr("resource.spec.name"),
+			}},
+			template: map[string]interface{}{"field": "${resource.spec.name}"},
+			wantPath: "status.field",
+			wantDeps: []string{"resource"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node, err := buildInstanceNode(
+				"example.com",
+				"v1alpha1",
+				"Test",
+				true, // namespaced (default)
+				tt.variables,
+				tt.template,
+				inspector,
+			)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPath, node.Variables[0].Path)
+			assert.Equal(t, tt.wantDeps, node.Meta.Dependencies)
+		})
+	}
+}
+
+func TestBuildInstanceSpecSchema(t *testing.T) {
+	tests := []struct {
+		name    string
+		schema  *krov1alpha1.Schema
+		wantErr string
+	}{
+		{
+			name: "invalid spec yaml",
+			schema: &krov1alpha1.Schema{
+				Spec:  rawExt("["),
+				Types: rawExt("{}"),
+			},
+			wantErr: "failed to unmarshal spec schema",
+		},
+		{
+			name: "invalid custom types yaml",
+			schema: &krov1alpha1.Schema{
+				Spec:  rawExt("{}"),
+				Types: rawExt("["),
+			},
+			wantErr: "failed to unmarshal predefined types",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildInstanceSpecSchema(tt.schema)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestBuildStatusSchema(t *testing.T) {
+	resourceSchema := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name":     {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"replicas": {SchemaProps: spec.SchemaProps{Type: []string{"integer"}}},
+		}),
+	})
+	env, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": resourceSchema})
+	statusBc := newTestBuildContext(t, env, provider)
+	inspector := newUnitInspector(t, "resource")
+	tests := []struct {
+		name            string
+		statusRaw       string
+		wantErr         string
+		wantStringField bool
+	}{
+		{name: "invalid status yaml", statusRaw: "[", wantErr: "failed to unmarshal status schema"},
+		{name: "invalid status expression syntax", statusRaw: "field: ${outer(${inner})}\n", wantErr: "failed to extract CEL expressions from status"},
+		{name: "string interpolation type check failure", statusRaw: "field: prefix-${resource.spec.missing}\n", wantErr: "failed to type-check status expression"},
+		{name: "string interpolation non string expression", statusRaw: "field: prefix-${resource.spec.replicas}\n", wantErr: "failed to type-check status expression \"prefix-${resource.spec.replicas}\" at path \"field\": ERROR: <input>:1:11: found no matching overload for '_+_' applied to '(string, int)'\n | \"prefix-\" + (resource.spec.replicas)\n | ..........^"},
+		{name: "string interpolation success", statusRaw: "field: prefix-${resource.spec.name}\n", wantStringField: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statusSchema, fieldDescriptors, _, err := buildStatusSchema(statusBc, &krov1alpha1.Schema{
+				Status: rawExt(tt.statusRaw),
+			}, []string{"resource"}, inspector)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, fieldDescriptors, 1)
+			assert.Equal(t, "string", statusSchema.Properties["field"].Type)
+		})
+	}
+}
+
+func TestGetSchemaWithoutStatus(t *testing.T) {
+	tests := []struct {
+		name             string
+		crd              *extv1.CustomResourceDefinition
+		wantErr          string
+		wantHasStatus    bool
+		wantHasMeta      bool
+		wantHasNamespace bool
+	}{
+		{
+			name: "requires exactly one version",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{},
+				},
+			},
+			wantErr: "exactly one version",
+		},
+		{
+			name: "requires schema",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{}},
+				},
+			},
+			wantErr: "schema defined",
+		},
+		{
+			name: "injects metadata when missing",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{
+								Type: "object",
+								Properties: map[string]extv1.JSONSchemaProps{
+									"status": {Type: "object"},
+								},
+							},
+						},
+					}},
+				},
+			},
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: true,
+		},
+		{
+			name: "injects metadata when properties map is nil",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{Type: "object"},
+						},
+					}},
+				},
+			},
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: true,
+		},
+		{
+			name: "cluster-scoped instances omit metadata namespace from injected schema",
+			crd: &extv1.CustomResourceDefinition{
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Scope: extv1.ClusterScoped,
+					Versions: []extv1.CustomResourceDefinitionVersion{{
+						Schema: &extv1.CustomResourceValidation{
+							OpenAPIV3Schema: &extv1.JSONSchemaProps{Type: "object"},
+						},
+					}},
+				},
+			},
+			wantHasStatus:    false,
+			wantHasMeta:      true,
+			wantHasNamespace: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schemaWithoutStatus, err := getSchemaWithoutStatus(tt.crd)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			_, hasStatus := schemaWithoutStatus.Properties["status"]
+			_, hasMetadata := schemaWithoutStatus.Properties["metadata"]
+			hasNamespace := false
+			if metadata, ok := schemaWithoutStatus.Properties["metadata"]; ok {
+				_, hasNamespace = metadata.Properties["namespace"]
+			}
+			assert.Equal(t, tt.wantHasStatus, hasStatus)
+			assert.Equal(t, tt.wantHasMeta, hasMetadata)
+			assert.Equal(t, tt.wantHasNamespace, hasNamespace)
+		})
+	}
+}
+
+func TestBuilderHelperCases(t *testing.T) {
+	rootSchema := objectSchema(map[string]spec.Schema{
+		"spec": *objectSchema(map[string]spec.Schema{
+			"name": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+			"items": {
+				SchemaProps: spec.SchemaProps{
+					Type: []string{"array"},
+					Items: &spec.SchemaOrArray{
+						Schema: objectSchema(map[string]spec.Schema{
+							"value": {SchemaProps: spec.SchemaProps{Type: []string{"string"}}},
+						}),
+					},
+				},
+			},
+		}),
+	})
+	schemaCache := graphschema.NewCache()
+	_, provider := newTypedEnvWithProvider(t, map[string]*spec.Schema{"resource": rootSchema})
+	resourceEnv, _, err := krocel.TypedEnvironmentWithProvider(map[string]*spec.Schema{
+		SchemaVarName: rootSchema,
+		"resource":    rootSchema,
+	})
+	require.NoError(t, err)
+	bc := newTestBuildContext(t, resourceEnv, provider)
+	plainEnv, err := cel.NewEnv(cel.Variable("items", cel.StringType))
+	require.NoError(t, err)
+	plainBc := newTestBuildContext(t, plainEnv, nil)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "resolveSchemaAndTypeName handles missing field",
+			run: func(t *testing.T) {
+				_, _, err := resolveSchemaAndTypeName(schemaCache, []fieldpath.Segment{{Name: "missing"}}, rootSchema, "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `field "missing" not found in schema`)
+			},
+		},
+		{
+			name: "resolveSchemaAndTypeName rejects index on non array",
+			run: func(t *testing.T) {
+				_, _, err := resolveSchemaAndTypeName(schemaCache, []fieldpath.Segment{{Name: "spec"}, {Index: 0}}, rootSchema, "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "field is not an array")
+			},
+		},
+		{
+			name: "getExpectedTypeForField falls back to dyn on bad paths",
+			run: func(t *testing.T) {
+				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
+					Path: "spec[",
+				}, rootSchema, "resource"))
+				assert.Equal(t, cel.DynType, expectedTypeForField(bc, &variable.FieldDescriptor{
+					Path: "spec.missing",
+				}, rootSchema, "resource"))
+			},
+		},
+		{
+			name: "getCelTypeFromSchema falls back to dyn for nil and empty schemas",
+			run: func(t *testing.T) {
+				assert.Equal(t, cel.DynType, celTypeFromSchema(bc, nil, "resource.Nil"))
+				assert.Equal(t, cel.DynType, celTypeFromSchema(bc, &spec.Schema{}, "resource.Empty"))
+			},
+		},
+		{
+			name: "validateExpressionType reports plain mismatch",
+			run: func(t *testing.T) {
+				err := validateExpressionType(cel.IntType, cel.StringType, "1", "resource", "spec.name", nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `returns type "int" but expected "string"`)
+			},
+		},
+		{
+			name: "parseCheckAndCompile returns parse errors",
+			run: func(t *testing.T) {
+				env, err := cel.NewEnv()
+				require.NoError(t, err)
+				_, err = bc.compile(env, expr("1 +"))
+				require.Error(t, err)
+			},
+		},
+		{
+			name: "validateConditionExpression wraps parse failures",
+			run: func(t *testing.T) {
+				env, err := cel.NewEnv()
+				require.NoError(t, err)
+				err = validateConditionExpression(bc, env, expr("1 +"), "includeWhen", "resource")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to type-check includeWhen expression")
+			},
+		},
+		{
+			name: "validateAndCompileForEach handles empty and invalid expressions",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema")
+				iteratorTypes, err := validateAndCompileForEach(plainBc, &Node{}, inspector)
+				require.NoError(t, err)
+				assert.Nil(t, iteratorTypes)
+
+				_, err = validateAndCompileForEach(plainBc, &Node{
+					Meta: NodeMeta{ID: "resource"},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("items +")},
+					},
+				}, inspector)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), `node "resource": forEach iterator "item"`)
+			},
+		},
+		{
+			name: "validateAndCompileNode rejects includeWhen refs to non-dependency resources",
+			run: func(t *testing.T) {
+				e := expr("other.spec.name == 'x'")
+				e.References = []string{"other"}
+				node := &Node{
+					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource, Dependencies: []string{}},
+					IncludeWhen: []*krocel.Expression{e},
+				}
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource", "other"), rootSchema)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "includeWhen")
+				assert.Contains(t, err.Error(), "references unknown identifiers")
+			},
+		},
+		{
+			name: "inspectExpressionRestricted reports parse and function errors",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				_, err := inspectExpressionRestricted(inspector, "resource +", []string{"schema"})
+				require.Error(t, err)
+				_, err = inspectExpressionRestricted(inspector, "missingFn()", []string{"schema"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "uses unknown functions")
+			},
+		},
+		{
+			name: "extractDependencies reports unknown functions",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "resource")
+				_, _, err := extractDependencies(inspector, expr("missingFn()"), nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "uses unknown functions")
+			},
+		},
+		{
+			name: "extractDependencies accepts omit as a known function",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				deps, _, err := extractDependencies(inspector, expr("schema.spec.x != '' ? schema.spec.x : omit()"), nil)
+				require.NoError(t, err)
+				assert.Empty(t, deps, "omit() should not produce resource dependencies")
+			},
+		},
+		{
+			name: "extractDependencies accepts standalone omit call",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema")
+				deps, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				require.NoError(t, err)
+				assert.Empty(t, deps)
+			},
+		},
+		{
+			name: "extractDependencies rejects omit when feature gate is disabled",
+			run: func(t *testing.T) {
+				disableOmitFeatureGate(t)
+				inspector := newUnitInspector(t, "schema")
+				_, _, err := extractDependencies(inspector, expr("omit()"), nil)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "CELOmitFunction feature gate")
+			},
+		},
+		{
+			name: "inspectExpressionRestricted rejects omit in restricted context",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "resource")
+				_, err := inspectExpressionRestricted(inspector, "schema.spec.x != '' ? schema.spec.x : omit()", []string{"schema"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+		{
+			name: "buildDependencyGraph rejects duplicate node IDs",
+			run: func(t *testing.T) {
+				builder := &Builder{}
+				inspector := newUnitInspector(t, "first", "second")
+				nodes := map[string]*Node{
+					"first":  {Meta: NodeMeta{ID: "dup", Index: 0}},
+					"second": {Meta: NodeMeta{ID: "dup", Index: 1}},
+				}
+				_, err := builder.buildDependencyGraph(nodes, inspector)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to add vertex to graph")
+			},
+		},
+		{
+			name: "extractForEachDependencies wraps extraction errors",
+			run: func(t *testing.T) {
+				inspector := newUnitInspector(t, "schema", "item")
+				node := &Node{
+					Meta: NodeMeta{ID: "items"},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("item +")},
+					},
+				}
+				_, err := extractForEachDependencies(inspector, node, []string{"item"})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to extract dependencies from forEach iterator")
+			},
+		},
+		{
+			name: "includeWhen rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta:        NodeMeta{ID: "resource", Type: NodeTypeResource},
+					IncludeWhen: []*krocel.Expression{expr("omit()")},
+				}
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "includeWhen")
+				assert.Contains(t, err.Error(), "must return bool or optional_type(bool), but returns \"dyn\"")
+			},
+		},
+		{
+			name: "readyWhen rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta:      NodeMeta{ID: "resource", Type: NodeTypeResource},
+					ReadyWhen: []*krocel.Expression{expr("omit()")},
+				}
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "readyWhen")
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+		{
+			name: "forEach rejects omit function",
+			run: func(t *testing.T) {
+				node := &Node{
+					Meta: NodeMeta{ID: "resource", Type: NodeTypeCollection},
+					ForEach: []ForEachDimension{
+						{Name: "item", Expression: expr("omit()")},
+					},
+				}
+				err := validateAndCompileNode(bc, node, newUnitInspector(t, "schema", "resource"), rootSchema)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "forEach")
+				assert.Contains(t, err.Error(), "omit() can only be used in resource template expressions")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, tt.run)
 	}
 }

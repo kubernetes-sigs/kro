@@ -16,26 +16,40 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	kroclient "github.com/kubernetes-sigs/kro/pkg/client"
+	"github.com/kubernetes-sigs/kro/pkg/dynamiccontroller"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/requeue"
+	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
+
+// FieldManagerForLabeler is the field manager name used when applying labels.
+const FieldManagerForLabeler = "kro.run/labeller"
 
 // ReconcileConfig holds configuration parameters for the reconciliation process.
 // It allows the customization of various aspects of the controller's behavior.
 type ReconcileConfig struct {
-	// DefaultRequeueDuration is the default duration to wait before requeuing a
-	// a reconciliation if no specific requeue time is set.
+	// DefaultRequeueDuration is the fixed delay used when the instance
+	// reconciler needs to retry after transient cluster state changes.
+	// Set to 0 to disable delayed requeues.
 	DefaultRequeueDuration time.Duration
 	// DeletionGraceTimeDuration is the duration to wait after initializing a resource
 	// deletion before considering it failed
@@ -45,6 +59,28 @@ type ReconcileConfig struct {
 	// TODO(a-hilaly): need to define think the different deletion policies we need to
 	// support.
 	DeletionPolicy string
+	// RGDConfig holds RGD runtime configuration parameters.
+	RGDConfig graph.RGDConfig
+}
+
+// GraphRevisionResolver resolves compiled graph revisions for a single RGD.
+//
+// Implementations are already scoped to one RGD's graph revisions. Callers do
+// not pass an RGD identifier on each method call; they only ask for the newest
+// issued revision or a specific revision number for that RGD.
+type GraphRevisionResolver interface {
+	// GetLatestRevision returns the newest issued revision currently present in
+	// the in-memory registry for this resolver's RGD.
+	//
+	// The boolean return is false when no revision is currently cached for that
+	// RGD, for example before warmup completes or after pruning.
+	GetLatestRevision() (revisions.Entry, bool)
+	// GetGraphRevision returns a specific revision from the in-memory registry
+	// for this resolver's RGD.
+	//
+	// The boolean return is false when that revision is not present in cache,
+	// for example because it has not been warmed yet or has already been pruned.
+	GetGraphRevision(revision int64) (revisions.Entry, bool)
 }
 
 // Controller manages the reconciliation of a single instance of a ResourceGraphDefinition,
@@ -67,92 +103,303 @@ type ReconcileConfig struct {
 // the state of the instance and its sub-resources. This ensure that at each
 // reconciliation loop, the controller is working with a fresh state of the instance
 // and its sub-resources.
+// Controller owns reconciliation for instances of a ResourceGraphDefinition.
 type Controller struct {
-	log logr.Logger
-	// gvr represents the Group, Version, and Resource of the custom resource
-	// this controller is responsible for.
-	gvr schema.GroupVersionResource
-	// client holds the dynamic client to use for interacting with the Kubernetes API.
-	clientSet kroclient.SetInterface
-	// rgd is a read-only reference to the Graph that the controller is
-	// managing instances for.
-	// TODO: use a read-only interface for the ResourceGraphDefinition
-	rgd *graph.Graph
-	// instanceLabeler is responsible for applying consistent labels
-	// to resources managed by this controller.
-	instanceLabeler metadata.Labeler
-	// reconcileConfig holds the configuration parameters for the reconciliation
-	// process.
-	reconcileConfig ReconcileConfig
+	log    logr.Logger
+	client kroclient.SetInterface
+	gvr    schema.GroupVersionResource
+
+	graphResolver GraphRevisionResolver
+	namespaced    bool
+
+	instanceLabeler      metadata.Labeler
+	childResourceLabeler metadata.Labeler
+	reconcileConfig      ReconcileConfig
+	coordinator          *dynamiccontroller.WatchCoordinator
+
+	// eventRecorder emits K8s Events on condition transitions.
+	eventRecorder record.EventRecorder
 }
 
-// NewController creates a new Controller instance.
+// NewController constructs a new controller that resolves the newest issued
+// graph revision for the RGD from a GraphRevisionResolver.
 func NewController(
 	log logr.Logger,
 	reconcileConfig ReconcileConfig,
 	gvr schema.GroupVersionResource,
-	rgd *graph.Graph,
-	clientSet kroclient.SetInterface,
-	restMapper meta.RESTMapper,
+	graphResolver GraphRevisionResolver,
+	namespaced bool,
+	client kroclient.SetInterface,
 	instanceLabeler metadata.Labeler,
+	childResourceLabeler metadata.Labeler,
+	coord *dynamiccontroller.WatchCoordinator,
+	eventRecorder record.EventRecorder,
 ) *Controller {
 	return &Controller{
-		log:             log,
-		gvr:             gvr,
-		clientSet:       clientSet,
-		rgd:             rgd,
-		instanceLabeler: instanceLabeler,
-		reconcileConfig: reconcileConfig,
+		log:                  log,
+		client:               client,
+		gvr:                  gvr,
+		graphResolver:        graphResolver,
+		namespaced:           namespaced,
+		instanceLabeler:      instanceLabeler,
+		childResourceLabeler: childResourceLabeler,
+		reconcileConfig:      reconcileConfig,
+		coordinator:          coord,
+		eventRecorder:        eventRecorder,
 	}
 }
 
-// Reconcile is a handler function that reconciles the instance and its sub-resources.
-func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) error {
+// Reconcile implements the controller-runtime Reconcile interface.
+func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error) {
 	log := c.log.WithValues("namespace", req.Namespace, "name", req.Name)
 
-	instance, err := c.clientSet.Dynamic().Resource(c.gvr).Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("Instance not found, it may have been deleted")
-			return nil
-		}
-		log.Error(err, "Failed to get instance")
-		return nil
-	}
-	instanceSubResourcesLabeler, err := metadata.NewInstanceLabeler(instance).Merge(c.instanceLabeler)
-	if err != nil {
-		return fmt.Errorf("failed to create instance sub-resources labeler: %w", err)
-	}
+	// Get per-instance watcher from the coordinator.
+	watcher := c.coordinator.ForInstance(c.gvr, req.NamespacedName)
 
-	// Create the instance graph reconciler early so the defer can access it
-	instanceGraphReconciler := &instanceGraphReconciler{
-		log:                         log,
-		gvr:                         c.gvr,
-		client:                      c.clientSet.Dynamic(),
-		restMapper:                  c.clientSet.RESTMapper(),
-		rgd:                         c.rgd,
-		instance:                    instance,
-		instanceLabeler:             c.instanceLabeler,
-		instanceSubResourcesLabeler: instanceSubResourcesLabeler,
-		reconcileConfig:             c.reconcileConfig,
-		// Fresh instance state at each reconciliation loop.
-		state: newInstanceState(),
-	}
-
-	// Single defer to rule them all - handles status updates for ALL code paths
+	start := time.Now()
 	defer func() {
-		// Update instance state based on reconciliation result
-		instanceGraphReconciler.updateInstanceState()
-
-		// Prepare and patch status
-		status := instanceGraphReconciler.prepareStatus()
-		if err := instanceGraphReconciler.patchInstanceStatus(ctx, status); err != nil {
-			// Only log error if instance still exists
-			if !apierrors.IsNotFound(err) {
-				log.Error(err, "Failed to patch instance status")
-			}
+		watcher.Done(err == nil || requeue.IsRequeueError(err))
+		gvr := c.gvr.String()
+		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
+		instanceReconcileTotal.WithLabelValues(gvr).Inc()
+		if err != nil && !requeue.IsRequeueError(err) {
+			log.V(1).Info("reporting reconcile error metric", "error", err)
+			instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
 		}
 	}()
 
-	return instanceGraphReconciler.reconcile(ctx)
+	//--------------------------------------------------------------
+	// 1. Load instance; snapshot conditions for event diff
+	//--------------------------------------------------------------
+	ri := c.client.Dynamic().Resource(c.gvr)
+	var inst *unstructured.Unstructured
+	if c.namespaced {
+		inst, err = ri.Namespace(req.Namespace).Get(ctx, req.Name, metav1.GetOptions{})
+	} else {
+		inst, err = ri.Get(ctx, req.Name, metav1.GetOptions{})
+	}
+	if apierrors.IsNotFound(err) {
+		log.Info("instance not found (likely deleted)")
+		return nil
+	}
+	if err != nil {
+		log.Error(err, "failed loading instance")
+		return err
+	}
+
+	// Emit condition events on every return path (behind feature gate).
+	var rcx *ReconcileContext
+	if features.FeatureGate.Enabled(features.InstanceConditionEvents) {
+		initialConditions := conditionsFromInstance(inst)
+		defer func() {
+			obj := inst
+			if rcx != nil {
+				obj = rcx.Instance
+			}
+			finalConditions := conditionsFromInstance(obj)
+			emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+		}()
+	}
+
+	//--------------------------------------------------------------
+	// 2. Create a fresh runtime for this reconciliation
+	//--------------------------------------------------------------
+	compiledGraph, err := c.resolveCompiledGraph()
+	if err != nil {
+		log.Error(err, "failed to resolve graph revision")
+		mark := NewConditionsMarkerFor(inst)
+		mark.GraphResolutionFailed("%v", err)
+		if statusErr := c.updateConditionsStatus(ctx, inst); statusErr != nil {
+			log.Error(statusErr, "failed to update conditions status after graph resolution failure")
+		}
+		return err
+	}
+	runtimeObj, err := runtime.FromGraph(compiledGraph, inst, c.reconcileConfig.RGDConfig)
+	if err != nil {
+		log.Error(err, "failed to create runtime")
+		return err
+	}
+
+	//--------------------------------------------------------------
+	// 3. Build reconciliation context (clients, mapper, labeler, runtime)
+	//--------------------------------------------------------------
+	rcx = NewReconcileContext(
+		ctx, log, c.gvr,
+		c.namespaced,
+		c.client.Dynamic(),
+		c.client.RESTMapper(),
+		c.childResourceLabeler,
+		runtimeObj,
+		c.reconcileConfig,
+		inst,
+	)
+	rcx.Watcher = watcher
+
+	//--------------------------------------------------------------
+	// 4. Handle deletion: clean up children and status
+	//--------------------------------------------------------------
+	if inst.GetDeletionTimestamp() != nil {
+		if err := c.reconcileDeletion(rcx); err != nil {
+			_ = c.updateStatus(rcx)
+			return err
+		}
+		return c.updateStatus(rcx)
+	}
+
+	//--------------------------------------------------------------
+	// 5. Ensure finalizer + management labels before mutating children
+	//--------------------------------------------------------------
+	if err := c.ensureManaged(rcx); err != nil {
+		rcx.Mark.InstanceNotManaged("finalizer/labeling failed: %v", err)
+		_ = c.updateStatus(rcx)
+		return err
+	}
+
+	//--------------------------------------------------------------
+	// 6. Resolve Graph (CEL, dependencies); allow data-pending
+	//--------------------------------------------------------------
+	rcx.Mark.GraphResolved()
+
+	//--------------------------------------------------------------
+	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend annotation is not present.
+	//--------------------------------------------------------------
+	annotations := inst.GetAnnotations()
+	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
+	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+		if err := c.reconcileNodes(rcx); err != nil {
+			var deletingErr *resourceDeletingError
+			if errors.As(err, &deletingErr) {
+				rcx.Mark.ResourcesDeleting("%v", deletingErr)
+				_ = c.updateStatus(rcx)
+				return rcx.delayedRequeue(deletingErr)
+			}
+			rcx.Mark.ResourcesNotReady("resource reconciliation failed: %v", err)
+			_ = c.updateStatus(rcx)
+			return err
+		}
+	}
+	// Only mark ResourcesReady if all resources reached terminal state.
+	// Resources with unsatisfied readyWhen are in WaitingForReadiness,
+	// which keeps StateManager.State as IN_PROGRESS.
+	switch rcx.StateManager.State {
+	case v1alpha1.InstanceStateActive:
+		rcx.Mark.ResourcesReady()
+	case v1alpha1.InstanceStateError:
+		if err := rcx.StateManager.NodeErrors(); err != nil {
+			rcx.Mark.ResourcesNotReady("resource error: %v", err)
+		} else {
+			rcx.Mark.ResourcesNotReady("resource reconciliation error")
+		}
+	case v1alpha1.InstanceStateInProgress:
+		err := rcx.StateManager.NodeErrors()
+		rcx.Mark.ResourcesNotReady("awaiting resource readiness: %v", err)
+	default:
+		rcx.Mark.ResourcesNotReady("unknown instance state")
+	}
+
+	//--------------------------------------------------------------
+	// 8. Persist status/conditions
+	//--------------------------------------------------------------
+	return c.updateStatus(rcx)
+}
+
+func (c *Controller) ensureManaged(rcx *ReconcileContext) error {
+	patched, err := c.applyManagedFinalizerAndLabels(rcx)
+	if err != nil {
+		return err
+	}
+	if patched != nil {
+		rcx.Instance = patched
+		rcx.Runtime.Instance().SetObserved([]*unstructured.Unstructured{patched})
+		rcx.Mark = NewConditionsMarkerFor(rcx.Instance)
+	}
+	rcx.Mark.InstanceManaged()
+	return nil
+}
+
+const (
+	graphResolutionReasonNotAvailable = "not_available"
+	graphResolutionReasonFailed       = "failed"
+	graphResolutionReasonUnknown      = "unknown_state"
+)
+
+func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
+	gvr := c.gvr.String()
+	latest, ok := c.graphResolver.GetLatestRevision()
+	if !ok {
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonNotAvailable).Inc()
+		return nil, requeue.NeededAfter(fmt.Errorf("latest issued graph revision not available"), c.reconcileConfig.DefaultRequeueDuration)
+	}
+
+	switch latest.State {
+	case revisions.RevisionStateActive:
+		// Active implies the newest issued revision compiled successfully and its
+		// graph is present; this is guaranteed by the GR reconciler and registry
+		// invariant.
+		instanceGraphResolutionSuccessTotal.WithLabelValues(gvr).Inc()
+		return latest.CompiledGraph, nil
+	case revisions.RevisionStatePending:
+		instanceGraphResolutionPendingTotal.WithLabelValues(gvr).Inc()
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d is pending", latest.Revision),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	case revisions.RevisionStateFailed:
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonFailed).Inc()
+		return nil, requeue.None(fmt.Errorf("latest issued graph revision %d failed", latest.Revision))
+	default:
+		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonUnknown).Inc()
+		return nil, requeue.NeededAfter(
+			fmt.Errorf("latest issued graph revision %d has unknown state %q", latest.Revision, latest.State),
+			c.reconcileConfig.DefaultRequeueDuration,
+		)
+	}
+}
+
+func (c *Controller) applyManagedFinalizerAndLabels(rcx *ReconcileContext) (*unstructured.Unstructured, error) {
+	obj := rcx.Instance
+	// Fast path: if everything is already correct → no patch
+	hasFinalizer := metadata.HasInstanceFinalizer(obj)
+	needFinalizer := !hasFinalizer
+
+	wantLabels := c.instanceLabeler.Labels()
+	haveLabels := obj.GetLabels()
+	needLabelPatch := false
+
+	for k, v := range wantLabels {
+		if haveLabels[k] != v {
+			needLabelPatch = true
+			break
+		}
+	}
+
+	if needPatch := needFinalizer || needLabelPatch; !needPatch {
+		return obj, nil
+	}
+
+	//-------------------------------------------
+	// Build a minimal patch object (SSA apply)
+	//-------------------------------------------
+	patch := instanceSSAPatch(obj)
+
+	// Label + finalizers patch
+	// we patch together here because otherwise we could revert a previous patch
+	// result if only one of finalizers or labels change.
+	patch.SetLabels(maps.Clone(wantLabels))
+	metadata.SetInstanceFinalizer(patch)
+
+	patched, err := rcx.InstanceClient().Apply(
+		rcx.Ctx,
+		obj.GetName(),
+		patch,
+		metav1.ApplyOptions{
+			FieldManager: FieldManagerForLabeler,
+			Force:        true,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed applying managed finalizer/labels: %w", err)
+	}
+
+	return patched, nil
 }

@@ -91,7 +91,7 @@ const config: Config = {
           editUrl: "https://github.com/kubernetes-sigs/kro/tree/main/website",
           disableVersioning: false,
           includeCurrentVersion: true,
-          lastVersion: "0.7.1",
+          lastVersion: "0.8.5",
         },
         blog: false,
         theme: {
@@ -131,6 +131,11 @@ const config: Config = {
           sidebarId: "examplesSidebar",
           position: "left",
           label: "Examples",
+        },
+        {
+          to: "/roadmap",
+          position: "left",
+          label: "Roadmap",
         },
         {
           type: "docsVersionDropdown",

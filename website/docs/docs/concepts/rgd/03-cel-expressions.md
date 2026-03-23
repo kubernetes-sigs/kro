@@ -113,6 +113,71 @@ name: "app-${string(schema.spec.replicas)}"
 ```
 :::
 
+### Multiline Expressions and YAML Block Scalars
+
+YAML block scalars (`|` and `>`) often add a **trailing newline**. For fields that must be a *standalone* expression (like `includeWhen` and `readyWhen`), a trailing newline means the value is no longer exactly `${...}` and validation fails.
+
+Use the **chomp indicator** `-` to strip the final newline:
+
+```kro
+includeWhen:
+  - |-
+    ${
+      schema.spec.enabled &&
+      schema.spec.count > 0
+    }
+```
+
+If you prefer folded scalars (`>`), also use `>-` to avoid the trailing newline:
+
+```kro
+readyWhen:
+  - >-
+    ${
+      deployment.status.phase == "Ready" &&
+      deployment.status.observedGeneration == deployment.metadata.generation
+    }
+```
+
+:::note
+- `|` preserves newlines; `>` folds them into spaces.
+- The `-` is what removes the final newline.
+:::
+
+### Escaping `${VAR}` Syntax
+
+kro uses `${...}` as CEL expression delimiters, which conflicts with shell `${VAR}` variable expansion syntax. To produce a literal `${VAR}` in the output, wrap the variable reference in a CEL string literal:
+
+**Pattern:** `${"${VAR}"}` produces the literal output `${VAR}`
+
+kro sees the outer `${...}` and evaluates the contents as CEL. The contents `"${VAR}"` is just a CEL string literal (text between double quotes), so it evaluates to the string `${VAR}`.
+
+**Example:**
+```kro
+containers:
+  - name: worker
+    command:
+      - bash
+      - -c
+      - echo "Hello ${"${USER}"}"
+```
+
+This works for all shell parameter expansion forms:
+
+| Shell syntax | Escaped for kro | CEL evaluates to |
+|---|---|---|
+| `${VAR}` | `${"${VAR}"}` | `${VAR}` |
+| `${VAR:-default}` | `${"${VAR:-default}"}` | `${VAR:-default}` |
+| `${VAR:=value}` | `${"${VAR:=value}"}` | `${VAR:=value}` |
+
+:::note
+Shell syntax that does **not** use `${` doesn't need escaping:
+
+- `$VAR` — no braces, kro ignores it
+- `$(command)` — command substitution uses `$(`, not `${`
+- `$@`, `$1`, `$?` — special variables without braces
+:::
+
 ## Referencing Data
 
 ### The `schema` Variable
@@ -253,14 +318,43 @@ The `?` operator prevents kro from validating the field's existence at build tim
 
 ## Available CEL Libraries
 
-| Library | Documentation |
-|---------|---------------|
-| Lists | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists) |
-| Strings | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings) |
-| Encoders | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders) |
-| Random | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go) |
-| URLs | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs) |
-| Regex | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex) |
+| Library                     | Documentation                                                                                  |
+|-----------------------------|------------------------------------------------------------------------------------------------|
+| Lists (cel-go)              | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists)                            |
+| Lists (k8s)                 | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Lists) |
+| Strings                     | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings)                          |
+| Encoders                    | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders)                         |
+| Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)             |
+| Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)       |
+| JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)         |
+| Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)        |
+| URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)   |
+| Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex)  |
+| Quantity                    | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Quantity) |
+
+The kro **Index Mutation** library adds three pure list functions (they return a new list and do not modify the input):
+
+| Function | Signature | Description |
+|---|---|---|
+| `lists.setAtIndex` | `list(T), int, T → list(T)` | Replace the element at `index` with `value`. Index must be in `[0, size(list))`. |
+| `lists.insertAtIndex` | `list(T), int, T → list(T)` | Insert `value` before `index`. Use `index == size(list)` to append. Index must be in `[0, size(list)]`. |
+| `lists.removeAtIndex` | `list(T), int → list(T)` | Remove the element at `index`. Index must be in `[0, size(list))`. |
+
+**Examples:**
+
+```kro
+# Replace the second tag
+tags: ${lists.setAtIndex(schema.spec.tags, 1, "new-tag")}
+
+# Prepend an environment variable
+envVars: ${lists.insertAtIndex(schema.spec.envVars, 0, "DEBUG=true")}
+
+# Remove the first port
+ports: ${lists.removeAtIndex(schema.spec.ports, 0)}
+
+# Chain operations: swap first two elements
+swapped: ${lists.setAtIndex(lists.setAtIndex(schema.spec.items, 0, schema.spec.items[1]), 1, schema.spec.items[0])}
+```
 
 For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).
 
@@ -394,6 +488,68 @@ readyConditions: ${deployment.status.conditions.filter(c, c.status == "True")}
 
 # Check all items
 allReady: ${schema.spec.services.all(s, s.enabled)}
+
+# Sort by a field (lexicographic ordering)
+sorted: ${items.sortBy(item, item.data.priority)}
+orderedNames: ${items.sortBy(i, i.data.priority).map(i, i.metadata.name).join(",")}
+```
+
+### Converting Between Lists and Maps
+
+The two-variable comprehension macros let you transform lists into maps, reshape maps, and extract lists from maps. Each macro provides access to both the key/index and the value of each entry.
+
+#### `transformMap` — Transform values, keeping keys
+
+Applies an expression to each value while preserving the original keys (or indices for lists):
+
+```kro
+# Double each value in a map
+scaled: ${{ "cpu": 2, "memory": 4 }.transformMap(k, v, v * 2)}
+# → {"cpu": 4, "memory": 8}
+
+# Convert a list to a map of {index: transformed_value}
+indexed: ${schema.spec.ports.transformMap(i, v, v + 1000)}
+# [80, 443] → {0: 1080, 1: 1443}
+```
+
+With an optional filter predicate (four-argument form), only entries where the predicate is true are included:
+
+```kro
+# Keep only entries with value > 1
+filtered: ${{ "a": 1, "b": 5, "c": 3 }.transformMap(k, v, v > 1, v * 10)}
+# → {"b": 50, "c": 30}
+```
+
+#### `transformMapEntry` — Build new key-value pairs
+
+Each iteration must return a single-entry map `{key: value}`. The results are merged into one map:
+
+```kro
+# Swap keys and values
+swapped: ${{ "us-east-1": "primary", "eu-west-1": "secondary" }.transformMapEntry(k, v, {v: k})}
+# → {"primary": "us-east-1", "secondary": "eu-west-1"}
+
+# Convert a list of names into a map of {name: index}
+nameIndex: ${schema.spec.items.transformMapEntry(i, v, {v: string(i)})}
+# ["app", "db"] → {"app": "0", "db": "1"}
+```
+
+#### `transformList` — Extract a list from a map
+
+Converts a map to a list by evaluating an expression for each entry:
+
+```kro
+# Extract all keys
+keys: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, k)}
+# → ["app", "version"]
+
+# Extract all values
+values: ${{ "app": "nginx", "version": "1.19" }.transformList(k, v, v)}
+# → ["nginx", "1.19"]
+
+# Build formatted strings from key-value pairs
+envVars: ${{ "APP": "nginx", "PORT": "8080" }.transformList(k, v, k + "=" + v)}
+# → ["APP=nginx", "PORT=8080"]
 ```
 
 ### Aggregating Status
@@ -417,4 +573,4 @@ status:
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - Learn how CEL expressions create dependencies
 - **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Use CEL for `includeWhen` conditions
 - **[Readiness](./02-resource-definitions/03-readiness.md)** - Use CEL for `readyWhen` conditions
-- **[External References](./02-resource-definitions/04-external-references.md)** - Reference external resources with CEL
+- **[External References](./02-resource-definitions/05-external-references.md)** - Reference external resources with CEL

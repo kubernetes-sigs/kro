@@ -19,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/release-utils/version"
 )
@@ -235,17 +237,68 @@ func TestNewResourceGraphDefinitionLabeler(t *testing.T) {
 	})
 }
 
+func TestNewGraphRevisionHashLabeler(t *testing.T) {
+	t.Run("sets hash label directly", func(t *testing.T) {
+		labeler := NewGraphRevisionHashLabeler("hash-1")
+		assert.Equal(t, GenericLabeler{
+			GraphRevisionHashLabel: "hash-1",
+		}, labeler)
+	})
+}
+
 func TestNewInstanceLabeler(t *testing.T) {
 	t.Run("NewInstanceLabeler", func(t *testing.T) {
 		name := "instance-name"
 		namespace := "instance-namespace"
 		uid := types.UID("instance-uid")
-		obj := &mockObject{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: uid}}
-		labeler := NewInstanceLabeler(obj)
+		group := "apps.example.com"
+		version := "v1"
+		kind := "MyApp"
+
+		obj := &unstructured.Unstructured{}
+		obj.SetName(name)
+		obj.SetNamespace(namespace)
+		obj.SetUID(uid)
+		obj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   group,
+			Version: version,
+			Kind:    kind,
+		})
+
+		labeler := NewInstanceLabeler(obj, true)
 		assert.Equal(t, GenericLabeler{
 			InstanceLabel:          name,
 			InstanceNamespaceLabel: namespace,
 			InstanceIDLabel:        string(uid),
+			InstanceGroupLabel:     group,
+			InstanceVersionLabel:   version,
+			InstanceKindLabel:      kind,
+		}, labeler)
+	})
+
+	t.Run("NewInstanceLabeler_ClusterScoped", func(t *testing.T) {
+		name := "instance-name"
+		uid := types.UID("instance-uid")
+		group := "apps.example.com"
+		version := "v1"
+		kind := "MyApp"
+
+		obj := &unstructured.Unstructured{}
+		obj.SetName(name)
+		obj.SetUID(uid)
+		obj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   group,
+			Version: version,
+			Kind:    kind,
+		})
+
+		labeler := NewInstanceLabeler(obj, false)
+		assert.Equal(t, GenericLabeler{
+			InstanceLabel:        name,
+			InstanceIDLabel:      string(uid),
+			InstanceGroupLabel:   group,
+			InstanceVersionLabel: version,
+			InstanceKindLabel:    kind,
 		}, labeler)
 	})
 }
@@ -254,8 +307,16 @@ func TestNewKROMetaLabeler(t *testing.T) {
 	t.Run("NewKROMetaLabeler", func(t *testing.T) {
 		labeler := NewKROMetaLabeler()
 		assert.Equal(t, GenericLabeler{
-			OwnedLabel:        "true",
-			KROVersionLabel:   version.GetVersionInfo().GitVersion,
+			OwnedLabel:      "true",
+			KROVersionLabel: version.GetVersionInfo().GitVersion,
+		}, labeler)
+	})
+}
+
+func TestNewNodeLabeler(t *testing.T) {
+	t.Run("NewNodeLabeler", func(t *testing.T) {
+		labeler := NewNodeLabeler()
+		assert.Equal(t, GenericLabeler{
 			ManagedByLabelKey: ManagedByKROValue,
 		}, labeler)
 	})

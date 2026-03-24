@@ -1093,6 +1093,87 @@ func TestResourceGraphDefinitionPrimaryWatchPredicateRejectsNilObjects(t *testin
 	}))
 }
 
+func TestFindRGDsForGraphRevision(t *testing.T) {
+	t.Parallel()
+	reconciler := &ResourceGraphDefinitionReconciler{}
+
+	tests := []struct {
+		name string
+		obj  client.Object
+		want []reconcile.Request
+	}{
+		{
+			name: "returns nil for non-GraphRevision object",
+			obj: &extv1.CustomResourceDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "not-a-gr"},
+			},
+		},
+		{
+			name: "returns nil when spec.snapshot.name is empty",
+			obj: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{Name: "gr-empty"},
+				Spec: internalv1alpha1.GraphRevisionSpec{
+					Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{},
+				},
+			},
+		},
+		{
+			name: "enqueues RGD from spec.snapshot.name",
+			obj: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{Name: "demo-r00001"},
+				Spec: internalv1alpha1.GraphRevisionSpec{
+					Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+						Name: "demo-rgd",
+					},
+				},
+			},
+			want: []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: "demo-rgd"},
+			}},
+		},
+		{
+			name: "enqueues based on spec not labels",
+			obj: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "gr-mismatch",
+					Labels: map[string]string{
+						metadata.ResourceGraphDefinitionNameLabel: "label-rgd",
+					},
+				},
+				Spec: internalv1alpha1.GraphRevisionSpec{
+					Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+						Name: "spec-rgd",
+					},
+				},
+			},
+			want: []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: "spec-rgd"},
+			}},
+		},
+		{
+			name: "enqueues for orphaned GR without ownerReferences",
+			obj: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{Name: "orphan-r00001"},
+				Spec: internalv1alpha1.GraphRevisionSpec{
+					Snapshot: internalv1alpha1.ResourceGraphDefinitionSnapshot{
+						Name: "orphan-rgd",
+					},
+				},
+			},
+			want: []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: "orphan-rgd"},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, reconciler.findRGDsForGraphRevision(context.Background(), tt.obj))
+		})
+	}
+}
+
 func newPredicateTestRGD(generation int64, deletionTimestamp *metav1.Time) *v1alpha1.ResourceGraphDefinition {
 	return &v1alpha1.ResourceGraphDefinition{
 		ObjectMeta: metav1.ObjectMeta{

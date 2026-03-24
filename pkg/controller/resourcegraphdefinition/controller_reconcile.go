@@ -26,6 +26,7 @@ import (
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -86,10 +87,18 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		return ctrl.Result{}, nil, nil, err
 	}
 
-	graphRevisions, hasTerminating, err := r.listGraphRevisions(ctx, rgd)
+	graphRevisions, hasTerminating, orphanIndices, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
 		resolutionResult = graphRevisionResolutionResultFailed
 		return ctrl.Result{}, nil, nil, fmt.Errorf("listing graph revisions: %w", err)
+	}
+
+	// Adopt orphaned revisions by stamping the current RGD's ownerReference.
+	// This restores cascade-delete semantics and .Owns() watch coverage.
+	if len(orphanIndices) > 0 {
+		if err := r.adoptGraphRevisions(ctx, rgd, graphRevisions, orphanIndices); err != nil {
+			return ctrl.Result{}, nil, nil, fmt.Errorf("adopting orphaned graph revisions: %w", err)
+		}
 	}
 
 	// If no live revisions exist, clear any stale registry entries from a
@@ -416,31 +425,90 @@ func newCRDError(err error) error             { return &crdError{err} }
 func newMicroControllerError(err error) error { return &microControllerError{err} }
 
 // listGraphRevisions returns the graph revisions for an RGD, split into live
-// and terminating sets.
+// and terminating sets, and identifies orphans that need adoption.
 //
 // GraphRevisions are grouped by RGD name (not UID) so a recreated RGD with the
 // same name can adopt the existing revisions. The list uses the direct API
 // reader with a CRD selectable field on spec.snapshot.name rather than a
 // cache-only field index. The caller uses the terminating flag to defer
 // decisions while GC is in flight.
-func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, err error) {
+//
+// A live revision is considered orphaned when it lacks a controller ownerReference
+// pointing to the current RGD UID. This happens after an orphan-policy delete or
+// when a GR is created externally with a matching spec.snapshot.name.
+func (r *ResourceGraphDefinitionReconciler) listGraphRevisions(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) (live []internalv1alpha1.GraphRevision, hasTerminating bool, orphans []int, err error) {
 	revisionList := &internalv1alpha1.GraphRevisionList{}
 	if err := r.apiReader.List(ctx, revisionList, client.MatchingFields{
 		"spec.snapshot.name": rgd.Name,
 	}); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 
+	// Separate live revisions from terminating ones. Terminating revisions
+	// are being deleted and should not influence resolution or issuance.
 	live = make([]internalv1alpha1.GraphRevision, 0, len(revisionList.Items))
 	for i := range revisionList.Items {
-		if revisionList.Items[i].GetDeletionTimestamp().IsZero() {
-			live = append(live, revisionList.Items[i])
-		} else {
+		if !revisionList.Items[i].GetDeletionTimestamp().IsZero() {
 			hasTerminating = true
+			continue
+		}
+		live = append(live, revisionList.Items[i])
+	}
+
+	// Identify live revisions missing an ownerReference to the current RGD.
+	// These need adoption to restore cascade-delete and .Owns() watch coverage.
+	for i := range live {
+		if !isOwnedBy(&live[i], rgd.UID) {
+			orphans = append(orphans, i)
 		}
 	}
 
-	return live, hasTerminating, nil
+	return live, hasTerminating, orphans, nil
+}
+
+// isOwnedBy returns true if the GR has a controller ownerReference matching the
+// given RGD UID.
+func isOwnedBy(gr *internalv1alpha1.GraphRevision, uid types.UID) bool {
+	for _, ref := range gr.OwnerReferences {
+		if ref.UID == uid && ref.Kind == metadata.KRORGOwnerReferenceKind && ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+// adoptGraphRevisions ensures every orphaned GraphRevision is owned by the
+// current RGD. If a GR already has a stale RGD ownerRef (e.g. from a
+// delete-recreate cycle), it is replaced. If none exists, one is added.
+func (r *ResourceGraphDefinitionReconciler) adoptGraphRevisions(
+	ctx context.Context,
+	rgd *v1alpha1.ResourceGraphDefinition,
+	live []internalv1alpha1.GraphRevision,
+	orphanIndices []int,
+) error {
+	log := ctrl.LoggerFrom(ctx)
+	desired := metadata.NewResourceGraphDefinitionOwnerReference(rgd.Name, rgd.UID)
+	for _, idx := range orphanIndices {
+		gr := &live[idx]
+		gr.OwnerReferences = setRGDOwnerReference(gr.OwnerReferences, desired)
+		if err := r.Update(ctx, gr); err != nil {
+			return fmt.Errorf("adopting graph revision %q: %w", gr.Name, err)
+		}
+		log.V(1).Info("adopted graph revision", "graphRevision", gr.Name, "revision", gr.Spec.Revision)
+	}
+	return nil
+}
+
+// setRGDOwnerReference replaces the existing RGD ownerReference in place,
+// or appends one if none exists.
+func setRGDOwnerReference(refs []metav1.OwnerReference, desired metav1.OwnerReference) []metav1.OwnerReference {
+	for i, ref := range refs {
+		if ref.Kind == metadata.KRORGOwnerReferenceKind && ref.APIVersion == metadata.KRORGOwnerReferenceAPIVersion {
+			refs[i] = desired
+			return refs
+		}
+	}
+	return append(refs, desired)
 }
 
 type latestGraphRevisionView struct {
@@ -623,7 +691,7 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		return nil
 	}
 
-	graphRevisions, _, err := r.listGraphRevisions(ctx, rgd)
+	graphRevisions, _, _, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
 		graphRevisionGCErrorsTotal.WithLabelValues().Inc()
 		return fmt.Errorf("listing graph revisions for gc: %w", err)

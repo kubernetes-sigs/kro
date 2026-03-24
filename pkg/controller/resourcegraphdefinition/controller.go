@@ -134,6 +134,10 @@ func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) e
 			},
 		).
 		Owns(&internalv1alpha1.GraphRevision{}).
+		Watches(
+			&internalv1alpha1.GraphRevision{},
+			handler.EnqueueRequestsFromMapFunc(r.findRGDsForGraphRevision),
+		).
 		WatchesMetadata(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
@@ -229,6 +233,26 @@ func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, 
 				Name: rgdName,
 			},
 		},
+	}
+}
+
+// findRGDsForGraphRevision enqueues the RGD named in spec.snapshot.name.
+//
+// This watch supplements .Owns() which only covers GRs with an ownerReference.
+// Orphaned revisions (ownerRef stripped or never set) still carry the RGD name
+// in their spec, so this watch ensures the RGD is notified and can adopt them.
+// Together the two watches cover both identity axes: ownerRef (GC/lifecycle)
+// and spec.snapshot.name (logical grouping used by listGraphRevisions).
+func (r *ResourceGraphDefinitionReconciler) findRGDsForGraphRevision(_ context.Context, obj client.Object) []reconcile.Request {
+	gr, ok := obj.(*internalv1alpha1.GraphRevision)
+	if !ok {
+		return nil
+	}
+	if gr.Spec.Snapshot.Name == "" {
+		return nil
+	}
+	return []reconcile.Request{
+		{NamespacedName: types.NamespacedName{Name: gr.Spec.Snapshot.Name}},
 	}
 }
 

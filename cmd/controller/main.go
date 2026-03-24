@@ -89,6 +89,9 @@ func main() {
 		rgdMaxCollectionDimensionSize int
 		rgdMaxGraphRevisions          int
 		rgdProgressRequeueDelay       time.Duration
+		leaderElectionLeaseDuration   time.Duration
+		leaderElectionRenewDeadline   time.Duration
+		leaderElectionRetryPeriod     time.Duration
 		featureGatesFlag              string
 	)
 
@@ -160,6 +163,12 @@ func main() {
 		"Maximum number of GraphRevisions to retain per ResourceGraphDefinition")
 	flag.DurationVar(&rgdProgressRequeueDelay, "rgd-progress-requeue-delay", 3*time.Second,
 		"Delay before requeuing while an RGD is waiting for asynchronous progress")
+	flag.DurationVar(&leaderElectionLeaseDuration, "leader-election-lease-duration", 15*time.Second,
+		"Duration that non-leader candidates will wait to force acquire leadership.")
+	flag.DurationVar(&leaderElectionRenewDeadline, "leader-election-renew-deadline", 10*time.Second,
+		"Duration the acting leader will retry refreshing leadership before giving up.")
+	flag.DurationVar(&leaderElectionRetryPeriod, "leader-election-retry-period", 2*time.Second,
+		"Duration between each leader election action.")
 
 	opts := zap.Options{
 		Development: true,
@@ -207,6 +216,9 @@ func main() {
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "controller.kro.run",
 		LeaderElectionNamespace: leaderElectionNamespace,
+		LeaseDuration:           &leaderElectionLeaseDuration,
+		RenewDeadline:           &leaderElectionRenewDeadline,
+		RetryPeriod:             &leaderElectionRetryPeriod,
 		Controller: ctrlconfig.Controller{
 			// EnableWarmup allows controllers to start their sources (watches/informers) before
 			// leader election is won. This pre-populates caches and improves leader failover time.

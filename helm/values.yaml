@@ -126,6 +126,12 @@ config:
   # will attempt to use the namespace of the service account mounted to the Controller
   # pod.
   leaderElectionNamespace: ""
+  # Duration that non-leader candidates will wait to force acquire leadership.
+  leaderElectionLeaseDuration: 15s
+  # Duration the acting leader will retry refreshing leadership before giving up.
+  leaderElectionRenewDeadline: 10s
+  # Duration between each leader election action.
+  leaderElectionRetryPeriod: 2s
   # Enable controller warmup to start controller sources (watches/informers) before
   # leader election is won. This pre-populates caches and improves leader failover time.
   # Requires enableLeaderElection to be true.

@@ -25,8 +25,10 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1833,6 +1835,32 @@ func TestGarbageCollectGraphRevisionsDeleteError(t *testing.T) {
 	err := reconciler.garbageCollectGraphRevisions(context.Background(), rgd)
 	require.Error(t, err)
 	assert.EqualError(t, err, fmt.Sprintf("deleting graph revision %q: delete boom", oldRevision.Name))
+}
+
+func TestGarbageCollectGraphRevisionsSkipsNotFound(t *testing.T) {
+	t.Parallel()
+
+	rgd := newTestRGD("rgd-gc-notfound")
+	old := newListedGraphRevision(rgd, 1, "hash-1")
+	kept := newListedGraphRevision(rgd, 2, "hash-2")
+	cl := newTestClient(t, interceptor.Funcs{
+		Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
+			if gr, ok := obj.(*internalv1alpha1.GraphRevision); ok && gr.Name == old.Name {
+				return apierrors.NewNotFound(
+					schema.GroupResource{Group: "internal.kro.run", Resource: "graphrevisions"}, old.Name,
+				)
+			}
+			return nil
+		},
+	}, old, kept)
+
+	reconciler := &ResourceGraphDefinitionReconciler{
+		Client:    cl,
+		apiReader: cl,
+		cfg:       Config{MaxGraphRevisions: 1},
+	}
+
+	require.NoError(t, reconciler.garbageCollectGraphRevisions(context.Background(), rgd))
 }
 
 func TestGraphRevisionRetentionFloor(t *testing.T) {

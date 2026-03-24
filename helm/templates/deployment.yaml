@@ -95,6 +95,12 @@ spec:
               value: {{ .Values.config.rgd.maxGraphRevisions | quote }}
             - name: KRO_RGD_PROGRESS_REQUEUE_DELAY
               value: {{ .Values.config.resourceGraphDefinitionProgressRequeueDelay | quote }}
+            - name: KRO_LEADER_ELECTION_LEASE_DURATION
+              value: {{ .Values.config.leaderElectionLeaseDuration | quote }}
+            - name: KRO_LEADER_ELECTION_RENEW_DEADLINE
+              value: {{ .Values.config.leaderElectionRenewDeadline | quote }}
+            - name: KRO_LEADER_ELECTION_RETRY_PERIOD
+              value: {{ .Values.config.leaderElectionRetryPeriod | quote }}
           args:
             {{- if .Values.config.allowCRDDeletion }}
             - --allow-crd-deletion
@@ -139,6 +145,12 @@ spec:
             - "$(KRO_RGD_MAX_GRAPH_REVISIONS)"
             - --rgd-progress-requeue-delay
             - "$(KRO_RGD_PROGRESS_REQUEUE_DELAY)"
+            - --leader-election-lease-duration
+            - "$(KRO_LEADER_ELECTION_LEASE_DURATION)"
+            - --leader-election-renew-deadline
+            - "$(KRO_LEADER_ELECTION_RENEW_DEADLINE)"
+            - --leader-election-retry-period
+            - "$(KRO_LEADER_ELECTION_RETRY_PERIOD)"
             {{- if .Values.config.enableLeaderElection }}
             - --leader-elect
             {{- if ne .Values.config.leaderElectionNamespace "" }}

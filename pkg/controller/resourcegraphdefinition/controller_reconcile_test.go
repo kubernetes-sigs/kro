@@ -1199,6 +1199,8 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				assert.Equal(t, rgd.Status.TopologicalOrder, topologicalOrder)
 				assert.Equal(t, rgd.Status.Resources, resourcesInfo)
 				assert.Equal(t, int64(4), rgd.Status.LastIssuedRevision)
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionUnknown, "WaitingForGraphRevisionCompilation", "waiting for graph revision 4 to compile")
+				assert.True(t, conditionFor(t, rgd, Ready).IsUnknown(), "Ready must be Unknown while revision is pending")
 			},
 		},
 		{
@@ -1312,7 +1314,9 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 
 				_, ok := reconciler.revisionsRegistry.Get(rgd.Name, 10)
 				assert.False(t, ok, "RGD controller should wait for the GR controller to warm the registry")
-				assert.True(t, conditionFor(t, rgd, GraphRevisionsResolved).IsUnknown())
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionUnknown, "WaitingForGraphRevisionCompilation", "graph revision 10 issued and awaiting compilation")
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionTrue, "Valid", "resource graph and schema are valid")
+				assertConditionExact(t, rgd, Ready, metav1.ConditionUnknown, "WaitingForGraphRevisionCompilation", "graph revision 10 issued and awaiting compilation")
 			},
 		},
 		{
@@ -1377,7 +1381,9 @@ func TestReconcileResourceGraphDefinitionRevisionPaths(t *testing.T) {
 				_, ok = reconciler.revisionsRegistry.Get(rgd.Name, 6)
 				assert.False(t, ok, "RGD controller should not seed the registry for newly issued revisions")
 
-				assert.True(t, conditionFor(t, rgd, GraphRevisionsResolved).IsUnknown())
+				assertConditionExact(t, rgd, GraphRevisionsResolved, metav1.ConditionUnknown, "WaitingForGraphRevisionCompilation", "graph revision 6 issued and awaiting compilation")
+				assertConditionExact(t, rgd, GraphAccepted, metav1.ConditionTrue, "Valid", "resource graph and schema are valid")
+				assert.True(t, conditionFor(t, rgd, Ready).IsUnknown(), "Ready must be Unknown while revision is compiling")
 			},
 		},
 		{

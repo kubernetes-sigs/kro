@@ -131,10 +131,12 @@ func TestListGraphRevisions_UsesSnapshotNameSelector(t *testing.T) {
 		},
 	}
 
-	got, hasTerminating, err := reconciler.listGraphRevisions(context.Background(), recreatedRGD)
+	got, hasTerminating, orphans, err := reconciler.listGraphRevisions(context.Background(), recreatedRGD)
 	require.NoError(t, err)
 	assert.False(t, hasTerminating)
 	require.Len(t, got, 2)
+	// Both GRs lack an ownerRef pointing to the recreated RGD's UID.
+	assert.Len(t, orphans, 2)
 
 	byRevision := map[int64]internalv1alpha1.GraphRevision{}
 	for _, revision := range got {
@@ -168,10 +170,12 @@ func TestListGraphRevisions_SkipsTerminatingRevisions(t *testing.T) {
 
 	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
 
-	got, hasTerminating, err := reconciler.listGraphRevisions(context.Background(), rgd)
+	got, hasTerminating, orphans, err := reconciler.listGraphRevisions(context.Background(), rgd)
 	require.NoError(t, err)
 	assert.True(t, hasTerminating)
 	require.Len(t, got, 1)
+	// The live GR has no ownerRef, so it's an orphan.
+	assert.Len(t, orphans, 1)
 	assert.Equal(t, int64(2), got[0].Spec.Revision)
 }
 
@@ -1937,6 +1941,376 @@ func TestGraphRevisionRetentionFloor(t *testing.T) {
 			assert.Equal(t, tt.wantFloor, got)
 		})
 	}
+}
+
+func TestIsOwnedBy(t *testing.T) {
+	t.Parallel()
+
+	rgdUID := types.UID("current-uid")
+	staleUID := types.UID("old-uid")
+	otherUID := types.UID("other-uid")
+
+	tests := []struct {
+		name string
+		gr   *internalv1alpha1.GraphRevision
+		want bool
+	}{
+		{
+			name: "no ownerReferences",
+			gr:   &internalv1alpha1.GraphRevision{},
+			want: false,
+		},
+		{
+			name: "owned by current RGD",
+			gr: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						metadata.NewResourceGraphDefinitionOwnerReference("demo", rgdUID),
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "stale UID from previous RGD incarnation",
+			gr: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						metadata.NewResourceGraphDefinitionOwnerReference("demo", staleUID),
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "owned by a different kind with same UID",
+			gr: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       "SomethingElse",
+							APIVersion: "other.io/v1",
+							UID:        rgdUID,
+							Controller: &[]bool{true}[0],
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "non-controller RGD ref with matching UID",
+			gr: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       metadata.KRORGOwnerReferenceKind,
+							APIVersion: metadata.KRORGOwnerReferenceAPIVersion,
+							UID:        rgdUID,
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "multiple refs, one matching",
+			gr: &internalv1alpha1.GraphRevision{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{
+						{Kind: "Other", APIVersion: "v1", UID: otherUID, Controller: &[]bool{true}[0]},
+						metadata.NewResourceGraphDefinitionOwnerReference("demo", rgdUID),
+					},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isOwnedBy(tt.gr, rgdUID))
+		})
+	}
+}
+
+func TestSetRGDOwnerReference(t *testing.T) {
+	t.Parallel()
+
+	desired := metadata.NewResourceGraphDefinitionOwnerReference("demo", "new-uid")
+	stale := metadata.NewResourceGraphDefinitionOwnerReference("demo", "old-uid")
+	unrelated := metav1.OwnerReference{
+		Kind: "Deployment", APIVersion: "apps/v1", UID: "deploy-uid",
+		Controller: &[]bool{true}[0],
+	}
+
+	tests := []struct {
+		name string
+		refs []metav1.OwnerReference
+		want []metav1.OwnerReference
+	}{
+		{
+			name: "appends when no refs exist",
+			refs: nil,
+			want: []metav1.OwnerReference{desired},
+		},
+		{
+			name: "appends when no RGD ref exists",
+			refs: []metav1.OwnerReference{unrelated},
+			want: []metav1.OwnerReference{unrelated, desired},
+		},
+		{
+			name: "replaces stale RGD ref in place",
+			refs: []metav1.OwnerReference{stale},
+			want: []metav1.OwnerReference{desired},
+		},
+		{
+			name: "replaces stale ref preserving other refs",
+			refs: []metav1.OwnerReference{unrelated, stale},
+			want: []metav1.OwnerReference{unrelated, desired},
+		},
+		{
+			name: "replaces when desired is already present (idempotent)",
+			refs: []metav1.OwnerReference{desired},
+			want: []metav1.OwnerReference{desired},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := setRGDOwnerReference(tt.refs, desired)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestListGraphRevisions_DetectsOrphans(t *testing.T) {
+	t.Parallel()
+
+	rgdUID := types.UID("current-uid")
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", UID: rgdUID},
+	}
+
+	ownedGR := newListedGraphRevision(rgd, 1, "hash-1")
+	ownedGR.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("demo", rgdUID),
+	}
+
+	orphanNoRef := newListedGraphRevision(rgd, 2, "hash-2")
+	// No ownerReferences — simulates orphan-policy delete.
+
+	staleUID := types.UID("old-uid")
+	orphanStaleRef := newListedGraphRevision(rgd, 3, "hash-3")
+	orphanStaleRef.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("demo", staleUID),
+	}
+
+	cl := newFakeClientBuilder().
+		WithObjects(ownedGR, orphanNoRef, orphanStaleRef).
+		Build()
+	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+	live, hasTerminating, orphans, err := reconciler.listGraphRevisions(context.Background(), rgd)
+	require.NoError(t, err)
+	assert.False(t, hasTerminating)
+	require.Len(t, live, 3)
+	// Revisions 2 (no ref) and 3 (stale ref) are orphans.
+	require.Len(t, orphans, 2)
+	assert.Equal(t, int64(2), live[orphans[0]].Spec.Revision)
+	assert.Equal(t, int64(3), live[orphans[1]].Spec.Revision)
+}
+
+func TestListGraphRevisions_NoOrphansWhenAllOwned(t *testing.T) {
+	t.Parallel()
+
+	rgdUID := types.UID("current-uid")
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", UID: rgdUID},
+	}
+
+	gr1 := newListedGraphRevision(rgd, 1, "hash-1")
+	gr1.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("demo", rgdUID),
+	}
+	gr2 := newListedGraphRevision(rgd, 2, "hash-2")
+	gr2.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("demo", rgdUID),
+	}
+
+	cl := newFakeClientBuilder().
+		WithObjects(gr1, gr2).
+		Build()
+	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+	live, _, orphans, err := reconciler.listGraphRevisions(context.Background(), rgd)
+	require.NoError(t, err)
+	require.Len(t, live, 2)
+	assert.Empty(t, orphans)
+}
+
+func TestListGraphRevisions_DoesNotCrossBoundaries(t *testing.T) {
+	t.Parallel()
+
+	rgdA := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "rgd-a", UID: "uid-a"},
+	}
+	rgdB := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "rgd-b", UID: "uid-b"},
+	}
+
+	// GR belonging to rgd-a.
+	grA := newListedGraphRevision(rgdA, 1, "hash")
+	grA.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("rgd-a", "uid-a"),
+	}
+
+	// GR belonging to rgd-b — must not appear when listing for rgd-a.
+	grB := newListedGraphRevision(rgdB, 1, "hash")
+	grB.OwnerReferences = []metav1.OwnerReference{
+		metadata.NewResourceGraphDefinitionOwnerReference("rgd-b", "uid-b"),
+	}
+
+	cl := newFakeClientBuilder().
+		WithObjects(grA, grB).
+		Build()
+	reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+	liveA, _, orphansA, err := reconciler.listGraphRevisions(context.Background(), rgdA)
+	require.NoError(t, err)
+	require.Len(t, liveA, 1)
+	assert.Equal(t, "rgd-a", liveA[0].Spec.Snapshot.Name)
+	assert.Empty(t, orphansA)
+
+	liveB, _, orphansB, err := reconciler.listGraphRevisions(context.Background(), rgdB)
+	require.NoError(t, err)
+	require.Len(t, liveB, 1)
+	assert.Equal(t, "rgd-b", liveB[0].Spec.Snapshot.Name)
+	assert.Empty(t, orphansB)
+}
+
+func TestAdoptGraphRevisions(t *testing.T) {
+	t.Parallel()
+
+	rgdUID := types.UID("current-uid")
+	rgd := &v1alpha1.ResourceGraphDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", UID: rgdUID},
+	}
+
+	t.Run("stamps ownerRef on orphan with no refs", func(t *testing.T) {
+		t.Parallel()
+		gr := newListedGraphRevision(rgd, 1, "hash")
+		cl := newFakeClientBuilder().WithObjects(gr).Build()
+		reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+		live := []internalv1alpha1.GraphRevision{*gr}
+		err := reconciler.adoptGraphRevisions(
+			ctrl.LoggerInto(context.Background(), logr.Discard()),
+			rgd, live, []int{0},
+		)
+		require.NoError(t, err)
+
+		var updated internalv1alpha1.GraphRevision
+		require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: gr.Name}, &updated))
+		require.Len(t, updated.OwnerReferences, 1)
+		assert.Equal(t, rgdUID, updated.OwnerReferences[0].UID)
+		assert.Equal(t, metadata.KRORGOwnerReferenceKind, updated.OwnerReferences[0].Kind)
+	})
+
+	t.Run("replaces stale RGD ownerRef", func(t *testing.T) {
+		t.Parallel()
+		gr := newListedGraphRevision(rgd, 2, "hash")
+		gr.OwnerReferences = []metav1.OwnerReference{
+			metadata.NewResourceGraphDefinitionOwnerReference("demo", "old-uid"),
+		}
+		cl := newFakeClientBuilder().WithObjects(gr).Build()
+		reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+		live := []internalv1alpha1.GraphRevision{*gr}
+		err := reconciler.adoptGraphRevisions(
+			ctrl.LoggerInto(context.Background(), logr.Discard()),
+			rgd, live, []int{0},
+		)
+		require.NoError(t, err)
+
+		var updated internalv1alpha1.GraphRevision
+		require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: gr.Name}, &updated))
+		require.Len(t, updated.OwnerReferences, 1)
+		assert.Equal(t, rgdUID, updated.OwnerReferences[0].UID)
+	})
+
+	t.Run("preserves non-RGD ownerRefs", func(t *testing.T) {
+		t.Parallel()
+		gr := newListedGraphRevision(rgd, 3, "hash")
+		unrelated := metav1.OwnerReference{
+			Kind: "Deployment", APIVersion: "apps/v1", UID: "deploy-uid",
+		}
+		gr.OwnerReferences = []metav1.OwnerReference{
+			unrelated,
+			metadata.NewResourceGraphDefinitionOwnerReference("demo", "old-uid"),
+		}
+		cl := newFakeClientBuilder().WithObjects(gr).Build()
+		reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+		live := []internalv1alpha1.GraphRevision{*gr}
+		err := reconciler.adoptGraphRevisions(
+			ctrl.LoggerInto(context.Background(), logr.Discard()),
+			rgd, live, []int{0},
+		)
+		require.NoError(t, err)
+
+		var updated internalv1alpha1.GraphRevision
+		require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: gr.Name}, &updated))
+		require.Len(t, updated.OwnerReferences, 2)
+		assert.Equal(t, "Deployment", updated.OwnerReferences[0].Kind)
+		assert.Equal(t, rgdUID, updated.OwnerReferences[1].UID)
+	})
+
+	t.Run("adopts multiple orphans", func(t *testing.T) {
+		t.Parallel()
+		gr1 := newListedGraphRevision(rgd, 4, "hash")
+		gr2 := newListedGraphRevision(rgd, 5, "hash")
+		cl := newFakeClientBuilder().WithObjects(gr1, gr2).Build()
+		reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+		live := []internalv1alpha1.GraphRevision{*gr1, *gr2}
+		err := reconciler.adoptGraphRevisions(
+			ctrl.LoggerInto(context.Background(), logr.Discard()),
+			rgd, live, []int{0, 1},
+		)
+		require.NoError(t, err)
+
+		for _, name := range []string{gr1.Name, gr2.Name} {
+			var updated internalv1alpha1.GraphRevision
+			require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Name: name}, &updated))
+			require.Len(t, updated.OwnerReferences, 1)
+			assert.Equal(t, rgdUID, updated.OwnerReferences[0].UID)
+		}
+	})
+
+	t.Run("returns error on update failure", func(t *testing.T) {
+		t.Parallel()
+		gr := newListedGraphRevision(rgd, 6, "hash")
+		cl := newFakeClientBuilder().
+			WithObjects(gr).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Update: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.UpdateOption) error {
+					return fmt.Errorf("api server gone")
+				},
+			}).
+			Build()
+		reconciler := &ResourceGraphDefinitionReconciler{Client: cl, apiReader: cl}
+
+		live := []internalv1alpha1.GraphRevision{*gr}
+		err := reconciler.adoptGraphRevisions(
+			ctrl.LoggerInto(context.Background(), logr.Discard()),
+			rgd, live, []int{0},
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "api server gone")
+	})
 }
 
 func newListedGraphRevision(rgd *v1alpha1.ResourceGraphDefinition, revision int64, specHash string) *internalv1alpha1.GraphRevision {

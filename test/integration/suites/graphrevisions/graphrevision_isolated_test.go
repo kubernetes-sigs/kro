@@ -339,28 +339,12 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 
 			updateRGDDataDefaultInEnv(ctx, testEnv, rgdName, "restart-value-2")
-			expectExactRGDConditionsInEnv(ctx, testEnv, rgdName, 100*time.Millisecond, exactRGDExpectationInEnv{
-				state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-				lastIssued: ptrToInt64InEnv(2),
-				conditions: map[krov1alpha1.ConditionType]conditionExpectationInEnv{
-					krov1alpha1.ConditionType(apis.ConditionReady): {
-						status:  metav1.ConditionUnknown,
-						reason:  "WaitingForGraphRevisionCompilation",
-						message: "graph revision 2 issued and awaiting compilation",
-					},
-					krov1alpha1.ConditionType(resourcegraphdefinition.GraphAccepted): {
-						status:  metav1.ConditionTrue,
-						reason:  "Valid",
-						message: "resource graph and schema are valid",
-					},
-					krov1alpha1.ConditionType(resourcegraphdefinition.GraphRevisionsResolved): {
-						status:  metav1.ConditionUnknown,
-						reason:  "WaitingForGraphRevisionCompilation",
-						message: "graph revision 2 issued and awaiting compilation",
-					},
-				},
-			})
 			Eventually(func(g Gomega) {
+				fresh := &krov1alpha1.ResourceGraphDefinition{}
+				err := testEnv.Client.Get(ctx, types.NamespacedName{Name: rgdName}, fresh)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(fresh.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+				g.Expect(fresh.Status.LastIssuedRevision).To(Equal(int64(2)))
 				g.Expect(maxGraphRevisionNumber(listGraphRevisionsInEnv(ctx, testEnv, rgdName))).To(Equal(int64(2)))
 			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 

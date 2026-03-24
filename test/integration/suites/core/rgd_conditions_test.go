@@ -71,24 +71,16 @@ var _ = Describe("RGD Conditions", func() {
 		})
 	})
 
-	It("should surface unknown serving conditions before the first revision becomes ready", func(ctx SpecContext) {
+	It("should converge to ready after the first revision is compiled", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-pending-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDPendingConditions%s", rand.String(5))
 		rgd := configmapRGD(rgdName, kind)
 
 		createConditionTestRGD(ctx, rgd)
 
-		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionUnknown,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
-				resourcegraphdefinition.KindReady:              metav1.ConditionUnknown,
-				resourcegraphdefinition.ControllerReady:        metav1.ConditionUnknown,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
-			},
-		})
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
-			state: krov1alpha1.ResourceGraphDefinitionStateActive,
+			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
+			lastIssued: ptrToInt64(1),
 			conditions: map[string]metav1.ConditionStatus{
 				apis.ConditionReady:                            metav1.ConditionTrue,
 				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
@@ -137,7 +129,7 @@ var _ = Describe("RGD Conditions", func() {
 		})
 	})
 
-	It("should surface unknown serving conditions while a valid update waits for a new revision", func(ctx SpecContext) {
+	It("should converge to ready after a valid update issues a new revision", func(ctx SpecContext) {
 		rgdName := fmt.Sprintf("rgd-conds-update-%s", rand.String(5))
 		kind := fmt.Sprintf("RGDUpdateConditions%s", rand.String(5))
 		rgd := configmapRGD(rgdName, kind)
@@ -148,17 +140,6 @@ var _ = Describe("RGD Conditions", func() {
 
 		updateRGDTemplate(ctx, rgdName, "rev-2")
 
-		expectRGDConditions(ctx, rgdName, 100*time.Millisecond, rgdExpectation{
-			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-			lastIssued: ptrToInt64(2),
-			conditions: map[string]metav1.ConditionStatus{
-				apis.ConditionReady:                            metav1.ConditionUnknown,
-				resourcegraphdefinition.GraphAccepted:          metav1.ConditionTrue,
-				resourcegraphdefinition.GraphRevisionsResolved: metav1.ConditionUnknown,
-			},
-			reasonCondition: resourcegraphdefinition.GraphRevisionsResolved,
-			reason:          "WaitingForGraphRevisionCompilation",
-		})
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
 			lastIssued: ptrToInt64(2),

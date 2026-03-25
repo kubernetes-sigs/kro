@@ -335,6 +335,7 @@ func newConfigMapObject(name, namespace string) *unstructured.Unstructured {
 	return obj
 }
 
+//nolint:unparam // namespace is always "default" in current tests but kept for flexibility
 func newApplysetManagedConfigMap(instance *unstructured.Unstructured, name, namespace string) *unstructured.Unstructured {
 	obj := newConfigMapObject(name, namespace)
 	obj.SetUID(types.UID(name + "-uid"))

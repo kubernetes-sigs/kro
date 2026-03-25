@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -58,6 +59,22 @@ type ApplyResultItem struct {
 // PruneResultItem is a successfully pruned resource.
 type PruneResultItem struct {
 	Object *unstructured.Unstructured
+}
+
+// OrphanCandidate is a resource discovered during orphan listing that is
+// a member of the applyset but not in the keep set. Callers use this to
+// apply ordering (e.g. reverse-topological) before issuing deletes.
+type OrphanCandidate struct {
+	Object *unstructured.Unstructured
+	GVR    schema.GroupVersionResource
+}
+
+// DeleteOrphanResult describes the outcome of a single orphan deletion.
+type DeleteOrphanResult struct {
+	// Pruned is non-nil when the delete was accepted by the API server.
+	Pruned *PruneResultItem
+	// Conflict is true when the UID precondition failed (resource was recreated).
+	Conflict bool
 }
 
 // ByID returns a map of results keyed by resource ID for easy lookup.

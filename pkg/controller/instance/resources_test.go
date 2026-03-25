@@ -16,6 +16,8 @@ package instance
 
 import (
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 
@@ -804,9 +806,9 @@ func TestPruneOrphansRespectsReverseTopologicalOrder(t *testing.T) {
 	// nodeC (position 2) must be deleted before nodeB (position 1),
 	// and nodeB before nodeA (position 0). Since each is in its own wave,
 	// the order is strictly: orphan-c, orphan-b, orphan-a.
-	posC := indexOf(deletionOrder, "orphan-c")
-	posB := indexOf(deletionOrder, "orphan-b")
-	posA := indexOf(deletionOrder, "orphan-a")
+	posC := slices.Index(deletionOrder, "orphan-c")
+	posB := slices.Index(deletionOrder, "orphan-b")
+	posA := slices.Index(deletionOrder, "orphan-a")
 	assert.Less(t, posC, posB, "nodeC orphan should be deleted before nodeB orphan")
 	assert.Less(t, posB, posA, "nodeB orphan should be deleted before nodeA orphan")
 }
@@ -861,29 +863,15 @@ func TestPruneOrphansUnmappedDeletedFirst(t *testing.T) {
 
 	// Unmapped orphan gets position len(nodes)=1, "known" gets position 0.
 	// Reverse order: unmapped (1) first, then known (0).
-	posUnknown := indexOf(deletionOrder, "orphan-unknown")
-	posKnown := indexOf(deletionOrder, "orphan-known")
+	posUnknown := slices.Index(deletionOrder, "orphan-unknown")
+	posKnown := slices.Index(deletionOrder, "orphan-known")
 	assert.Less(t, posUnknown, posKnown, "unmapped orphan should be deleted before known orphan")
 }
 
 func mergeLabels(base, extra map[string]string) map[string]string {
-	merged := make(map[string]string, len(base)+len(extra))
-	for k, v := range base {
-		merged[k] = v
-	}
-	for k, v := range extra {
-		merged[k] = v
-	}
+	merged := maps.Clone(base)
+	maps.Copy(merged, extra)
 	return merged
-}
-
-func indexOf(slice []string, item string) int {
-	for i, s := range slice {
-		if s == item {
-			return i
-		}
-	}
-	return -1
 }
 
 func TestProcessApplyResultsAndReadiness(t *testing.T) {

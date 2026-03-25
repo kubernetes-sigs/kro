@@ -60,12 +60,6 @@ type Interface interface {
 	// Batch metadata contains only GKs/namespaces from THIS apply (not parent memory).
 	Apply(ctx context.Context, resources []Resource, mode ApplyMode) (*ApplyResult, Metadata, error)
 
-	// Prune deletes orphaned resources (those with applyset label but not in KeepUIDs).
-	// Pass Project().PruneScope() to search both current batch locations AND parent memory.
-	// Prune deletes all orphans concurrently without ordering guarantees.
-	// For DAG-aware deletion, use ListOrphans + DeleteOrphan instead.
-	Prune(ctx context.Context, opts PruneOptions) (*PruneResult, error)
-
 	// ListOrphans discovers orphaned resources without deleting them.
 	// Returns candidates that the caller can order (e.g. reverse-topological)
 	// before issuing deletes via DeleteOrphan.
@@ -95,7 +89,7 @@ type ApplyMode struct {
 	Concurrency int // 0 = len(resources)
 }
 
-// PruneOptions controls Prune behavior.
+// PruneOptions controls ListOrphans behavior.
 type PruneOptions struct {
 	// KeepUIDs are UIDs of resources that should NOT be pruned.
 	// Typically from ApplyResult.ObservedUIDs().
@@ -105,8 +99,6 @@ type PruneOptions struct {
 	// Pass the superset scope (union of batch + parent) to ensure
 	// prune finds all orphans.
 	Scope *PruneScope
-	// Concurrency limits parallel delete operations. 0 = len(candidates).
-	Concurrency int
 }
 
 // PruneScope defines the search space for orphan detection.
@@ -324,37 +316,6 @@ func (a *ApplySet) Apply(ctx context.Context, resources []Resource, mode ApplyMo
 	return result, a.buildMetadata(desiredGKs, desiredNamespaces), nil
 }
 
-// Prune deletes orphaned resources (those with applyset label but not in KeepUIDs).
-func (a *ApplySet) Prune(ctx context.Context, opts PruneOptions) (*PruneResult, error) {
-	scopeGKs := opts.Scope.GroupKinds
-
-	// Always include parent namespace in prune scope
-	scopeNamespaces := opts.Scope.Namespaces.Clone()
-	if a.parentNamespace != "" {
-		scopeNamespaces.Insert(a.parentNamespace)
-	} else {
-		scopeNamespaces.Insert(metav1.NamespaceDefault)
-	}
-
-	// Convert GKs to RESTMappings
-	pruneMappings := make([]*meta.RESTMapping, 0, len(scopeGKs))
-	for gk := range scopeGKs {
-		mapping, err := a.restMapper.RESTMapping(gk)
-		if err != nil {
-			return nil, fmt.Errorf("RESTMapping failed for %v: %w", gk, err)
-		}
-		pruneMappings = append(pruneMappings, mapping)
-	}
-
-	// List and delete orphans
-	pruned, conflicts, err := a.prune(ctx, pruneMappings, scopeNamespaces, opts.KeepUIDs, opts.Concurrency)
-	if err != nil {
-		return nil, err
-	}
-
-	return &PruneResult{Pruned: pruned, Conflicts: conflicts}, nil
-}
-
 func (a *ApplySet) applyResource(
 	ctx context.Context,
 	r Resource,
@@ -481,7 +442,7 @@ func (a *ApplySet) ListOrphans(ctx context.Context, opts PruneOptions) ([]Orphan
 		mappings = append(mappings, mapping)
 	}
 
-	return a.listOrphans(ctx, mappings, scopeNamespaces, opts.KeepUIDs, opts.Concurrency)
+	return a.listOrphans(ctx, mappings, scopeNamespaces, opts.KeepUIDs)
 }
 
 // DeleteOrphan deletes a single orphan candidate using a UID precondition
@@ -529,7 +490,6 @@ func (a *ApplySet) listOrphans(
 	mappings []*meta.RESTMapping,
 	namespaces sets.Set[string],
 	keepUIDs sets.Set[types.UID],
-	concurrency int,
 ) ([]OrphanCandidate, error) {
 	type listTask struct {
 		gvr       schema.GroupVersionResource
@@ -552,9 +512,6 @@ func (a *ApplySet) listOrphans(
 	var candidates []OrphanCandidate
 
 	listGroup, listCtx := errgroup.WithContext(ctx)
-	if concurrency > 0 {
-		listGroup.SetLimit(concurrency)
-	}
 	for _, task := range tasks {
 		listGroup.Go(func() error {
 			var list *unstructured.UnstructuredList
@@ -594,59 +551,6 @@ func (a *ApplySet) listOrphans(
 	}
 
 	return candidates, nil
-}
-
-// prune lists and deletes orphans concurrently (flat, unordered).
-// Retained for the convenience Prune() method.
-func (a *ApplySet) prune(
-	ctx context.Context,
-	mappings []*meta.RESTMapping,
-	namespaces sets.Set[string],
-	keepUIDs sets.Set[types.UID],
-	concurrency int,
-) ([]PruneResultItem, int, error) {
-	candidates, err := a.listOrphans(ctx, mappings, namespaces, keepUIDs, concurrency)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	if concurrency <= 0 {
-		concurrency = len(candidates)
-	}
-	if concurrency == 0 {
-		concurrency = 1
-	}
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(concurrency)
-
-	var mu sync.Mutex
-	var results []PruneResultItem
-	conflicts := 0
-
-	for _, c := range candidates {
-		eg.Go(func() error {
-			result, err := a.DeleteOrphan(egCtx, c)
-			if err != nil {
-				return err
-			}
-			mu.Lock()
-			if result.Pruned != nil {
-				results = append(results, *result.Pruned)
-			}
-			if result.Conflict {
-				conflicts++
-			}
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	if err := eg.Wait(); err != nil {
-		return nil, 0, err
-	}
-
-	return results, conflicts, nil
 }
 
 func (a *ApplySet) parentAnnotationSets() (sets.Set[schema.GroupKind], sets.Set[string]) {

@@ -29,10 +29,10 @@ import (
 )
 
 const (
-	retentionRGDName    = "upgrade-readywhen-empty"
+	retentionRGDName    = "upgrade-readywhen-nil"
 	retentionInstanceNS = "upgrade-test"
-	retentionInstance   = "test-readyempty"
-	retentionChild      = "test-readyempty-configmap"
+	retentionInstance   = "test-readynil"
+	retentionChild      = "test-readynil-configmap"
 	maxGraphRevisions   = 5
 	retentionMutations  = 10
 	retentionTimeout    = 2 * time.Minute
@@ -100,7 +100,7 @@ var _ = ginkgo.Describe("Post-Upgrade Rapid Mutations", ginkgo.Ordered, func() {
 			}, retentionTimeout, retentionInterval).Should(gomega.Succeed())
 
 			ginkgo.By("Verifying instance is ACTIVE")
-			obj, err := dynamicClient.Resource(kroGVR("upgradereadyempties")).
+			obj, err := dynamicClient.Resource(kroGVR("upgradereadynils")).
 				Namespace(retentionInstanceNS).
 				Get(ctx, retentionInstance, metav1.GetOptions{})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())

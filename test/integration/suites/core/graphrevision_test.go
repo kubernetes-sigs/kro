@@ -185,6 +185,10 @@ var _ = Describe("GraphRevision Lifecycle", func() {
 											"name":  "CM_NAME",
 											"value": "${configmap.metadata.name}",
 										},
+										map[string]interface{}{
+											"name":  "CM_NS",
+											"value": "${configmap.metadata.namespace}",
+										},
 									},
 								},
 							},

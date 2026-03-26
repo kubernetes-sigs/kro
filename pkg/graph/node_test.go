@@ -47,6 +47,49 @@ func TestNodeTypeString(t *testing.T) {
 	}
 }
 
+func TestNodeMeta_AddDependency(t *testing.T) {
+	tests := []struct {
+		name     string
+		deps     []string
+		expected []string
+	}{
+		{
+			name:     "no duplicates",
+			deps:     []string{"a", "b", "c"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "all duplicates",
+			deps:     []string{"a", "a", "a"},
+			expected: []string{"a"},
+		},
+		{
+			name:     "interleaved duplicates",
+			deps:     []string{"a", "b", "a", "c", "b", "c"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "single dependency",
+			deps:     []string{"x"},
+			expected: []string{"x"},
+		},
+		{
+			name:     "empty",
+			deps:     nil,
+			expected: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &NodeMeta{}
+			for _, dep := range tt.deps {
+				m.addDependency(dep)
+			}
+			assert.Equal(t, tt.expected, m.Dependencies)
+		})
+	}
+}
+
 func TestNodeDeepCopy(t *testing.T) {
 	var nilNode *Node
 	assert.Nil(t, nilNode.DeepCopy())

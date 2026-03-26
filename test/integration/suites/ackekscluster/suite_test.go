@@ -107,6 +107,40 @@ var _ = Describe("EKSCluster", func() {
 
 			// Verify the ResourceGraphDefinition status
 			g.Expect(createdRGD.Status.TopologicalOrder).To(HaveLen(12))
+
+			// Verify dependency information is correct and deduplicated.
+			// Build a lookup from resource ID to its dependency IDs.
+			depsByID := make(map[string][]string)
+			for _, ri := range createdRGD.Status.Resources {
+				ids := make([]string, 0, len(ri.Dependencies))
+				for _, d := range ri.Dependencies {
+					ids = append(ids, d.ID)
+				}
+				depsByID[ri.ID] = ids
+			}
+			// Resources with no dependencies should not appear in the map.
+			g.Expect(depsByID).ToNot(HaveKey("clusterRole"))
+			g.Expect(depsByID).ToNot(HaveKey("clusterVPC"))
+			g.Expect(depsByID).ToNot(HaveKey("clusterElasticIPAddress"))
+			g.Expect(depsByID).ToNot(HaveKey("clusterAdminRole"))
+			g.Expect(depsByID).ToNot(HaveKey("clusterNodeRole"))
+			// Resources with dependencies — assert exact sets.
+			g.Expect(depsByID["clusterInternetGateway"]).To(ConsistOf("clusterVPC"))
+			g.Expect(depsByID["clusterRouteTable"]).To(ConsistOf(
+				"clusterVPC", "clusterInternetGateway",
+			))
+			g.Expect(depsByID["clusterSubnetA"]).To(ConsistOf("clusterVPC", "clusterRouteTable"))
+			g.Expect(depsByID["clusterSubnetB"]).To(ConsistOf("clusterVPC", "clusterRouteTable"))
+			g.Expect(depsByID["cluster"]).To(ConsistOf(
+				"clusterRole", "clusterSubnetA", "clusterSubnetB",
+			))
+			g.Expect(depsByID["clusterNATGateway"]).To(ConsistOf(
+				"clusterSubnetB", "clusterElasticIPAddress",
+			))
+			g.Expect(depsByID["clusterNodeGroup"]).To(ConsistOf(
+				"cluster", "clusterSubnetA", "clusterSubnetB", "clusterNodeRole",
+			))
+
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

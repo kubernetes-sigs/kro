@@ -176,13 +176,34 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 			ginkgo.Skip("Pre-upgrade version did not have GraphRevision support")
 		}
 
-		// Get current GR count
+		// Compute the expected total deterministically from the pre-upgrade snapshot:
+		//   - unmutated RGDs: snapshot count unchanged
+		//   - mutationRGDName: +1 (mutation suite adds exactly one new GR, no GC)
+		//   - retentionRGDName: +retentionMutations capped at maxGraphRevisions
+		//     (retention suite runs retentionMutations mutations; GC keeps at most
+		//     maxGraphRevisions, so the final count is min(pre+mutations, max))
+		//   - deletionRGDName: excluded — the deletion suite deletes this RGD and
+		//     its GRs are garbage collected
+		expectedTotal := 0
+		for rgdName, preCount := range snapshot.GRCountPerRGD {
+			switch rgdName {
+			case mutationRGDName:
+				expectedTotal += min(preCount+1, maxGraphRevisions)
+			case retentionRGDName:
+				expectedTotal += min(preCount+retentionMutations, maxGraphRevisions)
+			case deletionRGDName:
+				// GRs are GC'd when the RGD is deleted by the deletion suite
+			default:
+				expectedTotal += preCount
+			}
+		}
+
 		grList, err := dynamicClient.Resource(graphRevisionGVR).List(ctx, metav1.ListOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-		gomega.Expect(len(grList.Items)).To(gomega.Equal(snapshot.TotalGRCount),
-			"Total GraphRevision count should not have changed. Pre-upgrade: %d, Post-upgrade: %d",
-			snapshot.TotalGRCount, len(grList.Items))
+		gomega.Expect(len(grList.Items)).To(gomega.Equal(expectedTotal),
+			"Unexpected GraphRevision count post-upgrade. Expected: %d, Got: %d",
+			expectedTotal, len(grList.Items))
 	})
 
 	ginkgo.It("should have stable spec hashes for all RGDs", func() {

@@ -571,13 +571,17 @@ func (b *Builder) buildDependencyGraph(
 			return nil, fmt.Errorf("failed to extract dependencies from includeWhen: %w", err)
 		}
 
-		// Add all dependencies to node and DAG
-		allDeps := make([]string, 0, len(templateDeps)+len(forEachDeps)+len(includeWhenDeps))
-		allDeps = append(allDeps, templateDeps...)
-		allDeps = append(allDeps, forEachDeps...)
-		allDeps = append(allDeps, includeWhenDeps...)
-		node.Meta.Dependencies = append(node.Meta.Dependencies, allDeps...)
-		if err := directedAcyclicGraph.AddDependencies(node.Meta.ID, allDeps); err != nil {
+		// Build deduplicated dependency list, then register with the DAG.
+		for _, dep := range templateDeps {
+			node.Meta.addDependency(dep)
+		}
+		for _, dep := range forEachDeps {
+			node.Meta.addDependency(dep)
+		}
+		for _, dep := range includeWhenDeps {
+			node.Meta.addDependency(dep)
+		}
+		if err := directedAcyclicGraph.AddDependencies(node.Meta.ID, node.Meta.Dependencies); err != nil {
 			return nil, err
 		}
 	}

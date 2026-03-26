@@ -1188,6 +1188,45 @@ func TestGraphBuilder_DependencyValidation(t *testing.T) {
 			errMsg:  "graph contains a cycle",
 		},
 		{
+			name: "multiple fields referencing same resource are deduplicated",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, nil, nil),
+				// This resource references vpc from multiple fields — each
+				// field should contribute at most one dependency entry.
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "subnet",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlock": "${vpc.status.vpcID}",
+						"vpcID":     "${vpc.status.vpcID}",
+					},
+				}, nil, nil),
+			},
+			validateDeps: func(t *testing.T, g *Graph) {
+				assert.Empty(t, g.Resources["vpc"].Meta.Dependencies)
+				assert.Equal(t, []string{"vpc"}, g.Resources["subnet"].Meta.Dependencies)
+			},
+		},
+		{
 			name: "shared infrastructure dependencies",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(

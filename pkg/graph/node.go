@@ -98,6 +98,13 @@ type NodeMeta struct {
 	Dependencies []string
 }
 
+// addDependency appends dep to the dependency list if not already present.
+func (m *NodeMeta) addDependency(dep string) {
+	if !slices.Contains(m.Dependencies, dep) {
+		m.Dependencies = append(m.Dependencies, dep)
+	}
+}
+
 // ForEachDimension represents a parsed forEach dimension from an RGD resource.
 type ForEachDimension struct {
 	// Name is the iterator variable name (e.g., "region")

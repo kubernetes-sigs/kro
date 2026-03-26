@@ -96,6 +96,21 @@ var _ = Describe("NetworkingStack", func() {
 				"subnetAZB",
 				"subnetAZC",
 			}))
+			// Verify dependency information is correct and deduplicated.
+			depsByID := make(map[string][]string)
+			for _, ri := range createdRGD.Status.Resources {
+				ids := make([]string, 0, len(ri.Dependencies))
+				for _, d := range ri.Dependencies {
+					ids = append(ids, d.ID)
+				}
+				depsByID[ri.ID] = ids
+			}
+			g.Expect(depsByID).ToNot(HaveKey("vpc"))
+			g.Expect(depsByID["securityGroup"]).To(ConsistOf("vpc"))
+			g.Expect(depsByID["subnetAZA"]).To(ConsistOf("vpc"))
+			g.Expect(depsByID["subnetAZB"]).To(ConsistOf("vpc"))
+			g.Expect(depsByID["subnetAZC"]).To(ConsistOf("vpc"))
+
 			// Verify ready condition.
 			g.Expect(createdRGD.Status.Conditions).ShouldNot(BeEmpty())
 			var readyCondition krov1alpha1.Condition

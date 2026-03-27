@@ -17,14 +17,30 @@ tracked in a flat `map[string]*ResourceState`.
 
 This works but has known limitations:
 
-- **No parallelism.** Independent branches run one at a time. A graph with
-  two independent subtrees of depth 5 takes 10 steps instead of 5.
+- **No level-boundary enforcement.** `applyset.Apply()` already applies
+  resources concurrently using `errgroup`. The sequential bottleneck is
+  `processNodes()`: it resolves CEL template expressions and evaluates
+  `readyWhen` one node at a time in topological order. There is no level
+  boundary: a node at level N+1 can attempt CEL resolution before any node
+  at level N has its observed state available, so it simply blocks on
+  `ErrDataPending` and causes an immediate requeue. A graph with two
+  independent subtrees of depth 5 therefore requires 10 sequential
+  `processNode()` calls — and potentially 10 requeue cycles — instead of
+  5 parallel ones.
 - **No propagation control.** Every reconcile applies all changes at once.
   There's no way to gate rollouts, enforce maintenance windows, or do
   incremental rollouts across `forEach` collections.
-- **No ordered deletion.** The current ApplySet tracks resources as a flat
-  set. When pruning, a Service might be deleted before its Deployment, or a
-  Namespace before the resources inside it.
+- **No ordered deletion for orphan pruning.** There are two deletion paths
+  with different behaviors. Instance deletion (`reconcileDeletion()` →
+  `planNodesForDeletion()`) is already reverse-topological: it iterates
+  nodes in forward order and keeps overwriting `deletionNode`, so it always
+  selects the deepest surviving dependent — one node per reconcile cycle.
+  The unordered path is orphan pruning: `pruneOrphans()` → `ApplySet.Prune()`
+  lists all resources labeled with the applyset ID but absent from the
+  current desired set, then deletes them in a flat concurrent pass with no
+  dependency ordering. A Service could be pruned before its Deployment, or
+  a Namespace before the resources inside it. This is a known bug tracked
+  in PR #1210.
 - **No revision tracking.** When the RGD changes and a new
   [GraphRevision](https://kro.run/api/crds/graphrevision) is issued, the
   controller has no way to tell which resources need updating and which are
@@ -133,6 +149,18 @@ input values, and produces a **runtime DAG**: which resources to create, at
 which dependency levels, with fully-rendered templates. Dynamic elements --
 `includeWhen`, `forEach`, CEL expressions - are all resolved here.
 
+**Architecture note — layering:** The existing runtime has two layers:
+`graph.Graph` (static, built once per RGD revision, cached in
+`pkg/graph/revisions/`) and `runtime.Runtime` (per-reconcile, created via
+`runtime.FromGraph()`). `ProjectedDAG` is a new third layer produced
+alongside `Runtime` for each reconcile. Its construction evaluates
+`includeWhen` and `forEach` expressions. Because `runtime.FromGraph()`
+creates a single shared `expressionsCache` for the whole reconcile, any
+`includeWhen`/`forEach` evaluations done during `ProjectedDAG` construction
+must use a cache scope isolated from the template-variable expressions used
+later in Phase 3 — or stale projection results from one iteration will
+persist into template resolution.
+
 ```go
 type ProjectedDAG struct {
     // Levels is the output of Kahn's algorithm: nodes grouped by dependency
@@ -178,8 +206,8 @@ Every resource has two identities: one in the graph, one in the cluster.
 The graph node ID is stable across revisions. The GKNN is not necessarily
 stable — a new revision could change the resource name, which the diff sees
 as delete-old + create-new. Each managed resource carries
-`kro.run/resource-id` and `kro.run/foreach-bindings` labels to map a live
-resource back to its logical NodeID.
+`kro.run/node-id` (existing `NodeIDLabel`) and `kro.run/foreach-bindings`
+(new annotation) to map a live resource back to its logical NodeID.
 
 Projection rules:
 
@@ -198,6 +226,21 @@ its status fields become available, which may flip another node's
 `includeWhen` from false to true. The controller handles this by re-running
 projection up to 5 times per reconcile. Cycle detection on
 `includeWhen`/`readyWhen` edges prevents infinite loops.
+
+**Implementation note — expression cache interaction:** The current
+`expressionEvaluationState.Resolved` flag is set to `true` on first
+evaluation and is never cleared within a reconcile. The cache key is the
+expression string (`expr.Original`), shared across all uses in a single
+`runtime.FromGraph()` call. Re-running projection on the same `Runtime`
+instance would return the first-evaluated (potentially stale) result for
+any `includeWhen` or `readyWhen` expression. Fixed-point re-projection
+therefore requires one of: (a) scoping the expression cache to a single
+projection attempt rather than the whole reconcile, (b) clearing
+`Resolved = false` on `includeWhen` and `readyWhen` entries between
+projection iterations, or (c) constructing a fresh `Runtime` via
+`FromGraph()` for each projection attempt. This is a non-trivial
+implementation concern that must be resolved before fixed-point
+re-projection can be implemented correctly.
 
 ##### Phase 2: Diff
 
@@ -250,6 +293,15 @@ The wavefront processes levels in order. Within each level, nodes run in
 parallel. A level must finish before the next one starts. If a node fails,
 only its dependents are blocked — independent branches continue.
 
+**Concurrency note:** The current `StateManager` is explicitly documented
+as not safe for concurrent use — `SetNodeState()` writes to a plain
+`map[string]*NodeState` with no mutex. Parallel within-level execution
+requires either adding a `sync.Mutex` guarding `SetNodeState()`, or
+collecting per-node results into a slice or channel during the parallel
+phase and writing them to `StateManager` sequentially after the level's
+`errgroup` completes. The latter pattern is already used in
+`applyset.Apply()` and is the preferred approach.
+
 **Forward wavefront (create/update)**
 
 Levels are processed in ascending order (0, 1, 2, ...). Within each level,
@@ -273,7 +325,7 @@ Forward wavefront execution:
   │                                          (parallel)             │
   │   Secret ────── SSA apply ──► exists ──► readyWhen? ──► Ready   │
   │                                                                 │
-  │   All Ready? ── yes ──► runtime.Synchronize() ──► advance       │
+  │   All Ready? ── yes ──► SetObserved() per node ──► advance       │
   └─────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -282,7 +334,7 @@ Forward wavefront execution:
   │                                                                 │
   │   Deployment ── skip apply (unchanged) ─► readyWhen? ── Ready   │
   │                                                                 │
-  │   All Ready? ── yes ──► runtime.Synchronize() ──► advance       │
+  │   All Ready? ── yes ──► SetObserved() per node ──► advance       │
   └─────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -302,9 +354,12 @@ Key behaviors:
 - **Level completion.** A level is done when every node in it reaches a
   terminal state: Ready, Error, or Gated. If a node's `readyWhen` is not
   yet true, the reconcile returns and waits for a watch event.
-- **runtime.Synchronize() between levels.** After a level completes, the
-  CEL evaluation context is refreshed with the latest status fields from
-  the just-completed resources.
+- **Context refresh between levels.** After a level completes,
+  `SetObserved()` is called with the SSA response object for each node in
+  that level (via `processApplyResults()`). The next level's CEL evaluation
+  then reads from the updated `n.observed` on its dependencies via
+  `buildContext()`. Context refresh is implicit — there is no separate
+  synchronization step.
 - **Concurrency bound.** A semaphore limits parallel SSA applies to
   `maxConcurrency` (default: 10).
 
@@ -462,6 +517,14 @@ State mapping to [KREP-022] managedResources:
 | `Error` | `ERROR` | `NodeStateError` |
 | `ActionAdopt` | `IN_PROGRESS` | *(new - [KREP-014])* |
 
+> **API change required:** `BLOCKED` and `GATED` are new values that do not
+> exist in `api/v1alpha1` today. The current `NodeState` enum contains only:
+> `IN_PROGRESS`, `DELETING`, `SKIPPED`, `ERROR`, `SYNCED`, `DELETED`,
+> `WAITING_FOR_READINESS`. Adding `BLOCKED` and `GATED` requires extending
+> `api/v1alpha1/instance_state.go` and updating all exhaustive switch
+> statements over `NodeState`. This is an explicit step in the implementation
+> plan (Phase 3).
+
 ##### Phase 4: Status update
 
 Condition hierarchy (extends KREP-001 and [KREP-006]):
@@ -514,13 +577,27 @@ Member labels on each managed resource:
 ```yaml
 labels:
   applyset.kubernetes.io/part-of: "kro-<hash>"
-  kro.run/instance: "<instance-name>"
-  kro.run/resource-id: "deployment"
-  kro.run/level: "1"
-  kro.run/revision: "3"
+  kro.run/instance-name: "<instance-name>"    # existing: metadata.InstanceLabel
+  kro.run/node-id: "deployment"               # existing: metadata.NodeIDLabel
+  kro.run/level: "1"                          # new — add to applyDecoratorLabels()
+  kro.run/revision: "3"                       # new — add to applyDecoratorLabels()
 annotations:
-  kro.run/foreach-bindings: '{"region":"eu-west-1"}'  # forEach nodes only
+  kro.run/foreach-bindings: '{"region":"eu-west-1"}'  # forEach nodes only — new annotation
 ```
+
+> **Implementation note:** `kro.run/level` and `kro.run/revision` do not
+> exist in the current label set. The existing per-resource labels are
+> `kro.run/node-id` (`NodeIDLabel`), `kro.run/instance-name`
+> (`InstanceLabel`), `kro.run/instance-id` (`InstanceIDLabel`),
+> `kro.run/collection-index`, and `kro.run/collection-size` — all defined in
+> `pkg/metadata/labels.go`. Both new labels must be added to
+> `applyDecoratorLabels()` in `pkg/controller/instance/resources.go`.
+>
+> Reading `kro.run/revision` for the diff phase (Phase 2: "revision <
+> target → ActionUpdate") requires the live label value.
+> `processRegularNode()` already performs a GET per resource to check
+> `deletionTimestamp` and populate the CEL context; the revision label can
+> be read from that same GET response at no additional API cost.
 
 The inventory `revision` field is a "fully converged" marker — it is only
 updated after the entire forward wavefront completes and all nodes reach the
@@ -575,7 +652,7 @@ available for users who need per-revision health validation.
 
 | # | Invariant | Recovery |
 |---|-----------|----------|
-| 1 | **Labels are the source of truth.** `kro.run/revision` and `kro.run/level` on each managed resource are authoritative. | On crash, rebuild from labels. If inventory lost entirely, scan for `applyset.kubernetes.io/part-of` labels. |
+| 1 | **Labels are the source of truth.** `kro.run/revision` and `kro.run/level` on each managed resource are authoritative. | On crash, rebuild from labels. If inventory lost entirely, scan for resources carrying `applyset.kubernetes.io/part-of` and `kro.run/instance-name` labels. |
 | 2 | **Inventory revision ≤ minimum per-node revision.** The inventory `revision` is only bumped after all nodes reach the target. | Stale nodes are re-applied. SSA is idempotent. |
 | 3 | **Phase 1 recomputes levels from the GraphRevision, not the inventory.** | Stale inventory level data is ignored; inventory is rewritten at the end. |
 | 4 | **Don't delete resources based on stale CEL context.** If a node's `includeWhen` depends on an Error node's status, the result is frozen at its last known value. | Skip `includeWhen` re-evaluation for nodes whose dependencies include an Error node. |
@@ -634,7 +711,7 @@ Mapping current → proposed:
 |---------|----------|-------------|
 | `Controller.Reconcile` (sequential walk) | 4-phase pipeline | Refactor |
 | `InstanceState {State, ResourceStates}` | `+ Level, Revision` | Extend |
-| `runtime.Synchronize()` (per-node) | Per-level, using SSA response objects | Optimize |
+| `processApplyResults()` + `SetObserved()` (per-node, sequential) | Per-level batch: call `SetObserved()` for all nodes in a level after SSA responses arrive, then advance | Refactor |
 | `graph.Graph + flat TopologicalSort` | `TopologicalSortLevels` (Kahn's) | Refactor |
 | ApplySet labels (flat membership) | ApplySet labels + `kro.run/inventory` | Extend |
 
@@ -644,7 +721,7 @@ New components:
 |-----------|---------|
 | `Wavefront` | Level-aware parallel executor with [KREP-006] + [KREP-014] gates |
 | `LevelInventory` | Serializer for `kro.run/inventory` with pluggable storage backend |
-| `ProjectedDAG` | Explicit runtime DAG with `includeWhen`/`forEach` evaluated |
+| `ProjectedDAG` | New layer between static `graph.Graph` and per-reconcile `runtime.Runtime`. Evaluates `includeWhen`/`forEach` to produce the active node set and dependency levels. Must use an expression cache scope isolated from the template-variable cache in `runtime.FromGraph()` to avoid stale results across fixed-point iterations. |
 | `ReconcilePlan` | Typed diff output grouping actions by level |
 
 Migration phases:
@@ -653,7 +730,7 @@ Migration phases:
 |-------|-------|
 | 1 | Add `TopologicalSortLevels()` ([KREP-003]). Sequential execution. Add `kro.run/level` labels. |
 | 2 | Add `LevelInventory` writer. Write `kro.run/inventory`. Add `kro.run/revision` labels. |
-| 3 | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). |
+| 3 | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). Extend `api/v1alpha1/instance_state.go` `NodeState` enum with `BLOCKED` and `GATED`; update all exhaustive switch statements. Add mutex or channel-based result collection to `StateManager` for concurrent level execution. |
 | 4 | Add `propagateWhen` ([KREP-006]) and `onCreate`/`onDelete` ([KREP-014]). |
 
 ## Other solutions considered
@@ -812,9 +889,12 @@ revisions. Serialized mode is available as an opt-in.
    main resource conflicts with user spec edits. Mitigation: use SSA with
    dedicated field manager `kro-inventory`, or store inventory in a separate
    ConfigMap.
-2. **Stale informer cache during re-projection** (MEDIUM) — `runtime.Synchronize()`
-   reads from cache that hasn't received the watch event yet. Mitigation: use
-   SSA response objects directly to update the runtime context.
+2. **Stale informer cache during re-projection** (MEDIUM) — if `buildContext()`
+   reads from `n.observed` that was populated from an informer cache that has
+   not yet received the latest watch event, CEL evaluation will use stale data.
+   Mitigation: populate `n.observed` directly from the SSA response object
+   (the `Observed` field on `ApplyResultItem`) rather than from the informer
+   cache. This is already the pattern in `processApplyResults()`.
 3. **Finalizer-blocked reverse prune** (MEDIUM) — DELETE sets
    `deletionTimestamp` but resource lingers until an external finalizer
    completes. Mitigation: multi-reconcile deletion: issue DELETE, mark

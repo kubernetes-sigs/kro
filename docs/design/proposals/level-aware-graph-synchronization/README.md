@@ -447,38 +447,23 @@ Ready = False
 
 #### Node state machine
 
-```
-                         includeWhen = false
-              [*] ──────────────────────────────────► Excluded
-               │                                        │
-               │ includeWhen = true,                    │ includeWhen
-               │ deps not ready                         │ becomes true
-               │ OR any dep in Error                    │
-               ▼                                        │
-            Blocked ◄───────────────────────────────────┘
-               │
-               ├─── deps ready, propagateWhen = false ──► Gated ─┐
-               │                                                  │
-               │    deps ready, propagateWhen = true              │ propagateWhen
-               │    (or not set)                                  │ becomes true
-               ▼                                                  │
-           Applying ◄─────────────────────────────────────────────┘
-               │  ▲
-  SSA apply    │  │ retry on
-  failed       │  │ next reconcile
-               ▼  │
-            Error ─┘
-               │
-               │ SSA success,
-               │ readyWhen = false
-               ▼
-          WaitReady ─── readyWhen = true ──► Ready
-```
+| From | To | Condition |
+|------|----|-----------|
+| *initial* | Excluded | `includeWhen` evaluates to false |
+| *initial* | Blocked | `includeWhen` true, but dependencies not all Ready (not yet ready, Error, or Gated) |
+| Excluded | Blocked | `includeWhen` becomes true (re-projection) |
+| Blocked | Gated | All dependencies Ready, `propagateWhen` evaluates to false ([KREP-006]) |
+| Blocked | Applying | All dependencies Ready, `propagateWhen` true or not set |
+| Gated | Applying | `propagateWhen` becomes true |
+| Applying | WaitReady | SSA apply succeeds, `readyWhen` not yet satisfied |
+| Applying | Error | SSA apply fails |
+| WaitReady | Ready | `readyWhen` evaluates to true |
+| Error | Applying | Retry on next reconcile |
 
-- A node enters `Blocked` if any dependency is not `Ready` (including `Error`)
-- `propagateWhen` gates mutation *start* ([KREP-006])
-- `readyWhen` gates mutation *end*
-- `Error` on a node blocks only its dependents, not unrelated branches
+Key properties:
+- A node enters `Blocked` if *any* dependency is not `Ready` — including dependencies in `Error`. This means errors only block dependents, not unrelated branches.
+- `propagateWhen` gates mutation *start*; `readyWhen` gates mutation *end* ([KREP-006]).
+- `Error -> Applying` happens on the next reconcile cycle, not immediately.
 
 **State mapping to [KREP-022] managedResources:**
 

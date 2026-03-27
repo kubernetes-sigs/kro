@@ -163,6 +163,42 @@ type ProjectedNode struct {
 }
 ```
 
+**Node identity:**
+
+The synchronizer works with two layers of identity that must be kept in
+correspondence:
+
+| Layer | Identifier | Scope | Example |
+|-------|-----------|-------|---------|
+| **Graph node** (logical) | `NodeID` = `ResourceID` + `ForEachBindings` | Unique within the projected DAG of one instance | `NodeID{ResourceID: "deployment"}` or `NodeID{ResourceID: "deployment", ForEachBindings: {"region": "eu-west-1"}}` |
+| **Kubernetes resource** (physical) | GKNN = Group + Kind + Namespace + Name | Unique within the cluster | `apps/Deployment/default/my-app-eu-west-1` |
+
+The graph node ID is **stable across revisions** — it is derived from the
+RGD's resource block name and the forEach bindings, not from the rendered
+Kubernetes resource name. This means the synchronizer can track that
+"the `deployment` node" is the same logical entity across GraphRevision 2
+and 3, even if its rendered template changes.
+
+The Kubernetes GKNN is computed during projection by rendering the node's
+template. The mapping from NodeID to GKNN is **not necessarily stable
+across revisions** — a new GraphRevision could change the name template,
+producing a different GKNN for the same NodeID. When this happens, the
+diff phase sees it as a delete of the old GKNN + create of the new GKNN
+(the old resource is in the inventory but absent from the projection; the
+new resource is in the projection but absent from the cluster).
+
+The `kro.run/resource-id` label on each managed resource records the
+graph-level `ResourceID`, enabling the controller to map a live Kubernetes
+resource back to its logical node. For forEach nodes,
+`kro.run/foreach-bindings` records the binding values. Together, these
+labels reconstruct the full `NodeID` from a live resource.
+
+The inventory uses GKNNs (physical identity) because it tracks what
+exists in the cluster. The projected DAG uses NodeIDs (logical identity)
+because it tracks what *should* exist. The diff phase joins these two
+views: for each NodeID, it looks up the corresponding GKNN and compares
+against the cluster.
+
 **Projection rules:**
 
 - `externalRef` nodes are resolved first (level -1, conceptually). They

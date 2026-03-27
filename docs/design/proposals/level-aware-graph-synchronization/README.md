@@ -433,13 +433,16 @@ A typical GKNN entry like `"Deployment.apps.my-namespace.my-app-eu-west-1"` is
 
 ### Mitigation
 
-The recommended hard limit is **50% of budget (~128KB)**:
+If the annotation budget becomes a concern, the inventory can be stored
+elsewhere instead:
 
-1. **Primary**: ConfigMap overflow. Annotation stores
-   `{"overflow":"<configmap-name>"}`. ConfigMap data holds full inventory (1MB).
-2. **Secondary**: Use GKN instead of GKNN when all resources share the instance
-   namespace (~15-25 bytes saved per entry).
-3. **Last resort**: gzip + base64 (typically 3-5x compression).
+1. **ConfigMap**: A dedicated ConfigMap per instance holds the full inventory
+   (up to 1MB). The annotation stores only a pointer:
+   `{"overflow":"<configmap-name>"}`.
+2. **Instance status**: The inventory is written into the instance's
+   `.status.inventory` field, keeping all instance state co-located and avoiding
+   a separate object. Status subresource updates don't conflict with spec
+   edits.
 
 ---
 

@@ -261,23 +261,37 @@ func (w *Wavefront) executeLevel(ctx context.Context, level int, actions []Plann
 
 **Node state machine:**
 
-```mermaid
-stateDiagram-v2
-    [*] --> Pending
-    Pending --> Excluded : includeWhen = false
-    Pending --> Blocked : includeWhen = true,\ndeps not ready
-    Excluded --> Blocked : includeWhen becomes true
-    Blocked --> Gated : deps ready,\npropagateWhen = false
-    Blocked --> Applying : deps ready,\npropagateWhen = true\n(or not set)
-    Gated --> Applying : propagateWhen\nbecomes true
-    Applying --> Error : SSA apply failed
-    Applying --> WaitReady : SSA success,\nreadyWhen = false
-    WaitReady --> Ready : readyWhen = true
-    Error --> Applying : retry on\nnext reconcile
-
-    note right of Gated : KREP-006\npropagateWhen\ngates mutation start
-    note right of WaitReady : readyWhen\ngates mutation end
-    note right of Excluded : KREP-022\nstate: EXCLUDED
+```
+                         includeWhen = false
+              [*] ──────────────────────────────────► Excluded
+               │                                        │
+               │ includeWhen = true,                    │ includeWhen
+               │ deps not ready                         │ becomes true
+               ▼                                        │
+            Blocked ◄───────────────────────────────────┘
+               │
+               ├─── deps ready, propagateWhen = false ──► Gated ─┐
+               │                                                  │
+               │    deps ready, propagateWhen = true              │ propagateWhen
+               │    (or not set)                                  │ becomes true
+               ▼                                                  │
+           Applying ◄─────────────────────────────────────────────┘
+               │  ▲
+  SSA apply    │  │ retry on
+  failed       │  │ next reconcile
+               ▼  │
+            Error ─┘
+               │
+               │ SSA success,
+               │ readyWhen = false
+               ▼
+          WaitReady ─── readyWhen = true ──► Ready
+               │                               │
+               │                               │
+    ┌──────────┘                  ┌────────────┘
+    │ KREP-006: propagateWhen     │ KREP-006: readyWhen
+    │ gates mutation start        │ gates mutation end
+    └─────────────────────────────┘
 ```
 
 **State mapping to [KREP-022] managedResources:**

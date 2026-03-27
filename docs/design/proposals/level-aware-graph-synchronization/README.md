@@ -1,4 +1,4 @@
-# KREP: Level-Aware Graph Synchronization for the Instance Controller
+# KREP-023: Level-Aware Graph Synchronization for the Instance Controller
 
 **Authors:** Jakob Moller
 **Status:** Draft

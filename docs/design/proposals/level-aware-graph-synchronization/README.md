@@ -260,6 +260,9 @@ because the new GraphRevision may have changed CEL expressions or predicates:
   Otherwise                             --> ActionNone
 
   In inventory but not in projection?   --> ActionDelete
+  includeWhen became false?             --> ActionDelete (only if resource exists;
+                                            but see Invariant 4: skip if caused
+                                            by stale Error dependency context)
   KREP-014 adopt policy?               --> ActionAdopt
   KREP-014 orphan policy?              --> ActionOrphan
 ```
@@ -537,9 +540,11 @@ Key properties:
 | `WaitReady` | `WAITING_FOR_READINESS` | `NodeStateWaitingForReadiness` |
 | `Blocked` | `BLOCKED` | *(new -- dependency in Error or Gated)* |
 | `Gated` | `GATED` | *(new -- [KREP-006])* |
-| `Excluded` | `EXCLUDED` | `NodeStateSkipped` (renamed) |
+| `Excluded` (no resource) | not in `managedResources` | `NodeStateSkipped` (renamed) |
+| `Excluded` (resource exists) | `DELETING` | `NodeStateDeleting` |
+| `Deleting` | `DELETING` | `NodeStateDeleting` |
+| `Deleted` | not in `managedResources` | `NodeStateDeleted` |
 | `Error` | `ERROR` | `NodeStateError` |
-| `ActionDelete` | `DELETING` | `NodeStateDeleting` |
 | `ActionAdopt` | `IN_PROGRESS` | *(new -- [KREP-014])* |
 
 ### Phase 4: Status update
@@ -1008,14 +1013,14 @@ until the new one is successfully created.
      rebuild from `applyset.kubernetes.io/part-of` labels via cluster scan.
      SSA applies are idempotent.
 
-8. **Re-projection deleting resources due to stale Error node status** (MEDIUM)
+7. **Re-projection deleting resources due to stale Error node status** (MEDIUM)
    - *Cause:* An Error node's status is stale/absent in the CEL context. Another
      node's `includeWhen` references it, evaluates to false, and the node is
      excluded from the projected DAG — triggering an unintended delete.
    - *Mitigation:* Freeze `includeWhen` evaluation for nodes with Error
      dependencies (see [Invariant 4](#consistency-invariants-and-recovery)).
 
-9. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
+8. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
    - *Cause:* External resource stuck, producing permanent GATED state
      ([KREP-006]).
    - *Mitigation:* Optional `propagationTimeout`. Condition message:

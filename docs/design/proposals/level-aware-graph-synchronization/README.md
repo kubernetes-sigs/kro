@@ -575,12 +575,12 @@ flowchart LR
 
 ### Migration path
 
-| Phase | Scope | Target |
-|-------|-------|--------|
-| 1 | Add `TopologicalSortLevels()` ([KREP-003]). Sequential execution. Add `kro.run/level` labels. | v0.10 |
-| 2 | Add `LevelInventory` writer. Write `kro.run/inventory`. Add `kro.run/revision` labels. | v0.10 |
-| 3 | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). | v0.11 |
-| 4 | Add `propagateWhen` ([KREP-006]) and `onCreate`/`onDelete` ([KREP-014]). | v0.12+ |
+| Phase | Scope |
+|-------|-------|
+| 1 | Add `TopologicalSortLevels()` ([KREP-003]). Sequential execution. Add `kro.run/level` labels. |
+| 2 | Add `LevelInventory` writer. Write `kro.run/inventory`. Add `kro.run/revision` labels. |
+| 3 | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). |
+| 4 | Add `propagateWhen` ([KREP-006]) and `onCreate`/`onDelete` ([KREP-014]). |
 
 ---
 

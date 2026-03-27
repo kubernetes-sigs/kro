@@ -601,12 +601,12 @@ annotations:
 ### Ordered prune
 
 ```mermaid
-flowchart TB
-    INV["Read inventory"] --> PROJ["Compute projected DAG"]
-    PROJ --> DIFF["For each level highest->lowest:\nfind stale resources"]
-    DIFF --> DEL["Delete resources\n(parallel within level)"]
+flowchart LR
+    INV["Read\ninventory"] --> PROJ["Compute\nprojected DAG"]
+    PROJ --> DIFF["Find stale resources\n(highest level first)"]
+    DIFF --> DEL["Delete\n(parallel within level)"]
     DEL --> WAIT["Wait for confirmed\ndeletion via watch"]
-    WAIT --> UPD["Update inventory"]
+    WAIT --> UPD["Update\ninventory"]
     UPD --> NEXT{"More\nlevels?"}
     NEXT -- yes --> DIFF
     NEXT -- no --> DONE["Update ApplySet\nannotations"]

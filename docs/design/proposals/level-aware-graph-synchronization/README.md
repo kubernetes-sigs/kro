@@ -1246,6 +1246,72 @@ flowchart LR
 
 ---
 
+## Alternatives Considered
+
+### Per-node dependency graph walker instead of levels
+
+Instead of grouping nodes into levels and processing level-by-level, the
+wavefront could track each node's dependencies individually. A node would
+start as soon as all its specific dependencies are Ready, regardless of
+what level they're in.
+
+**Why we didn't choose this:** Level-based execution is simpler to reason
+about, debug, and observe. "Level 1 is done, level 2 is starting" is
+easier to follow than "node X started because nodes A and B finished but
+node Y is still waiting on C." The parallelism benefit is the same for
+most real-world graphs. Per-node tracking adds complexity without
+meaningful throughput gain.
+
+### One ApplySet per level instead of a single inventory annotation
+
+Instead of extending a single ApplySet with a `kro.run/inventory`
+annotation, we could create a separate ApplySet for each level. Each
+level would have its own parent object tracking its members.
+
+**Why we didn't choose this:** The ApplySet spec requires each resource
+to belong to exactly one ApplySet. With per-level ApplySets, a resource
+that changes level between revisions would need to be removed from one
+ApplySet and added to another — an error-prone two-step operation. A
+single inventory with level metadata is simpler and avoids cross-ApplySet
+coordination.
+
+### Instance-level revision tracking instead of per-node
+
+Instead of labeling each managed resource with `kro.run/revision`, we
+could track the revision at the instance level: "this instance is at
+revision 3."
+
+**Why we didn't choose this:** During a partial migration (e.g., level 0
+updated to rev 3 but level 1 failed), an instance-level revision can't
+represent the mixed state. The controller wouldn't know which nodes to
+retry on the next reconcile. Per-node labels give exact progress
+visibility and enable resumption from any failure point.
+
+### Block the entire graph on any node error
+
+Instead of error isolation (failed node blocks only its dependents), the
+wavefront could halt entirely when any node fails.
+
+**Why we didn't choose this:** Independent branches have no reason to
+stop. If Deployment-A fails but Deployment-B and its Service are fine,
+blocking Service-B delays useful work for no benefit. Error isolation
+keeps healthy branches running while the broken branch waits for a fix.
+
+### Serialized revision migration as the default
+
+Instead of skip-to-latest, the controller could complete each revision
+fully before starting the next.
+
+**Why we didn't choose this as the default:** Kubernetes controllers
+conventionally reconcile toward the latest desired state. Each
+GraphRevision is a complete snapshot — there's nothing in revision N that
+must be applied before N+1. Skip-to-latest is simpler (no extra state to
+persist) and avoids wasting work on intermediate revisions that the user
+has already superseded. Serialized mode is available as an opt-in for
+users who need per-revision health validation.
+
+---
+
 ## Open Questions
 
 1. **Serialized vs skip-to-latest revision policy** -- The proposal recommends

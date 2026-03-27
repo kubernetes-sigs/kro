@@ -485,20 +485,20 @@ Ready = False
 
 ```
                           includeWhen = false
-               [*] ──────────────────────────────────► Excluded
-                │                                        │
-                │ includeWhen = true,                    │ includeWhen
-                │ deps not ready                         │ becomes true
-                │ OR any dep in Error                    │
-                ▼                                        │
-  Ready ──► Blocked ◄───────────────────────────────────┘
-  │  dep      │
-  │  regress  ├── deps ready, propagateWhen = false ──► Gated ─┐
-  │           │                                                 │
-  │           │   deps ready, propagateWhen = true              │ propagateWhen
-  │           │   (or not set)                                  │ becomes true
-  │           ▼                                                 │
-  │       Applying ◄────────────────────────────────────────────┘
+               [*] ──────────────────────────────────► Excluded ◄──┐
+                │                                        │  ▲       │
+                │ includeWhen = true,                    │  │       │ includeWhen
+                │ deps not ready                         │  │       │ becomes false
+                │ OR any dep in Error                    │  │       │
+                ▼                          includeWhen   │  │       │
+  Ready ──► Blocked ◄──── becomes true ─────────────────┘  │       │
+  │  dep      │                                             │       │
+  │  regress  ├── deps ready, propagateWhen = false ──► Gated      │
+  │           │                                          │         │
+  │           │   deps ready, propagateWhen = true       │ propagate
+  │           │   (or not set)                           │ becomes
+  │           ▼                                          │ true
+  │       Applying ◄─────────────────────────────────────┘
   │           │  ▲
   │  template │  │ retry on
   │  changed  │  │ next reconcile
@@ -509,7 +509,15 @@ Ready = False
   │           │ SSA success,
   │           │ readyWhen = false
   │           ▼
-  └──────► WaitReady ─── readyWhen = true ──► Ready
+  └──────► WaitReady ─── readyWhen = true ──► Ready ───► Deleting ───► Deleted
+                                                │                        ▲
+                                                │  node removed or       │
+                                                │  instance deleted      │
+                                                └────────────────────────┘
+
+  Excluded (previously applied) ───► Deleting ───► Deleted
+           resource exists,
+           includeWhen = false
 ```
 
 Key properties:
@@ -517,6 +525,8 @@ Key properties:
 - `propagateWhen` gates mutation *start*; `readyWhen` gates mutation *end* ([KREP-006]).
 - `Error -> Applying` happens on the next reconcile cycle, not immediately.
 - A `Ready` node can regress to `Blocked` (dependency regresses or new revision) or to `Applying` (template changed, re-apply needed).
+- A `Ready` node transitions to `Deleting` when the instance is deleted or the node is removed by a new revision. Deletion is confirmed via watch before reaching `Deleted`.
+- An `Excluded` node that was previously applied (resource exists in cluster) transitions to `Deleting` to clean up the resource. An Excluded node that was never applied has no resource to delete.
 
 **State mapping to [KREP-022] managedResources:**
 

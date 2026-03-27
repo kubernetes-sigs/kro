@@ -461,6 +461,115 @@ elsewhere instead:
 
 ---
 
+## Observability
+
+The wavefront synchronizer introduces new failure modes and concurrency
+patterns that are invisible without dedicated observability. This section
+defines the metrics, events, conditions, and structured logging needed to
+diagnose problems in production.
+
+### Metrics
+
+All metrics use the `kro_instance_` prefix and are exposed as Prometheus
+metrics via the controller-runtime metrics endpoint.
+
+#### Reconcile-level metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `kro_instance_reconcile_duration_seconds` | Histogram | `rgd`, `phase` (`project`, `diff`, `execute`, `status`) | Identify which phase dominates reconcile time. A slow `project` phase suggests expensive CEL evaluation or deep re-projection. A slow `execute` phase suggests API server latency or readyWhen polling. |
+| `kro_instance_reconcile_total` | Counter | `rgd`, `result` (`success`, `error`, `requeue`) | Track reconcile throughput and failure rate per RGD. A rising error rate after an RGD update signals a bad revision. |
+| `kro_instance_reprojection_iterations` | Histogram | `rgd` | Number of fixed-point iterations in Phase 1. Values consistently near the cap (default: 5) indicate complex conditional chains that may need restructuring. |
+
+#### Wavefront metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `kro_instance_level_duration_seconds` | Histogram | `rgd`, `level`, `direction` (`forward`, `reverse`) | Per-level execution time. Outlier levels reveal bottleneck resources (slow readyWhen, slow API server responses). |
+| `kro_instance_level_concurrency` | Histogram | `rgd`, `level` | Actual parallelism achieved per level (number of goroutines). Consistently hitting `maxConcurrency` suggests the limit should be raised; consistently 1 suggests the DAG has no parallelism. |
+| `kro_instance_node_action_total` | Counter | `rgd`, `action` (`create`, `update`, `delete`, `adopt`, `orphan`, `skip`, `gate`) | Action distribution. A spike in `gate` actions after an RGD update means propagation control is working. A spike in `error` actions means it isn't. |
+| `kro_instance_node_duration_seconds` | Histogram | `rgd`, `resource_id`, `action` | Per-node SSA apply duration. Identifies slow resources (large CRDs, webhook-heavy namespaces). |
+| `kro_instance_nodes_gated` | Gauge | `rgd`, `instance` | Current number of nodes in GATED state. A non-zero value that persists for hours signals a stuck propagation gate. |
+| `kro_instance_nodes_error` | Gauge | `rgd`, `instance` | Current number of nodes in ERROR state. Persistent errors after multiple reconciles indicate a resource that needs manual intervention. |
+
+#### Inventory metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `kro_instance_inventory_size_bytes` | Gauge | `rgd`, `instance`, `storage` (`annotation`, `configmap`, `status`) | Track annotation budget consumption. Alert when approaching 50% of 256KB. |
+| `kro_instance_inventory_entries` | Gauge | `rgd`, `instance` | Total entries in inventory. Correlate with forEach expansion size. |
+
+### Kubernetes Events
+
+The synchronizer emits events on the instance object for state transitions
+that operators need to notice without watching metrics:
+
+| Event | Type | Reason | When |
+|-------|------|--------|------|
+| Normal | `LevelComplete` | A level finishes execution (all nodes ready or gated). Message includes level number, node count, and duration. |
+| Normal | `ReconcileComplete` | Full reconcile cycle completes successfully. Message includes total duration and node counts by final state. |
+| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision. Message includes old and new revision numbers. |
+| Warning | `NodeError` | A node's SSA apply fails. Message includes the resource ID, error, and retry count. |
+| Warning | `NodeGatedTimeout` | A node has been in GATED state longer than `propagationTimeout`. Message includes the node ID and the `propagateWhen` expression that is not satisfied. |
+| Warning | `ReprojectionCapReached` | Phase 1 hit the fixed-point iteration cap without converging. Message includes which `includeWhen` predicates are oscillating. |
+| Warning | `InventoryOverflow` | Inventory exceeded annotation budget and spilled to ConfigMap or status. Message includes entry count and byte size. |
+| Warning | `ImmutableFieldConflict` | Diff detected a change to a known immutable field. Message includes the field path and resource. |
+
+### Conditions
+
+The condition hierarchy (Phase 4) surfaces failure information directly in
+`kubectl get` output:
+
+```
+Ready = False
+  ResourcesReady = False
+    Message: "2/8 nodes in ERROR state: [deployment, service].
+             deployment: SSA conflict on apps/v1 Deployment default/app
+             (field manager 'helm' owns .spec.replicas).
+             service: connection refused to API server (retries: 3)."
+```
+
+```
+Ready = False
+  ResourcesPropagated = False
+    Message: "3 nodes GATED for 4h12m: [deploy-eu, deploy-ap, deploy-us].
+             propagateWhen: status.canary.healthy == true
+             (canary deploy-us-canary: status.canary.healthy = false)"
+```
+
+Each condition message includes:
+- **Which nodes** are in a non-terminal state
+- **Why** they are stuck (the specific error or unsatisfied predicate)
+- **How long** they have been in that state
+
+### Structured Logging
+
+Log lines use structured fields for machine-parseable filtering:
+
+```
+level=info  msg="level complete"      instance=my-app rgd=webapp level=1 direction=forward nodes=3 duration=2.4s
+level=info  msg="node applied"        instance=my-app rgd=webapp node=deployment action=update level=1 duration=0.8s revision=3
+level=warn  msg="node error"          instance=my-app rgd=webapp node=service action=create level=1 error="conflict" retries=2
+level=warn  msg="node gated"          instance=my-app rgd=webapp node=deploy-eu level=1 gated_since=2026-03-27T16:00:00Z predicate="status.canary.healthy == true"
+level=info  msg="reprojection"        instance=my-app rgd=webapp iteration=2 changed_nodes=[servicemonitor] trigger="includeWhen became true"
+level=error msg="reprojection cap"    instance=my-app rgd=webapp iterations=5 oscillating=[node-a,node-b]
+```
+
+### Debugging guide: common failure patterns
+
+| Symptom | Metrics / logs to check | Likely cause | Remediation |
+|---------|------------------------|--------------|-------------|
+| Instance stuck in `IN_PROGRESS` indefinitely | `kro_instance_nodes_error` gauge, `NodeError` events | One or more nodes failing SSA apply repeatedly | Check events on the instance. Common causes: field manager conflict (another tool owns the field), webhook rejection, RBAC missing. Fix the conflict or update the RGD template. |
+| Instance stuck in `GATED` | `kro_instance_nodes_gated` gauge, `NodeGatedTimeout` event | `propagateWhen` predicate never becomes true | Inspect the predicate in the event message. Check the upstream resource it references. If the gate is no longer needed, update the RGD to remove or adjust the `propagateWhen`. |
+| Reconcile latency spike | `kro_instance_reconcile_duration_seconds` by phase, `kro_instance_level_duration_seconds` | Slow API server, expensive CEL, or large forEach expansion | If `project` phase is slow: check `reprojection_iterations` and CEL complexity. If `execute` phase is slow: check `node_duration_seconds` for outlier resources and API server latency. |
+| Resources deleted out of order | `kro_instance_level_duration_seconds` with `direction=reverse`, inventory logs | Stale or missing inventory | Check `kro_instance_inventory_size_bytes`. If inventory was lost (controller crash), the controller rebuilds from `part-of` labels on next reconcile. Verify labels are present on managed resources. |
+| forEach creates too many resources | `kro_instance_inventory_entries`, `kro_instance_node_action_total` with `action=create` | forEach expression evaluates to unexpectedly large set | Check the forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. Monitor `inventory_entries` for growth. |
+| `ReprojectionCapReached` warning | Structured logs with `reprojection cap`, oscillating node list | Circular dependency between `includeWhen` predicates that reference each other's state | Restructure the RGD to break the dependency cycle. Two nodes should not conditionally include each other based on the other's readiness. |
+| Inventory overflow to ConfigMap | `kro_instance_inventory_size_bytes` with `storage=configmap`, `InventoryOverflow` event | Large forEach expansion producing thousands of entries | Expected for large deployments. Monitor the ConfigMap size. If approaching 1MB, reduce forEach cardinality or consolidate resources. |
+| Revision rollout not progressing | `kro_instance_node_action_total` with `action=gate`, `kro_instance_nodes_gated` | `propagateWhen` is working as intended, gating rollout | This is normal during controlled rollouts. Check if the canary or first-batch resources are healthy. If they are and the gate still isn't opening, the `propagateWhen` predicate may reference the wrong field. |
+
+---
+
 ## Correlation with KREP-022: managedResources
 
 [KREP-022] introduces `managedResources` in instance status. This proposal's

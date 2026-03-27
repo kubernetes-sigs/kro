@@ -83,17 +83,15 @@ This works but has known limitations:
    reconcile interruptions.
 2. **Safe parallelism.** Independent resources within the same dependency level
    execute concurrently, bounded by configurable concurrency limits.
-3. **Propagation control integration.** The [KREP-006] `propagateWhen` mechanism
-   gates when a node's mutation can *start*, complementing `readyWhen` which
-   gates when a node's mutation is *complete*.
+3. **Propagation control integration.** [KREP-006] `propagateWhen` gates
+   when a node's mutation can *start*. `readyWhen` gates when the mutation
+   is *complete*.
 4. **Revision-aware convergence.** The synchronizer tracks which
    [GraphRevision](https://kro.run/api/crds/graphrevision) each resource was
    last reconciled against, enabling efficient diffing and ordered rollout of
    RGD changes.
-5. **Compatibility with ApplySet.** The inventory scheme is a superset of the
-   ApplySet specification ([KEP-3659]). Standard ApplySet tooling can still
-   discover and enumerate managed resources; KRO extends the metadata to encode
-   level ordering.
+5. **Compatibility with ApplySet.** Standard ApplySet tooling ([KEP-3659])
+   still works. KRO adds level ordering on top.
 
 ---
 
@@ -167,39 +165,28 @@ type ProjectedNode struct {
 
 **Node identity:**
 
-The synchronizer works with two layers of identity that must be kept in
-correspondence:
+Every resource has two identities: one in the graph, one in the cluster.
 
 | Layer | Identifier | Scope | Example |
 |-------|-----------|-------|---------|
 | **Graph node** (logical) | `NodeID` = `ResourceID` + `ForEachBindings` | Unique within the projected DAG of one instance | `NodeID{ResourceID: "deployment"}` or `NodeID{ResourceID: "deployment", ForEachBindings: {"region": "eu-west-1"}}` |
 | **Kubernetes resource** (physical) | GKNN (Group, Kind, Namespace, Name) | Unique within the cluster | `apps/Deployment/default/my-app-eu-west-1` |
 
-The graph node ID is **stable across revisions** — it is derived from the
-RGD's resource block name and the forEach bindings, not from the rendered
-Kubernetes resource name. This means the synchronizer can track that
-"the `deployment` node" is the same logical entity across GraphRevision 2
-and 3, even if its rendered template changes.
+The graph node ID is **stable across revisions**. It comes from the RGD's
+resource block name and forEach bindings, not from the rendered Kubernetes
+name. So "the `deployment` node" is the same logical entity in revision 2
+and revision 3, even if the template changes.
 
-The Kubernetes GKNN is computed during projection by rendering the node's
-template. The mapping from NodeID to GKNN is **not necessarily stable
-across revisions** — a new GraphRevision could change the name template,
-producing a different GKNN for the same NodeID. When this happens, the
-diff phase sees it as a delete of the old GKNN + create of the new GKNN
-(the old resource is in the inventory but absent from the projection; the
-new resource is in the projection but absent from the cluster).
+The GKNN is **not necessarily stable across revisions**. A new revision
+could change the resource name. When that happens, the diff sees it as a
+delete of the old name + create of the new name.
 
-The `kro.run/resource-id` label on each managed resource records the
-graph-level `ResourceID`, enabling the controller to map a live Kubernetes
-resource back to its logical node. For forEach nodes,
-`kro.run/foreach-bindings` records the binding values. Together, these
-labels reconstruct the full `NodeID` from a live resource.
+Each managed resource carries `kro.run/resource-id` and
+`kro.run/foreach-bindings` labels. These let the controller map a live
+Kubernetes resource back to its logical NodeID.
 
-The inventory uses GKNNs (physical identity) because it tracks what
-exists in the cluster. The projected DAG uses NodeIDs (logical identity)
-because it tracks what *should* exist. The diff phase joins these two
-views: for each NodeID, it looks up the corresponding GKNN and compares
-against the cluster.
+The inventory stores GKNNs (what exists in the cluster). The projected
+DAG stores NodeIDs (what should exist). The diff phase joins them.
 
 **Projection rules:**
 
@@ -248,11 +235,9 @@ const (
 
 **Node classification logic:**
 
-For each node in the projected DAG, the diff reads the corresponding live
-resource from the cluster (if it exists) and classifies it. The
-`kro.run/revision` label on each managed resource enables revision-aware
-diffing -- a stale revision forces an update even if the template is identical,
-because the new GraphRevision may have changed CEL expressions or predicates:
+For each node, the diff reads the live resource from the cluster and
+classifies it. A stale `kro.run/revision` label forces an update even
+if the template hasn't changed:
 
 ```
   Resource not in cluster?              --> ActionCreate
@@ -468,13 +453,9 @@ in its `Dependencies` list is in `Ready` state. If any dependency is
 remains `Blocked` (it cannot proceed until the gate opens and the
 dependency reaches `Ready`).
 
-**runtime.Synchronize() with partial errors:** When a level completes with
-some nodes in Error, the CEL context is refreshed only with status from
-Ready nodes. Error nodes retain their last-known status in the context
-(or are absent if they were never successfully applied). Templates at the
-next level that reference an Error node's status fields will use stale or
-zero values -- but those nodes are Blocked anyway, so the stale values are
-never applied to the cluster.
+**CEL context with partial errors:** When a level has errors, the CEL
+context only gets fresh status from Ready nodes. This is safe because
+nodes that depend on the Error node are Blocked and won't be applied.
 
 **Status rollup:** The instance condition reflects the partial state:
 
@@ -585,11 +566,9 @@ is a flat set with no ordering. When pruning, a Service might be deleted before
 its Deployment. Each resource can belong to at most one ApplySet -- you cannot
 create one per level.
 
-This proposal introduces a **Level Inventory** that extends ApplySet with
-topological ordering: a per-level inventory attached to the instance's ApplySet
-parent, enabling ordered creation in forward topological order and ordered
-pruning in reverse topological order -- something a single flat ApplySet cannot
-express.
+This proposal adds a **Level Inventory** on top of ApplySet. It groups
+resources by dependency level, so they can be created in forward order
+and deleted in reverse order.
 
 ### Level Inventory design
 
@@ -731,9 +710,9 @@ active GraphRevision and records it as `ProjectedDAG.Revision` -- the
 individually from its `kro.run/revision` label during Phase 2 (Diff).
 
 There is no instance-level "previous revision" field. Each node's
-`kro.run/revision` label is the source of truth. During a partial
+`kro.run/revision` label tracks where that node is. During a partial
 migration, different nodes may be at different revisions. The inventory
-`revision` field is only updated once all nodes reach the target (see
+`revision` is only updated once all nodes reach the target (see
 [Level Inventory design](#level-inventory-design)).
 
 ### Execution order

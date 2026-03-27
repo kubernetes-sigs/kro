@@ -483,36 +483,40 @@ Ready = False
 
 #### Node state machine
 
-```mermaid
-stateDiagram-v2
-    direction LR
-
-    [*] --> Excluded : includeWhen = false
-    [*] --> Blocked : includeWhen = true, deps not Ready
-
-    Excluded --> Blocked : includeWhen becomes true
-
-    Blocked --> Gated : deps Ready, propagateWhen = false
-    Blocked --> Applying : deps Ready, propagateWhen = true
-
-    Gated --> Applying : propagateWhen becomes true
-
-    Applying --> WaitReady : SSA success, readyWhen = false
-    Applying --> Error : SSA apply fails
-
-    Error --> Applying : retry next reconcile
-
-    WaitReady --> Ready : readyWhen = true
-
-    Ready --> Blocked : dependency regresses or new revision
-    Ready --> Applying : template changed, re-apply needed
+```
+                          includeWhen = false
+               [*] ──────────────────────────────────► Excluded
+                │                                        │
+                │ includeWhen = true,                    │ includeWhen
+                │ deps not ready                         │ becomes true
+                │ OR any dep in Error                    │
+                ▼                                        │
+  Ready ──► Blocked ◄───────────────────────────────────┘
+  │  dep      │
+  │  regress  ├── deps ready, propagateWhen = false ──► Gated ─┐
+  │           │                                                 │
+  │           │   deps ready, propagateWhen = true              │ propagateWhen
+  │           │   (or not set)                                  │ becomes true
+  │           ▼                                                 │
+  │       Applying ◄────────────────────────────────────────────┘
+  │           │  ▲
+  │  template │  │ retry on
+  │  changed  │  │ next reconcile
+  │           │  │
+  │    SSA    ▼  │
+  │    fail  Error
+  │           │
+  │           │ SSA success,
+  │           │ readyWhen = false
+  │           ▼
+  └──────► WaitReady ─── readyWhen = true ──► Ready
 ```
 
 Key properties:
 - A node enters `Blocked` if *any* dependency is not `Ready` — including dependencies in `Error`. This means errors only block dependents, not unrelated branches.
 - `propagateWhen` gates mutation *start*; `readyWhen` gates mutation *end* ([KREP-006]).
 - `Error -> Applying` happens on the next reconcile cycle, not immediately.
-- A `Ready` node can regress to `Blocked` (e.g., a dependency enters Error on a later reconcile) or to `Applying` (e.g., a new revision changes its template).
+- A `Ready` node can regress to `Blocked` (dependency regresses or new revision) or to `Applying` (template changed, re-apply needed).
 
 **State mapping to [KREP-022] managedResources:**
 

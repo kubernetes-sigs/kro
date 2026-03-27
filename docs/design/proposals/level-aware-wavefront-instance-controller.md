@@ -1,4 +1,4 @@
-# KREP-023: Level-Aware Graph Synchronization for the Instance Controller
+# KREP-023: Level-Aware Wavefront Instance Controller
 
 **Authors:** Jakob Moller
 **Status:** Draft
@@ -73,7 +73,7 @@ Today: 6 sequential steps, even though A and B are completely independent.
 
 ## Proposal
 
-Replace the sequential model with a **level-aware wavefront synchronizer**.
+Replace the sequential instance controller model with a **level-aware wavefront synchronizer**.
 The core idea:
 
 1. Group resources into **dependency levels** using topological sorting.
@@ -107,14 +107,14 @@ For a wider graph:
 
 Key decisions:
 
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Parallelism model | Within-level parallelism, strict ordering between levels | Simple to reason about. No need to track per-node dependency readiness at runtime. |
-| Error handling | Failed node blocks only its dependents, not the whole graph | Independent branches should keep working. |
-| Deletion order | Reverse topological (highest level first) | Prevents dangling references (Service deleted before Deployment). |
-| Revision tracking | Per-node `kro.run/revision` label | Allows partial migration. Controller knows exactly where it left off after a crash. |
-| New revision during migration | Skip to latest (default) | Each GraphRevision is a complete snapshot. No need to apply intermediate revisions. |
-| Inventory storage | Annotation on instance (can migrate to other backends) | Fits in standard Kubernetes objects. No external storage needed. |
+| Decision                      | Choice                                                      | Why                                                                                 |
+|-------------------------------|-------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| Parallelism model             | Within-level parallelism, strict ordering between levels    | Simple to reason about. No need to track per-node dependency readiness at runtime.  |
+| Error handling                | Failed node blocks only its dependents, not the whole graph | Independent branches should keep working.                                           |
+| Deletion order                | Reverse topological (highest level first)                   | Prevents dangling references (Service deleted before Deployment).                   |
+| Revision tracking             | Per-node `kro.run/revision` label                           | Allows partial migration. Controller knows exactly where it left off after a crash. |
+| New revision during migration | Skip to latest (default)                                    | Each GraphRevision is a complete snapshot. No need to apply intermediate revisions. |
+| Inventory storage             | Annotation on instance (can migrate to other backends)      | Fits in standard Kubernetes objects. No external storage needed.                    |
 
 #### Overview
 
@@ -198,10 +198,10 @@ type ProjectedNode struct {
 
 Every resource has two identities: one in the graph, one in the cluster.
 
-| Layer | Identifier | Scope | Example |
-|-------|-----------|-------|---------|
-| **Graph node** (logical) | `NodeID` = `ResourceID` + `ForEachBindings` | Unique within the projected DAG of one instance | `NodeID{ResourceID: "deployment"}` or `NodeID{ResourceID: "deployment", ForEachBindings: {"region": "eu-west-1"}}` |
-| **Kubernetes resource** (physical) | GKNN (Group, Kind, Namespace, Name) | Unique within the cluster | `apps/Deployment/default/my-app-eu-west-1` |
+| Layer                              | Identifier                                  | Scope                                           | Example                                                                                                            |
+|------------------------------------|---------------------------------------------|-------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| **Graph node** (logical)           | `NodeID` = `ResourceID` + `ForEachBindings` | Unique within the projected DAG of one instance | `NodeID{ResourceID: "deployment"}` or `NodeID{ResourceID: "deployment", ForEachBindings: {"region": "eu-west-1"}}` |
+| **Kubernetes resource** (physical) | GKNN (Group, Kind, Namespace, Name)         | Unique within the cluster                       | `apps/Deployment/default/my-app-eu-west-1`                                                                         |
 
 The graph node ID is stable across revisions. The GKNN is not necessarily
 stable — a new revision could change the resource name, which the diff sees
@@ -503,19 +503,19 @@ Excluded (previously applied) ───► Deleting ───► Deleted
 
 State mapping to [KREP-022] managedResources:
 
-| Synchronizer state | [KREP-022] `managedResources.state` | Current `instance_state.go` |
-|---|---|---|
-| `Ready` | `READY` | `NodeStateSynced` |
-| `Applying` | `IN_PROGRESS` | `NodeStateInProgress` |
-| `WaitReady` | `WAITING_FOR_READINESS` | `NodeStateWaitingForReadiness` |
-| `Blocked` | `BLOCKED` | *(new - dependency in Error or Gated)* |
-| `Gated` | `GATED` | *(new - [KREP-006])* |
-| `Excluded` (no resource) | not in `managedResources` | `NodeStateSkipped` (renamed) |
-| `Excluded` (resource exists) | `DELETING` | `NodeStateDeleting` |
-| `Deleting` | `DELETING` | `NodeStateDeleting` |
-| `Deleted` | not in `managedResources` | `NodeStateDeleted` |
-| `Error` | `ERROR` | `NodeStateError` |
-| `ActionAdopt` | `IN_PROGRESS` | *(new - [KREP-014])* |
+| Synchronizer state           | [KREP-022] `managedResources.state` | Current `instance_state.go`            |
+|------------------------------|-------------------------------------|----------------------------------------|
+| `Ready`                      | `READY`                             | `NodeStateSynced`                      |
+| `Applying`                   | `IN_PROGRESS`                       | `NodeStateInProgress`                  |
+| `WaitReady`                  | `WAITING_FOR_READINESS`             | `NodeStateWaitingForReadiness`         |
+| `Blocked`                    | `BLOCKED`                           | *(new - dependency in Error or Gated)* |
+| `Gated`                      | `GATED`                             | *(new - [KREP-006])*                   |
+| `Excluded` (no resource)     | not in `managedResources`           | `NodeStateSkipped` (renamed)           |
+| `Excluded` (resource exists) | `DELETING`                          | `NodeStateDeleting`                    |
+| `Deleting`                   | `DELETING`                          | `NodeStateDeleting`                    |
+| `Deleted`                    | not in `managedResources`           | `NodeStateDeleted`                     |
+| `Error`                      | `ERROR`                             | `NodeStateError`                       |
+| `ActionAdopt`                | `IN_PROGRESS`                       | *(new - [KREP-014])*                   |
 
 > **API change required:** `BLOCKED` and `GATED` are new values that do not
 > exist in `api/v1alpha1` today. The current `NodeState` enum contains only:
@@ -606,14 +606,13 @@ during a partial migration.
 
 Annotation size analysis:
 
-| Scenario | Total entries | Size | % of 256KB |
-|----------|-------------|------|------------|
-| Simple web app (5 nodes, 3 levels) | 5 | ~430B | 0.2% |
-| Microservice mesh (20 nodes, 5 levels) | 20 | ~1.5KB | 0.6% |
-| Multi-region (3 forEach x 10 regions) | 30 | ~2.3KB | 0.9% |
-| Large platform (10 + 5 forEach x 50) | 260 | ~18KB | 7% |
-| Extreme (5 + 10 forEach x 200) | 2005 | ~140KB | 55% |
-| Pathological (20 forEach x 500) | 10000 | ~700KB | **EXCEEDS** |
+| Scenario                               | Total entries | Size   | % of 256KB |
+|----------------------------------------|---------------|--------|------------|
+| Simple web app (5 nodes, 3 levels)     | 5             | ~430B  | 0.2%       |
+| Microservice mesh (20 nodes, 5 levels) | 20            | ~1.5KB | 0.6%       |
+| Multi-region (3 forEach x 10 regions)  | 30            | ~2.3KB | 0.9%       |
+| Large platform (10 + 5 forEach x 50)   | 260           | ~18KB  | 7%         |
+| Extreme (5 + 10 forEach x 200)         | 2005          | ~140KB | 55%        |
 
 If the annotation budget becomes a concern, the same data can be stored in a
 dedicated ConfigMap or the instance's `.status.inventory` field without
@@ -633,13 +632,13 @@ applies them level-by-level.
 
 Topology changes between revisions:
 
-| Change | Handling |
-|--------|----------|
-| **Node added** | `ActionCreate` at its computed level. |
-| **Node removed** | `ActionDelete` in reverse order, after forward wavefront completes. |
-| **Node moves level** | `kro.run/level` label updated during SSA. Processed at new level. |
-| **Edge added** | Node waits for the new dependency. Cycles are caught at compile time. |
-| **Edge removed** | Node may move to a lower level. Processed there. |
+| Change               | Handling                                                              |
+|----------------------|-----------------------------------------------------------------------|
+| **Node added**       | `ActionCreate` at its computed level.                                 |
+| **Node removed**     | `ActionDelete` in reverse order, after forward wavefront completes.   |
+| **Node moves level** | `kro.run/level` label updated during SSA. Processed at new level.     |
+| **Edge added**       | Node waits for the new dependency. Cycles are caught at compile time. |
+| **Edge removed**     | Node may move to a lower level. Processed there.                      |
 
 If a new GraphRevision becomes active mid-reconcile, the current reconcile
 finishes against the in-progress revision. The controller picks up the new
@@ -650,13 +649,13 @@ available for users who need per-revision health validation.
 
 ##### Consistency invariants and recovery
 
-| # | Invariant | Recovery |
-|---|-----------|----------|
-| 1 | **Labels are the source of truth.** `kro.run/revision` and `kro.run/level` on each managed resource are authoritative. | On crash, rebuild from labels. If inventory lost entirely, scan for resources carrying `applyset.kubernetes.io/part-of` and `kro.run/instance-name` labels. |
-| 2 | **Inventory revision ≤ minimum per-node revision.** The inventory `revision` is only bumped after all nodes reach the target. | Stale nodes are re-applied. SSA is idempotent. |
-| 3 | **Phase 1 recomputes levels from the GraphRevision, not the inventory.** | Stale inventory level data is ignored; inventory is rewritten at the end. |
-| 4 | **Don't delete resources based on stale CEL context.** If a node's `includeWhen` depends on an Error node's status, the result is frozen at its last known value. | Skip `includeWhen` re-evaluation for nodes whose dependencies include an Error node. |
-| 5 | **Create before delete within the same level.** During revision transitions, the forward wavefront creates new nodes before the reverse wavefront deletes old ones at the same level. | If the create fails, the delete is skipped — the old resource is kept. |
+| # | Invariant                                                                                                                                                                             | Recovery                                                                                                                                                    |
+|---|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 | **Labels are the source of truth.** `kro.run/revision` and `kro.run/level` on each managed resource are authoritative.                                                                | On crash, rebuild from labels. If inventory lost entirely, scan for resources carrying `applyset.kubernetes.io/part-of` and `kro.run/instance-name` labels. |
+| 2 | **Inventory revision ≤ minimum per-node revision.** The inventory `revision` is only bumped after all nodes reach the target.                                                         | Stale nodes are re-applied. SSA is idempotent.                                                                                                              |
+| 3 | **Phase 1 recomputes levels from the GraphRevision, not the inventory.**                                                                                                              | Stale inventory level data is ignored; inventory is rewritten at the end.                                                                                   |
+| 4 | **Don't delete resources based on stale CEL context.** If a node's `includeWhen` depends on an Error node's status, the result is frozen at its last known value.                     | Skip `includeWhen` re-evaluation for nodes whose dependencies include an Error node.                                                                        |
+| 5 | **Create before delete within the same level.** During revision transitions, the forward wavefront creates new nodes before the reverse wavefront deletes old ones at the same level. | If the create fails, the delete is skipped — the old resource is kept.                                                                                      |
 
 ##### Observability
 
@@ -672,33 +671,33 @@ Ready = False
 
 **Kubernetes Events:**
 
-| Event type | Reason | When |
-|------------|--------|------|
-| Normal | `LevelComplete` | A level finishes. Message includes level number, node count, duration. |
-| Normal | `ReconcileComplete` | Full reconcile cycle completes. |
-| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision. |
-| Warning | `NodeError` | A node's SSA apply fails. Message includes resource ID, error, retry count. |
-| Warning | `NodeGatedTimeout` | Node in GATED state longer than `propagationTimeout`. |
-| Warning | `ReprojectionCapReached` | Phase 1 hit fixed-point iteration cap. |
-| Warning | `InventoryOverflow` | Inventory exceeded annotation budget. |
-| Warning | `ImmutableFieldConflict` | Diff detected change to a known immutable field. |
+| Event type | Reason                   | When                                                                        |
+|------------|--------------------------|-----------------------------------------------------------------------------|
+| Normal     | `LevelComplete`          | A level finishes. Message includes level number, node count, duration.      |
+| Normal     | `ReconcileComplete`      | Full reconcile cycle completes.                                             |
+| Normal     | `RevisionTransition`     | Instance begins reconciling against a new GraphRevision.                    |
+| Warning    | `NodeError`              | A node's SSA apply fails. Message includes resource ID, error, retry count. |
+| Warning    | `NodeGatedTimeout`       | Node in GATED state longer than `propagationTimeout`.                       |
+| Warning    | `ReprojectionCapReached` | Phase 1 hit fixed-point iteration cap.                                      |
+| Warning    | `InventoryOverflow`      | Inventory exceeded annotation budget.                                       |
+| Warning    | `ImmutableFieldConflict` | Diff detected change to a known immutable field.                            |
 
 **New metrics** (all use the `kro_instance_` prefix):
 
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `level_duration_seconds` | Histogram | `gvr`, `level`, `direction` | Per-level execution time. |
-| `level_concurrency` | Histogram | `gvr`, `level` | Actual parallelism achieved per level. |
-| `node_action_total` | Counter | `gvr`, `action` | Action distribution (create, update, delete, adopt, orphan, gate). |
-| `node_duration_seconds` | Histogram | `gvr`, `resource_id`, `action` | Per-node SSA apply duration. |
-| `nodes_gated` | Gauge | `gvr`, `instance` | Nodes currently in GATED state. |
-| `nodes_error` | Gauge | `gvr`, `instance` | Nodes currently in ERROR state. |
-| `reprojection_iterations` | Histogram | `gvr` | Fixed-point iterations in Phase 1. |
-| `inventory_size_bytes` | Gauge | `gvr`, `instance`, `storage` | Annotation budget consumption. |
-| `inventory_entries` | Gauge | `gvr`, `instance` | Total entries in inventory. |
-| `revision_current` | Gauge | `gvr`, `instance` | GraphRevision being reconciled. |
-| `revision_transition_duration_seconds` | Histogram | `gvr` | End-to-end migration time. |
-| `nodes_at_revision` | Gauge | `gvr`, `instance`, `revision` | Resources per revision. |
+| Metric                                 | Type      | Labels                         | Purpose                                                            |
+|----------------------------------------|-----------|--------------------------------|--------------------------------------------------------------------|
+| `level_duration_seconds`               | Histogram | `gvr`, `level`, `direction`    | Per-level execution time.                                          |
+| `level_concurrency`                    | Histogram | `gvr`, `level`                 | Actual parallelism achieved per level.                             |
+| `node_action_total`                    | Counter   | `gvr`, `action`                | Action distribution (create, update, delete, adopt, orphan, gate). |
+| `node_duration_seconds`                | Histogram | `gvr`, `resource_id`, `action` | Per-node SSA apply duration.                                       |
+| `nodes_gated`                          | Gauge     | `gvr`, `instance`              | Nodes currently in GATED state.                                    |
+| `nodes_error`                          | Gauge     | `gvr`, `instance`              | Nodes currently in ERROR state.                                    |
+| `reprojection_iterations`              | Histogram | `gvr`                          | Fixed-point iterations in Phase 1.                                 |
+| `inventory_size_bytes`                 | Gauge     | `gvr`, `instance`, `storage`   | Annotation budget consumption.                                     |
+| `inventory_entries`                    | Gauge     | `gvr`, `instance`              | Total entries in inventory.                                        |
+| `revision_current`                     | Gauge     | `gvr`, `instance`              | GraphRevision being reconciled.                                    |
+| `revision_transition_duration_seconds` | Histogram | `gvr`                          | End-to-end migration time.                                         |
+| `nodes_at_revision`                    | Gauge     | `gvr`, `instance`, `revision`  | Resources per revision.                                            |
 
 The existing `instance_reconcile_duration_seconds` metric gains a `phase`
 label (`project`, `diff`, `execute`, `status`) to enable per-phase breakdown.
@@ -707,31 +706,31 @@ label (`project`, `diff`, `execute`, `status`) to enable per-phase breakdown.
 
 Mapping current → proposed:
 
-| Current | Proposed | Change type |
-|---------|----------|-------------|
-| `Controller.Reconcile` (sequential walk) | 4-phase pipeline | Refactor |
-| `InstanceState {State, ResourceStates}` | `+ Level, Revision` | Extend |
-| `processApplyResults()` + `SetObserved()` (per-node, sequential) | Per-level batch: call `SetObserved()` for all nodes in a level after SSA responses arrive, then advance | Refactor |
-| `graph.Graph + flat TopologicalSort` | `TopologicalSortLevels` (Kahn's) | Refactor |
-| ApplySet labels (flat membership) | ApplySet labels + `kro.run/inventory` | Extend |
+| Current                                                          | Proposed                                                                                                | Change type |
+|------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|-------------|
+| `Controller.Reconcile` (sequential walk)                         | 4-phase pipeline                                                                                        | Refactor    |
+| `InstanceState {State, ResourceStates}`                          | `+ Level, Revision`                                                                                     | Extend      |
+| `processApplyResults()` + `SetObserved()` (per-node, sequential) | Per-level batch: call `SetObserved()` for all nodes in a level after SSA responses arrive, then advance | Refactor    |
+| `graph.Graph + flat TopologicalSort`                             | `TopologicalSortLevels` (Kahn's)                                                                        | Refactor    |
+| ApplySet labels (flat membership)                                | ApplySet labels + `kro.run/inventory`                                                                   | Extend      |
 
 New components:
 
-| Component | Purpose |
-|-----------|---------|
-| `Wavefront` | Level-aware parallel executor with [KREP-006] + [KREP-014] gates |
-| `LevelInventory` | Serializer for `kro.run/inventory` with pluggable storage backend |
-| `ProjectedDAG` | New layer between static `graph.Graph` and per-reconcile `runtime.Runtime`. Evaluates `includeWhen`/`forEach` to produce the active node set and dependency levels. Must use an expression cache scope isolated from the template-variable cache in `runtime.FromGraph()` to avoid stale results across fixed-point iterations. |
-| `ReconcilePlan` | Typed diff output grouping actions by level |
+| Component        | Purpose                                                                                                                                                                                                                                                                                                                         |
+|------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Wavefront`      | Level-aware parallel executor with [KREP-006] + [KREP-014] gates                                                                                                                                                                                                                                                                |
+| `LevelInventory` | Serializer for `kro.run/inventory` with pluggable storage backend                                                                                                                                                                                                                                                               |
+| `ProjectedDAG`   | New layer between static `graph.Graph` and per-reconcile `runtime.Runtime`. Evaluates `includeWhen`/`forEach` to produce the active node set and dependency levels. Must use an expression cache scope isolated from the template-variable cache in `runtime.FromGraph()` to avoid stale results across fixed-point iterations. |
+| `ReconcilePlan`  | Typed diff output grouping actions by level                                                                                                                                                                                                                                                                                     |
 
 Migration phases:
 
-| Phase | Scope |
-|-------|-------|
-| 1 | Add `TopologicalSortLevels()` ([KREP-003]). Sequential execution. Add `kro.run/level` labels. |
-| 2 | Add `LevelInventory` writer. Write `kro.run/inventory`. Add `kro.run/revision` labels. |
-| 3 | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). Extend `api/v1alpha1/instance_state.go` `NodeState` enum with `BLOCKED` and `GATED`; update all exhaustive switch statements. Add mutex or channel-based result collection to `StateManager` for concurrent level execution. |
-| 4 | Add `propagateWhen` ([KREP-006]) and `onCreate`/`onDelete` ([KREP-014]). |
+| Phase | Scope                                                                                                                                                                                                                                                                                                     |
+|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1     | Add `TopologicalSortLevels()` ([KREP-003]). Sequential execution. Add `kro.run/level` labels.                                                                                                                                                                                                             |
+| 2     | Add `LevelInventory` writer. Write `kro.run/inventory`. Add `kro.run/revision` labels.                                                                                                                                                                                                                    |
+| 3     | Replace sequential walk with wavefront. Add `managedResources` ([KREP-022]). Extend `api/v1alpha1/instance_state.go` `NodeState` enum with `BLOCKED` and `GATED`; update all exhaustive switch statements. Add mutex or channel-based result collection to `StateManager` for concurrent level execution. |
+| 4     | Add `propagateWhen` ([KREP-006]) and `onCreate`/`onDelete` ([KREP-014]).                                                                                                                                                                                                                                  |
 
 ## Other solutions considered
 
@@ -917,13 +916,13 @@ revisions. Serialized mode is available as an opt-in.
 
 **Related proposals:**
 
-| Reference | Title | Relationship |
-|-----------|-------|--------------|
-| [KREP-003] | Level-based topological sorting | Foundation: provides Kahn's algorithm and level grouping |
-| [KREP-006] | Propagation control | Extension: `propagateWhen` gates integrated into wavefront |
-| [KREP-014] | Resource lifecycles | Extension: Adopt/Orphan policies affect diff and prune phases |
-| [KREP-022] | `managedResources` in instance status | Consumer: wavefront produces data for managedResources |
-| [KEP-3659] | ApplySet: kubectl apply --prune | Specification: inventory design extends ApplySet |
+| Reference  | Title                                 | Relationship                                                  |
+|------------|---------------------------------------|---------------------------------------------------------------|
+| [KREP-003] | Level-based topological sorting       | Foundation: provides Kahn's algorithm and level grouping      |
+| [KREP-006] | Propagation control                   | Extension: `propagateWhen` gates integrated into wavefront    |
+| [KREP-014] | Resource lifecycles                   | Extension: Adopt/Orphan policies affect diff and prune phases |
+| [KREP-022] | `managedResources` in instance status | Consumer: wavefront produces data for managedResources        |
+| [KEP-3659] | ApplySet: kubectl apply --prune       | Specification: inventory design extends ApplySet              |
 
 <!-- Reference-style links -->
 [KREP-003]: https://github.com/bschaatsbergen/kro/blob/1260308a4475ea622f774e3d3ff0f4ee13bca0b5/docs/design/proposals/krep-003-level-based-topological-sorting.md

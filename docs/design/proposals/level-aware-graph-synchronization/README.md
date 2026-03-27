@@ -232,8 +232,9 @@ because the new GraphRevision may have changed CEL expressions or predicates:
 
 The wavefront processes levels in strict order, with parallelism *within*
 each level. A level only begins after all nodes in the previous level have
-reached `Ready` (or been skipped/gated). This guarantees that a node's
-dependencies are always satisfied before it is touched.
+reached a terminal state (Ready, Error, or Gated). Nodes at the next level
+proceed only if their individual dependencies are all Ready (see [Error
+isolation](#error-isolation)).
 
 #### Forward wavefront (create/update)
 
@@ -486,7 +487,7 @@ Ready = False
 | `Ready` | `READY` | `NodeStateSynced` |
 | `Applying` | `IN_PROGRESS` | `NodeStateInProgress` |
 | `WaitReady` | `WAITING_FOR_READINESS` | `NodeStateWaitingForReadiness` |
-| `Blocked` | `IN_PROGRESS` | `NodeStateInProgress` |
+| `Blocked` | `BLOCKED` | *(new -- dependency in Error or Gated)* |
 | `Gated` | `GATED` | *(new -- [KREP-006])* |
 | `Excluded` | `EXCLUDED` | `NodeStateSkipped` (renamed) |
 | `Error` | `ERROR` | `NodeStateError` |
@@ -703,11 +704,14 @@ Forward wavefront:
 Inventory updated: {"revision": 3, ...}
 ```
 
-If a node fails at level 1, the wavefront halts. Level 0 nodes carry
-`kro.run/revision: 3`, level 1+ nodes retain `kro.run/revision: 2`.
-The inventory `revision` stays at `2`. On the next reconcile, the diff
-sees level 0 nodes already at revision 3 (skip or readyWhen-check only)
-and resumes work at level 1.
+If a node fails at level 1, its dependents are blocked but independent
+branches continue (see [Error isolation](#error-isolation)). For example,
+if Deployment fails but an independent Service at level 2 has all its
+dependencies Ready, that Service is still updated to revision 3. The
+inventory `revision` stays at `2` because not all nodes reached the
+target. On the next reconcile, the diff sees nodes already at revision 3
+(skip or readyWhen-check only) and retries only the failed node and its
+blocked dependents.
 
 ### Topology changes between revisions
 
@@ -845,6 +849,76 @@ target revision" in the inventory or instance status so it survives
 controller restarts. Strategy A needs no additional state -- it always
 reads the latest from the registry.
 
+### Consistency invariants and recovery
+
+The synchronizer maintains state in three places: managed resource labels,
+the inventory annotation, and the in-memory projected DAG. These can
+diverge after crashes or partial failures. This section defines the
+invariants, how they can break, and how the controller recovers.
+
+**Invariant 1: Labels are the source of truth for per-node state.**
+
+The `kro.run/revision` and `kro.run/level` labels on each managed resource
+are written atomically as part of the SSA apply. If the controller crashes
+after applying some nodes but before updating the inventory, labels and
+inventory diverge. Recovery: the next reconcile reads labels from live
+resources during Phase 2 (Diff). Nodes whose labels show the target
+revision are skipped; nodes with stale labels are re-applied. The
+inventory is rewritten at the end of a successful reconcile.
+
+The inventory is an optimization (avoids listing all managed resources on
+every reconcile), not the source of truth. If the inventory is lost or
+stale, the controller can rebuild it from `applyset.kubernetes.io/part-of`
+labels via a cluster scan.
+
+**Invariant 2: The inventory `revision` is always <= the minimum per-node revision.**
+
+The inventory `revision` is only bumped after all nodes reach the target.
+If the controller crashes mid-migration, the inventory `revision` stays
+at the old value. This is safe: the next reconcile re-reads per-node
+labels and only re-applies nodes that are behind the target. Nodes already
+at the target are idempotently skipped (SSA is a no-op for matching
+templates).
+
+**Invariant 3: Level assignments in the inventory match the current GraphRevision.**
+
+When a new revision changes the topology, level assignments change. The
+inventory is rewritten with new level assignments after the forward
+wavefront completes. If the controller crashes between updating a node's
+`kro.run/level` label and rewriting the inventory, the inventory has stale
+level data. Recovery: the next reconcile computes fresh level assignments
+from the current GraphRevision (Phase 1) and ignores the inventory's level
+data during the diff. The inventory is rewritten at the end.
+
+**Invariant 4: Re-projection does not delete resources based on stale CEL context.**
+
+During error isolation, an Error node's status fields may be stale or
+absent in the CEL context. If another node's `includeWhen` predicate
+references the Error node's status, the predicate may evaluate to false,
+which would exclude the node from the projected DAG and classify it as
+`ActionDelete`. This is unsafe — the node should be Blocked, not deleted.
+
+Mitigation: during re-projection, nodes whose dependencies include an
+Error node are exempt from `includeWhen` re-evaluation. Their inclusion
+state is frozen at the last known value until all dependencies are Ready.
+This prevents the CEL context's stale values from causing unintended
+deletions.
+
+**Invariant 5: Forward-before-reverse within the same level during revision transitions.**
+
+When a revision transition adds and removes nodes at the same level, the
+forward wavefront creates the new node before the reverse wavefront
+deletes the old one. This prevents a gap where neither exists. If the new
+and old nodes share the same Kubernetes resource name (the resource was
+replaced), the forward SSA apply handles this naturally — SSA updates the
+existing resource in-place, and no reverse delete is needed (the old
+resource *is* the new resource, just updated).
+
+If they have different names, the forward creates the new resource first,
+then the reverse deletes the old one. If the forward create fails, the
+reverse delete does not proceed for that level — the old resource is kept
+until the new one is successfully created.
+
 ---
 
 ## Edge Cases and Risks
@@ -879,11 +953,21 @@ reads the latest from the registry.
      immutable field changes as warnings.
 
 6. **Controller crash mid-inventory-write** (LOW)
-   - *Cause:* Stale inventory listing deleted resources.
-   - *Mitigation:* Atomic PATCH. On recovery, rebuild from ApplySet `part-of`
-     labels via cluster scan.
+   - *Cause:* Stale inventory listing deleted resources or wrong level
+     assignments.
+   - *Mitigation:* Labels are the source of truth, not the inventory (see
+     [Invariants 1-3](#consistency-invariants-and-recovery)). On recovery,
+     rebuild from `applyset.kubernetes.io/part-of` labels via cluster scan.
+     SSA applies are idempotent.
 
-7. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
+8. **Re-projection deleting resources due to stale Error node status** (MEDIUM)
+   - *Cause:* An Error node's status is stale/absent in the CEL context. Another
+     node's `includeWhen` references it, evaluates to false, and the node is
+     excluded from the projected DAG — triggering an unintended delete.
+   - *Mitigation:* Freeze `includeWhen` evaluation for nodes with Error
+     dependencies (see [Invariant 4](#consistency-invariants-and-recovery)).
+
+9. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
    - *Cause:* External resource stuck, producing permanent GATED state
      ([KREP-006]).
    - *Mitigation:* Optional `propagationTimeout`. Condition message:

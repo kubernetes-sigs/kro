@@ -483,18 +483,20 @@ Ready = False
 
 #### Node state machine
 
-| From | To | Condition |
-|------|----|-----------|
-| *initial* | Excluded | `includeWhen` evaluates to false |
-| *initial* | Blocked | `includeWhen` true, but dependencies not all Ready (not yet ready, Error, or Gated) |
-| Excluded | Blocked | `includeWhen` becomes true (re-projection) |
-| Blocked | Gated | All dependencies Ready, `propagateWhen` evaluates to false ([KREP-006]) |
-| Blocked | Applying | All dependencies Ready, `propagateWhen` true or not set |
-| Gated | Applying | `propagateWhen` becomes true |
-| Applying | WaitReady | SSA apply succeeds, `readyWhen` not yet satisfied |
-| Applying | Error | SSA apply fails |
-| WaitReady | Ready | `readyWhen` evaluates to true |
-| Error | Applying | Retry on next reconcile |
+```mermaid
+stateDiagram-v2
+    [*] --> Excluded : includeWhen = false
+    [*] --> Blocked : includeWhen = true, deps not Ready
+    Excluded --> Blocked : includeWhen becomes true
+    Blocked --> Gated : deps Ready, propagateWhen = false
+    Blocked --> Applying : deps Ready, propagateWhen = true
+    Gated --> Applying : propagateWhen becomes true
+    Applying --> WaitReady : SSA success, readyWhen = false
+    Applying --> Error : SSA apply fails
+    WaitReady --> Ready : readyWhen = true
+    Error --> Applying : retry next reconcile
+    Ready --> [*]
+```
 
 Key properties:
 - A node enters `Blocked` if *any* dependency is not `Ready` — including dependencies in `Error`. This means errors only block dependents, not unrelated branches.

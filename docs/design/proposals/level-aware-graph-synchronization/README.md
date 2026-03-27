@@ -18,31 +18,90 @@
 
 ---
 
-## Summary
+## Executive Summary
 
-The instance controller today applies resources sequentially with no
-parallelism, no ordered deletion, and no way to track which GraphRevision each
-resource was last reconciled against. This proposal replaces that model with a
-**level-aware wavefront synchronizer** that:
+KRO lets users define a **ResourceGraphDefinition (RGD)** — a template that
+describes a set of Kubernetes resources and how they depend on each other.
+When a user creates an **instance** of that RGD, KRO's **instance controller**
+creates and manages all the resources on their behalf.
 
-1. **Applies resources in parallel within dependency levels** ([KREP-003]),
-   while preserving strict ordering *between* levels.
-2. **Gates mutations** via `propagateWhen` ([KREP-006]), controlling when
-   changes are allowed to propagate.
-3. **Deletes resources in the right order** using a level-ordered inventory
-   that extends ApplySet ([KEP-3659]). Dependents are always removed before
-   their dependencies.
-4. **Tracks which GraphRevision each resource was last applied at**, so the
-   controller knows exactly what changed and what to update when the RGD
-   changes.
+Today the instance controller applies resources **one at a time**, in order.
+This is simple but slow. It also has no way to delete resources in the right
+order, and no way to efficiently update resources when the RGD changes.
 
-**How to read this proposal:** [Design](#design) describes the four-phase
-reconcile loop and is the core of the proposal. [Level-Aware Inventory
-Management](#level-aware-inventory-management) explains the storage scheme.
-[Revision Migration](#revision-migration-n-1-to-n) covers GraphRevision
-transitions. [Observability](#observability) starts with a debugging guide.
-[Implementation Plan](#implementation-plan) maps current code to proposed
-changes.
+This proposal replaces the sequential model with a **level-aware wavefront
+synchronizer**. The core idea:
+
+1. Group resources into **dependency levels** using topological sorting.
+   Level 0 has no dependencies, level 1 depends on level 0, and so on.
+2. Apply all resources within a level **in parallel**. Wait for the level
+   to finish. Then move to the next level.
+3. When deleting, go in **reverse order** — remove level 2 before level 1
+   before level 0. This prevents dangling references.
+4. Track which **GraphRevision** each resource was last applied at, so the
+   controller knows exactly what to update when the RGD changes.
+
+### Example: what changes
+
+Consider a simple web app RGD with three resources:
+
+```
+ConfigMap ──► Deployment ──► Service
+```
+
+The Deployment depends on the ConfigMap (it mounts it). The Service depends
+on the Deployment (it routes to its pods).
+
+**Today (sequential):**
+```
+Step 1: Apply ConfigMap     wait for ready
+Step 2: Apply Deployment    wait for ready (pods start)
+Step 3: Apply Service       wait for ready
+Total: 3 sequential steps
+
+Delete: Service, Deployment, ConfigMap  (no ordering guarantee!)
+```
+
+**With this proposal (level-based wavefront):**
+```
+Level 0: Apply ConfigMap                 wait for ready
+Level 1: Apply Deployment               wait for ready (pods start)
+Level 2: Apply Service                  wait for ready
+Total: 3 steps (same for a linear chain, but parallel for wider graphs)
+
+Delete: Level 2 (Service) → Level 1 (Deployment) → Level 0 (ConfigMap)
+        Always in reverse order. Dependents removed first.
+```
+
+For a wider graph with independent branches, the benefit is larger:
+
+```
+ConfigMap ──► Deployment-A ──► Service-A
+Secret    ──► Deployment-B ──► Service-B
+
+Today: 6 sequential steps
+With wavefront: 3 level steps (each level runs in parallel)
+  Level 0: ConfigMap + Secret          (parallel)
+  Level 1: Deployment-A + Deployment-B (parallel)
+  Level 2: Service-A + Service-B       (parallel)
+```
+
+### Key decisions
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Parallelism model | Within-level parallelism, strict ordering between levels | Simple to reason about. No need to track per-node dependency readiness at runtime. |
+| Error handling | Failed node blocks only its dependents, not the whole graph | Independent branches should keep working. |
+| Deletion order | Reverse topological (highest level first) | Prevents dangling references (Service deleted before Deployment). |
+| Revision tracking | Per-node `kro.run/revision` label | Allows partial migration. Controller knows exactly where it left off after a crash. |
+| New revision during migration | Skip to latest (default) | Each GraphRevision is a complete snapshot. No need to apply intermediate revisions. |
+| Inventory storage | Annotation on instance, with ConfigMap overflow | Fits in standard Kubernetes objects. No external storage needed. |
+
+**How to read the rest of this proposal:** The [Design](#design) section
+is the core — it describes the four-phase reconcile loop in detail. The
+other sections cover specific aspects: [Inventory](#level-aware-inventory-management),
+[Revision Migration](#revision-migration-n-1-to-n),
+[Observability](#observability), and [Implementation Plan](#implementation-plan).
 
 ---
 
@@ -62,35 +121,30 @@ in [PR #970](https://github.com/kubernetes-sigs/kro/pull/970)) are:
 
 This works but has known limitations:
 
-- **No parallelism.** Independent branches serialize unnecessarily. A graph with
-  two independent subtrees of depth 5 takes 10 sequential steps instead of 5.
-- **No propagation control.** Every reconciliation applies all pending changes
-  immediately. There is no mechanism to gate mutation rate, enforce maintenance
-  windows, or do incremental rollouts across `forEach` collections.
-- **Flat inventory.** The current ApplySet tracks all managed resources as a
-  single flat set. Pruning iterates this set without ordering guarantees,
-  which means a Service might be deleted before the Deployment it fronts, or a
+- **No parallelism.** Independent branches run one at a time. A graph with
+  two independent subtrees of depth 5 takes 10 steps instead of 5.
+- **No propagation control.** Every reconcile applies all changes at once.
+  There's no way to gate rollouts, enforce maintenance windows, or do
+  incremental rollouts across `forEach` collections.
+- **No ordered deletion.** The current ApplySet tracks resources as a flat
+  set. When pruning, a Service might be deleted before its Deployment, or a
   Namespace before the resources inside it.
-- **No revision-aware reconciliation.** When the RGD changes and a new
+- **No revision tracking.** When the RGD changes and a new
   [GraphRevision](https://kro.run/api/crds/graphrevision) is issued, the
-  controller has no structured way to determine which resources need updating
-  versus which are already at the latest revision.
+  controller has no way to tell which resources need updating and which are
+  already current.
 
 ### Design goals
 
-1. **Correct ordered creation and deletion.** Resources are created in forward
-   topological order and pruned in reverse topological order, even across
-   reconcile interruptions.
-2. **Safe parallelism.** Independent resources within the same dependency level
-   execute concurrently, bounded by configurable concurrency limits.
-3. **Propagation control integration.** [KREP-006] `propagateWhen` gates
-   when a node's mutation can *start*. `readyWhen` gates when the mutation
-   is *complete*.
-4. **Revision-aware convergence.** The synchronizer tracks which
-   [GraphRevision](https://kro.run/api/crds/graphrevision) each resource was
-   last reconciled against, enabling efficient diffing and ordered rollout of
-   RGD changes.
-5. **Compatibility with ApplySet.** Standard ApplySet tooling ([KEP-3659])
+1. **Ordered creation and deletion.** Create in forward topological order.
+   Delete in reverse. Even across reconcile interruptions.
+2. **Safe parallelism.** Independent resources within a level run
+   concurrently, bounded by configurable limits.
+3. **Propagation control.** [KREP-006] `propagateWhen` gates when a
+   mutation can *start*. `readyWhen` gates when it is *complete*.
+4. **Revision-aware updates.** Track which GraphRevision each resource was
+   last applied at. Only update what changed.
+5. **ApplySet compatibility.** Standard ApplySet tooling ([KEP-3659])
    still works. KRO adds level ordering on top.
 
 ---

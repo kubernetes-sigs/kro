@@ -18,7 +18,7 @@
 
 ---
 
-## Executive Summary
+## Summary
 
 KRO lets users define a **ResourceGraphDefinition (RGD)** — a template that
 describes a set of Kubernetes resources and how they depend on each other.
@@ -95,7 +95,7 @@ With wavefront: 3 level steps (each level runs in parallel)
 | Deletion order | Reverse topological (highest level first) | Prevents dangling references (Service deleted before Deployment). |
 | Revision tracking | Per-node `kro.run/revision` label | Allows partial migration. Controller knows exactly where it left off after a crash. |
 | New revision during migration | Skip to latest (default) | Each GraphRevision is a complete snapshot. No need to apply intermediate revisions. |
-| Inventory storage | Annotation on instance, with ConfigMap overflow | Fits in standard Kubernetes objects. No external storage needed. |
+| Inventory storage | Annotation on instance (can migrate to other backends) | Fits in standard Kubernetes objects. No external storage needed. |
 
 **How to read the rest of this proposal:** The [Design](#design) section
 is the core — it describes the four-phase reconcile loop in detail. The
@@ -708,16 +708,11 @@ A typical GKNN entry like `"Deployment.apps.my-namespace.my-app-eu-west-1"` is
 
 **Mitigation:**
 
-If the annotation budget becomes a concern, the inventory can be stored
-elsewhere instead:
-
-1. **ConfigMap**: A dedicated ConfigMap per instance holds the full inventory
-   (up to 1MB). The annotation stores only a pointer:
-   `{"overflow":"<configmap-name>"}`.
-2. **Instance status**: The inventory is written into the instance's
-   `.status.inventory` field, keeping all instance state co-located and avoiding
-   a separate object. Status subresource updates don't conflict with spec
-   edits.
+The inventory format is a simple JSON blob. If the annotation budget
+becomes a concern, the same data can be stored elsewhere (a dedicated
+ConfigMap, the instance's `.status.inventory` field, etc.) without
+changing the synchronizer logic. Only the read/write layer needs to
+swap out.
 
 ---
 
@@ -1046,7 +1041,7 @@ the controller recovers.
 | Resources deleted out of order | `level_duration_seconds` with `direction=reverse` | Stale or missing inventory | If inventory was lost (crash), the controller rebuilds from `part-of` labels on next reconcile. Verify labels are present. |
 | forEach creates too many resources | `inventory_entries` gauge | forEach evaluates to unexpectedly large set | Check forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. |
 | `ReprojectionCapReached` warning | Structured logs with `reprojection cap` | Circular `includeWhen` predicates | Restructure the RGD. Two nodes should not conditionally include each other based on the other's readiness. |
-| Inventory overflow | `inventory_size_bytes` with `storage=configmap` | Large forEach expansion | Expected for large deployments. Monitor ConfigMap size. If approaching 1MB, reduce forEach cardinality. |
+| Inventory annotation too large | `inventory_size_bytes` gauge | Large forEach expansion | Migrate inventory to a different storage backend (ConfigMap, status field). The format is portable. |
 | Revision rollout not progressing | `nodes_at_revision` gauge, `nodes_gated` | `propagateWhen` gating rollout (by design) | Check if canary/first-batch resources are healthy. If so, the `propagateWhen` predicate may reference the wrong field. |
 
 ### Conditions
@@ -1236,7 +1231,7 @@ flowchart LR
 | Component | Purpose |
 |-----------|---------|
 | `Wavefront` | Level-aware parallel executor with [KREP-006] + [KREP-014] gates |
-| `LevelInventory` | Serializer for `kro.run/inventory` with ConfigMap overflow |
+| `LevelInventory` | Serializer for `kro.run/inventory` with pluggable storage backend |
 | `ProjectedDAG` | Explicit runtime DAG with `includeWhen`/`forEach` evaluated |
 | `ReconcilePlan` | Typed diff output grouping actions by level |
 
@@ -1265,10 +1260,9 @@ flowchart LR
 3. **forEach rollout** -- Subsumed by [KREP-006] `propagateWhen` primitives.
    The [propagation gating example](#propagation-gating-within-a-level-krep-006)
    shows how this works in practice.
-4. **Inventory storage backend** -- Annotation-first with ConfigMap overflow vs
-   always-ConfigMap. See [Annotation size analysis](#annotation-size-analysis)
-   for budget estimates. Always-ConfigMap avoids the race in
-   [risk #1](#edge-cases-and-risks) but adds an extra object per instance.
+4. **Inventory storage backend** -- Start with annotations. Migrate to
+   ConfigMap or status field if annotation budget becomes a problem. See
+   [Annotation size analysis](#annotation-size-analysis) for estimates.
 5. **Revision fallback policy** -- A `Failed` latest revision blocks all
    instances with no automatic fallback (see [Revision Migration, "Failed
    revision"](#edge-cases-1)). Should we support opt-in
@@ -1283,7 +1277,7 @@ flowchart LR
 
 - Kahn's algorithm level computation
 - Diff algorithm (create, update, delete, adopt, orphan)
-- Inventory serialization and ConfigMap overflow
+- Inventory serialization and storage backend migration
 - Propagation gate evaluation ([KREP-006])
 - forEach set reconciliation and identity collision detection
 - Annotation size estimation

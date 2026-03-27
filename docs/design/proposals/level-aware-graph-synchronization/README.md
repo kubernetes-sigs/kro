@@ -29,11 +29,12 @@ resource was last reconciled against. This proposal replaces that model with a
    while preserving strict ordering *between* levels.
 2. **Gates mutations** via `propagateWhen` ([KREP-006]), controlling when
    changes are allowed to propagate.
-3. **Tracks managed resources in a level-ordered inventory** that extends
-   the ApplySet specification ([KEP-3659]) with topological ordering, enabling
-   correct reverse-order deletion.
-4. **Tracks per-node GraphRevision**, enabling efficient diffing and ordered
-   rollout when the RGD changes.
+3. **Deletes resources in the right order** using a level-ordered inventory
+   that extends ApplySet ([KEP-3659]). Dependents are always removed before
+   their dependencies.
+4. **Tracks which GraphRevision each resource was last applied at**, so the
+   controller knows exactly what changed and what to update when the RGD
+   changes.
 
 **How to read this proposal:** [Design](#design) describes the four-phase
 reconcile loop and is the core of the proposal. [Level-Aware Inventory
@@ -49,15 +50,15 @@ changes.
 
 ### Current state
 
-The instance controller (`pkg/controller/instance`) today processes resources
-sequentially in topological order. The `Controller.Reconcile` method walks the
-DAG node-by-node: resolve CEL variables via `runtime.Synchronize()`, apply via
-SSA, check `readyWhen`, advance. The `InstanceState` type tracks per-node state
-as a flat `map[string]*ResourceState`. Node states (defined in
-`api/v1alpha1/instance_state.go`, refactored in
-[PR #970](https://github.com/kubernetes-sigs/kro/pull/970)) include `Synced`,
-`InProgress`, `Error`, `WaitingForReadiness`, `Skipped`, `Deleting`, and
-`Deleted`.
+The instance controller (`pkg/controller/instance`) processes resources one
+at a time in topological order. For each node it resolves CEL variables,
+applies via SSA, and checks `readyWhen` before moving to the next node.
+
+Per-node state is tracked in a flat `map[string]*ResourceState`. The
+possible states (defined in `api/v1alpha1/instance_state.go`, refactored
+in [PR #970](https://github.com/kubernetes-sigs/kro/pull/970)) are:
+`Synced`, `InProgress`, `Error`, `WaitingForReadiness`, `Skipped`,
+`Deleting`, and `Deleted`.
 
 This works but has known limitations:
 
@@ -116,10 +117,10 @@ flowchart LR
     style S fill:#FAEEDA,stroke:#854F0B,color:#633806
 ```
 
-Each phase may short-circuit or loop based on watch events. The re-projection
-arrow from the wavefront back to projection represents the case where a node
-reaching `Ready` state causes an `includeWhen` predicate to change, requiring
-a partial DAG re-evaluation.
+Each phase may short-circuit or loop based on watch events. The arrow
+from the wavefront back to projection shows what happens when a node
+reaches `Ready` and that changes an `includeWhen` predicate — the
+controller re-evaluates the DAG.
 
 ### Phase 1: Project
 
@@ -146,8 +147,9 @@ type NodeID struct {
     // ResourceID is the logical ID from the RGD (e.g., "deployment").
     ResourceID string
 
-    // ForEachBindings encodes the forEach variable bindings for expanded nodes.
-    // nil for non-forEach nodes. Deterministically serialized for stable identity.
+    // ForEachBindings holds the forEach variable bindings for expanded nodes.
+    // nil for non-forEach nodes. Sorted so the same bindings always produce
+    // the same ID.
     ForEachBindings map[string]string
 }
 
@@ -171,7 +173,7 @@ correspondence:
 | Layer | Identifier | Scope | Example |
 |-------|-----------|-------|---------|
 | **Graph node** (logical) | `NodeID` = `ResourceID` + `ForEachBindings` | Unique within the projected DAG of one instance | `NodeID{ResourceID: "deployment"}` or `NodeID{ResourceID: "deployment", ForEachBindings: {"region": "eu-west-1"}}` |
-| **Kubernetes resource** (physical) | GKNN = Group + Kind + Namespace + Name | Unique within the cluster | `apps/Deployment/default/my-app-eu-west-1` |
+| **Kubernetes resource** (physical) | GKNN (Group, Kind, Namespace, Name) | Unique within the cluster | `apps/Deployment/default/my-app-eu-west-1` |
 
 The graph node ID is **stable across revisions** — it is derived from the
 RGD's resource block name and the forEach bindings, not from the rendered
@@ -211,12 +213,12 @@ against the cluster.
 - After projection, Kahn's algorithm ([KREP-003]) groups included nodes into
   levels.
 
-**Re-projection:** Because `includeWhen` predicates can reference other
-resources' status fields, the projected DAG can change during a reconciliation
-pass. This is modeled as a fixed-point computation capped at a configurable
-depth (default: 5 iterations). The existing cycle detection on
-`includeWhen`/`readyWhen` edges prevents true infinite loops; the cap is a
-safety net for complex conditional chains.
+**Re-projection:** The projected DAG can change while we're reconciling.
+For example, when a node becomes Ready, its status fields become
+available, which may flip another node's `includeWhen` from false to
+true. The controller handles this by re-running projection up to 5
+times per reconcile. Cycle detection on `includeWhen`/`readyWhen` edges
+prevents infinite loops. The iteration cap is a safety net.
 
 ### Phase 2: Diff
 
@@ -260,20 +262,21 @@ because the new GraphRevision may have changed CEL expressions or predicates:
   Otherwise                             --> ActionNone
 
   In inventory but not in projection?   --> ActionDelete
-  includeWhen became false?             --> ActionDelete (only if resource exists;
-                                            but see Invariant 4: skip if caused
-                                            by stale Error dependency context)
+  includeWhen became false?             --> ActionDelete (if resource exists)
   KREP-014 adopt policy?               --> ActionAdopt
   KREP-014 orphan policy?              --> ActionOrphan
 ```
 
+**Note:** An `includeWhen` exclusion caused by stale CEL context (e.g., a
+dependency is in Error and its status is missing) must **not** trigger a
+delete. See [Invariant 4](#consistency-invariants-and-recovery).
+
 ### Phase 3: Execute wavefront
 
-The wavefront processes levels in strict order, with parallelism *within*
-each level. A level only begins after all nodes in the previous level have
-reached a terminal state (Ready, Error, or Gated). Nodes at the next level
-proceed only if their individual dependencies are all Ready (see [Error
-isolation](#error-isolation)).
+The wavefront processes levels in order. Within each level, nodes run in
+parallel. A level must finish before the next one starts. If a node fails,
+only its dependents are blocked — independent branches continue (see
+[Error isolation](#error-isolation)).
 
 #### Forward wavefront (create/update)
 
@@ -332,13 +335,13 @@ Key behaviors:
 - **Parallelism within a level.** ConfigMap and Secret are applied
   concurrently. Service and Ingress are applied concurrently. But
   Deployment never starts before both ConfigMap and Secret are `Ready`.
-- **readyWhen as a level gate.** The wavefront does not advance to the next
-  level until all nodes in the current level reach a terminal state (Ready,
-  Error, or Gated). If a node's readyWhen is not yet satisfied, the reconcile
-  returns and waits for a watch event. Nodes at the next level whose
-  dependencies are all Ready proceed normally; nodes whose dependencies include
-  an Error node are marked Blocked (see [Error isolation](#error-isolation)
-  below).
+- **Level completion.** A level is done when every node in it reaches a
+  terminal state: Ready, Error, or Gated. If a node's `readyWhen` is not
+  yet true, the reconcile returns and waits for a watch event.
+- **Next-level dependency check.** When a level completes, each node at
+  the next level checks its own dependencies. If all are Ready, the node
+  proceeds. If any dependency is in Error, the node is Blocked and skipped
+  (see [Error isolation](#error-isolation)).
 - **runtime.Synchronize() between levels.** After a level completes, the
   CEL evaluation context is refreshed with the latest status fields from
   the just-completed resources. This ensures that level 1 templates can
@@ -395,11 +398,11 @@ Level 1: [deploy-us, deploy-eu, deploy-ap]
 ```
 
 **Why gated nodes don't block the wavefront:**
-`propagateWhen` is a gate that *prevents* mutation, not one that *delays* the
-reconcile loop. If the wavefront blocked waiting for the predicate (which might
-depend on external conditions like maintenance windows), the controller
-goroutine would be tied up indefinitely. Instead, the reconcile completes with
-a "gated" status, and the next watch event triggers re-evaluation.
+`propagateWhen` prevents mutation — it does not delay the reconcile loop.
+If the wavefront blocked waiting for the predicate (which might depend on
+maintenance windows or external systems), the controller goroutine would
+be stuck. Instead, the reconcile finishes with a "gated" status. The next
+watch event or resync triggers re-evaluation.
 
 **Deletion does not respect `propagateWhen`:** When a user deletes an instance,
 all resources should be cleaned up promptly. Propagation control is a
@@ -727,11 +730,11 @@ active GraphRevision and records it as `ProjectedDAG.Revision` -- the
 *target* revision. Each managed resource's *current* revision is read
 individually from its `kro.run/revision` label during Phase 2 (Diff).
 
-There is no instance-level "previous revision" field. Per-node tracking
-is the source of truth because during a partial migration, different
-nodes are at different revisions. The `revision` field in the
-`kro.run/inventory` annotation is a "fully converged" marker -- only
-updated after all nodes reach the target.
+There is no instance-level "previous revision" field. Each node's
+`kro.run/revision` label is the source of truth. During a partial
+migration, different nodes may be at different revisions. The inventory
+`revision` field is only updated once all nodes reach the target (see
+[Level Inventory design](#level-inventory-design)).
 
 ### Execution order
 
@@ -772,11 +775,11 @@ When the new GraphRevision changes the dependency structure:
 
 | Change | Handling |
 |--------|----------|
-| **Node added** | Appears in projected DAG at its computed level. `ActionCreate`. Created in forward order. |
-| **Node removed** | In inventory but absent from projected DAG. `ActionDelete`. Deleted in reverse order after all forward actions complete. |
-| **Node moves to a different level** | `kro.run/level` label updated during SSA apply. Inventory rewritten with new level assignments. The forward wavefront processes the node at its new level. |
-| **Dependency edge added** | Node waits for an additional dependency. If it creates a cycle, the GraphRevision's `GraphVerified` condition is `False` and the revision enters `Failed` state -- never served to instances. |
-| **Dependency edge removed** | Node may move to a lower level. Processed at its new level. |
+| **Node added** | `ActionCreate` at its computed level. |
+| **Node removed** | `ActionDelete` in reverse order, after forward wavefront completes. |
+| **Node moves level** | `kro.run/level` label updated during SSA. Processed at new level. |
+| **Edge added** | Node waits for the new dependency. Cycles are caught at compile time (`GraphVerified = False`). |
+| **Edge removed** | Node may move to a lower level. Processed there. |
 
 **Example -- node changes level:**
 
@@ -812,24 +815,22 @@ updated separately from the resource template.
 **Revision issued mid-reconcile:**
 
 If a new GraphRevision becomes active while the wavefront is executing
-revision *n*, the current reconcile completes against revision *n*. The
-newer revision *n+1* is picked up on the next reconcile cycle. This is
-safe because `resolveCompiledGraph()` is called once at the start of
-each reconcile and the result is held for the duration. The inventory and
-labels are updated to revision *n*, so the next reconcile correctly
+revision *n*, the current reconcile finishes against *n*. The controller
+picks up *n+1* on the next cycle. `resolveCompiledGraph()` runs once at
+the start of each reconcile and the result is held for the duration.
+Labels and inventory are updated to *n*, so the next reconcile correctly
 diffs *n* against *n+1*.
 
 **Failed revision:**
 
-If the latest GraphRevision enters `Failed` state (compilation error),
-`resolveCompiledGraph()` returns a terminal error and the reconcile
-aborts. The instance retains its current per-node revision labels. There
-is no fallback to the previous active revision -- a failed revision means
-the RGD spec is invalid, and silently falling back could mask the
-problem. The `GraphVerified` condition on the GraphRevision surfaces the
-error; the instance's `GraphResolved` condition transitions to `False`
-with a message referencing the failed revision number. Operators must fix
-the RGD, which triggers a new GraphRevision.
+If the latest GraphRevision fails to compile, `resolveCompiledGraph()`
+returns an error and the reconcile stops. The instance keeps its current
+per-node revision labels. The controller does not fall back to the
+previous revision — a failed compile means the RGD spec is invalid, and
+hiding that would be worse than blocking. The `GraphVerified` condition
+on the GraphRevision shows the error. The instance's `GraphResolved`
+condition goes to `False` with the failed revision number. The operator
+must fix the RGD to unblock.
 
 **Partial migration + topology reorder:**
 
@@ -843,14 +844,16 @@ pruned (if removed).
 
 **New revision arrives during incomplete migration:**
 
-The synchronizer must handle the case where a new GraphRevision *n+1*
-becomes active while the wavefront is still migrating from *n-1* to *n*.
-Two strategies are possible:
+If a new GraphRevision *n+1* arrives while the controller is still
+migrating from *n-1* to *n*, the **default behavior is to skip to the
+latest revision.** The current reconcile finishes its in-progress level,
+then the next reconcile targets *n+1* directly. Nodes still at *n-1*
+jump straight to *n+1*, skipping *n*.
 
-**Strategy A: Skip to latest (default).** The current reconcile completes
-its in-progress level against revision *n*, then the next reconcile
-targets *n+1* directly. Nodes already at *n* are updated again to *n+1*.
-Nodes still at *n-1* jump directly to *n+1*, skipping *n* entirely.
+This works because each GraphRevision is a complete snapshot, not an
+incremental diff. There's nothing in revision *n* that must be applied
+before *n+1*. This matches Kubernetes conventions: controllers always
+reconcile toward the latest desired state.
 
 ```
 Before:  L0:[rev 3]  L1:[rev 2]  L2:[rev 2]    (migrating 2->3, L0 done)
@@ -861,15 +864,11 @@ Next reconcile targets rev 4:
   L2: rev 2 < 4 --> ActionUpdate (2->4, skips 3)
 ```
 
-This is correct because each GraphRevision is a complete snapshot -- there
-is no incremental delta that requires processing revision 3 before 4.
-Resources jump directly to the latest desired state. This is the simplest
-model and avoids serializing migrations that may never complete.
-
-**Strategy B: Complete current before advancing.** The wavefront finishes
-the full *n-1* to *n* migration before starting *n* to *n+1*. This
-guarantees that every revision is fully applied and validated via
-`readyWhen` before moving on.
+**Alternative: Serialized migration.** An opt-in `revisionPolicy:
+Serialized` could finish the full *n-1* to *n* migration before starting
+*n* to *n+1*. This ensures every revision is fully applied and passes
+`readyWhen` before moving on. The tradeoff is added latency when
+revisions arrive in rapid succession.
 
 ```
 Before:  L0:[rev 3]  L1:[rev 2]  L2:[rev 2]    (migrating 2->3, L0 done)
@@ -878,99 +877,73 @@ Rev 4 arrives, but wavefront continues targeting rev 3:
   L2: rev 2 < 3 --> ActionUpdate (2->3)
   All at rev 3. Inventory updated to rev 3.
 Next reconcile targets rev 4:
-  L0: rev 3 < 4 --> ActionUpdate (3->4)
-  L1: rev 3 < 4 --> ActionUpdate (3->4)
-  L2: rev 3 < 4 --> ActionUpdate (3->4)
+  L0-L2: all updated (3->4)
 ```
 
-This is safer when `readyWhen` predicates act as health checks -- it
-ensures revision *n* is fully healthy before applying *n+1*. But it adds
-latency when revisions arrive in rapid succession (each must fully roll
-out before the next starts).
-
-**Recommended default: Strategy A (skip to latest).** This matches
-Kubernetes controller conventions -- a controller always reconciles
-toward the latest desired state. Strategy B can be offered as an opt-in
-`revisionPolicy: Serialized` for users who need per-revision health
-validation. Under Strategy A, the `resolveCompiledGraph()` call at the
-start of each reconcile always returns the latest active revision; under
-Strategy B, it returns the in-progress target revision until migration
-completes.
-
-Implementation note: Strategy B requires tracking the "in-progress
-target revision" in the inventory or instance status so it survives
-controller restarts. Strategy A needs no additional state -- it always
-reads the latest from the registry.
+Serialized mode requires persisting the in-progress target revision in
+the inventory or instance status so it survives controller restarts.
+Skip-to-latest needs no additional state.
 
 ### Consistency invariants and recovery
 
-The synchronizer maintains state in three places: managed resource labels,
-the inventory annotation, and the in-memory projected DAG. These can
-diverge after crashes or partial failures. This section defines the
-invariants, how they can break, and how the controller recovers.
+State is stored in three places: resource labels, the inventory
+annotation, and the in-memory projected DAG. These can diverge after
+crashes. The following invariants define what's authoritative and how
+the controller recovers.
 
-**Invariant 1: Labels are the source of truth for per-node state.**
+**Invariant 1: Labels are the source of truth.**
 
-The `kro.run/revision` and `kro.run/level` labels on each managed resource
-are written atomically as part of the SSA apply. If the controller crashes
-after applying some nodes but before updating the inventory, labels and
-inventory diverge. Recovery: the next reconcile reads labels from live
-resources during Phase 2 (Diff). Nodes whose labels show the target
-revision are skipped; nodes with stale labels are re-applied. The
-inventory is rewritten at the end of a successful reconcile.
+- *Rule:* The `kro.run/revision` and `kro.run/level` labels on each
+  managed resource are the authoritative per-node state.
+- *What can go wrong:* Controller crashes after applying some nodes but
+  before updating the inventory. Labels and inventory diverge.
+- *Recovery:* Next reconcile reads labels from live resources. Nodes at
+  the target revision are skipped. Stale nodes are re-applied. The
+  inventory is rebuilt at the end. If the inventory is lost entirely,
+  the controller scans for `applyset.kubernetes.io/part-of` labels.
 
-The inventory is an optimization (avoids listing all managed resources on
-every reconcile), not the source of truth. If the inventory is lost or
-stale, the controller can rebuild it from `applyset.kubernetes.io/part-of`
-labels via a cluster scan.
+**Invariant 2: Inventory revision <= minimum per-node revision.**
 
-**Invariant 2: The inventory `revision` is always <= the minimum per-node revision.**
+- *Rule:* The inventory `revision` field is only bumped after all nodes
+  reach the target.
+- *What can go wrong:* Controller crashes mid-migration. Some nodes have
+  the new revision label, others don't.
+- *Recovery:* The inventory `revision` stays at the old value. Next
+  reconcile re-reads each node's label and only re-applies stale nodes.
+  SSA is idempotent, so re-applying an already-current node is a no-op.
 
-The inventory `revision` is only bumped after all nodes reach the target.
-If the controller crashes mid-migration, the inventory `revision` stays
-at the old value. This is safe: the next reconcile re-reads per-node
-labels and only re-applies nodes that are behind the target. Nodes already
-at the target are idempotently skipped (SSA is a no-op for matching
-templates).
+**Invariant 3: Phase 1 recomputes levels from the GraphRevision.**
 
-**Invariant 3: Level assignments in the inventory match the current GraphRevision.**
+- *Rule:* Level assignments come from the current GraphRevision, not
+  from the inventory.
+- *What can go wrong:* Controller crashes between updating a node's
+  `kro.run/level` label and rewriting the inventory. The inventory has
+  stale level data.
+- *Recovery:* Next reconcile computes fresh levels from the GraphRevision
+  in Phase 1 and ignores the inventory's level data. The inventory is
+  rewritten at the end.
 
-When a new revision changes the topology, level assignments change. The
-inventory is rewritten with new level assignments after the forward
-wavefront completes. If the controller crashes between updating a node's
-`kro.run/level` label and rewriting the inventory, the inventory has stale
-level data. Recovery: the next reconcile computes fresh level assignments
-from the current GraphRevision (Phase 1) and ignores the inventory's level
-data during the diff. The inventory is rewritten at the end.
+**Invariant 4: Don't delete resources based on stale CEL context.**
 
-**Invariant 4: Re-projection does not delete resources based on stale CEL context.**
+- *Rule:* If a node's `includeWhen` depends on an Error node's status,
+  the `includeWhen` result is frozen at its last known value.
+- *What can go wrong:* An Error node's status is stale or absent. Another
+  node's `includeWhen` evaluates to false because of missing data,
+  excluding the node from the DAG and triggering a delete.
+- *Recovery:* The controller skips `includeWhen` re-evaluation for nodes
+  whose dependencies include an Error node. The node stays included until
+  all its dependencies are Ready and the CEL context is fresh.
 
-During error isolation, an Error node's status fields may be stale or
-absent in the CEL context. If another node's `includeWhen` predicate
-references the Error node's status, the predicate may evaluate to false,
-which would exclude the node from the projected DAG and classify it as
-`ActionDelete`. This is unsafe — the node should be Blocked, not deleted.
+**Invariant 5: Create before delete within the same level.**
 
-Mitigation: during re-projection, nodes whose dependencies include an
-Error node are exempt from `includeWhen` re-evaluation. Their inclusion
-state is frozen at the last known value until all dependencies are Ready.
-This prevents the CEL context's stale values from causing unintended
-deletions.
-
-**Invariant 5: Forward-before-reverse within the same level during revision transitions.**
-
-When a revision transition adds and removes nodes at the same level, the
-forward wavefront creates the new node before the reverse wavefront
-deletes the old one. This prevents a gap where neither exists. If the new
-and old nodes share the same Kubernetes resource name (the resource was
-replaced), the forward SSA apply handles this naturally — SSA updates the
-existing resource in-place, and no reverse delete is needed (the old
-resource *is* the new resource, just updated).
-
-If they have different names, the forward creates the new resource first,
-then the reverse deletes the old one. If the forward create fails, the
-reverse delete does not proceed for that level — the old resource is kept
-until the new one is successfully created.
+- *Rule:* During revision transitions, the forward wavefront creates new
+  nodes before the reverse wavefront deletes old ones at the same level.
+- *What can go wrong:* Deleting the old resource before the new one is
+  ready leaves a gap.
+- *Recovery:* If the new and old resource share the same name, SSA
+  updates in-place (no delete needed). If they have different names, the
+  forward creates first, then the reverse deletes. If the create fails,
+  the delete is skipped — the old resource is kept.
 
 ---
 

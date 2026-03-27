@@ -1297,6 +1297,21 @@ stop. If Deployment-A fails but Deployment-B and its Service are fine,
 blocking Service-B delays useful work for no benefit. Error isolation
 keeps healthy branches running while the broken branch waits for a fix.
 
+### Drop ApplySet entirely in favor of a custom inventory
+
+Instead of extending ApplySet with level metadata, we could build a
+fully custom inventory system — our own labels, our own parent object
+format, no dependency on the ApplySet spec.
+
+**Why we didn't choose this:** ApplySet gives us a lot for free:
+membership tracking, garbage collection semantics, and compatibility with
+`kubectl apply --prune` and other ecosystem tools that understand
+ApplySet. Building our own would mean reimplementing all of that. The
+only thing ApplySet lacks is ordering, which we add with one annotation.
+If the ApplySet spec evolves in ways that conflict with our needs, we can
+migrate away later — the inventory is a simple JSON blob behind a thin
+read/write layer.
+
 ### Serialized revision migration as the default
 
 Instead of skip-to-latest, the controller could complete each revision

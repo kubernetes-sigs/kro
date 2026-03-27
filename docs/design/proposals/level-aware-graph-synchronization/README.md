@@ -292,10 +292,13 @@ Key behaviors:
 - **Parallelism within a level.** ConfigMap and Secret are applied
   concurrently. Service and Ingress are applied concurrently. But
   Deployment never starts before both ConfigMap and Secret are `Ready`.
-- **readyWhen as a level gate.** The wavefront does not advance to level 1
-  until *all* level 0 nodes pass their `readyWhen` predicates. If a node's
-  readyWhen is not yet satisfied, the reconcile returns and waits for a
-  watch event.
+- **readyWhen as a level gate.** The wavefront does not advance to the next
+  level until all nodes in the current level reach a terminal state (Ready,
+  Error, or Gated). If a node's readyWhen is not yet satisfied, the reconcile
+  returns and waits for a watch event. Nodes at the next level whose
+  dependencies are all Ready proceed normally; nodes whose dependencies include
+  an Error node are marked Blocked (see [Error isolation](#error-isolation)
+  below).
 - **runtime.Synchronize() between levels.** After a level completes, the
   CEL evaluation context is refreshed with the latest status fields from
   the just-completed resources. This ensures that level 1 templates can
@@ -384,6 +387,63 @@ Same reconcile:
 Result: OldSidecar removed only after NewSidecar is Ready.
 ```
 
+#### Error isolation
+
+When a node fails, only its dependents are blocked -- independent branches
+at the same or deeper levels continue unaffected. A level is considered
+complete when all its nodes reach a terminal state (Ready, Error, or
+Gated), not only when all are Ready.
+
+```
+DAG:  ConfigMap ──► Deployment-A ──► Service-A
+      Secret    ──► Deployment-B ──► Service-B
+
+Level 0: [ConfigMap, Secret]
+Level 1: [Deployment-A, Deployment-B]
+Level 2: [Service-A, Service-B]
+
+Deployment-A fails (SSA conflict). Deployment-B is Ready.
+
+  Level 1 terminal states: [Error, Ready] -- level complete, advance.
+
+  Level 2 dependency check:
+    Service-A depends on Deployment-A (Error) --> Blocked (skip)
+    Service-B depends on Deployment-B (Ready) --> SSA apply --> Ready
+
+  Result:
+    Deployment-A: Error     Service-A: Blocked
+    Deployment-B: Ready     Service-B: Ready
+```
+
+The instance is not `ACTIVE` (not all nodes Ready), but the healthy branch
+is fully reconciled. On the next reconcile, Deployment-A is retried. If it
+succeeds, Service-A unblocks and proceeds.
+
+**Dependency check rule:** A node can proceed if and only if *every* node
+in its `Dependencies` list is in `Ready` state. If any dependency is
+`Error`, the node is `Blocked`. If any dependency is `Gated`, the node
+remains `Blocked` (it cannot proceed until the gate opens and the
+dependency reaches `Ready`).
+
+**runtime.Synchronize() with partial errors:** When a level completes with
+some nodes in Error, the CEL context is refreshed only with status from
+Ready nodes. Error nodes retain their last-known status in the context
+(or are absent if they were never successfully applied). Templates at the
+next level that reference an Error node's status fields will use stale or
+zero values -- but those nodes are Blocked anyway, so the stale values are
+never applied to the cluster.
+
+**Status rollup:** The instance condition reflects the partial state:
+
+```
+Ready = False
+  ResourcesReady = False
+    Message: "6/8 nodes Ready. 1 Error: [deployment-a].
+             1 Blocked: [service-a] (depends on deployment-a).
+             deployment-a: SSA conflict (field manager 'helm'
+             owns .spec.replicas)."
+```
+
 #### Node state machine
 
 ```
@@ -392,6 +452,7 @@ Result: OldSidecar removed only after NewSidecar is Ready.
                │                                        │
                │ includeWhen = true,                    │ includeWhen
                │ deps not ready                         │ becomes true
+               │ OR any dep in Error                    │
                ▼                                        │
             Blocked ◄───────────────────────────────────┘
                │
@@ -413,8 +474,10 @@ Result: OldSidecar removed only after NewSidecar is Ready.
           WaitReady ─── readyWhen = true ──► Ready
 ```
 
+- A node enters `Blocked` if any dependency is not `Ready` (including `Error`)
 - `propagateWhen` gates mutation *start* ([KREP-006])
 - `readyWhen` gates mutation *end*
+- `Error` on a node blocks only its dependents, not unrelated branches
 
 **State mapping to [KREP-022] managedResources:**
 

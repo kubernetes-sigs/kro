@@ -20,22 +20,28 @@
 
 ## Summary
 
-This proposal defines the synchronization engine at the heart of KRO's instance
-controller. It replaces the current sequential reconciliation model with a
-**level-aware wavefront synchronizer** that unifies three complementary
-concerns:
+The instance controller today applies resources sequentially with no
+parallelism, no ordered deletion, and no way to track which GraphRevision each
+resource was last reconciled against. This proposal replaces that model with a
+**level-aware wavefront synchronizer** that:
 
-1. **Parallel execution within dependency levels** (from [KREP-003])
-2. **Propagation gating** via `propagateWhen` (from [KREP-006])
-3. **Ordered inventory management** that extends the ApplySet specification
-   ([KEP-3659]) with level-aware create/prune semantics
+1. **Applies resources in parallel within dependency levels** ([KREP-003]),
+   while preserving strict ordering *between* levels.
+2. **Gates mutations** via `propagateWhen` ([KREP-006]), controlling when
+   changes are allowed to propagate.
+3. **Tracks managed resources in a level-ordered inventory** that extends
+   the ApplySet specification ([KEP-3659]) with topological ordering, enabling
+   correct reverse-order deletion.
+4. **Tracks per-node GraphRevision**, enabling efficient diffing and ordered
+   rollout when the RGD changes.
 
-The core insight is that ApplySet gives us membership tracking but not ordering,
-while level-based topological sorting gives us ordering but ApplySet can't
-represent it. This proposal introduces a **Level Inventory** scheme that bridges
-both: a per-level inventory attached to the instance's ApplySet parent, enabling
-ordered creation in forward topological order and ordered pruning in reverse
-topological order -- something a single flat ApplySet cannot express.
+**How to read this proposal:** [Design](#design) describes the four-phase
+reconcile loop and is the core of the proposal. [Level-Aware Inventory
+Management](#level-aware-inventory-management) explains the storage scheme.
+[Revision Migration](#revision-migration-n-1-to-n) covers GraphRevision
+transitions. [Observability](#observability) starts with a debugging guide.
+[Implementation Plan](#implementation-plan) maps current code to proposed
+changes.
 
 ---
 
@@ -117,9 +123,11 @@ a partial DAG re-evaluation.
 
 ### Phase 1: Project
 
-Projection computes the **runtime DAG** from the structural DAG
-([GraphRevision](https://kro.run/api/crds/graphrevision)) and the current
-instance state. This is where the dynamic elements resolve:
+Projection takes the structural DAG from the current
+[GraphRevision](https://kro.run/api/crds/graphrevision) and the instance's
+input values, and produces a **runtime DAG**: which resources to create, at
+which dependency levels, with fully-rendered templates. Dynamic elements --
+`includeWhen`, `forEach`, CEL expressions -- are all resolved here.
 
 ```go
 type ProjectedDAG struct {
@@ -130,16 +138,7 @@ type ProjectedDAG struct {
     // Nodes maps each node ID to its projected state.
     Nodes map[NodeID]*ProjectedNode
 
-    // Revision is the target GraphRevision.spec.revision number for this
-    // reconcile cycle. Resolved via GraphRevisionResolver.GetLatestRevision()
-    // from the in-memory revision registry. The corresponding GraphRevision
-    // object is immutable (XValidation: "self == oldSelf") and carries the
-    // full RGD spec snapshot in spec.snapshot.spec.
-    //
-    // Per-node current revision is tracked individually via the
-    // kro.run/revision label on each managed resource — NOT at the instance
-    // level. This allows partial migration: after a failed wavefront, some
-    // nodes are at the new revision and some are still at the old one.
+    // Revision is the target GraphRevision.spec.revision for this reconcile.
     Revision int64
 }
 
@@ -209,41 +208,24 @@ const (
 )
 ```
 
-**Revision-aware diffing:**
+**Node classification logic:**
 
-The diff phase reads each managed resource's `kro.run/revision` label to
-determine whether it needs re-reconciliation against the target revision.
-When a node's label is behind the target, the diff marks it `ActionUpdate`
-even if the rendered template is byte-for-byte identical — because the new
-GraphRevision may have changed CEL expressions, dependency edges, or
-`readyWhen`/`propagateWhen` predicates that don't appear in the template:
+For each node in the projected DAG, the diff reads the corresponding live
+resource from the cluster (if it exists) and classifies it. The
+`kro.run/revision` label on each managed resource enables revision-aware
+diffing -- a stale revision forces an update even if the template is identical,
+because the new GraphRevision may have changed CEL expressions or predicates:
 
-```go
-func (d *Differ) classifyNode(node *ProjectedNode, live *unstructured.Unstructured) NodeAction {
-    if live == nil {
-        return ActionCreate
-    }
+```
+  Resource not in cluster?              --> ActionCreate
+  kro.run/revision < target revision?   --> ActionUpdate (force)
+  Template differs from live?           --> ActionUpdate
+  readyWhen satisfied?                  --> ActionReady
+  Otherwise                             --> ActionNone
 
-    liveRevision, _ := strconv.ParseInt(
-        live.GetLabels()["kro.run/revision"], 10, 64,
-    )
-
-    if liveRevision < d.targetRevision {
-        // Resource was last reconciled under an older revision.
-        // Force update to bump the label and apply any behavioral
-        // changes from the new GraphRevision.
-        return ActionUpdate
-    }
-
-    if !equality.Semantic.DeepEqual(node.Template, live) {
-        return ActionUpdate
-    }
-
-    if d.evaluateReadyWhen(node, live) {
-        return ActionReady
-    }
-    return ActionNone
-}
+  In inventory but not in projection?   --> ActionDelete
+  KREP-014 adopt policy?               --> ActionAdopt
+  KREP-014 orphan policy?              --> ActionOrphan
 ```
 
 ### Phase 3: Execute wavefront
@@ -353,7 +335,7 @@ ConfigMap it mounts.
 
 When `propagateWhen` is configured, some nodes within a level may be
 gated even though their dependencies are ready. The wavefront applies
-non-gated nodes and skips gated ones — it does not block waiting:
+non-gated nodes and skips gated ones -- it does not block waiting:
 
 ```
 Level 1: [deploy-us, deploy-eu, deploy-ap]
@@ -368,6 +350,17 @@ Level 1: [deploy-us, deploy-eu, deploy-ap]
   Next watch event (canary becomes healthy) triggers new reconcile.
   deploy-eu and deploy-ap re-evaluated.
 ```
+
+**Why gated nodes don't block the wavefront:**
+`propagateWhen` is a gate that *prevents* mutation, not one that *delays* the
+reconcile loop. If the wavefront blocked waiting for the predicate (which might
+depend on external conditions like maintenance windows), the controller
+goroutine would be tied up indefinitely. Instead, the reconcile completes with
+a "gated" status, and the next watch event triggers re-evaluation.
+
+**Deletion does not respect `propagateWhen`:** When a user deletes an instance,
+all resources should be cleaned up promptly. Propagation control is a
+deployment-time safety mechanism, not a deletion-time one.
 
 #### Mixed forward and reverse in the same reconcile
 
@@ -391,7 +384,7 @@ Same reconcile:
 Result: OldSidecar removed only after NewSidecar is Ready.
 ```
 
-**Node state machine:**
+#### Node state machine
 
 ```
                          includeWhen = false
@@ -418,13 +411,10 @@ Result: OldSidecar removed only after NewSidecar is Ready.
                │ readyWhen = false
                ▼
           WaitReady ─── readyWhen = true ──► Ready
-               │                               │
-               │                               │
-    ┌──────────┘                  ┌────────────┘
-    │ KREP-006: propagateWhen     │ KREP-006: readyWhen
-    │ gates mutation start        │ gates mutation end
-    └─────────────────────────────┘
 ```
+
+- `propagateWhen` gates mutation *start* ([KREP-006])
+- `readyWhen` gates mutation *end*
 
 **State mapping to [KREP-022] managedResources:**
 
@@ -439,19 +429,6 @@ Result: OldSidecar removed only after NewSidecar is Ready.
 | `Error` | `ERROR` | `NodeStateError` |
 | `ActionDelete` | `DELETING` | `NodeStateDeleting` |
 | `ActionAdopt` | `IN_PROGRESS` | *(new -- [KREP-014])* |
-
-**Why gated nodes don't block the wavefront:**
-
-[KREP-006] models `propagateWhen` as a gate that *prevents* mutation, not one
-that *delays* the reconcile loop. If the wavefront blocked waiting for
-`propagateWhen` to become true (which might depend on external conditions like
-maintenance windows), the controller goroutine would be tied up indefinitely.
-Instead, the reconcile completes with a "gated" status, and the next watch
-event or resync triggers a new evaluation.
-
-**Deletion does not respect `propagateWhen`:** When a user deletes an instance,
-all resources should be cleaned up promptly. Propagation control is a
-deployment-time safety mechanism, not a deletion-time one.
 
 ### Phase 4: Status update
 
@@ -483,9 +460,16 @@ Ready
 ### The ApplySet limitation
 
 The ApplySet specification ([KEP-3659]) uses a parent object with labels and
-annotations to track set membership. This is a flat set with no ordering. When
-pruning, a Service might be deleted before its Deployment. Each resource can
-belong to at most one ApplySet -- you cannot create one per level.
+annotations to track set membership. This gives us membership tracking, but it
+is a flat set with no ordering. When pruning, a Service might be deleted before
+its Deployment. Each resource can belong to at most one ApplySet -- you cannot
+create one per level.
+
+This proposal introduces a **Level Inventory** that extends ApplySet with
+topological ordering: a per-level inventory attached to the instance's ApplySet
+parent, enabling ordered creation in forward topological order and ordered
+pruning in reverse topological order -- something a single flat ApplySet cannot
+express.
 
 ### Level Inventory design
 
@@ -508,13 +492,13 @@ metadata:
       ]}
 ```
 
-The `revision` field in the inventory is a "fully converged" marker — it
-is only updated after the entire forward wavefront completes and all
-nodes reach the target revision. Per-node revision is the source of truth
-(via `kro.run/revision` labels on managed resources). During a partial
-failure, individual node labels show exactly which nodes migrated and
-which did not; the inventory `revision` stays at the old value, ensuring
-the next reconcile correctly re-targets all stale nodes.
+The `revision` field in the inventory is a "fully converged" marker -- it is
+only updated after the entire forward wavefront completes and all nodes reach
+the target revision. Per-node revision is the source of truth (via
+`kro.run/revision` labels on managed resources). During a partial failure,
+individual node labels show exactly which nodes migrated and which did not;
+the inventory `revision` stays at the old value, ensuring the next reconcile
+correctly re-targets all stale nodes.
 
 **Member labels (on each managed resource):**
 
@@ -547,12 +531,49 @@ flowchart TB
     style DONE fill:#EAF3DE,stroke:#3B6D11,color:#27500A
 ```
 
+### Annotation size analysis
+
+**Size formula:**
+
+```
+inventory_bytes ~ 30 + sum(entries_per_level * (avg_gknn_length + 3) + 4)
+```
+
+A typical GKNN entry like `"Deployment.apps.my-namespace.my-app-eu-west-1"` is
+~50 characters.
+
+**Concrete estimates:**
+
+| Scenario | Total entries | Size | % of 256KB |
+|----------|-------------|------|------------|
+| Simple web app (5 nodes, 3 levels) | 5 | ~430B | 0.2% |
+| Microservice mesh (20 nodes, 5 levels) | 20 | ~1.5KB | 0.6% |
+| Multi-region (3 forEach x 10 regions) | 30 | ~2.3KB | 0.9% |
+| Large platform (10 + 5 forEach x 50) | 260 | ~18KB | 7% |
+| Extreme (5 + 10 forEach x 200) | 2005 | ~140KB | 55% |
+| Pathological (20 forEach x 500) | 10000 | ~700KB | **EXCEEDS** |
+
+**Mitigation:**
+
+If the annotation budget becomes a concern, the inventory can be stored
+elsewhere instead:
+
+1. **ConfigMap**: A dedicated ConfigMap per instance holds the full inventory
+   (up to 1MB). The annotation stores only a pointer:
+   `{"overflow":"<configmap-name>"}`.
+2. **Instance status**: The inventory is written into the instance's
+   `.status.inventory` field, keeping all instance state co-located and avoiding
+   a separate object. Status subresource updates don't conflict with spec
+   edits.
+
 ---
 
 ## Revision Migration: n-1 to n
 
-This section describes the mechanics of transitioning an instance from
-GraphRevision *n-1* to GraphRevision *n*.
+This section consolidates the revision-specific behaviors described in
+[Phase 2 (Diff)](#phase-2-diff) and [Phase 3 (Execute wavefront)](#phase-3-execute-wavefront)
+into a complete picture of how an instance transitions from one GraphRevision to
+the next.
 
 ### Trigger
 
@@ -585,38 +606,22 @@ the highest-numbered active entry.
 ### Detection
 
 At the start of each reconcile, Phase 1 (Project) resolves the latest
-active GraphRevision and records it as `ProjectedDAG.Revision` — the
+active GraphRevision and records it as `ProjectedDAG.Revision` -- the
 *target* revision. Each managed resource's *current* revision is read
 individually from its `kro.run/revision` label during Phase 2 (Diff).
 
 There is no instance-level "previous revision" field. Per-node tracking
 is the source of truth because during a partial migration, different
 nodes are at different revisions. The `revision` field in the
-`kro.run/inventory` annotation is a "fully converged" marker — only
+`kro.run/inventory` annotation is a "fully converged" marker -- only
 updated after all nodes reach the target.
-
-### Diffing during revision transition
-
-Phase 2 compares each node individually:
-
-- If the managed resource's `kro.run/revision` label equals the target →
-  normal diff (compare template, check readyWhen).
-- If the label is **behind** the target → `ActionUpdate` regardless of
-  whether the rendered template changed. This ensures:
-  1. The `kro.run/revision` label is bumped.
-  2. Any SSA field manager changes take effect.
-  3. The new revision's `readyWhen`/`propagateWhen` predicates are
-     evaluated.
-- If the resource does **not exist** → `ActionCreate` (new node in this
-  revision).
-- If the resource exists in the inventory but is **absent** from the
-  projected DAG → `ActionDelete` (node removed in this revision).
 
 ### Execution order
 
-Revision migration follows the same level-by-level forward wavefront.
-This is critical: level 0 resources may carry new configuration values
-that higher levels depend on.
+The diff and wavefront phases handle revision migration using the same
+mechanics described above: nodes with a stale `kro.run/revision` label
+are classified as `ActionUpdate` (see [Phase 2](#phase-2-diff)), and the
+forward wavefront applies them level-by-level (see [Phase 3](#phase-3-execute-wavefront)).
 
 ```
 Revision 2 (current):  [ConfigMap] -> [Deployment] -> [Service]
@@ -650,10 +655,10 @@ When the new GraphRevision changes the dependency structure:
 | **Node added** | Appears in projected DAG at its computed level. `ActionCreate`. Created in forward order. |
 | **Node removed** | In inventory but absent from projected DAG. `ActionDelete`. Deleted in reverse order after all forward actions complete. |
 | **Node moves to a different level** | `kro.run/level` label updated during SSA apply. Inventory rewritten with new level assignments. The forward wavefront processes the node at its new level. |
-| **Dependency edge added** | Node waits for an additional dependency. If it creates a cycle, the GraphRevision's `GraphVerified` condition is `False` and the revision enters `Failed` state — never served to instances. |
+| **Dependency edge added** | Node waits for an additional dependency. If it creates a cycle, the GraphRevision's `GraphVerified` condition is `False` and the revision enters `Failed` state -- never served to instances. |
 | **Dependency edge removed** | Node may move to a lower level. Processed at its new level. |
 
-**Example — node changes level:**
+**Example -- node changes level:**
 
 ```
 Revision 2:  L0:[ConfigMap, Secret]  L1:[Deployment]  L2:[Service]
@@ -679,7 +684,7 @@ It serves three purposes:
 3. **Debugging.** After a partial failure, the label reveals the exact
    frontier of the migration across all managed resources.
 
-The label is written atomically as part of the SSA apply — it is never
+The label is written atomically as part of the SSA apply -- it is never
 updated separately from the resource template.
 
 ### Edge cases
@@ -699,7 +704,7 @@ diffs *n* against *n+1*.
 If the latest GraphRevision enters `Failed` state (compilation error),
 `resolveCompiledGraph()` returns a terminal error and the reconcile
 aborts. The instance retains its current per-node revision labels. There
-is no fallback to the previous active revision — a failed revision means
+is no fallback to the previous active revision -- a failed revision means
 the RGD spec is invalid, and silently falling back could mask the
 problem. The `GraphVerified` condition on the GraphRevision surfaces the
 error; the instance's `GraphResolved` condition transitions to `False`
@@ -731,119 +736,69 @@ See [Open Questions](#open-questions) item 1.
 
 ---
 
-## Annotation Size Analysis
-
-### Size formula
-
-```
-inventory_bytes ~ 30 + sum(entries_per_level * (avg_gknn_length + 3) + 4)
-```
-
-A typical GKNN entry like `"Deployment.apps.my-namespace.my-app-eu-west-1"` is
-~50 characters.
-
-### Concrete estimates
-
-| Scenario | Total entries | Size | % of 256KB |
-|----------|-------------|------|------------|
-| Simple web app (5 nodes, 3 levels) | 5 | ~430B | 0.2% |
-| Microservice mesh (20 nodes, 5 levels) | 20 | ~1.5KB | 0.6% |
-| Multi-region (3 forEach x 10 regions) | 30 | ~2.3KB | 0.9% |
-| Large platform (10 + 5 forEach x 50) | 260 | ~18KB | 7% |
-| Extreme (5 + 10 forEach x 200) | 2005 | ~140KB | 55% |
-| Pathological (20 forEach x 500) | 10000 | ~700KB | **EXCEEDS** |
-
-### Mitigation
-
-If the annotation budget becomes a concern, the inventory can be stored
-elsewhere instead:
-
-1. **ConfigMap**: A dedicated ConfigMap per instance holds the full inventory
-   (up to 1MB). The annotation stores only a pointer:
-   `{"overflow":"<configmap-name>"}`.
-2. **Instance status**: The inventory is written into the instance's
-   `.status.inventory` field, keeping all instance state co-located and avoiding
-   a separate object. Status subresource updates don't conflict with spec
-   edits.
-
----
-
 ## Edge Cases and Risks
 
-| # | Risk | Severity | Root cause | Mitigation |
-|---|------|----------|------------|------------|
-| 1 | **Watch storm during forEach expansion** | HIGH | N creates -> N watch events -> burst of API server load | Bound worker pool via `maxConcurrency` semaphore. Post-level yield (200ms) for levels creating >20 resources. |
-| 2 | **Inventory annotation race with spec updates** | HIGH (new surface) | Inventory PATCH on main resource conflicts with user spec edits. Today's controller only writes `/status`. | Use SSA with dedicated field manager `kro-inventory`. Or store inventory in separate ConfigMap. |
-| 3 | **Stale informer cache during re-projection** | MEDIUM | `runtime.Synchronize()` reads from cache that hasn't received the watch event yet | Use SSA response objects directly to update runtime context, bypassing informer cache. |
-| 4 | **Finalizer-blocked reverse prune** | MEDIUM | DELETE sets `deletionTimestamp` but resource lingers until external finalizer completes | Multi-reconcile deletion: issue DELETE, mark DELETING, return. Next reconcile confirms deletion via watch. |
-| 5 | **forEach identity collision** | MEDIUM | Two forEach bindings produce same Kubernetes resource name | Validate expanded names for uniqueness during projection phase before SSA applies. |
-| 6 | **Revision transition with immutable field changes** | LOW / HIGH blast | RGD changes immutable field (e.g., Deployment selector) -> SSA fails permanently | Diff structural DAGs at revision creation. Flag known immutable field changes as warnings. |
-| 7 | **Controller crash mid-inventory-write** | LOW | Stale inventory listing deleted resources | Atomic PATCH. On recovery, rebuild from ApplySet `part-of` labels via cluster scan. |
-| 8 | **propagateWhen never becoming true** | LOW / MED impact | External resource stuck -> permanent GATED state ([KREP-006]) | Optional `propagationTimeout`. Condition message: "propagateWhen false for 4h on node X". |
+1. **Watch storm during forEach expansion** (HIGH)
+   - *Cause:* N creates produce N watch events, bursting API server load.
+   - *Mitigation:* Bound worker pool via `maxConcurrency` semaphore. Post-level
+     yield (200ms) for levels creating >20 resources.
+
+2. **Inventory annotation race with spec updates** (HIGH)
+   - *Cause:* Inventory PATCH on main resource conflicts with user spec edits.
+     Today's controller only writes `/status`.
+   - *Mitigation:* Use SSA with dedicated field manager `kro-inventory`. Or
+     store inventory in a separate ConfigMap.
+
+3. **Stale informer cache during re-projection** (MEDIUM)
+   - *Cause:* `runtime.Synchronize()` reads from cache that hasn't received the
+     watch event yet.
+   - *Mitigation:* Use SSA response objects directly to update the runtime
+     context, bypassing informer cache.
+
+4. **Finalizer-blocked reverse prune** (MEDIUM)
+   - *Cause:* DELETE sets `deletionTimestamp` but resource lingers until an
+     external finalizer completes.
+   - *Mitigation:* Multi-reconcile deletion: issue DELETE, mark DELETING,
+     return. Next reconcile confirms deletion via watch.
+
+5. **forEach identity collision** (MEDIUM)
+   - *Cause:* Two forEach bindings produce the same Kubernetes resource name.
+   - *Mitigation:* Validate expanded names for uniqueness during the projection
+     phase before SSA applies.
+
+6. **Revision transition with immutable field changes** (LOW severity / HIGH blast)
+   - *Cause:* RGD changes an immutable field (e.g., Deployment selector) and SSA
+     fails permanently.
+   - *Mitigation:* Diff structural DAGs at revision creation. Flag known
+     immutable field changes as warnings.
+
+7. **Controller crash mid-inventory-write** (LOW)
+   - *Cause:* Stale inventory listing deleted resources.
+   - *Mitigation:* Atomic PATCH. On recovery, rebuild from ApplySet `part-of`
+     labels via cluster scan.
+
+8. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
+   - *Cause:* External resource stuck, producing permanent GATED state
+     ([KREP-006]).
+   - *Mitigation:* Optional `propagationTimeout`. Condition message:
+     "propagateWhen false for 4h on node X".
 
 ---
 
 ## Observability
 
-The wavefront synchronizer introduces new failure modes and concurrency
-patterns that are invisible without dedicated observability. This section
-defines the metrics, events, conditions, and structured logging needed to
-diagnose problems in production.
+### Debugging guide: common failure patterns
 
-### Metrics
-
-All metrics use the `kro_instance_` prefix and are exposed as Prometheus
-metrics via the controller-runtime metrics endpoint.
-
-#### Reconcile-level metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `kro_instance_reconcile_duration_seconds` | Histogram | `rgd`, `phase` (`project`, `diff`, `execute`, `status`) | Identify which phase dominates reconcile time. A slow `project` phase suggests expensive CEL evaluation or deep re-projection. A slow `execute` phase suggests API server latency or readyWhen polling. |
-| `kro_instance_reconcile_total` | Counter | `rgd`, `result` (`success`, `error`, `requeue`) | Track reconcile throughput and failure rate per RGD. A rising error rate after an RGD update signals a bad revision. |
-| `kro_instance_reprojection_iterations` | Histogram | `rgd` | Number of fixed-point iterations in Phase 1. Values consistently near the cap (default: 5) indicate complex conditional chains that may need restructuring. |
-
-#### Wavefront metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `kro_instance_level_duration_seconds` | Histogram | `rgd`, `level`, `direction` (`forward`, `reverse`) | Per-level execution time. Outlier levels reveal bottleneck resources (slow readyWhen, slow API server responses). |
-| `kro_instance_level_concurrency` | Histogram | `rgd`, `level` | Actual parallelism achieved per level (number of goroutines). Consistently hitting `maxConcurrency` suggests the limit should be raised; consistently 1 suggests the DAG has no parallelism. |
-| `kro_instance_node_action_total` | Counter | `rgd`, `action` (`create`, `update`, `delete`, `adopt`, `orphan`, `skip`, `gate`) | Action distribution. A spike in `gate` actions after an RGD update means propagation control is working. A spike in `error` actions means it isn't. |
-| `kro_instance_node_duration_seconds` | Histogram | `rgd`, `resource_id`, `action` | Per-node SSA apply duration. Identifies slow resources (large CRDs, webhook-heavy namespaces). |
-| `kro_instance_nodes_gated` | Gauge | `rgd`, `instance` | Current number of nodes in GATED state. A non-zero value that persists for hours signals a stuck propagation gate. |
-| `kro_instance_nodes_error` | Gauge | `rgd`, `instance` | Current number of nodes in ERROR state. Persistent errors after multiple reconciles indicate a resource that needs manual intervention. |
-
-#### Inventory metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `kro_instance_inventory_size_bytes` | Gauge | `rgd`, `instance`, `storage` (`annotation`, `configmap`, `status`) | Track annotation budget consumption. Alert when approaching 50% of 256KB. |
-| `kro_instance_inventory_entries` | Gauge | `rgd`, `instance` | Total entries in inventory. Correlate with forEach expansion size. |
-
-#### Revision metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `kro_instance_revision_current` | Gauge | `rgd`, `instance` | The `GraphRevision.spec.revision` currently being reconciled. Track rollout progress across a fleet of instances. |
-| `kro_instance_revision_transition_duration_seconds` | Histogram | `rgd` | Time from first reconcile targeting a new revision to all nodes reaching `Ready` at that revision. Measures end-to-end migration speed. |
-| `kro_instance_nodes_at_revision` | Gauge | `rgd`, `instance`, `revision` | Number of managed resources labeled with each revision. During migration, two revision values are non-zero. Converges to one when migration completes. |
-
-### Kubernetes Events
-
-The synchronizer emits events on the instance object for state transitions
-that operators need to notice without watching metrics:
-
-| Event | Type | Reason | When |
-|-------|------|--------|------|
-| Normal | `LevelComplete` | A level finishes execution (all nodes ready or gated). Message includes level number, node count, and duration. |
-| Normal | `ReconcileComplete` | Full reconcile cycle completes successfully. Message includes total duration and node counts by final state. |
-| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision (see [Revision Migration: n-1 to n](#revision-migration-n-1-to-n)). Message includes old and new revision numbers and topology change summary (nodes added/removed/moved). |
-| Warning | `NodeError` | A node's SSA apply fails. Message includes the resource ID, error, and retry count. |
-| Warning | `NodeGatedTimeout` | A node has been in GATED state longer than `propagationTimeout`. Message includes the node ID and the `propagateWhen` expression that is not satisfied. |
-| Warning | `ReprojectionCapReached` | Phase 1 hit the fixed-point iteration cap without converging. Message includes which `includeWhen` predicates are oscillating. |
-| Warning | `InventoryOverflow` | Inventory exceeded annotation budget and spilled to ConfigMap or status. Message includes entry count and byte size. |
-| Warning | `ImmutableFieldConflict` | Diff detected a change to a known immutable field. Message includes the field path and resource. |
+| Symptom | What to check | Likely cause | Remediation |
+|---------|---------------|--------------|-------------|
+| Instance stuck `IN_PROGRESS` | `kro_instance_nodes_error` gauge, `NodeError` events | SSA apply failing repeatedly | Check instance events. Common causes: field manager conflict, webhook rejection, RBAC missing. Fix the conflict or update the RGD template. |
+| Instance stuck `GATED` | `kro_instance_nodes_gated` gauge, `NodeGatedTimeout` event | `propagateWhen` predicate never becomes true | Inspect the predicate in the event message. Check the upstream resource it references. Update the RGD to adjust `propagateWhen`. |
+| Reconcile latency spike | `reconcile_duration_seconds` by phase, `level_duration_seconds` | Slow API server, expensive CEL, or large forEach | If `project` phase is slow: check `reprojection_iterations`. If `execute` is slow: check `node_duration_seconds` for outliers. |
+| Resources deleted out of order | `level_duration_seconds` with `direction=reverse` | Stale or missing inventory | If inventory was lost (crash), the controller rebuilds from `part-of` labels on next reconcile. Verify labels are present. |
+| forEach creates too many resources | `kro_instance_inventory_entries` | forEach evaluates to unexpectedly large set | Check forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. |
+| `ReprojectionCapReached` warning | Structured logs with `reprojection cap` | Circular `includeWhen` predicates | Restructure the RGD. Two nodes should not conditionally include each other based on the other's readiness. |
+| Inventory overflow | `inventory_size_bytes` with `storage=configmap` | Large forEach expansion | Expected for large deployments. Monitor ConfigMap size. If approaching 1MB, reduce forEach cardinality. |
+| Revision rollout not progressing | `nodes_at_revision` gauge, `nodes_gated` | `propagateWhen` gating rollout (by design) | Check if canary/first-batch resources are healthy. If so, the `propagateWhen` predicate may reference the wrong field. |
 
 ### Conditions
 
@@ -872,9 +827,59 @@ Each condition message includes:
 - **Why** they are stuck (the specific error or unsatisfied predicate)
 - **How long** they have been in that state
 
-### Structured Logging
+### Kubernetes Events
 
-Log lines use structured fields for machine-parseable filtering:
+| Event | Type | Reason | When |
+|-------|------|--------|------|
+| Normal | `LevelComplete` | A level finishes execution. Message includes level number, node count, and duration. |
+| Normal | `ReconcileComplete` | Full reconcile cycle completes. Message includes total duration and node counts by final state. |
+| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision (see [Revision Migration](#revision-migration-n-1-to-n)). Message includes old and new revision numbers and topology change summary (nodes added/removed/moved). |
+| Warning | `NodeError` | A node's SSA apply fails. Message includes resource ID, error, and retry count. |
+| Warning | `NodeGatedTimeout` | Node in GATED state longer than `propagationTimeout`. Message includes node ID and unsatisfied `propagateWhen` expression. |
+| Warning | `ReprojectionCapReached` | Phase 1 hit fixed-point iteration cap. Message includes oscillating `includeWhen` predicates. |
+| Warning | `InventoryOverflow` | Inventory exceeded annotation budget. Message includes entry count and byte size. |
+| Warning | `ImmutableFieldConflict` | Diff detected change to a known immutable field. Message includes field path and resource. |
+
+### Metrics
+
+All metrics use the `kro_instance_` prefix and are exposed via the
+controller-runtime metrics endpoint.
+
+#### Reconcile-level metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `reconcile_duration_seconds` | Histogram | `rgd`, `phase` | Identify which phase dominates reconcile time. |
+| `reconcile_total` | Counter | `rgd`, `result` (`success`, `error`, `requeue`) | Reconcile throughput and failure rate per RGD. |
+| `reprojection_iterations` | Histogram | `rgd` | Fixed-point iterations in Phase 1. Near-cap values indicate complex conditional chains. |
+
+#### Wavefront metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `level_duration_seconds` | Histogram | `rgd`, `level`, `direction` | Per-level execution time. |
+| `level_concurrency` | Histogram | `rgd`, `level` | Actual parallelism achieved per level. |
+| `node_action_total` | Counter | `rgd`, `action` | Action distribution (create, update, delete, gate, etc.). |
+| `node_duration_seconds` | Histogram | `rgd`, `resource_id`, `action` | Per-node SSA apply duration. |
+| `nodes_gated` | Gauge | `rgd`, `instance` | Nodes currently in GATED state. |
+| `nodes_error` | Gauge | `rgd`, `instance` | Nodes currently in ERROR state. |
+
+#### Inventory metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `inventory_size_bytes` | Gauge | `rgd`, `instance`, `storage` | Annotation budget consumption. |
+| `inventory_entries` | Gauge | `rgd`, `instance` | Total entries in inventory. |
+
+#### Revision metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `revision_current` | Gauge | `rgd`, `instance` | GraphRevision currently being reconciled. |
+| `revision_transition_duration_seconds` | Histogram | `rgd` | End-to-end migration time (first reconcile to all nodes Ready). |
+| `nodes_at_revision` | Gauge | `rgd`, `instance`, `revision` | Resources per revision. Two non-zero values during migration. |
+
+### Structured Logging
 
 ```
 level=info  msg="level complete"      instance=my-app rgd=webapp level=1 direction=forward nodes=3 duration=2.4s
@@ -885,44 +890,27 @@ level=info  msg="reprojection"        instance=my-app rgd=webapp iteration=2 cha
 level=error msg="reprojection cap"    instance=my-app rgd=webapp iterations=5 oscillating=[node-a,node-b]
 ```
 
-### Debugging guide: common failure patterns
-
-| Symptom | Metrics / logs to check | Likely cause | Remediation |
-|---------|------------------------|--------------|-------------|
-| Instance stuck in `IN_PROGRESS` indefinitely | `kro_instance_nodes_error` gauge, `NodeError` events | One or more nodes failing SSA apply repeatedly | Check events on the instance. Common causes: field manager conflict (another tool owns the field), webhook rejection, RBAC missing. Fix the conflict or update the RGD template. |
-| Instance stuck in `GATED` | `kro_instance_nodes_gated` gauge, `NodeGatedTimeout` event | `propagateWhen` predicate never becomes true | Inspect the predicate in the event message. Check the upstream resource it references. If the gate is no longer needed, update the RGD to remove or adjust the `propagateWhen`. |
-| Reconcile latency spike | `kro_instance_reconcile_duration_seconds` by phase, `kro_instance_level_duration_seconds` | Slow API server, expensive CEL, or large forEach expansion | If `project` phase is slow: check `reprojection_iterations` and CEL complexity. If `execute` phase is slow: check `node_duration_seconds` for outlier resources and API server latency. |
-| Resources deleted out of order | `kro_instance_level_duration_seconds` with `direction=reverse`, inventory logs | Stale or missing inventory | Check `kro_instance_inventory_size_bytes`. If inventory was lost (controller crash), the controller rebuilds from `part-of` labels on next reconcile. Verify labels are present on managed resources. |
-| forEach creates too many resources | `kro_instance_inventory_entries`, `kro_instance_node_action_total` with `action=create` | forEach expression evaluates to unexpectedly large set | Check the forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. Monitor `inventory_entries` for growth. |
-| `ReprojectionCapReached` warning | Structured logs with `reprojection cap`, oscillating node list | Circular dependency between `includeWhen` predicates that reference each other's state | Restructure the RGD to break the dependency cycle. Two nodes should not conditionally include each other based on the other's readiness. |
-| Inventory overflow to ConfigMap | `kro_instance_inventory_size_bytes` with `storage=configmap`, `InventoryOverflow` event | Large forEach expansion producing thousands of entries | Expected for large deployments. Monitor the ConfigMap size. If approaching 1MB, reduce forEach cardinality or consolidate resources. |
-| Revision rollout not progressing | `kro_instance_node_action_total` with `action=gate`, `kro_instance_nodes_gated` | `propagateWhen` is working as intended, gating rollout | This is normal during controlled rollouts. Check if the canary or first-batch resources are healthy. If they are and the gate still isn't opening, the `propagateWhen` predicate may reference the wrong field. |
-
 ---
 
-## Correlation with KREP-022: managedResources
+## Relationship to Other Proposals
 
-[KREP-022] introduces `managedResources` in instance status. This proposal's
-synchronizer produces all the data it needs.
+### KREP-022: managedResources
 
-**Key design decisions from [PR #1161](https://github.com/kubernetes-sigs/kro/pull/1161) review:**
+[KREP-022] introduces `managedResources` in instance status. The wavefront
+synchronizer produces all the data it needs. Key design decisions from
+[PR #1161](https://github.com/kubernetes-sigs/kro/pull/1161) review:
 
-- **`graphRevision` must be per-node**, not per-instance
-  ([review comment](https://github.com/kubernetes-sigs/kro/pull/1161#discussion_r2949023361)).
-  During revision transitions, different nodes are at different revisions.
-- **External nodes excluded** from managedResources
-  ([review comment](https://github.com/kubernetes-sigs/kro/pull/1161#discussion_r2949061140)).
+- **`graphRevision` must be per-node**, not per-instance. During revision
+  transitions, different nodes are at different revisions.
+- **External nodes excluded** from managedResources.
 - **Add `level` field** to each entry (new -- this proposal recommends it).
-- **State naming**: map internal `NodeStateSynced` -> `READY` in status
-  ([review comment](https://github.com/kubernetes-sigs/kro/pull/1161#discussion_r2949028082)).
+- **State naming**: map internal `NodeStateSynced` -> `READY` in status.
 
----
-
-## Correlation with KREP-014: Resource Lifecycles
+### KREP-014: Resource Lifecycles
 
 [KREP-014] introduces resource policies for adoption and orphaning. The
-[PR #1091](https://github.com/kubernetes-sigs/kro/pull/1091) review discussion
-converges toward separating creation and deletion policies:
+[PR #1091](https://github.com/kubernetes-sigs/kro/pull/1091) review converges
+toward separating creation and deletion policies:
 
 ```go
 type ResourcePolicies struct {
@@ -932,12 +920,11 @@ type ResourcePolicies struct {
 ```
 
 This fits the synchronizer naturally: forward wavefront reads `OnCreate`,
-reverse wavefront reads `OnDelete`. They never interfere, avoiding the compound
-`AdoptAndOrphan` policy flagged in [review](https://github.com/kubernetes-sigs/kro/pull/1091#discussion_r2921044507).
+reverse wavefront reads `OnDelete`. They never interfere.
 
 ---
 
-## Convergence with pkg/controller/instance
+## Implementation Plan
 
 ### Mapping current -> proposed
 
@@ -1023,113 +1010,29 @@ flowchart LR
 
 ---
 
-## Concrete Examples
-
-### Example 1: Web application with conditional monitoring
-
-RGD with `includeWhen`-conditional `ServiceMonitor`. Levels:
-`[configmap]` -> `[deployment]` -> `[service, servicemonitor]`.
-
-**Reconcile sequence with `monitoring: false`:**
-
-```mermaid
-sequenceDiagram
-    participant C as Controller
-    participant L0 as Level 0
-    participant L1 as Level 1
-    participant L2 as Level 2
-
-    Note over C: Projection: servicemonitor EXCLUDED
-    C->>L0: Apply configmap (SSA)
-    L0-->>C: Ready
-    C->>C: runtime.Synchronize()
-    C->>L1: Apply deployment (SSA)
-    L1-->>C: Exists, readyWhen=false
-    Note over C: Return, requeue via watch
-    Note over L1: Pods scale up...
-    L1-->>C: Watch: replicas ready
-    C->>L1: Re-eval readyWhen -> true
-    C->>C: runtime.Synchronize()
-    C->>L2: Apply service (SSA)
-    Note over L2: servicemonitor: EXCLUDED
-    L2-->>C: Ready -> ACTIVE
-```
-
-**User enables `monitoring: true`:**
-servicemonitor transitions `EXCLUDED -> INCLUDED -> IN_PROGRESS -> READY`.
-
-### Example 2: Multi-region forEach with ordered pruning
-
-**User removes region `ap-southeast-1`:**
-
-```mermaid
-sequenceDiagram
-    participant C as Controller
-    participant L2 as Level 2 (reverse)
-    participant L1 as Level 1 (reverse)
-
-    Note over C: Diff: ap-southeast-1 in inventory, NOT in projection
-    C->>L2: DELETE service-ap-southeast-1-svc
-    L2-->>C: Confirmed deleted
-    C->>C: Update inventory
-    C->>L1: DELETE deployment-ap-southeast-1
-    L1-->>C: Confirmed deleted
-    C->>C: Update inventory
-    Note over C: Namespace stays (still needed)
-```
-
-Service deleted **before** Deployment -- traffic stops before pods removed.
-
-### Example 3: Database with Adopt/Orphan ([KREP-014])
-
-- Level 0: database -- `onCreate: Adopt` -> verify exists, add labels
-- Level 1: app-config -- normal create using `database.status`
-- Level 2: deployment -- normal create
-- On delete: Level 2->1 deleted, Level 0 database **orphaned** (labels removed,
-  resource survives)
-
-### Example 4: Propagation-controlled rollout ([KREP-006])
-
-```mermaid
-sequenceDiagram
-    participant W as Wavefront
-    participant R1 as us-east-1
-    participant R2 as eu-west-1
-    participant R3 as ap-southeast-1
-
-    Note over W: exponentiallyReady: batch=1
-    W->>R1: Update to v2.0
-    Note over R2,R3: GATED
-    R1-->>W: Ready (3/3)
-
-    Note over W: exponentiallyReady: batch=2
-    W->>R2: Update to v2.0
-    Note over R3: GATED
-    R2-->>W: Ready (3/3)
-
-    Note over W: exponentiallyReady: batch=4
-    W->>R3: Update to v2.0
-    R3-->>W: Ready (3/3)
-    Note over W: ResourcesPropagated: True
-```
-
----
-
 ## Open Questions
 
-1. **Concurrent propagations** -- [KREP-006] raises whether multiple revision
-   rollouts can overlap. This proposal assumes single-propagation (see
-   [Revision Migration: n-1 to n](#revision-migration-n-1-to-n), "Concurrent
-   propagation" subsection). Defer to a follow-up proposal.
-2. **Debounce on external watches** -- configurable 1-2s window.
-3. **forEach rollout** -- subsumed by [KREP-006] `propagateWhen` primitives.
-4. **Inventory storage backend** -- annotation-first with ConfigMap overflow vs
-   always-ConfigMap.
-5. **Revision fallback policy** -- Currently, a `Failed` latest revision blocks
-   all instances with no automatic fallback to the previous active revision.
-   Should we support an opt-in `revisionPolicy: FallbackToPrevious` that
-   continues serving revision *n-1* when *n* fails compilation? This trades
-   "fail loudly" for availability. Defer.
+1. **Concurrent propagations** -- Can multiple revision rollouts overlap?
+   This proposal assumes single-propagation (see [Revision Migration,
+   "Concurrent propagation"](#edge-cases-1)). Overlapping rollouts would
+   require tracking per-node target revision, not just current revision.
+   Defer to a follow-up proposal.
+2. **Debounce on external watches** -- Configurable 1-2s window. Relevant to
+   [Phase 1 (Project)](#phase-1-project) re-projection triggered by external
+   resource changes. Without debounce, rapid external changes cause unnecessary
+   re-projections.
+3. **forEach rollout** -- Subsumed by [KREP-006] `propagateWhen` primitives.
+   The [propagation gating example](#propagation-gating-within-a-level-krep-006)
+   shows how this works in practice.
+4. **Inventory storage backend** -- Annotation-first with ConfigMap overflow vs
+   always-ConfigMap. See [Annotation size analysis](#annotation-size-analysis)
+   for budget estimates. Always-ConfigMap avoids the race in
+   [risk #2](#edge-cases-and-risks) but adds an extra object per instance.
+5. **Revision fallback policy** -- A `Failed` latest revision blocks all
+   instances with no automatic fallback (see [Revision Migration, "Failed
+   revision"](#edge-cases-1)). Should we support opt-in
+   `revisionPolicy: FallbackToPrevious`? This trades "fail loudly" for
+   availability. Defer.
 
 ---
 
@@ -1148,7 +1051,6 @@ sequenceDiagram
 
 - Multi-level wavefront execution
 - Partial failure and recovery
-- Revision transitions
 - Revision migration: full n-1 to n transition with level-by-level label bumping
 - Revision migration: topology change (node added, node removed, node moves level)
 - Revision migration: partial failure at level K, recovery on next reconcile
@@ -1169,9 +1071,9 @@ sequenceDiagram
 - forEach producing 0 elements
 - All nodes gated
 - Revision reordering levels
-- Inventory exceeding 50% budget
 - Revision n-1 partially applied, revision n+1 issued (skip n)
 - Revision changes immutable field on a node (cross-ref risk #6)
+- Inventory exceeding 50% budget
 - Resource lifecycle policy transitions mid-reconcile ([KREP-014])
 
 <!-- Reference-style links -->

@@ -248,61 +248,147 @@ func (d *Differ) classifyNode(node *ProjectedNode, live *unstructured.Unstructur
 
 ### Phase 3: Execute wavefront
 
-The wavefront processes levels in order, with parallelism within each level,
-respecting both `readyWhen` and `propagateWhen` gates:
+The wavefront processes levels in strict order, with parallelism *within*
+each level. A level only begins after all nodes in the previous level have
+reached `Ready` (or been skipped/gated). This guarantees that a node's
+dependencies are always satisfied before it is touched.
 
-```mermaid
-flowchart TB
-    subgraph FW["Forward wavefront (create order)"]
-        direction TB
-        L0["Level 0\nConfigMap, Secret"] --> L1["Level 1\nDeployment, Service"]
-        L1 --> L2["Level 2\nIngress, ServiceMonitor"]
-    end
+#### Forward wavefront (create/update)
 
-    subgraph RW["Reverse wavefront (prune order)"]
-        direction TB
-        R2["Level 2\nDelete Ingress"] --> R1["Level 1\nDelete Deployment"]
-        R1 --> R0["Level 0\nDelete ConfigMap"]
-    end
+Levels are processed in ascending order (0, 1, 2, ...). Within each level,
+all non-gated nodes are applied concurrently up to `maxConcurrency`:
 
-    FW -. "within each level:\nparallel apply +\nreadyWhen gate +\npropagateWhen gate" .-> RW
+```
+DAG:  ConfigMap ──► Deployment ──► Service
+      Secret    ──┘              ─► Ingress
 
-    style L0 fill:#EAF3DE,stroke:#3B6D11,color:#27500A
-    style L1 fill:#E6F1FB,stroke:#185FA5,color:#0C447C
-    style L2 fill:#EEEDFE,stroke:#534AB7,color:#3C3489
-    style R2 fill:#FCEBEB,stroke:#A32D2D,color:#791F1F
-    style R1 fill:#FCEBEB,stroke:#A32D2D,color:#791F1F
-    style R0 fill:#FCEBEB,stroke:#A32D2D,color:#791F1F
+Levels after Kahn's algorithm:
+  Level 0: [ConfigMap, Secret]       (no dependencies)
+  Level 1: [Deployment]              (depends on ConfigMap, Secret)
+  Level 2: [Service, Ingress]        (depend on Deployment)
+
+Forward wavefront execution:
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Level 0                                                         │
+  │                                                                 │
+  │   ConfigMap ─── SSA apply ──► exists ──► readyWhen? ──► Ready   │
+  │                                          (parallel)             │
+  │   Secret ────── SSA apply ──► exists ──► readyWhen? ──► Ready   │
+  │                                                                 │
+  │   All Ready? ── yes ──► runtime.Synchronize() ──► advance       │
+  └─────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Level 1                                                         │
+  │                                                                 │
+  │   Deployment ── SSA apply ──► exists ──► readyWhen? ── no       │
+  │                                                                 │
+  │   Requeue. Wait for watch event (e.g. replicas become ready).   │
+  │   Next reconcile re-enters here:                                │
+  │                                                                 │
+  │   Deployment ── skip apply (unchanged) ─► readyWhen? ── Ready   │
+  │                                                                 │
+  │   All Ready? ── yes ──► runtime.Synchronize() ──► advance       │
+  └─────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Level 2                                                         │
+  │                                                                 │
+  │   Service ──── SSA apply ──► exists ──► readyWhen? ──► Ready    │
+  │                                         (parallel)              │
+  │   Ingress ──── SSA apply ──► exists ──► readyWhen? ──► Ready    │
+  │                                                                 │
+  │   All Ready? ── yes ──► instance ACTIVE                         │
+  └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Level execution with propagation gating ([KREP-006]):**
+Key behaviors:
 
-```go
-func (w *Wavefront) executeLevel(ctx context.Context, level int, actions []PlannedAction) error {
-    var wg sync.WaitGroup
-    sem := make(chan struct{}, w.maxWorkers)
-    errs := &syncErrorMap{}
+- **Parallelism within a level.** ConfigMap and Secret are applied
+  concurrently. Service and Ingress are applied concurrently. But
+  Deployment never starts before both ConfigMap and Secret are `Ready`.
+- **readyWhen as a level gate.** The wavefront does not advance to level 1
+  until *all* level 0 nodes pass their `readyWhen` predicates. If a node's
+  readyWhen is not yet satisfied, the reconcile returns and waits for a
+  watch event.
+- **runtime.Synchronize() between levels.** After a level completes, the
+  CEL evaluation context is refreshed with the latest status fields from
+  the just-completed resources. This ensures that level 1 templates can
+  reference level 0 status values (e.g., a Deployment referencing a
+  ConfigMap's resourceVersion).
+- **Concurrency bound.** A semaphore limits parallel SSA applies to
+  `maxConcurrency` (default: 10) to avoid overwhelming the API server.
 
-    for _, action := range actions {
-        if !w.canPropagate(action) { // KREP-006 gate check
-            continue // Node is gated -- skip, do not block the level.
-        }
-        wg.Add(1)
-        go func(a PlannedAction) {
-            defer wg.Done()
-            sem <- struct{}{}
-            defer func() { <-sem }()
-            if err := w.applyAction(ctx, a); err != nil {
-                errs.Set(a.NodeID, err)
-            }
-        }(action)
-    }
-    wg.Wait()
-    if errs.Len() > 0 {
-        return errs.Combined()
-    }
-    return w.awaitLevelReady(ctx, level, actions)
-}
+#### Reverse wavefront (delete/prune)
+
+When resources need to be removed (instance deletion or nodes removed by a
+new GraphRevision), levels are processed in descending order (2, 1, 0).
+This ensures dependents are cleaned up before their dependencies:
+
+```
+Reverse wavefront execution (instance deletion):
+
+  Level 2: DELETE Service      (parallel)
+           DELETE Ingress
+           Wait for confirmed deletion via watch.
+
+  Level 1: DELETE Deployment
+           Wait for confirmed deletion via watch.
+
+  Level 0: DELETE ConfigMap    (parallel)
+           DELETE Secret
+           Wait for confirmed deletion via watch.
+
+  Remove finalizer. Instance deleted.
+```
+
+This ordering prevents dangling references: the Service is deleted before
+the Deployment it routes to, and the Deployment is deleted before the
+ConfigMap it mounts.
+
+#### Propagation gating within a level ([KREP-006])
+
+When `propagateWhen` is configured, some nodes within a level may be
+gated even though their dependencies are ready. The wavefront applies
+non-gated nodes and skips gated ones — it does not block waiting:
+
+```
+Level 1: [deploy-us, deploy-eu, deploy-ap]
+         propagateWhen: canary.status.healthy == true
+
+  deploy-us ── propagateWhen? ── true  ──► SSA apply ──► WaitReady
+  deploy-eu ── propagateWhen? ── false ──► GATED (skip)
+  deploy-ap ── propagateWhen? ── false ──► GATED (skip)
+
+  Level result: 1 applied, 2 gated.
+  Reconcile completes with status: GATED.
+  Next watch event (canary becomes healthy) triggers new reconcile.
+  deploy-eu and deploy-ap re-evaluated.
+```
+
+#### Mixed forward and reverse in the same reconcile
+
+When a new GraphRevision adds some nodes and removes others, both
+wavefronts run in the same reconcile cycle. The forward wavefront runs
+first (create/update), then the reverse wavefront prunes stale resources:
+
+```
+Revision 2: [ConfigMap] -> [Deployment, OldSidecar] -> [Service]
+Revision 3: [ConfigMap] -> [Deployment, NewSidecar] -> [Service]
+
+Same reconcile:
+  Forward (levels 0, 1, 2):
+    Level 0: Update ConfigMap
+    Level 1: Update Deployment, Create NewSidecar
+    Level 2: Update Service
+
+  Reverse (levels 1):
+    Level 1: Delete OldSidecar
+
+Result: OldSidecar removed only after NewSidecar is Ready.
 ```
 
 **Node state machine:**

@@ -721,63 +721,106 @@ processed in the new level order. Partially-applied level-2 resources
 from revision *n* are either updated (if still in the projected DAG) or
 pruned (if removed).
 
-**Concurrent propagation (deferred):**
+**New revision arrives during incomplete migration:**
 
-Under the current single-propagation model, if revision *n* is still
-being rolled out when *n+1* arrives:
+The synchronizer must handle the case where a new GraphRevision *n+1*
+becomes active while the wavefront is still migrating from *n-1* to *n*.
+Two strategies are possible:
 
-- Current reconcile finishes against *n* (or partially).
-- Next reconcile targets *n+1* directly.
-- Nodes updated to *n* are updated again to *n+1*.
-- Nodes still at *n-1* jump directly to *n+1*.
+**Strategy A: Skip to latest (default).** The current reconcile completes
+its in-progress level against revision *n*, then the next reconcile
+targets *n+1* directly. Nodes already at *n* are updated again to *n+1*.
+Nodes still at *n-1* jump directly to *n+1*, skipping *n* entirely.
 
-This is correct but potentially wasteful for rapid successive revisions.
-See [Open Questions](#open-questions) item 1.
+```
+Before:  L0:[rev 3]  L1:[rev 2]  L2:[rev 2]    (migrating 2->3, L0 done)
+Rev 4 arrives.
+Next reconcile targets rev 4:
+  L0: rev 3 < 4 --> ActionUpdate (3->4)
+  L1: rev 2 < 4 --> ActionUpdate (2->4, skips 3)
+  L2: rev 2 < 4 --> ActionUpdate (2->4, skips 3)
+```
+
+This is correct because each GraphRevision is a complete snapshot -- there
+is no incremental delta that requires processing revision 3 before 4.
+Resources jump directly to the latest desired state. This is the simplest
+model and avoids serializing migrations that may never complete.
+
+**Strategy B: Complete current before advancing.** The wavefront finishes
+the full *n-1* to *n* migration before starting *n* to *n+1*. This
+guarantees that every revision is fully applied and validated via
+`readyWhen` before moving on.
+
+```
+Before:  L0:[rev 3]  L1:[rev 2]  L2:[rev 2]    (migrating 2->3, L0 done)
+Rev 4 arrives, but wavefront continues targeting rev 3:
+  L1: rev 2 < 3 --> ActionUpdate (2->3)
+  L2: rev 2 < 3 --> ActionUpdate (2->3)
+  All at rev 3. Inventory updated to rev 3.
+Next reconcile targets rev 4:
+  L0: rev 3 < 4 --> ActionUpdate (3->4)
+  L1: rev 3 < 4 --> ActionUpdate (3->4)
+  L2: rev 3 < 4 --> ActionUpdate (3->4)
+```
+
+This is safer when `readyWhen` predicates act as health checks -- it
+ensures revision *n* is fully healthy before applying *n+1*. But it adds
+latency when revisions arrive in rapid succession (each must fully roll
+out before the next starts).
+
+**Recommended default: Strategy A (skip to latest).** This matches
+Kubernetes controller conventions -- a controller always reconciles
+toward the latest desired state. Strategy B can be offered as an opt-in
+`revisionPolicy: Serialized` for users who need per-revision health
+validation. Under Strategy A, the `resolveCompiledGraph()` call at the
+start of each reconcile always returns the latest active revision; under
+Strategy B, it returns the in-progress target revision until migration
+completes.
+
+Implementation note: Strategy B requires tracking the "in-progress
+target revision" in the inventory or instance status so it survives
+controller restarts. Strategy A needs no additional state -- it always
+reads the latest from the registry.
 
 ---
 
 ## Edge Cases and Risks
 
-1. **Watch storm during forEach expansion** (HIGH)
-   - *Cause:* N creates produce N watch events, bursting API server load.
-   - *Mitigation:* Bound worker pool via `maxConcurrency` semaphore. Post-level
-     yield (200ms) for levels creating >20 resources.
-
-2. **Inventory annotation race with spec updates** (HIGH)
+1. **Inventory annotation race with spec updates** (HIGH)
    - *Cause:* Inventory PATCH on main resource conflicts with user spec edits.
      Today's controller only writes `/status`.
    - *Mitigation:* Use SSA with dedicated field manager `kro-inventory`. Or
      store inventory in a separate ConfigMap.
 
-3. **Stale informer cache during re-projection** (MEDIUM)
+2. **Stale informer cache during re-projection** (MEDIUM)
    - *Cause:* `runtime.Synchronize()` reads from cache that hasn't received the
      watch event yet.
    - *Mitigation:* Use SSA response objects directly to update the runtime
      context, bypassing informer cache.
 
-4. **Finalizer-blocked reverse prune** (MEDIUM)
+3. **Finalizer-blocked reverse prune** (MEDIUM)
    - *Cause:* DELETE sets `deletionTimestamp` but resource lingers until an
      external finalizer completes.
    - *Mitigation:* Multi-reconcile deletion: issue DELETE, mark DELETING,
      return. Next reconcile confirms deletion via watch.
 
-5. **forEach identity collision** (MEDIUM)
+4. **forEach identity collision** (MEDIUM)
    - *Cause:* Two forEach bindings produce the same Kubernetes resource name.
    - *Mitigation:* Validate expanded names for uniqueness during the projection
      phase before SSA applies.
 
-6. **Revision transition with immutable field changes** (LOW severity / HIGH blast)
+5. **Revision transition with immutable field changes** (LOW severity / HIGH blast)
    - *Cause:* RGD changes an immutable field (e.g., Deployment selector) and SSA
      fails permanently.
    - *Mitigation:* Diff structural DAGs at revision creation. Flag known
      immutable field changes as warnings.
 
-7. **Controller crash mid-inventory-write** (LOW)
+6. **Controller crash mid-inventory-write** (LOW)
    - *Cause:* Stale inventory listing deleted resources.
    - *Mitigation:* Atomic PATCH. On recovery, rebuild from ApplySet `part-of`
      labels via cluster scan.
 
-8. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
+7. **propagateWhen never becoming true** (LOW severity / MEDIUM impact)
    - *Cause:* External resource stuck, producing permanent GATED state
      ([KREP-006]).
    - *Mitigation:* Optional `propagationTimeout`. Condition message:
@@ -1004,11 +1047,11 @@ flowchart LR
 
 ## Open Questions
 
-1. **Concurrent propagations** -- Can multiple revision rollouts overlap?
-   This proposal assumes single-propagation (see [Revision Migration,
-   "Concurrent propagation"](#edge-cases-1)). Overlapping rollouts would
-   require tracking per-node target revision, not just current revision.
-   Defer to a follow-up proposal.
+1. **Serialized vs skip-to-latest revision policy** -- The proposal recommends
+   skip-to-latest as the default (see [Revision Migration, "New revision arrives
+   during incomplete migration"](#edge-cases-1)). Should `revisionPolicy:
+   Serialized` be available from the start, or deferred? Serialized requires
+   persisting the in-progress target revision.
 2. **Debounce on external watches** -- Configurable 1-2s window. Relevant to
    [Phase 1 (Project)](#phase-1-project) re-projection triggered by external
    resource changes. Without debounce, rapid external changes cause unnecessary
@@ -1019,7 +1062,7 @@ flowchart LR
 4. **Inventory storage backend** -- Annotation-first with ConfigMap overflow vs
    always-ConfigMap. See [Annotation size analysis](#annotation-size-analysis)
    for budget estimates. Always-ConfigMap avoids the race in
-   [risk #2](#edge-cases-and-risks) but adds an extra object per instance.
+   [risk #1](#edge-cases-and-risks) but adds an extra object per instance.
 5. **Revision fallback policy** -- A `Failed` latest revision blocks all
    instances with no automatic fallback (see [Revision Migration, "Failed
    revision"](#edge-cases-1)). Should we support opt-in

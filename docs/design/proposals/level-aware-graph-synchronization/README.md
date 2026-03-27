@@ -130,7 +130,16 @@ type ProjectedDAG struct {
     // Nodes maps each node ID to its projected state.
     Nodes map[NodeID]*ProjectedNode
 
-    // Revision is the GraphRevision this projection is based on.
+    // Revision is the target GraphRevision.spec.revision number for this
+    // reconcile cycle. Resolved via GraphRevisionResolver.GetLatestRevision()
+    // from the in-memory revision registry. The corresponding GraphRevision
+    // object is immutable (XValidation: "self == oldSelf") and carries the
+    // full RGD spec snapshot in spec.snapshot.spec.
+    //
+    // Per-node current revision is tracked individually via the
+    // kro.run/revision label on each managed resource — NOT at the instance
+    // level. This allows partial migration: after a failed wavefront, some
+    // nodes are at the new revision and some are still at the old one.
     Revision int64
 }
 
@@ -198,6 +207,43 @@ const (
     ActionBlocked                     // Dependencies not ready
     ActionGated                       // Dependencies ready, propagateWhen false (KREP-006)
 )
+```
+
+**Revision-aware diffing:**
+
+The diff phase reads each managed resource's `kro.run/revision` label to
+determine whether it needs re-reconciliation against the target revision.
+When a node's label is behind the target, the diff marks it `ActionUpdate`
+even if the rendered template is byte-for-byte identical — because the new
+GraphRevision may have changed CEL expressions, dependency edges, or
+`readyWhen`/`propagateWhen` predicates that don't appear in the template:
+
+```go
+func (d *Differ) classifyNode(node *ProjectedNode, live *unstructured.Unstructured) NodeAction {
+    if live == nil {
+        return ActionCreate
+    }
+
+    liveRevision, _ := strconv.ParseInt(
+        live.GetLabels()["kro.run/revision"], 10, 64,
+    )
+
+    if liveRevision < d.targetRevision {
+        // Resource was last reconciled under an older revision.
+        // Force update to bump the label and apply any behavioral
+        // changes from the new GraphRevision.
+        return ActionUpdate
+    }
+
+    if !equality.Semantic.DeepEqual(node.Template, live) {
+        return ActionUpdate
+    }
+
+    if d.evaluateReadyWhen(node, live) {
+        return ActionReady
+    }
+    return ActionNone
+}
 ```
 
 ### Phase 3: Execute wavefront
@@ -376,6 +422,14 @@ metadata:
       ]}
 ```
 
+The `revision` field in the inventory is a "fully converged" marker — it
+is only updated after the entire forward wavefront completes and all
+nodes reach the target revision. Per-node revision is the source of truth
+(via `kro.run/revision` labels on managed resources). During a partial
+failure, individual node labels show exactly which nodes migrated and
+which did not; the inventory `revision` stays at the old value, ensuring
+the next reconcile correctly re-targets all stale nodes.
+
 **Member labels (on each managed resource):**
 
 ```yaml
@@ -406,6 +460,188 @@ flowchart TB
     style DEL fill:#FCEBEB,stroke:#A32D2D,color:#791F1F
     style DONE fill:#EAF3DE,stroke:#3B6D11,color:#27500A
 ```
+
+---
+
+## Revision Migration: n-1 to n
+
+This section describes the mechanics of transitioning an instance from
+GraphRevision *n-1* to GraphRevision *n*.
+
+### Trigger
+
+A new GraphRevision is created by the RGD controller whenever
+`ResourceGraphDefinition.spec` changes. The GraphRevision object is
+immutable (`spec` carries an XValidation rule: `self == oldSelf`) and
+contains a full snapshot of the RGD spec:
+
+```yaml
+apiVersion: internal.kro.run/v1alpha1
+kind: GraphRevision
+metadata:
+  name: webapp-r00003
+  labels:
+    kro.run/graph-revision-hash: "sha256-abc123"
+    internal.kro.run/resource-graph-definition-name: webapp
+spec:
+  revision: 3
+  snapshot:
+    name: webapp
+    generation: 7
+    spec: { ... }   # full copy of the RGD spec at generation 7
+```
+
+The in-memory revision registry (`pkg/graph/revisions/registry.go`)
+tracks this object through states `Pending -> Active` (or `Failed`). The
+instance controller's `GraphRevisionResolver.GetLatestRevision()` returns
+the highest-numbered active entry.
+
+### Detection
+
+At the start of each reconcile, Phase 1 (Project) resolves the latest
+active GraphRevision and records it as `ProjectedDAG.Revision` — the
+*target* revision. Each managed resource's *current* revision is read
+individually from its `kro.run/revision` label during Phase 2 (Diff).
+
+There is no instance-level "previous revision" field. Per-node tracking
+is the source of truth because during a partial migration, different
+nodes are at different revisions. The `revision` field in the
+`kro.run/inventory` annotation is a "fully converged" marker — only
+updated after all nodes reach the target.
+
+### Diffing during revision transition
+
+Phase 2 compares each node individually:
+
+- If the managed resource's `kro.run/revision` label equals the target →
+  normal diff (compare template, check readyWhen).
+- If the label is **behind** the target → `ActionUpdate` regardless of
+  whether the rendered template changed. This ensures:
+  1. The `kro.run/revision` label is bumped.
+  2. Any SSA field manager changes take effect.
+  3. The new revision's `readyWhen`/`propagateWhen` predicates are
+     evaluated.
+- If the resource does **not exist** → `ActionCreate` (new node in this
+  revision).
+- If the resource exists in the inventory but is **absent** from the
+  projected DAG → `ActionDelete` (node removed in this revision).
+
+### Execution order
+
+Revision migration follows the same level-by-level forward wavefront.
+This is critical: level 0 resources may carry new configuration values
+that higher levels depend on.
+
+```
+Revision 2 (current):  [ConfigMap] -> [Deployment] -> [Service]
+Revision 3 (target):   [ConfigMap] -> [Deployment] -> [Service, Ingress]
+                                                        ^^^^^^^ new node
+
+Forward wavefront:
+  Level 0: Update ConfigMap (kro.run/revision: 2 -> 3)
+           Wait readyWhen -> Ready
+  Level 1: Update Deployment (kro.run/revision: 2 -> 3)
+           Wait readyWhen -> Ready
+  Level 2: Update Service (kro.run/revision: 2 -> 3)
+           Create Ingress (kro.run/revision: 3)
+           Wait readyWhen -> Ready
+
+Inventory updated: {"revision": 3, ...}
+```
+
+If a node fails at level 1, the wavefront halts. Level 0 nodes carry
+`kro.run/revision: 3`, level 1+ nodes retain `kro.run/revision: 2`.
+The inventory `revision` stays at `2`. On the next reconcile, the diff
+sees level 0 nodes already at revision 3 (skip or readyWhen-check only)
+and resumes work at level 1.
+
+### Topology changes between revisions
+
+When the new GraphRevision changes the dependency structure:
+
+| Change | Handling |
+|--------|----------|
+| **Node added** | Appears in projected DAG at its computed level. `ActionCreate`. Created in forward order. |
+| **Node removed** | In inventory but absent from projected DAG. `ActionDelete`. Deleted in reverse order after all forward actions complete. |
+| **Node moves to a different level** | `kro.run/level` label updated during SSA apply. Inventory rewritten with new level assignments. The forward wavefront processes the node at its new level. |
+| **Dependency edge added** | Node waits for an additional dependency. If it creates a cycle, the GraphRevision's `GraphVerified` condition is `False` and the revision enters `Failed` state — never served to instances. |
+| **Dependency edge removed** | Node may move to a lower level. Processed at its new level. |
+
+**Example — node changes level:**
+
+```
+Revision 2:  L0:[ConfigMap, Secret]  L1:[Deployment]  L2:[Service]
+Revision 3:  L0:[ConfigMap]          L1:[Secret, Deployment]  L2:[Service]
+             (Secret now depends on ConfigMap)
+
+Forward wavefront for revision 3:
+  Level 0: Update ConfigMap (revision 2->3)
+  Level 1: Update Secret (revision 2->3, kro.run/level: 0->1)
+           Update Deployment (revision 2->3)
+  Level 2: Update Service (revision 2->3)
+```
+
+### The kro.run/revision label
+
+Each managed resource carries `kro.run/revision` set during SSA apply.
+It serves three purposes:
+
+1. **Diff optimization.** Skip re-applying resources already at the
+   target revision when templates have not changed.
+2. **Progress visibility.** `kubectl get <resource> -L kro.run/revision`
+   shows at a glance which resources have migrated and which have not.
+3. **Debugging.** After a partial failure, the label reveals the exact
+   frontier of the migration across all managed resources.
+
+The label is written atomically as part of the SSA apply — it is never
+updated separately from the resource template.
+
+### Edge cases
+
+**Revision issued mid-reconcile:**
+
+If a new GraphRevision becomes active while the wavefront is executing
+revision *n*, the current reconcile completes against revision *n*. The
+newer revision *n+1* is picked up on the next reconcile cycle. This is
+safe because `resolveCompiledGraph()` is called once at the start of
+each reconcile and the result is held for the duration. The inventory and
+labels are updated to revision *n*, so the next reconcile correctly
+diffs *n* against *n+1*.
+
+**Failed revision:**
+
+If the latest GraphRevision enters `Failed` state (compilation error),
+`resolveCompiledGraph()` returns a terminal error and the reconcile
+aborts. The instance retains its current per-node revision labels. There
+is no fallback to the previous active revision — a failed revision means
+the RGD spec is invalid, and silently falling back could mask the
+problem. The `GraphVerified` condition on the GraphRevision surfaces the
+error; the instance's `GraphResolved` condition transitions to `False`
+with a message referencing the failed revision number. Operators must fix
+the RGD, which triggers a new GraphRevision.
+
+**Partial migration + topology reorder:**
+
+If revision *n* completes levels 0 and 1 but fails at level 2, and the
+operator issues revision *n+1* which reorders levels, the next reconcile
+starts fresh against *n+1*. The diff reads each node's `kro.run/revision`
+label individually: all are < *n+1*, so all are marked `ActionUpdate` and
+processed in the new level order. Partially-applied level-2 resources
+from revision *n* are either updated (if still in the projected DAG) or
+pruned (if removed).
+
+**Concurrent propagation (deferred):**
+
+Under the current single-propagation model, if revision *n* is still
+being rolled out when *n+1* arrives:
+
+- Current reconcile finishes against *n* (or partially).
+- Next reconcile targets *n+1* directly.
+- Nodes updated to *n* are updated again to *n+1*.
+- Nodes still at *n-1* jump directly to *n+1*.
+
+This is correct but potentially wasteful for rapid successive revisions.
+See [Open Questions](#open-questions) item 1.
 
 ---
 
@@ -499,6 +735,14 @@ metrics via the controller-runtime metrics endpoint.
 | `kro_instance_inventory_size_bytes` | Gauge | `rgd`, `instance`, `storage` (`annotation`, `configmap`, `status`) | Track annotation budget consumption. Alert when approaching 50% of 256KB. |
 | `kro_instance_inventory_entries` | Gauge | `rgd`, `instance` | Total entries in inventory. Correlate with forEach expansion size. |
 
+#### Revision metrics
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `kro_instance_revision_current` | Gauge | `rgd`, `instance` | The `GraphRevision.spec.revision` currently being reconciled. Track rollout progress across a fleet of instances. |
+| `kro_instance_revision_transition_duration_seconds` | Histogram | `rgd` | Time from first reconcile targeting a new revision to all nodes reaching `Ready` at that revision. Measures end-to-end migration speed. |
+| `kro_instance_nodes_at_revision` | Gauge | `rgd`, `instance`, `revision` | Number of managed resources labeled with each revision. During migration, two revision values are non-zero. Converges to one when migration completes. |
+
 ### Kubernetes Events
 
 The synchronizer emits events on the instance object for state transitions
@@ -508,7 +752,7 @@ that operators need to notice without watching metrics:
 |-------|------|--------|------|
 | Normal | `LevelComplete` | A level finishes execution (all nodes ready or gated). Message includes level number, node count, and duration. |
 | Normal | `ReconcileComplete` | Full reconcile cycle completes successfully. Message includes total duration and node counts by final state. |
-| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision. Message includes old and new revision numbers. |
+| Normal | `RevisionTransition` | Instance begins reconciling against a new GraphRevision (see [Revision Migration: n-1 to n](#revision-migration-n-1-to-n)). Message includes old and new revision numbers and topology change summary (nodes added/removed/moved). |
 | Warning | `NodeError` | A node's SSA apply fails. Message includes the resource ID, error, and retry count. |
 | Warning | `NodeGatedTimeout` | A node has been in GATED state longer than `propagationTimeout`. Message includes the node ID and the `propagateWhen` expression that is not satisfied. |
 | Warning | `ReprojectionCapReached` | Phase 1 hit the fixed-point iteration cap without converging. Message includes which `includeWhen` predicates are oscillating. |
@@ -788,11 +1032,18 @@ sequenceDiagram
 ## Open Questions
 
 1. **Concurrent propagations** -- [KREP-006] raises whether multiple revision
-   rollouts can overlap. This proposal assumes single-propagation. Defer.
+   rollouts can overlap. This proposal assumes single-propagation (see
+   [Revision Migration: n-1 to n](#revision-migration-n-1-to-n), "Concurrent
+   propagation" subsection). Defer to a follow-up proposal.
 2. **Debounce on external watches** -- configurable 1-2s window.
 3. **forEach rollout** -- subsumed by [KREP-006] `propagateWhen` primitives.
 4. **Inventory storage backend** -- annotation-first with ConfigMap overflow vs
    always-ConfigMap.
+5. **Revision fallback policy** -- Currently, a `Failed` latest revision blocks
+   all instances with no automatic fallback to the previous active revision.
+   Should we support an opt-in `revisionPolicy: FallbackToPrevious` that
+   continues serving revision *n-1* when *n* fails compilation? This trades
+   "fail loudly" for availability. Defer.
 
 ---
 
@@ -812,6 +1063,11 @@ sequenceDiagram
 - Multi-level wavefront execution
 - Partial failure and recovery
 - Revision transitions
+- Revision migration: full n-1 to n transition with level-by-level label bumping
+- Revision migration: topology change (node added, node removed, node moves level)
+- Revision migration: partial failure at level K, recovery on next reconcile
+- Revision migration: new revision issued mid-reconcile (ignored until next cycle)
+- Revision migration: failed revision blocks instances, fixed RGD unblocks
 - forEach expansion/contraction with ordered pruning
 - `includeWhen` re-projection
 - `propagateWhen` gating ([KREP-006])
@@ -828,6 +1084,8 @@ sequenceDiagram
 - All nodes gated
 - Revision reordering levels
 - Inventory exceeding 50% budget
+- Revision n-1 partially applied, revision n+1 issued (skip n)
+- Revision changes immutable field on a node (cross-ref risk #6)
 - Resource lifecycle policy transitions mid-reconcile ([KREP-014])
 
 <!-- Reference-style links -->

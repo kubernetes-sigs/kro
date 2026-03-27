@@ -791,11 +791,11 @@ See [Open Questions](#open-questions) item 1.
 
 | Symptom | What to check | Likely cause | Remediation |
 |---------|---------------|--------------|-------------|
-| Instance stuck `IN_PROGRESS` | `kro_instance_nodes_error` gauge, `NodeError` events | SSA apply failing repeatedly | Check instance events. Common causes: field manager conflict, webhook rejection, RBAC missing. Fix the conflict or update the RGD template. |
-| Instance stuck `GATED` | `kro_instance_nodes_gated` gauge, `NodeGatedTimeout` event | `propagateWhen` predicate never becomes true | Inspect the predicate in the event message. Check the upstream resource it references. Update the RGD to adjust `propagateWhen`. |
-| Reconcile latency spike | `reconcile_duration_seconds` by phase, `level_duration_seconds` | Slow API server, expensive CEL, or large forEach | If `project` phase is slow: check `reprojection_iterations`. If `execute` is slow: check `node_duration_seconds` for outliers. |
+| Instance stuck `IN_PROGRESS` | `nodes_error` gauge, `NodeError` events | SSA apply failing repeatedly | Check instance events. Common causes: field manager conflict, webhook rejection, RBAC missing. Fix the conflict or update the RGD template. |
+| Instance stuck `GATED` | `nodes_gated` gauge, `NodeGatedTimeout` event | `propagateWhen` predicate never becomes true | Inspect the predicate in the event message. Check the upstream resource it references. Update the RGD to adjust `propagateWhen`. |
+| Reconcile latency spike | `reconcile_duration_seconds` by `phase`, `level_duration_seconds` | Slow API server, expensive CEL, or large forEach | If `project` phase is slow: check `reprojection_iterations`. If `execute` is slow: check `node_duration_seconds` for outliers. |
 | Resources deleted out of order | `level_duration_seconds` with `direction=reverse` | Stale or missing inventory | If inventory was lost (crash), the controller rebuilds from `part-of` labels on next reconcile. Verify labels are present. |
-| forEach creates too many resources | `kro_instance_inventory_entries` | forEach evaluates to unexpectedly large set | Check forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. |
+| forEach creates too many resources | `inventory_entries` gauge | forEach evaluates to unexpectedly large set | Check forEach source data. Add `maxItems` validation on the forEach input in the RGD schema. |
 | `ReprojectionCapReached` warning | Structured logs with `reprojection cap` | Circular `includeWhen` predicates | Restructure the RGD. Two nodes should not conditionally include each other based on the other's readiness. |
 | Inventory overflow | `inventory_size_bytes` with `storage=configmap` | Large forEach expansion | Expected for large deployments. Monitor ConfigMap size. If approaching 1MB, reduce forEach cardinality. |
 | Revision rollout not progressing | `nodes_at_revision` gauge, `nodes_gated` | `propagateWhen` gating rollout (by design) | Check if canary/first-batch resources are healthy. If so, the `propagateWhen` predicate may reference the wrong field. |
@@ -842,42 +842,34 @@ Each condition message includes:
 
 ### Metrics
 
-All metrics use the `kro_instance_` prefix and are exposed via the
-controller-runtime metrics endpoint.
+The existing instance controller already exposes reconcile-level metrics
+(`instance_reconcile_duration_seconds`, `instance_reconcile_total`,
+`instance_reconcile_errors_total`, `instance_state_transitions_total`,
+`instance_graph_resolution_*`). This proposal changes one existing metric
+and adds new ones for the wavefront, inventory, and revision subsystems.
 
-#### Reconcile-level metrics
+**Changed metric:**
 
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `reconcile_duration_seconds` | Histogram | `rgd`, `phase` | Identify which phase dominates reconcile time. |
-| `reconcile_total` | Counter | `rgd`, `result` (`success`, `error`, `requeue`) | Reconcile throughput and failure rate per RGD. |
-| `reprojection_iterations` | Histogram | `rgd` | Fixed-point iterations in Phase 1. Near-cap values indicate complex conditional chains. |
+| Metric | Change | Reason |
+|--------|--------|--------|
+| `instance_reconcile_duration_seconds` | Add `phase` label (`project`, `diff`, `execute`, `status`) | Current metric only records total duration. Per-phase breakdown identifies whether slowness is in CEL evaluation, API server calls, or status writes. |
 
-#### Wavefront metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `level_duration_seconds` | Histogram | `rgd`, `level`, `direction` | Per-level execution time. |
-| `level_concurrency` | Histogram | `rgd`, `level` | Actual parallelism achieved per level. |
-| `node_action_total` | Counter | `rgd`, `action` | Action distribution (create, update, delete, gate, etc.). |
-| `node_duration_seconds` | Histogram | `rgd`, `resource_id`, `action` | Per-node SSA apply duration. |
-| `nodes_gated` | Gauge | `rgd`, `instance` | Nodes currently in GATED state. |
-| `nodes_error` | Gauge | `rgd`, `instance` | Nodes currently in ERROR state. |
-
-#### Inventory metrics
+**New metrics** (all use the `kro_instance_` prefix):
 
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `inventory_size_bytes` | Gauge | `rgd`, `instance`, `storage` | Annotation budget consumption. |
-| `inventory_entries` | Gauge | `rgd`, `instance` | Total entries in inventory. |
-
-#### Revision metrics
-
-| Metric | Type | Labels | Purpose |
-|--------|------|--------|---------|
-| `revision_current` | Gauge | `rgd`, `instance` | GraphRevision currently being reconciled. |
-| `revision_transition_duration_seconds` | Histogram | `rgd` | End-to-end migration time (first reconcile to all nodes Ready). |
-| `nodes_at_revision` | Gauge | `rgd`, `instance`, `revision` | Resources per revision. Two non-zero values during migration. |
+| `level_duration_seconds` | Histogram | `gvr`, `level`, `direction` | Per-level execution time. Outlier levels reveal bottleneck resources. |
+| `level_concurrency` | Histogram | `gvr`, `level` | Actual parallelism achieved per level. Consistently 1 means the DAG has no parallelism at that level. |
+| `node_action_total` | Counter | `gvr`, `action` | Action distribution (create, update, delete, adopt, orphan, gate). |
+| `node_duration_seconds` | Histogram | `gvr`, `resource_id`, `action` | Per-node SSA apply duration. Identifies slow resources. |
+| `nodes_gated` | Gauge | `gvr`, `instance` | Nodes currently in GATED state. Non-zero for hours signals a stuck gate. |
+| `nodes_error` | Gauge | `gvr`, `instance` | Nodes currently in ERROR state. |
+| `reprojection_iterations` | Histogram | `gvr` | Fixed-point iterations in Phase 1. Near-cap values indicate complex conditional chains. |
+| `inventory_size_bytes` | Gauge | `gvr`, `instance`, `storage` | Annotation budget consumption. Alert when approaching 50% of 256KB. |
+| `inventory_entries` | Gauge | `gvr`, `instance` | Total entries in inventory. |
+| `revision_current` | Gauge | `gvr`, `instance` | GraphRevision being reconciled. Track rollout progress across a fleet. |
+| `revision_transition_duration_seconds` | Histogram | `gvr` | End-to-end migration time (first reconcile to all nodes Ready at new revision). |
+| `nodes_at_revision` | Gauge | `gvr`, `instance`, `revision` | Resources per revision. Two non-zero values during migration; converges to one when complete. |
 
 ### Structured Logging
 

@@ -17,11 +17,14 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -261,6 +264,27 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 	o *v1alpha1.ResourceGraphDefinition,
 ) (ctrl.Result, error) {
 	if !o.DeletionTimestamp.IsZero() {
+		// Block deletion while instances of the generated CRD still exist.
+		// Shutting down the instance controller before instances are gone
+		// leaves them with a dangling finalizer that no controller can remove.
+		gvr := metadata.GetResourceGraphDefinitionInstanceGVR(
+			o.Spec.Schema.Group, o.Spec.Schema.APIVersion, o.Spec.Schema.Kind,
+		)
+		existing, err := r.clientSet.Dynamic().Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+		if err != nil {
+			// If the resource type is gone (CRD already deleted externally),
+			// there can't be any instances — safe to proceed with cleanup.
+			if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+				return ctrl.Result{}, fmt.Errorf("failed to check for existing instances: %w", err)
+			}
+		} else if len(existing.Items) > 0 {
+			ctrl.LoggerFrom(ctx).Info(
+				"waiting for instances to be deleted before cleaning up ResourceGraphDefinition",
+				"instanceGVR", gvr.String(),
+			)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
 		startTime := time.Now()
 		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err

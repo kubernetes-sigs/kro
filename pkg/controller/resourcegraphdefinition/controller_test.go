@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -369,6 +370,17 @@ func newFailingBuilder(err error) resourceGraphBuilder {
 
 func newKROFakeSet() *krofake.FakeSet {
 	return krofake.NewFakeSet(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()))
+}
+
+// newFakeSetForDeletion creates a FakeSet whose dynamic client knows about the
+// given GVR so that List calls succeed. Pre-populated objects are optional.
+func newFakeSetForDeletion(gvr schema.GroupVersionResource, objs ...runtime.Object) *krofake.FakeSet {
+	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "UnstructuredList"},
+		objs...,
+	)
+	return krofake.NewFakeSet(dc)
 }
 
 func testDynamicControllerConfig() dynamiccontroller.Config {
@@ -838,6 +850,7 @@ func TestReconcile(t *testing.T) {
 					Client:            c,
 					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
+					clientSet:         newFakeSetForDeletion(gvr),
 					dynamicController: dc,
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),
@@ -862,12 +875,14 @@ func TestReconcile(t *testing.T) {
 				now := metav1.Now()
 				rgd.DeletionTimestamp = &now
 
+				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
 				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
 					apiReader:         c,
 					cfg:               Config{AllowCRDDeletion: true},
+					clientSet:         newFakeSetForDeletion(gvr),
 					dynamicController: newRunningDynamicController(t),
 					crdManager:        manager,
 					revisionsRegistry: revisions.NewRegistry(),
@@ -901,6 +916,7 @@ func TestReconcile(t *testing.T) {
 				return &ResourceGraphDefinitionReconciler{
 					Client:            c,
 					apiReader:         c,
+					clientSet:         newFakeSetForDeletion(gvr),
 					dynamicController: dc,
 					crdManager:        &stubCRDManager{},
 					revisionsRegistry: revisions.NewRegistry(),
@@ -910,6 +926,42 @@ func TestReconcile(t *testing.T) {
 				assert.Equal(t, ctrl.Result{}, result)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "patch boom")
+				assert.True(t, metadata.HasResourceGraphDefinitionFinalizer(getStoredRGD(t, c, rgd.Name)))
+			},
+		},
+		{
+			name: "blocks deletion while instances still exist",
+			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
+				rgd := newTestRGD("reconcile-delete-blocked")
+				metadata.SetResourceGraphDefinitionFinalizer(rgd)
+				now := metav1.Now()
+				rgd.DeletionTimestamp = &now
+
+				gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+
+				// Create an existing instance of the generated CRD
+				instance := &unstructured.Unstructured{}
+				instance.SetGroupVersionKind(schema.GroupVersionKind{
+					Group: gvr.Group, Version: gvr.Version, Kind: "Network",
+				})
+				instance.SetName("my-instance")
+				instance.SetNamespace("default")
+
+				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
+				return &ResourceGraphDefinitionReconciler{
+					Client:            c,
+					apiReader:         c,
+					cfg:               Config{AllowCRDDeletion: true},
+					clientSet:         newFakeSetForDeletion(gvr, instance),
+					dynamicController: newRunningDynamicController(t),
+					crdManager:        &stubCRDManager{},
+					revisionsRegistry: revisions.NewRegistry(),
+				}, c, rgd, nil
+			},
+			check: func(t *testing.T, result ctrl.Result, err error, c client.WithWatch, rgd *v1alpha1.ResourceGraphDefinition, _ *stubCRDManager) {
+				require.NoError(t, err)
+				assert.Equal(t, 10*time.Second, result.RequeueAfter)
+				// Finalizer must still be present
 				assert.True(t, metadata.HasResourceGraphDefinitionFinalizer(getStoredRGD(t, c, rgd.Name)))
 			},
 		},

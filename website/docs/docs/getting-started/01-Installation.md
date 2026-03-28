@@ -89,6 +89,20 @@ echo $KRO_VERSION
 kubectl create namespace kro-system
 kubectl apply -f https://github.com/kubernetes-sigs/kro/releases/download/v$KRO_VERSION/$KRO_VARIANT.yaml
 ```
+
+:::warning[**Access Control Setup Required**]
+The raw manifest installation uses the **aggregation** RBAC mode, which only grants kro
+minimal permissions by default. You will need to create additional `ClusterRole` resources
+for each resource type in your `ResourceGraphDefinitions`. Without this, RGD instances will
+fail to reconcile.
+
+See the [Access Control](../advanced/01-access-control.md#aggregation-access) documentation
+for details and examples.
+
+If you prefer the Helm chart's default behavior (full cluster access), use one of the Helm
+installation methods above instead.
+:::
+
   </TabItem>
 </Tabs>
 

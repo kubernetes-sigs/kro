@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/cel/ast"
@@ -148,6 +149,15 @@ func validateResourceIDs(rgd *v1alpha1.ResourceGraphDefinition) error {
 
 		if !isValidResourceID(res.ID) {
 			return fmt.Errorf("id %s is not a valid KRO resource id: must be lower camelCase", res.ID)
+		}
+
+		// Resource IDs are used as Kubernetes label values (kro.run/node-id),
+		// which are limited to 63 characters.
+		if len(res.ID) > validation.LabelValueMaxLength {
+			return fmt.Errorf("id %q exceeds the maximum length of %d characters: "+
+				"resource IDs are used as Kubernetes label values (kro.run/node-id) "+
+				"which must be no more than %d characters",
+				res.ID, validation.LabelValueMaxLength, validation.LabelValueMaxLength)
 		}
 
 		if _, ok := seen[res.ID]; ok {

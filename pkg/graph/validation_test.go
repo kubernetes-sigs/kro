@@ -82,6 +82,28 @@ func TestValidateRGResourceNames(t *testing.T) {
 			},
 			expectError: true,
 		},
+		{
+			name: "Resource ID at exactly 63 characters",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "aResourceIdentifierThatIsExactlySixtyThreeCharactersLongXXXXXXX"},
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "Resource ID exceeding 63 characters",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "thisIsAnExtremelyLongResourceIdentifierThatExceedsSixtyThreeCharactersLimit"},
+					},
+				},
+			},
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -329,6 +351,21 @@ func TestValidateResourceGraphDefinition(t *testing.T) {
 								{"invalid_IteratorName": "b"},
 							},
 						},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: "ValidKindName",
+					},
+				},
+			},
+			rgdConfig: defaultRGDConfig,
+			wantErr:   true,
+		},
+		{
+			name: "Resource ID exceeding Kubernetes label value length limit",
+			rgd: &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: "thisIsAnExtremelyLongResourceIdentifierThatExceedsSixtyThreeCharactersLimit"},
 					},
 					Schema: &v1alpha1.Schema{
 						Kind: "ValidKindName",

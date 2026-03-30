@@ -691,14 +691,15 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 		new    map[string]string
 		expect bool
 	}{
+		// Legacy "disabled" value (backward compat)
 		{
-			name:   "disabled -> enabled (label removed)",
+			name:   "disabled -> enabled (annotation removed)",
 			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			new:    nil,
 			expect: true,
 		},
 		{
-			name:   "disabled -> enabled (label changed)",
+			name:   "disabled -> enabled (annotation changed)",
 			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "enabled"},
 			expect: true,
@@ -716,16 +717,60 @@ func TestReconcileEnabledInUpdate(t *testing.T) {
 			expect: false,
 		},
 		{
-			name:   "no labels on either",
-			old:    nil,
-			new:    nil,
-			expect: false,
-		},
-		{
 			name:   "case insensitive disabled",
 			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "DISABLED"},
 			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"},
 			expect: true,
+		},
+		// Canonical "suspended" value
+		{
+			name:   "suspended -> enabled (annotation removed)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			new:    nil,
+			expect: true,
+		},
+		{
+			name:   "suspended -> enabled (annotation changed)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "enabled"},
+			expect: true,
+		},
+		{
+			name:   "suspended -> suspended",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			expect: false,
+		},
+		{
+			name:   "enabled -> suspended",
+			old:    nil,
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			expect: false,
+		},
+		{
+			name:   "case insensitive suspended",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "SUSPENDED"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "true"},
+			expect: true,
+		},
+		// Cross-value transitions
+		{
+			name:   "disabled -> suspended (both suspend, no re-enqueue)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			expect: false,
+		},
+		{
+			name:   "suspended -> disabled (both suspend, no re-enqueue)",
+			old:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "suspended"},
+			new:    map[string]string{v1alpha1.InstanceReconcileAnnotation: "disabled"},
+			expect: false,
+		},
+		{
+			name:   "no annotations on either",
+			old:    nil,
+			new:    nil,
+			expect: false,
 		},
 	}
 

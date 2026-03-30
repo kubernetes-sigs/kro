@@ -176,7 +176,7 @@ var _ = Describe("DeploymentService", func() {
 
 		// // annotate instance with "kro.run/reconcile:disabled"
 		currentAnnotations := instance.GetAnnotations()
-		currentAnnotations[krov1alpha1.InstanceReconcileAnnotation] = "disabled"
+		currentAnnotations[krov1alpha1.InstanceReconcileAnnotation] = krov1alpha1.ReconcileLegacyDisabled
 		instance.SetAnnotations(currentAnnotations)
 		Expect(env.Client.Update(ctx, instance)).To(Succeed())
 

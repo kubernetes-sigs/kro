@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -264,8 +263,8 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend annotation is not present.
 	//--------------------------------------------------------------
 	annotations := inst.GetAnnotations()
-	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
-	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+	reconcileState := annotations[v1alpha1.InstanceReconcileAnnotation]
+	if !v1alpha1.IsReconcileSuspended(reconcileState) {
 		if err := c.reconcileNodes(rcx); err != nil {
 			if deletingErr, ok2 := errors.AsType[*resourceDeletingError](err); ok2 {
 				rcx.Mark.ResourcesDeleting("%v", deletingErr)

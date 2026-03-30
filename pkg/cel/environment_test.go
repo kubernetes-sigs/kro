@@ -164,6 +164,10 @@ func TestDefaultEnvironment_KubernetesLibraries(t *testing.T) {
 			name: "quantity library",
 			expr: `quantity("500Mi").isLessThan(quantity("1Gi"))`,
 		},
+		{
+			name: "hash library",
+			expr: `sha256("test")`,
+		},
 	}
 
 	for _, tc := range tests {

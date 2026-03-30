@@ -22,6 +22,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/ext"
+	kyvernohash "github.com/kyverno/kyverno/pkg/cel/libs/hash"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	k8scellib "k8s.io/apiserver/pkg/cel/library"
 	"k8s.io/apiserver/pkg/cel/openapi"
@@ -120,6 +121,7 @@ func BaseDeclarations() []cel.EnvOption {
 			library.Maps(),
 			library.JSON(),
 			library.Lists(),
+			kyvernohash.Lib(nil),
 			// Omit() is registered globally so CEL can parse and type-check it
 			// everywhere. The graph builder rejects it in restricted contexts
 			// (includeWhen, readyWhen, forEach) via inspectExpressionRestricted

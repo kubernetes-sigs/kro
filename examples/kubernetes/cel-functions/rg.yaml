@@ -51,6 +51,8 @@ spec:
                       value: "${json.marshal({\"name\": schema.spec.name})}"
                     - name: QUANTITY_COMPARISON
                       value: "${quantity(\"500Mi\").isLessThan(quantity(\"1Gi\")) ? \"small\" : \"large\"}"
+                    - name: HASH_SHA256
+                      value: "${sha256(schema.spec.name)}"
     - id: service
       template:
         apiVersion: v1

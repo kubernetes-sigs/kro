@@ -328,6 +328,7 @@ The `?` operator prevents kro from validating the field's existence at build tim
 | Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)       |
 | JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)         |
 | Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)        |
+| Hash                        | [Kyverno](https://kyverno.io/docs/policy-types/cel-libraries/#hash-library)                    |
 | URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)   |
 | Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex)  |
 | Quantity                    | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Quantity) |

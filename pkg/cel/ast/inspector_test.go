@@ -1005,6 +1005,16 @@ func TestNewInspectorWithEnv_CustomFunctionsNotResources(t *testing.T) {
 			wantUnknownRes: nil,
 		},
 		{
+			name:       "sha256 is not an unknown function",
+			resources:  []string{"schema"},
+			expression: `sha256(schema.spec.password)`,
+			wantResources: []ResourceDependency{
+				{ID: "schema", Path: "schema.spec.password"},
+			},
+			wantUnknownFns: nil,
+			wantUnknownRes: nil,
+		},
+		{
 			name:       "has macro is not an unknown function",
 			resources:  []string{"deploy"},
 			expression: `has(deploy.spec.replicas)`,

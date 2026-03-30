@@ -461,11 +461,9 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 }
 
 func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
-	oldAnnotations := oldMeta.GetAnnotations()
-	newAnnotations := newMeta.GetAnnotations()
-	oldIsDisabled := strings.EqualFold(oldAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
-	newIsDisabled := strings.EqualFold(newAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
-	return oldIsDisabled && !newIsDisabled
+	oldSuspended := v1alpha1.IsReconcileSuspended(oldMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
+	newSuspended := v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
+	return oldSuspended && !newSuspended
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.

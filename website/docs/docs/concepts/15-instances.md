@@ -46,7 +46,7 @@ This continuous loop ensures your resources stay in sync with your desired state
 - Rich status tracking
 
 :::tip
-To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `disabled`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
+To suspend active reconciliation of an instance for debugging purposes, apply an annotation with the key `kro.run/reconcile` and the value `suspended`. See [Debugging Specific Labels](./15-instances.md#labels-and-ownership) for more details
 :::
 
 ### Reactive Reconciliation
@@ -93,7 +93,7 @@ When kro manages an instance, it applies these labels and annotations:
 
 | Annotation | Description |
 |------|-------------|
-| `kro.run/reconcile` | Set the value to `disabled` to pause reconciliation of the instance. Only to be used when manually debugging |
+| `kro.run/reconcile` | Set the value to `suspended` to suspend reconciliation of the instance. Only to be used when manually debugging |
 
 </TabItem>
 <TabItem value="managed" label="Managed Resource Metadata">
@@ -244,10 +244,6 @@ Detailed status information structured hierarchically. kro provides a top-level 
   - Monitors the health of resources in topological order
   - Reports when all resources have reached their ready state
 
-- **`ReconciliationSuspended`** - Instance Reconciliation is Suspended
-  - Set to True when the annotation `kro.run/reconcile: "disabled"` annotation key and value are present. Otherwise set to false
-  - Explicitly shows if kro is actively reconciling an instance or not
-
 - **`Ready`** - Instance is fully operational (top-level condition)
   - Aggregates the state of all sub-conditions
   - Only becomes True when all sub-conditions are True
@@ -256,7 +252,7 @@ Detailed status information structured hierarchically. kro provides a top-level 
 
 
 :::tip
-Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`, `ReconciliationSuspended`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
+Always use the `Ready` condition to determine instance health. The sub-conditions (`InstanceManaged`, `GraphResolved`, `ResourcesReady`) are provided for debugging purposes and may change in future versions. kro reserves the right to add, remove, or modify sub-conditions without breaking compatibility as long as the `Ready` condition behavior remains stable.
 :::
 
 Each condition includes:

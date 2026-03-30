@@ -17,6 +17,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/scheme"
 )
@@ -33,10 +35,24 @@ const (
 	AllowBreakingChangesAnnotation = KRODomainName + "/allow-breaking-changes"
 
 	// InstanceReconcileAnnotation controls instance reconciliation. When set to
-	// "disabled" (case-insensitive), the instance controller skips resource
+	// "suspended" (case-insensitive), the instance controller skips resource
 	// reconciliation and marks the instance as suspended.
+	// "disabled" is accepted as a legacy alias for backward compatibility.
 	InstanceReconcileAnnotation = KRODomainName + "/reconcile"
+
+	// ReconcileSuspended is the canonical annotation value to suspend reconciliation.
+	ReconcileSuspended = "suspended"
+	// ReconcileLegacyDisabled is the legacy annotation value for suspending reconciliation.
+	// Kept for backward compatibility; prefer ReconcileSuspended.
+	ReconcileLegacyDisabled = "disabled"
 )
+
+// IsReconcileSuspended reports whether the given annotation value represents
+// a suspended reconciliation state. It accepts "suspended" (canonical) and
+// "disabled" (legacy) in a case-insensitive manner.
+func IsReconcileSuspended(value string) bool {
+	return strings.EqualFold(value, ReconcileSuspended) || strings.EqualFold(value, ReconcileLegacyDisabled)
+}
 
 var (
 	// GroupVersion is group version used to register these objects

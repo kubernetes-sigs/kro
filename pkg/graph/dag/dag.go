@@ -129,8 +129,7 @@ func formatCycle[T cmp.Ordered](cycle []T) string {
 
 // AsCycleError returns the (potentially wrapped) CycleError, or nil if it is not a CycleError.
 func AsCycleError[T cmp.Ordered](err error) *CycleError[T] {
-	cycleError := &CycleError[T]{}
-	if errors.As(err, &cycleError) {
+	if cycleError, ok := errors.AsType[*CycleError[T]](err); ok {
 		return cycleError
 	}
 	return nil

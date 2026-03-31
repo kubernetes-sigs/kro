@@ -152,7 +152,6 @@ func TestReconcileNodesPaths(t *testing.T) {
 }
 
 func TestProcessNodePaths(t *testing.T) {
-	disabled := false
 	tests := []struct {
 		name              string
 		specEnabled       *bool
@@ -169,7 +168,7 @@ func TestProcessNodePaths(t *testing.T) {
 	}{
 		{
 			name:        "ignored node becomes skip apply",
-			specEnabled: &disabled,
+			specEnabled: new(false),
 			node: &graph.Node{
 				Meta: graph.NodeMeta{
 					ID:         "deploy",
@@ -268,8 +267,7 @@ func TestProcessNodePaths(t *testing.T) {
 			},
 			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
 				obj := newDeploymentObject("demo", "default")
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return obj
 			}()},
 			wantState: v1alpha1.NodeStateDeleting,
@@ -287,8 +285,7 @@ func TestProcessNodePaths(t *testing.T) {
 					metadata.InstanceIDLabel: "demo-uid",
 					metadata.NodeIDLabel:     "configs",
 				})
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return obj
 			}()},
 			wantState: v1alpha1.NodeStateDeleting,
@@ -466,8 +463,7 @@ func TestProcessExternalRefNodePaths(t *testing.T) {
 			desired: []*unstructured.Unstructured{newConfigMapObject("demo", "default")},
 			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
 				obj := newConfigMapObject("demo", "default")
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return obj
 			}()},
 			wantState: v1alpha1.NodeStateSynced,
@@ -595,8 +591,7 @@ func TestProcessExternalCollectionNodePaths(t *testing.T) {
 			currentObjs: []apimachineryruntime.Object{func() *unstructured.Unstructured {
 				obj := newConfigMapObject("match", "default")
 				obj.SetLabels(map[string]string{"app": "demo"})
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return obj
 			}()},
 			desired: []*unstructured.Unstructured{func() *unstructured.Unstructured {
@@ -1023,8 +1018,7 @@ func TestReconcileNodesBlocksDependentsWhenManagedResourcesAreTerminating(t *tes
 			},
 			currentObjs: func(_ *unstructured.Unstructured) []apimachineryruntime.Object {
 				obj := newConfigMapObject("demo-config", "default")
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return []apimachineryruntime.Object{obj}
 			},
 			dependentName: "demo",
@@ -1057,8 +1051,7 @@ func TestReconcileNodesBlocksDependentsWhenManagedResourcesAreTerminating(t *tes
 					metadata.InstanceIDLabel: string(instance.GetUID()),
 					metadata.NodeIDLabel:     "configs",
 				})
-				now := metav1.Now()
-				obj.SetDeletionTimestamp(&now)
+				obj.SetDeletionTimestamp(new(metav1.Now()))
 				return []apimachineryruntime.Object{obj}
 			},
 			dependentName: "demo",

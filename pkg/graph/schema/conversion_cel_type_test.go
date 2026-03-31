@@ -25,7 +25,6 @@ import (
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
-	"k8s.io/utils/ptr"
 )
 
 func TestInferSchemaFromCELType_Primitives(t *testing.T) {
@@ -131,6 +130,7 @@ func TestInferSchemaFromCELType_Collections(t *testing.T) {
 		})
 	}
 }
+
 func TestGenerateSchemaFromCELTypes_Timestamp(t *testing.T) {
 	typeMap := map[string]*cel.Type{
 		"ts": cel.TimestampType,
@@ -215,7 +215,7 @@ func TestGenerateSchemaFromCELTypes_Complex(t *testing.T) {
 						},
 					},
 					"extra": {
-						XPreserveUnknownFields: ptr.To(true),
+						XPreserveUnknownFields: new(true),
 					},
 				},
 			},

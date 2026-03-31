@@ -56,8 +56,7 @@ func getObjectMetaSchema() (spec.Schema, error) {
 		if !ok {
 			return nil, false
 		}
-		s := def.Schema
-		return &s, true
+		return new(def.Schema), true
 	}, metav1.ObjectMeta{}.OpenAPIModelName())
 	if err != nil {
 		return spec.Schema{}, fmt.Errorf("failed to populate refs for ObjectMeta: %w", err)

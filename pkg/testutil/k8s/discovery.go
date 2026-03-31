@@ -618,13 +618,12 @@ func quantitySchema() spec.Schema {
 
 // resourceListSchema returns a map[string]Quantity schema (e.g. ResourceQuota.spec.hard).
 func resourceListSchema() spec.Schema {
-	qs := quantitySchema()
 	return spec.Schema{
 		SchemaProps: spec.SchemaProps{
 			Type: []string{"object"},
 			AdditionalProperties: &spec.SchemaOrBool{
 				Allows: true,
-				Schema: &qs,
+				Schema: new(quantitySchema()),
 			},
 		},
 	}

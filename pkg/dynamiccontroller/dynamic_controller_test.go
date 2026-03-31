@@ -283,8 +283,7 @@ func TestInstanceUpdatePolicy(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper(scheme.PreferredVersionAllGroups())
 
 	dc := NewDynamicController(logger, Config{}, client, mapper)
-	ctx := t.Context()
-	dc.ctx.Store(&ctx) // simulate a start through dc.Run
+	dc.ctx.Store(new(t.Context())) // simulate a start through dc.Run
 
 	handlerFunc := Handler(func(ctx context.Context, req controllerruntime.Request) error {
 		fmt.Println("reconciling instance", req)

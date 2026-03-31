@@ -267,8 +267,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
 	if !ok || !strings.EqualFold(reconcileState, "disabled") {
 		if err := c.reconcileNodes(rcx); err != nil {
-			var deletingErr *resourceDeletingError
-			if errors.As(err, &deletingErr) {
+			if deletingErr, ok2 := errors.AsType[*resourceDeletingError](err); ok2 {
 				rcx.Mark.ResourcesDeleting("%v", deletingErr)
 				_ = c.updateStatus(rcx)
 				return rcx.delayedRequeue(deletingErr)

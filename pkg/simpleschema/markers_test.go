@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
 )
 
 func TestApplyMarkers(t *testing.T) {
@@ -84,19 +83,19 @@ func TestApplyMarkers(t *testing.T) {
 			name:       "minimum",
 			schemaType: "integer",
 			markers:    "minimum=0",
-			want:       &extv1.JSONSchemaProps{Type: "integer", Minimum: ptr.To(0.0)},
+			want:       &extv1.JSONSchemaProps{Type: "integer", Minimum: new(0.0)},
 		},
 		{
 			name:       "maximum",
 			schemaType: "integer",
 			markers:    "maximum=100",
-			want:       &extv1.JSONSchemaProps{Type: "integer", Maximum: ptr.To(100.0)},
+			want:       &extv1.JSONSchemaProps{Type: "integer", Maximum: new(100.0)},
 		},
 		{
 			name:       "minimum and maximum",
 			schemaType: "number",
 			markers:    "minimum=0.5 maximum=99.5",
-			want:       &extv1.JSONSchemaProps{Type: "number", Minimum: ptr.To(0.5), Maximum: ptr.To(99.5)},
+			want:       &extv1.JSONSchemaProps{Type: "number", Minimum: new(0.5), Maximum: new(99.5)},
 		},
 		{
 			name:       "invalid minimum",
@@ -227,7 +226,7 @@ func TestApplyMarkers(t *testing.T) {
 			name:       "minLength and maxLength",
 			schemaType: "string",
 			markers:    "minLength=3 maxLength=20",
-			want:       &extv1.JSONSchemaProps{Type: "string", MinLength: ptr.To[int64](3), MaxLength: ptr.To[int64](20)},
+			want:       &extv1.JSONSchemaProps{Type: "string", MinLength: new(int64(3)), MaxLength: new(int64(20))},
 		},
 		{
 			name:       "invalid minLength",
@@ -258,7 +257,7 @@ func TestApplyMarkers(t *testing.T) {
 			name:       "uniqueItems=true sets list type",
 			schemaType: "array",
 			markers:    "uniqueItems=true",
-			want:       &extv1.JSONSchemaProps{Type: "array", XListType: ptr.To("set")},
+			want:       &extv1.JSONSchemaProps{Type: "array", XListType: new("set")},
 		},
 		{
 			name:       "uniqueItems=false",
@@ -283,7 +282,7 @@ func TestApplyMarkers(t *testing.T) {
 			name:       "minItems and maxItems",
 			schemaType: "array",
 			markers:    "minItems=2 maxItems=10",
-			want:       &extv1.JSONSchemaProps{Type: "array", MinItems: ptr.To[int64](2), MaxItems: ptr.To[int64](10)},
+			want:       &extv1.JSONSchemaProps{Type: "array", MinItems: new(int64(2)), MaxItems: new(int64(10))},
 		},
 		{
 			name:       "invalid minItems",

@@ -283,8 +283,7 @@ func TestReconcileGraphResolutionFailureMarksCondition(t *testing.T) {
 func TestReconcileDeletionRemovesFinalizer(t *testing.T) {
 	instance := newInstanceObject("demo", "default")
 	metadata.SetInstanceFinalizer(instance)
-	now := metav1.NewTime(time.Now())
-	instance.SetDeletionTimestamp(&now)
+	instance.SetDeletionTimestamp(new(metav1.NewTime(time.Now())))
 
 	raw := newControllerTestDynamicClient(t, instance.DeepCopy())
 	controller, _ := newControllerUnderTest(t, raw, newTestGraph())
@@ -345,8 +344,7 @@ func TestReconcileTerminatingManagedResourcesSetDeletingStatus(t *testing.T) {
 			}),
 			buildCurrent: func(_ *unstructured.Unstructured) []apimachineryruntime.Object {
 				current := newDeploymentObject("demo", "default")
-				now := metav1.Now()
-				current.SetDeletionTimestamp(&now)
+				current.SetDeletionTimestamp(new(metav1.Now()))
 				return []apimachineryruntime.Object{current}
 			},
 			wantMessage: `resource "default/demo" for node "deploy" is currently being deleted`,
@@ -363,8 +361,7 @@ func TestReconcileTerminatingManagedResourcesSetDeletingStatus(t *testing.T) {
 					metadata.InstanceIDLabel: string(instance.GetUID()),
 					metadata.NodeIDLabel:     "configs",
 				})
-				now := metav1.Now()
-				current.SetDeletionTimestamp(&now)
+				current.SetDeletionTimestamp(new(metav1.Now()))
 				return []apimachineryruntime.Object{current}
 			},
 			wantMessage: `resource "default/one" for node "configs" is currently being deleted`,

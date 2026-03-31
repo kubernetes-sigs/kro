@@ -113,7 +113,7 @@ func (s *kroServer) Initialize(context *glsp.Context, params *protocol.Initializ
 		Capabilities: capabilities, // What features this server supports
 		ServerInfo: &protocol.InitializeResultServerInfo{
 			Name:    "Kro Language Server",
-			Version: stringPtr(getVersion()),
+			Version: new(getVersion()),
 		},
 	}, nil
 }
@@ -230,13 +230,12 @@ func (s *kroServer) DidSave(context *glsp.Context, params *protocol.DidSaveTextD
 // Currently supports full document synchronization and save notifications.
 func (s *kroServer) createServerCapabilities() protocol.ServerCapabilities {
 	// Use full document sync (client sends entire document on changes)
-	syncKind := protocol.TextDocumentSyncKindFull
 	capabilities := protocol.ServerCapabilities{
 		TextDocumentSync: protocol.TextDocumentSyncOptions{
-			OpenClose: boolPtr(true), // Handle document open/close events
-			Change:    &syncKind,     // Handle document change events (full sync)
+			OpenClose: new(true),                              // Handle document open/close events
+			Change:    new(protocol.TextDocumentSyncKindFull), // Handle document change events (full sync)
 			Save: &protocol.SaveOptions{
-				IncludeText: boolPtr(true), // Include document text in save events
+				IncludeText: new(true), // Include document text in save events
 			},
 		},
 		// Future capabilities can be added here:

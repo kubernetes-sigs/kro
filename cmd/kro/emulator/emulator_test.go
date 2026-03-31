@@ -351,15 +351,15 @@ func TestGenerateDummyCR(t *testing.T) {
 									"value": {
 										SchemaProps: spec.SchemaProps{
 											Type:    spec.StringOrArray{"integer"},
-											Minimum: ptr(0.0),
-											Maximum: ptr(100.0),
+											Minimum: new(0.0),
+											Maximum: new(100.0),
 										},
 									},
 									"ratio": {
 										SchemaProps: spec.SchemaProps{
 											Type:    spec.StringOrArray{"number"},
-											Minimum: ptr(0.0),
-											Maximum: ptr(1.0),
+											Minimum: new(0.0),
+											Maximum: new(1.0),
 										},
 									},
 								},
@@ -401,8 +401,8 @@ func TestGenerateDummyCR(t *testing.T) {
 													},
 												},
 											},
-											MinItems: ptr[int64](10),
-											MaxItems: ptr[int64](20),
+											MinItems: new(int64(10)),
+											MaxItems: new(int64(20)),
 										},
 									},
 								},
@@ -543,7 +543,6 @@ func TestGenerateValueWithIntOrString(t *testing.T) {
 		require.NoError(t, err)
 		assert.IsType(t, int64(0), value, "Expected integer as default value for x-kubernetes-int-or-string")
 	})
-
 }
 
 func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
@@ -561,7 +560,6 @@ func TestGenerateValueWithPreserveUnknownFields(t *testing.T) {
 		_, err := e.generateValue(schema)
 		require.NoError(t, err)
 	})
-
 }
 
 func ptr[T comparable](v T) *T {

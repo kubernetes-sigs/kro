@@ -19,7 +19,6 @@ import (
 
 	"github.com/google/cel-go/common/types/ref"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
 )
 
 // inferSchemaFromCELValue infers a JSONSchemaProps from a CEL value.
@@ -60,7 +59,7 @@ func inferSchemaTypeFromGoValue(goRuntimeVal interface{}) (*extv1.JSONSchemaProp
 	case nil:
 		return &extv1.JSONSchemaProps{
 			Description:            "the original schema type was optional or nil so any type is allowed",
-			XPreserveUnknownFields: ptr.To(true),
+			XPreserveUnknownFields: new(true),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", goRuntimeVal)

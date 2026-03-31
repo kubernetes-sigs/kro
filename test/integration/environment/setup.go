@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -184,13 +183,13 @@ func (e *Environment) setupController() error {
 	e.CtrlManager, err = ctrl.NewManager(e.ClientSet.RESTConfig(), ctrl.Options{
 		Scheme: scheme.Scheme,
 		Controller: config.Controller{
-			SkipNameValidation: ptr.To(true),
+			SkipNameValidation: new(true),
 		},
 		Metrics: server.Options{
 			// Disable the metrics server
 			BindAddress: "0",
 		},
-		GracefulShutdownTimeout: ptr.To(30 * time.Second),
+		GracefulShutdownTimeout: new(30 * time.Second),
 	})
 	if err != nil {
 		return fmt.Errorf("creating manager: %w", err)

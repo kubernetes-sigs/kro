@@ -23,7 +23,6 @@ import (
 	"unicode"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
 )
 
 // ErrUnknownMarker is returned when an unrecognized marker is encountered.
@@ -407,7 +406,7 @@ func applyUniqueItemsMarker(schema *extv1.JSONSchemaProps, marker *Marker) error
 	if isUnique {
 		// Always set x-kubernetes-list-type to "set" when uniqueItems is true
 		// https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions
-		schema.XListType = ptr.To("set")
+		schema.XListType = new("set")
 	}
 	return nil
 }

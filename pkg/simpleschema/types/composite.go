@@ -16,7 +16,6 @@ package types
 
 import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
 )
 
 // Object represents a schemaless object with unknown fields preserved.
@@ -27,7 +26,7 @@ func (Object) Deps() []string { return nil }
 func (Object) Schema(_ Resolver) (*extv1.JSONSchemaProps, error) {
 	return &extv1.JSONSchemaProps{
 		Type:                   "object",
-		XPreserveUnknownFields: ptr.To(true),
+		XPreserveUnknownFields: new(true),
 	}, nil
 }
 

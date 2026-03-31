@@ -28,8 +28,6 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
-func strPtr(s string) *string { return &s }
-
 func newTestInst() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -60,7 +58,7 @@ func TestEmitConditionEvents_NoChange(t *testing.T) {
 	inst := newTestInst()
 
 	conditions := []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionTrue, Reason: strPtr("AllGood")},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: new("AllGood")},
 	}
 
 	emitConditionEvents(recorder, inst, conditions, conditions)
@@ -85,7 +83,7 @@ func TestEmitConditionEvents_NewCondition(t *testing.T) {
 			inst := newTestInst()
 
 			final := []v1alpha1.Condition{
-				{Type: "Ready", Status: tt.status, Reason: strPtr("TestReason")},
+				{Type: "Ready", Status: tt.status, Reason: new("TestReason")},
 			}
 
 			emitConditionEvents(recorder, inst, nil, final)
@@ -103,10 +101,10 @@ func TestEmitConditionEvents_TrueToFalseIsWarning(t *testing.T) {
 	inst := newTestInst()
 
 	initial := []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionTrue, Reason: strPtr("AllGood")},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: new("AllGood")},
 	}
 	final := []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("Degraded")},
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: new("Degraded")},
 	}
 
 	emitConditionEvents(recorder, inst, initial, final)
@@ -123,10 +121,10 @@ func TestEmitConditionEvents_FalseToTrueIsNormal(t *testing.T) {
 	inst := newTestInst()
 
 	initial := []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionFalse, Reason: strPtr("Degraded")},
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: new("Degraded")},
 	}
 	final := []v1alpha1.Condition{
-		{Type: "Ready", Status: metav1.ConditionTrue, Reason: strPtr("Recovered")},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: new("Recovered")},
 	}
 
 	emitConditionEvents(recorder, inst, initial, final)
@@ -143,13 +141,13 @@ func TestEmitConditionEvents_MultipleConditions(t *testing.T) {
 	inst := newTestInst()
 
 	initial := []v1alpha1.Condition{
-		{Type: "InstanceManaged", Status: metav1.ConditionTrue, Reason: strPtr("OK")},
-		{Type: "ResourcesReady", Status: metav1.ConditionFalse, Reason: strPtr("Pending")},
+		{Type: "InstanceManaged", Status: metav1.ConditionTrue, Reason: new("OK")},
+		{Type: "ResourcesReady", Status: metav1.ConditionFalse, Reason: new("Pending")},
 	}
 	final := []v1alpha1.Condition{
-		{Type: "InstanceManaged", Status: metav1.ConditionTrue, Reason: strPtr("OK")},      // no change
-		{Type: "ResourcesReady", Status: metav1.ConditionTrue, Reason: strPtr("AllReady")}, // changed
-		{Type: "GraphResolved", Status: metav1.ConditionTrue, Reason: strPtr("Resolved")},  // new
+		{Type: "InstanceManaged", Status: metav1.ConditionTrue, Reason: new("OK")},      // no change
+		{Type: "ResourcesReady", Status: metav1.ConditionTrue, Reason: new("AllReady")}, // changed
+		{Type: "GraphResolved", Status: metav1.ConditionTrue, Reason: new("Resolved")},  // new
 	}
 
 	emitConditionEvents(recorder, inst, initial, final)

@@ -20,15 +20,15 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/rand"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/controller/resourcegraphdefinition"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
 var _ = Describe("RGD Conditions", func() {
@@ -40,7 +40,7 @@ var _ = Describe("RGD Conditions", func() {
 		createConditionTestRGD(ctx, rgd)
 		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-			lastIssued: ptrToInt64(1),
+			lastIssued: new(int64(1)),
 			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
 				krov1alpha1.ConditionType(apis.ConditionReady): {
 					status:  metav1.ConditionTrue,
@@ -80,7 +80,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-			lastIssued: ptrToInt64(1),
+			lastIssued: new(int64(1)),
 			conditions: map[string]metav1.ConditionStatus{
 				apis.ConditionReady:                            metav1.ConditionTrue,
 				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
@@ -142,7 +142,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		expectRGDConditions(ctx, rgdName, time.Second, rgdExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-			lastIssued: ptrToInt64(2),
+			lastIssued: new(int64(2)),
 			conditions: map[string]metav1.ConditionStatus{
 				apis.ConditionReady:                            metav1.ConditionTrue,
 				resourcegraphdefinition.KindReady:              metav1.ConditionTrue,
@@ -174,7 +174,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		expectExactRGDConditions(ctx, rgdName, time.Second, exactRGDExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateInactive,
-			lastIssued: ptrToInt64(1),
+			lastIssued: new(int64(1)),
 			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
 				krov1alpha1.ConditionType(apis.ConditionReady): {
 					status:  metav1.ConditionFalse,
@@ -272,7 +272,7 @@ var _ = Describe("RGD Conditions", func() {
 
 		expectExactRGDConditions(ctx, rgdName, 100*time.Millisecond, exactRGDExpectation{
 			state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-			lastIssued: ptrToInt64(1),
+			lastIssued: new(int64(1)),
 			conditions: map[krov1alpha1.ConditionType]conditionExpectation{
 				krov1alpha1.ConditionType(apis.ConditionReady): {
 					status:  metav1.ConditionUnknown,
@@ -371,10 +371,6 @@ func expectRGDConditions(
 		g.Expect(cond.Reason).ToNot(BeNil())
 		g.Expect(*cond.Reason).To(Equal(want.reason))
 	}, 20*time.Second, interval).WithContext(ctx).Should(Succeed())
-}
-
-func ptrToInt64(v int64) *int64 {
-	return &v
 }
 
 func assertRGDConditionStatusOnly(

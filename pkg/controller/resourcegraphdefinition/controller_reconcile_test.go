@@ -159,8 +159,7 @@ func TestListGraphRevisions_SkipsTerminatingRevisions(t *testing.T) {
 	}
 	liveRevision := newListedGraphRevision(rgd, 2, "hash-2")
 	terminatingRevision := newListedGraphRevision(rgd, 1, "hash-1")
-	now := metav1.Now()
-	terminatingRevision.DeletionTimestamp = &now
+	terminatingRevision.DeletionTimestamp = new(metav1.Now())
 	terminatingRevision.Finalizers = []string{"test.kro.run/finalizer"}
 
 	cl := newFakeClientBuilder().
@@ -1618,8 +1617,7 @@ func TestReconcileResourceGraphDefinition_TerminatingRevisionsBlockReconcile(t *
 			}
 			for _, rev := range tt.terminatingRevs {
 				gr := newListedGraphRevision(rgd, rev, fmt.Sprintf("hash-%d", rev))
-				now := metav1.Now()
-				gr.DeletionTimestamp = &now
+				gr.DeletionTimestamp = new(metav1.Now())
 				gr.Finalizers = []string{"test.kro.run/finalizer"}
 				objects = append(objects, gr)
 			}

@@ -20,16 +20,15 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/utils/ptr"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
-	"github.com/kubernetes-sigs/kro/pkg/testutil/generator"
 )
 
 var _ = Describe("Webhook Denial", func() {
@@ -61,7 +60,7 @@ var _ = Describe("Webhook Denial", func() {
 		policy := &admissionregistrationv1.ValidatingAdmissionPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: policyName},
 			Spec: admissionregistrationv1.ValidatingAdmissionPolicySpec{
-				FailurePolicy: ptr.To(admissionregistrationv1.Fail),
+				FailurePolicy: new(admissionregistrationv1.Fail),
 				MatchConstraints: &admissionregistrationv1.MatchResources{
 					ResourceRules: []admissionregistrationv1.NamedRuleWithOperations{{
 						RuleWithOperations: admissionregistrationv1.RuleWithOperations{

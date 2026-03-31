@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -151,7 +150,7 @@ var _ = Describe("ExternalRef", func() {
 				Namespace: namespace,
 			},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To[int32](2),
+				Replicas: new(int32(2)),
 				Selector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"app": "test-deployment",
@@ -242,7 +241,7 @@ var _ = Describe("ExternalRef", func() {
 			Namespace: deployment1.Namespace,
 		}, deployment1)).To(Succeed())
 		originalExternalDeployment := deployment1.DeepCopy()
-		deployment1.Spec.Replicas = ptr.To[int32](4)
+		deployment1.Spec.Replicas = new(int32(4))
 		Expect(env.Client.Patch(ctx, deployment1, client.MergeFrom(originalExternalDeployment))).To(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {

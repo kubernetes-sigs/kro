@@ -20,7 +20,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 func TestCondition_GetStatus(t *testing.T) {
@@ -28,22 +27,23 @@ func TestCondition_GetStatus(t *testing.T) {
 		name string
 		c    *Condition
 		want metav1.ConditionStatus
-	}{{
-		name: "Status True",
-		c:    &Condition{Status: metav1.ConditionTrue},
-		want: metav1.ConditionTrue,
-	}, {
-		name: "Status False",
-		c:    &Condition{Status: metav1.ConditionFalse},
-		want: metav1.ConditionFalse,
-	}, {
-		name: "Status Unknown",
-		c:    &Condition{Status: metav1.ConditionUnknown},
-		want: metav1.ConditionUnknown,
-	}, {
-		name: "Status Nil",
-		want: metav1.ConditionUnknown,
-	},
+	}{
+		{
+			name: "Status True",
+			c:    &Condition{Status: metav1.ConditionTrue},
+			want: metav1.ConditionTrue,
+		}, {
+			name: "Status False",
+			c:    &Condition{Status: metav1.ConditionFalse},
+			want: metav1.ConditionFalse,
+		}, {
+			name: "Status Unknown",
+			c:    &Condition{Status: metav1.ConditionUnknown},
+			want: metav1.ConditionUnknown,
+		}, {
+			name: "Status Nil",
+			want: metav1.ConditionUnknown,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,22 +59,23 @@ func TestCondition_IsFalse(t *testing.T) {
 		name string
 		c    *Condition
 		want bool
-	}{{
-		name: "Status True",
-		c:    &Condition{Status: metav1.ConditionTrue},
-		want: false,
-	}, {
-		name: "Status False",
-		c:    &Condition{Status: metav1.ConditionFalse},
-		want: true,
-	}, {
-		name: "Status Unknown",
-		c:    &Condition{Status: metav1.ConditionUnknown},
-		want: false,
-	}, {
-		name: "Status Nil",
-		want: false,
-	},
+	}{
+		{
+			name: "Status True",
+			c:    &Condition{Status: metav1.ConditionTrue},
+			want: false,
+		}, {
+			name: "Status False",
+			c:    &Condition{Status: metav1.ConditionFalse},
+			want: true,
+		}, {
+			name: "Status Unknown",
+			c:    &Condition{Status: metav1.ConditionUnknown},
+			want: false,
+		}, {
+			name: "Status Nil",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,22 +91,23 @@ func TestCondition_IsTrue(t *testing.T) {
 		name string
 		c    *Condition
 		want bool
-	}{{
-		name: "Status True",
-		c:    &Condition{Status: metav1.ConditionTrue},
-		want: true,
-	}, {
-		name: "Status False",
-		c:    &Condition{Status: metav1.ConditionFalse},
-		want: false,
-	}, {
-		name: "Status Unknown",
-		c:    &Condition{Status: metav1.ConditionUnknown},
-		want: false,
-	}, {
-		name: "Status Nil",
-		want: false,
-	},
+	}{
+		{
+			name: "Status True",
+			c:    &Condition{Status: metav1.ConditionTrue},
+			want: true,
+		}, {
+			name: "Status False",
+			c:    &Condition{Status: metav1.ConditionFalse},
+			want: false,
+		}, {
+			name: "Status Unknown",
+			c:    &Condition{Status: metav1.ConditionUnknown},
+			want: false,
+		}, {
+			name: "Status Nil",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -121,22 +123,23 @@ func TestCondition_IsUnknown(t *testing.T) {
 		name string
 		c    *Condition
 		want bool
-	}{{
-		name: "Status True",
-		c:    &Condition{Status: metav1.ConditionTrue},
-		want: false,
-	}, {
-		name: "Status False",
-		c:    &Condition{Status: metav1.ConditionFalse},
-		want: false,
-	}, {
-		name: "Status Unknown",
-		c:    &Condition{Status: metav1.ConditionUnknown},
-		want: true,
-	}, {
-		name: "Status Nil",
-		want: true,
-	},
+	}{
+		{
+			name: "Status True",
+			c:    &Condition{Status: metav1.ConditionTrue},
+			want: false,
+		}, {
+			name: "Status False",
+			c:    &Condition{Status: metav1.ConditionFalse},
+			want: false,
+		}, {
+			name: "Status Unknown",
+			c:    &Condition{Status: metav1.ConditionUnknown},
+			want: true,
+		}, {
+			name: "Status Nil",
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,13 +151,12 @@ func TestCondition_IsUnknown(t *testing.T) {
 }
 
 func TestConditionRoundTrip(t *testing.T) {
-	now := metav1.Now()
 	originalCondition := Condition{
 		Type:               ConditionType("TestCondition"),
 		Status:             metav1.ConditionTrue,
-		Reason:             ptr.To("TestReason"),
-		Message:            ptr.To("Test message"),
-		LastTransitionTime: &now,
+		Reason:             new("TestReason"),
+		Message:            new("Test message"),
+		LastTransitionTime: new(metav1.Now()),
 		ObservedGeneration: 42,
 	}
 

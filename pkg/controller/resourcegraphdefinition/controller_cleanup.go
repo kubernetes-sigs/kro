@@ -20,11 +20,10 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
@@ -36,8 +35,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
 	// shutdown microcontroller
-	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
-	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
+	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, new(metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind))); err != nil {
 		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 	}
 

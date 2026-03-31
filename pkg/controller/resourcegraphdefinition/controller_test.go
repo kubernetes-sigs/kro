@@ -687,7 +687,6 @@ func TestSetupWithManager(t *testing.T) {
 			liveRevision, entry := newActiveGraphRevisionFixture(t, rgd, 1)
 			fakeClient := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy(), liveRevision)
 			fakeSet := newKROFakeSet()
-			skipNameValidation := true
 			mapper := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{
 				v1alpha1.GroupVersion,
 				extv1.SchemeGroupVersion,
@@ -702,7 +701,7 @@ func TestSetupWithManager(t *testing.T) {
 				logger:            logr.Discard(),
 				scheme:            testScheme(t),
 				cache:             cache,
-				controllerOptions: config.Controller{SkipNameValidation: &skipNameValidation},
+				controllerOptions: config.Controller{SkipNameValidation: new(true)},
 				addErr:            tt.addErr,
 			}
 			registry := revisions.NewRegistry()
@@ -825,8 +824,7 @@ func TestReconcile(t *testing.T) {
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("reconcile-delete")
 				metadata.SetResourceGraphDefinitionFinalizer(rgd)
-				now := metav1.Now()
-				rgd.DeletionTimestamp = &now
+				rgd.DeletionTimestamp = new(metav1.Now())
 
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
 				dc := newRunningDynamicController(t)
@@ -859,8 +857,7 @@ func TestReconcile(t *testing.T) {
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("reconcile-delete-error")
 				metadata.SetResourceGraphDefinitionFinalizer(rgd)
-				now := metav1.Now()
-				rgd.DeletionTimestamp = &now
+				rgd.DeletionTimestamp = new(metav1.Now())
 
 				c := newTestClient(t, interceptor.Funcs{}, rgd.DeepCopy())
 				manager := &stubCRDManager{deleteErr: errors.New("delete boom")}
@@ -885,8 +882,7 @@ func TestReconcile(t *testing.T) {
 			build: func(t *testing.T) (*ResourceGraphDefinitionReconciler, client.WithWatch, *v1alpha1.ResourceGraphDefinition, *stubCRDManager) {
 				rgd := newTestRGD("reconcile-delete-unmanaged-error")
 				metadata.SetResourceGraphDefinitionFinalizer(rgd)
-				now := metav1.Now()
-				rgd.DeletionTimestamp = &now
+				rgd.DeletionTimestamp = new(metav1.Now())
 
 				c := newTestClient(t, interceptor.Funcs{
 					Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {

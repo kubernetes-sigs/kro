@@ -21,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/utils/ptr"
 )
 
 func TestBuildOpenAPISchema(t *testing.T) {
@@ -186,7 +185,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{
 								Type:                   "object",
-								XPreserveUnknownFields: ptr.To(true),
+								XPreserveUnknownFields: new(true),
 							},
 						},
 					},
@@ -210,7 +209,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 								Items: &extv1.JSONSchemaPropsOrArray{
 									Schema: &extv1.JSONSchemaProps{
 										Type:                   "object",
-										XPreserveUnknownFields: ptr.To(true),
+										XPreserveUnknownFields: new(true),
 									},
 								},
 							},
@@ -440,7 +439,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
 							Schema: &extv1.JSONSchemaProps{
 								Type:                   "object",
-								XPreserveUnknownFields: ptr.To(true),
+								XPreserveUnknownFields: new(true),
 							},
 						},
 					},
@@ -464,7 +463,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 								AdditionalProperties: &extv1.JSONSchemaPropsOrBool{
 									Schema: &extv1.JSONSchemaProps{
 										Type:                   "object",
-										XPreserveUnknownFields: ptr.To(true),
+										XPreserveUnknownFields: new(true),
 									},
 								},
 							},
@@ -535,7 +534,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"values": {
 						Type:                   "object",
-						XPreserveUnknownFields: ptr.To(true),
+						XPreserveUnknownFields: new(true),
 					},
 				},
 			},
@@ -551,7 +550,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"values": {
 						Type:                   "object",
-						XPreserveUnknownFields: ptr.To(true),
+						XPreserveUnknownFields: new(true),
 					},
 				},
 				Required: []string{"values"},
@@ -569,7 +568,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"values": {
 						Type:                   "object",
-						XPreserveUnknownFields: ptr.To(true),
+						XPreserveUnknownFields: new(true),
 						Default:                &extv1.JSON{Raw: []byte("{\"a\":\"b\"}")},
 					},
 				},
@@ -747,8 +746,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"username": {
 						Type:      "string",
-						MinLength: ptr.To(int64(3)),
-						MaxLength: ptr.To(int64(20)),
+						MinLength: new(int64(3)),
+						MaxLength: new(int64(20)),
 					},
 				},
 			},
@@ -765,8 +764,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 					"code": {
 						Type:        "string",
 						Pattern:     "^[A-Z]{2}[0-9]{4}$",
-						MinLength:   ptr.To(int64(6)),
-						MaxLength:   ptr.To(int64(6)),
+						MinLength:   new(int64(6)),
+						MaxLength:   new(int64(6)),
 						Description: "Country code format",
 					},
 				},
@@ -786,7 +785,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "string"},
 						},
-						XListType: ptr.To("set"),
+						XListType: new("set"),
 					},
 				},
 			},
@@ -833,15 +832,15 @@ func TestBuildOpenAPISchema(t *testing.T) {
 							"username": {
 								Type:      "string",
 								Pattern:   "^[a-zA-Z0-9_]+$",
-								MinLength: ptr.To(int64(3)),
-								MaxLength: ptr.To(int64(15)),
+								MinLength: new(int64(3)),
+								MaxLength: new(int64(15)),
 							},
 							"roles": {
 								Type: "array",
 								Items: &extv1.JSONSchemaPropsOrArray{
 									Schema: &extv1.JSONSchemaProps{Type: "string"},
 								},
-								XListType: ptr.To("set"),
+								XListType: new("set"),
 							},
 							"tags": {
 								Type: "array",
@@ -865,7 +864,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"items": {
 						Type:     "array",
-						MinItems: ptr.To(int64(2)),
+						MinItems: new(int64(2)),
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "string"},
 						},
@@ -884,7 +883,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"tags": {
 						Type:     "array",
-						MaxItems: ptr.To(int64(10)),
+						MaxItems: new(int64(10)),
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "string"},
 						},
@@ -903,8 +902,8 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"priorities": {
 						Type:     "array",
-						MinItems: ptr.To(int64(1)),
-						MaxItems: ptr.To(int64(5)),
+						MinItems: new(int64(1)),
+						MaxItems: new(int64(5)),
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "integer"},
 						},
@@ -923,12 +922,12 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"codes": {
 						Type:     "array",
-						MinItems: ptr.To(int64(2)),
-						MaxItems: ptr.To(int64(8)),
+						MinItems: new(int64(2)),
+						MaxItems: new(int64(8)),
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "string"},
 						},
-						XListType: ptr.To("set"),
+						XListType: new("set"),
 					},
 				},
 			},
@@ -944,7 +943,7 @@ func TestBuildOpenAPISchema(t *testing.T) {
 				Properties: map[string]extv1.JSONSchemaProps{
 					"optional": {
 						Type:     "array",
-						MinItems: ptr.To(int64(0)),
+						MinItems: new(int64(0)),
 						Items: &extv1.JSONSchemaPropsOrArray{
 							Schema: &extv1.JSONSchemaProps{Type: "string"},
 						},
@@ -1374,8 +1373,8 @@ func TestComplexSchemaE2E(t *testing.T) {
 					"port": {
 						Type:    "integer",
 						Default: &extv1.JSON{Raw: []byte("8080")},
-						Minimum: ptr.To(1.0),
-						Maximum: ptr.To(65535.0),
+						Minimum: new(1.0),
+						Maximum: new(65535.0),
 					},
 					"database": {
 						Type:    "string",
@@ -1390,8 +1389,8 @@ func TestComplexSchemaE2E(t *testing.T) {
 					"maxRetries": {
 						Type:    "integer",
 						Default: &extv1.JSON{Raw: []byte("3")},
-						Minimum: ptr.To(0.0),
-						Maximum: ptr.To(10.0),
+						Minimum: new(0.0),
+						Maximum: new(10.0),
 					},
 					"backoffMs": {
 						Type:    "integer",
@@ -1405,7 +1404,7 @@ func TestComplexSchemaE2E(t *testing.T) {
 			},
 			"endpoints": {
 				Type:     "array",
-				MinItems: ptr.To[int64](1),
+				MinItems: new(int64(1)),
 				Items: &extv1.JSONSchemaPropsOrArray{
 					Schema: &extv1.JSONSchemaProps{
 						Type:     "object",
@@ -1419,8 +1418,8 @@ func TestComplexSchemaE2E(t *testing.T) {
 							"timeout": {
 								Type:    "integer",
 								Default: &extv1.JSON{Raw: []byte("30")},
-								Minimum: ptr.To(1.0),
-								Maximum: ptr.To(300.0),
+								Minimum: new(1.0),
+								Maximum: new(300.0),
 							},
 						},
 					},
@@ -1434,7 +1433,7 @@ func TestComplexSchemaE2E(t *testing.T) {
 			},
 			"labels": {
 				Type:      "array",
-				XListType: ptr.To("set"),
+				XListType: new("set"),
 				Items: &extv1.JSONSchemaPropsOrArray{
 					Schema: &extv1.JSONSchemaProps{
 						Type:     "object",
@@ -1442,8 +1441,8 @@ func TestComplexSchemaE2E(t *testing.T) {
 						Properties: map[string]extv1.JSONSchemaProps{
 							"key": {
 								Type:      "string",
-								MinLength: ptr.To[int64](1),
-								MaxLength: ptr.To[int64](63),
+								MinLength: new(int64(1)),
+								MaxLength: new(int64(63)),
 							},
 							"value": {
 								Type:    "string",
@@ -1462,8 +1461,8 @@ func TestComplexSchemaE2E(t *testing.T) {
 			"replicas": {
 				Type:    "integer",
 				Default: &extv1.JSON{Raw: []byte("1")},
-				Minimum: ptr.To(0.0),
-				Maximum: ptr.To(100.0),
+				Minimum: new(0.0),
+				Maximum: new(100.0),
 				XValidations: []extv1.ValidationRule{
 					{Rule: "self <= 10 || self % 2 == 0", Message: "validation failed"},
 				},

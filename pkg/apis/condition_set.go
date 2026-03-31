@@ -25,7 +25,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
@@ -151,7 +150,7 @@ func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 			if condition.Status == cond.Status {
 				condition.LastTransitionTime = cond.LastTransitionTime
 			} else {
-				condition.LastTransitionTime = ptr.To(metav1.Now())
+				condition.LastTransitionTime = new(metav1.Now())
 			}
 			if reflect.DeepEqual(condition, cond) {
 				return false
@@ -162,9 +161,9 @@ func (c ConditionSet) Set(condition v1alpha1.Condition) (modified bool) {
 		// Dependent conditions should always be set, so if it's not found, that means
 		// that we are initializing the condition type, and it's last "transition" was object creation
 		if c.IsDependentCondition(condition.Type.String()) {
-			condition.LastTransitionTime = ptr.To(c.object.GetCreationTimestamp())
+			condition.LastTransitionTime = new(c.object.GetCreationTimestamp())
 		} else {
-			condition.LastTransitionTime = ptr.To(metav1.Now())
+			condition.LastTransitionTime = new(metav1.Now())
 		}
 	}
 	conditions = append(conditions, condition)
@@ -237,8 +236,8 @@ func (c ConditionSet) SetTrueWithReason(conditionType string, reason, message st
 	return c.Set(v1alpha1.Condition{
 		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionTrue,
-		Reason:  ptr.To(reason),
-		Message: ptr.To(message),
+		Reason:  new(reason),
+		Message: new(message),
 	})
 }
 
@@ -255,8 +254,8 @@ func (c ConditionSet) SetUnknownWithReason(conditionType string, reason, message
 	return c.Set(v1alpha1.Condition{
 		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionUnknown,
-		Reason:  ptr.To(reason),
-		Message: ptr.To(message),
+		Reason:  new(reason),
+		Message: new(message),
 	})
 }
 
@@ -265,8 +264,8 @@ func (c ConditionSet) SetFalse(conditionType string, reason, message string) (mo
 	return c.Set(v1alpha1.Condition{
 		Type:    v1alpha1.ConditionType(conditionType),
 		Status:  metav1.ConditionFalse,
-		Reason:  ptr.To(reason),
-		Message: ptr.To(message),
+		Reason:  new(reason),
+		Message: new(message),
 	})
 }
 

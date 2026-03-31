@@ -86,8 +86,7 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 
 	deleting := newTestGraphRevision("finalizer-evict")
 	metadata.SetGraphRevisionFinalizer(deleting)
-	ts := metav1.Now()
-	deleting.DeletionTimestamp = &ts
+	deleting.DeletionTimestamp = new(metav1.Now())
 	deleteClient := fake.NewClientBuilder().WithScheme(graphRevisionTestScheme(t)).WithObjects(deleting.DeepCopy()).Build()
 	registry := revisions.NewRegistry()
 	registry.Put(revisions.Entry{

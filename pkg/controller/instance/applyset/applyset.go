@@ -175,7 +175,8 @@ type Config struct {
 func New(cfg Config, parent interface {
 	metav1.Object
 	schema.ObjectKind
-}) *ApplySet {
+},
+) *ApplySet {
 	applySetID := ID(parent)
 	return &ApplySet{
 		client:            cfg.Client,
@@ -542,9 +543,8 @@ func (a *ApplySet) prune(
 
 	for _, c := range candidates {
 		eg.Go(func() error {
-			uid := c.obj.GetUID()
 			deleteOpts := metav1.DeleteOptions{
-				Preconditions: &metav1.Preconditions{UID: &uid},
+				Preconditions: &metav1.Preconditions{UID: new(c.obj.GetUID())},
 			}
 			var err error
 			if c.obj.GetNamespace() != "" {
@@ -648,7 +648,8 @@ func (a *ApplySet) buildMetadata(
 func ID(parent interface {
 	metav1.Object
 	schema.ObjectKind
-}) string {
+},
+) string {
 	unencoded := strings.Join([]string{
 		parent.GetName(),
 		parent.GetNamespace(),

@@ -65,9 +65,9 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				assert.Equal(t, "demo-rgd", rgd.Name)
 				return compiled, nil
 			},
-			wantFinalizer:   boolPtr(true),
-			wantVerified:    conditionStatusPtr(metav1.ConditionTrue),
-			wantReady:       conditionStatusPtr(metav1.ConditionTrue),
+			wantFinalizer:   new(true),
+			wantVerified:    new(metav1.ConditionTrue),
+			wantReady:       new(metav1.ConditionTrue),
 			wantOrder:       []string{"config", "deploy"},
 			wantResourceIDs: []string{"deploy"},
 			wantRegistry: &revisions.Entry{
@@ -84,9 +84,9 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains: []string{"graph compile failed"},
-			wantFinalizer:   boolPtr(true),
-			wantVerified:    conditionStatusPtr(metav1.ConditionFalse),
-			wantReady:       conditionStatusPtr(metav1.ConditionFalse),
+			wantFinalizer:   new(true),
+			wantVerified:    new(metav1.ConditionFalse),
+			wantReady:       new(metav1.ConditionFalse),
 			wantRegistry: &revisions.Entry{
 				RGDName:  "demo-rgd",
 				Revision: 1,
@@ -108,7 +108,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				return compiled, nil
 			},
 			wantErrContains: []string{"status patch failed"},
-			wantFinalizer:   boolPtr(true),
+			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
 				RGDName:  "demo-rgd",
 				Revision: 1,
@@ -139,7 +139,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				return compiled, nil
 			},
 			wantErrContains: []string{"status patch failed"},
-			wantFinalizer:   boolPtr(true),
+			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
 				RGDName:       "demo-rgd",
 				Revision:      1,
@@ -152,8 +152,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			name: "deletion removes registry entry after finalizer removal",
 			mutateRevision: func(revision *internalv1alpha1.GraphRevision) {
 				metadata.SetGraphRevisionFinalizer(revision)
-				ts := metav1.Now()
-				revision.DeletionTimestamp = &ts
+				revision.DeletionTimestamp = new(metav1.Now())
 			},
 			seedRegistry: func(registry *revisions.Registry, revision *internalv1alpha1.GraphRevision) {
 				registry.Put(revisions.Entry{
@@ -164,15 +163,14 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				})
 			},
 			compile:          panicCompile,
-			wantFinalizer:    boolPtr(false),
+			wantFinalizer:    new(false),
 			wantRegistryMiss: true,
 		},
 		{
 			name: "deletion keeps registry entry when finalizer patch fails",
 			mutateRevision: func(revision *internalv1alpha1.GraphRevision) {
 				metadata.SetGraphRevisionFinalizer(revision)
-				ts := metav1.Now()
-				revision.DeletionTimestamp = &ts
+				revision.DeletionTimestamp = new(metav1.Now())
 			},
 			buildClient: func(t *testing.T, scheme *runtime.Scheme, revision *internalv1alpha1.GraphRevision) client.Client {
 				base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(revision).Build()
@@ -188,7 +186,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			compile:         panicCompile,
 			wantErrContains: []string{"patch failed"},
-			wantFinalizer:   boolPtr(true),
+			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
 				RGDName:       "demo-rgd",
 				Revision:      1,
@@ -204,7 +202,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 			},
 			compile:          panicCompile,
 			wantErrContains:  []string{"patch failed"},
-			wantFinalizer:    boolPtr(false),
+			wantFinalizer:    new(false),
 			wantRegistryMiss: true,
 		},
 		{
@@ -221,7 +219,7 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains: []string{"graph compile failed", "status patch failed"},
-			wantFinalizer:   boolPtr(true),
+			wantFinalizer:   new(true),
 			wantRegistry: &revisions.Entry{
 				RGDName:  "demo-rgd",
 				Revision: 1,
@@ -244,9 +242,9 @@ func TestGraphRevisionReconcilerCases(t *testing.T) {
 				return nil, errors.New("graph compile failed")
 			},
 			wantErrContains: []string{"graph compile failed"},
-			wantFinalizer:   boolPtr(true),
-			wantVerified:    conditionStatusPtr(metav1.ConditionFalse),
-			wantReady:       conditionStatusPtr(metav1.ConditionFalse),
+			wantFinalizer:   new(true),
+			wantVerified:    new(metav1.ConditionFalse),
+			wantReady:       new(metav1.ConditionFalse),
 			wantRegistry: &revisions.Entry{
 				RGDName:  "demo-rgd",
 				Revision: 1,
@@ -791,10 +789,6 @@ func newPredicateTestGraphRevision(generation int64, deletionTimestamp *metav1.T
 		},
 	}
 }
-
-func boolPtr(v bool) *bool { return &v }
-
-func conditionStatusPtr(v metav1.ConditionStatus) *metav1.ConditionStatus { return &v }
 
 func mustSpecHash(t *testing.T, spec v1alpha1.ResourceGraphDefinitionSpec) string {
 	t.Helper()

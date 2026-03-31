@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -356,7 +357,7 @@ var _ = Describe("GraphRevision Integration", Serial, func() {
 
 			expectExactRGDConditionsInEnv(ctx, testEnv, rgdName, 100*time.Millisecond, exactRGDExpectationInEnv{
 				state:      krov1alpha1.ResourceGraphDefinitionStateActive,
-				lastIssued: ptrToInt64InEnv(2),
+				lastIssued: new(int64(2)),
 				conditions: map[krov1alpha1.ConditionType]conditionExpectationInEnv{
 					krov1alpha1.ConditionType(apis.ConditionReady): {
 						status:  metav1.ConditionTrue,
@@ -762,8 +763,4 @@ func findConditionByTypeInEnv(conditions []krov1alpha1.Condition, t krov1alpha1.
 		}
 	}
 	return nil
-}
-
-func ptrToInt64InEnv(v int64) *int64 {
-	return &v
 }

@@ -18,10 +18,9 @@ import (
 	"errors"
 	"fmt"
 
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema/types"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // customType stores the schema and required state for a custom type.
@@ -83,8 +82,7 @@ func (t *transformer) loadCustomTypes(customTypes map[string]interface{}) error 
 	}
 	for name, typ := range parsed {
 		if err := graph.AddDependencies(name, typ.Deps()); err != nil {
-			var cycleErr *dag.CycleError[string]
-			if errors.As(err, &cycleErr) {
+			if _, ok := errors.AsType[*dag.CycleError[string]](err); ok {
 				return fmt.Errorf("cyclic dependency in type %s: %w", name, err)
 			}
 			return err

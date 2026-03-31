@@ -166,7 +166,7 @@ test-coverage: ## Run all tests and report coverage
 	@echo "Combined:    $$(go tool cover -func=combined-cover.out | grep total | awk '{print $$NF}')"
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.8.0
+GOLANGCI_LINT_VERSION ?= v2.11.4
 golangci-lint:
 	@[ -f $(GOLANGCI_LINT) ] || { \
 	set -e ;\

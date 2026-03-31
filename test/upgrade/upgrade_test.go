@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -25,8 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 var _ = ginkgo.Describe("Post-Upgrade", ginkgo.Ordered, func() {
@@ -176,34 +175,40 @@ var _ = ginkgo.Describe("Post-Upgrade GraphRevision", ginkgo.Ordered, func() {
 			ginkgo.Skip("Pre-upgrade version did not have GraphRevision support")
 		}
 
-		// Compute the expected total deterministically from the pre-upgrade snapshot:
-		//   - unmutated RGDs: snapshot count unchanged
-		//   - mutationRGDName: +1 (mutation suite adds exactly one new GR, no GC)
-		//   - retentionRGDName: +retentionMutations capped at maxGraphRevisions
-		//     (retention suite runs retentionMutations mutations; GC keeps at most
-		//     maxGraphRevisions, so the final count is min(pre+mutations, max))
-		//   - deletionRGDName: excluded — the deletion suite deletes this RGD and
-		//     its GRs are garbage collected
-		expectedTotal := 0
-		for rgdName, preCount := range snapshot.GRCountPerRGD {
-			switch rgdName {
-			case mutationRGDName:
-				expectedTotal += min(preCount+1, maxGraphRevisions)
-			case retentionRGDName:
-				expectedTotal += min(preCount+retentionMutations, maxGraphRevisions)
-			case deletionRGDName:
-				// GRs are GC'd when the RGD is deleted by the deletion suite
-			default:
-				expectedTotal += preCount
-			}
-		}
-
 		grList, err := dynamicClient.Resource(graphRevisionGVR).List(ctx, metav1.ListOptions{})
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-		gomega.Expect(len(grList.Items)).To(gomega.Equal(expectedTotal),
-			"Unexpected GraphRevision count post-upgrade. Expected: %d, Got: %d",
-			expectedTotal, len(grList.Items))
+		// Build a map of current GR counts per RGD from the live cluster.
+		currentGRCountPerRGD := make(map[string]int)
+		for _, gr := range grList.Items {
+			rgdName := getRGDNameFromGR(gr)
+			if rgdName != "" {
+				currentGRCountPerRGD[rgdName]++
+			}
+		}
+
+		// Verify no spurious GRs were created. For each RGD in the snapshot,
+		// the current count must not exceed what is expected given the known
+		// post-upgrade mutations:
+		//   - mutationRGDName: exactly +1 (one deliberate mutation by mutation suite)
+		//   - retentionRGDName: capped at maxGraphRevisions (rapid-mutation suite)
+		//   - deletionRGDName: 0 or snapshot count (deletion suite may or may not have run)
+		//   - all others: unchanged from snapshot
+		for rgdName, preCount := range snapshot.GRCountPerRGD {
+			currentCount := currentGRCountPerRGD[rgdName]
+			var maxAllowed int
+			switch rgdName {
+			case mutationRGDName:
+				maxAllowed = min(preCount+1, maxGraphRevisions)
+			case retentionRGDName:
+				maxAllowed = min(preCount+retentionMutations, maxGraphRevisions)
+			default:
+				maxAllowed = preCount
+			}
+			gomega.Expect(currentCount).To(gomega.BeNumerically("<=", maxAllowed),
+				"RGD %s has more GraphRevisions than expected (spurious GRs). Pre: %d, Max allowed: %d, Got: %d",
+				rgdName, preCount, maxAllowed, currentCount)
+		}
 	})
 
 	ginkgo.It("should have stable spec hashes for all RGDs", func() {

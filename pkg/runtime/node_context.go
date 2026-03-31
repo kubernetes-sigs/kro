@@ -42,12 +42,14 @@ func (n *Node) buildContext(only ...string) map[string]any {
 		if len(only) > 0 && !slices.Contains(only, depID) {
 			continue
 		}
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		if dep.Spec.Meta.Type.IsCollection() {
 			items := make([]any, len(dep.observed))
 			for i, obj := range dep.observed {
 				items[i] = wrapWithSchema(obj.Object, dep.resourceSchema)
 			}
 			ctx[depID] = items
+		} else if dep.Spec.Meta.Type == graph.NodeTypeVariable {
+			ctx[depID] = wrapWithSchema(dep.observed[0].Object, dep.resourceSchema)
 		} else {
 			obj := dep.observed[0].Object
 			// For schema (instance), strip status - users should only access spec/metadata.
@@ -112,7 +114,7 @@ func (n *Node) neededDeps(exprs map[string]struct{}) []string {
 // - iterators: forEach loop variable names from iterCtx (declared as list(dyn))
 func (n *Node) contextDependencyIDs(iterCtx map[string]any) (singles, collections, iterators []string) {
 	for depID, dep := range n.deps {
-		if dep.Spec.Meta.Type == graph.NodeTypeCollection || dep.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		if dep.Spec.Meta.Type.IsCollection() {
 			collections = append(collections, depID)
 		} else {
 			singles = append(singles, depID)

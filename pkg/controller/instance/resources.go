@@ -300,6 +300,8 @@ func (c *Controller) processNode(
 	var nodeState NodeState
 
 	switch node.Spec.Meta.Type {
+	case graph.NodeTypeVariable, graph.NodeTypeVariableCollection:
+		c.processVariableNode(node, &nodeState, desired)
 	case graph.NodeTypeExternal:
 		nodeState, err = c.processExternalRefNode(rcx, node, desired)
 	case graph.NodeTypeExternalCollection:
@@ -316,6 +318,18 @@ func (c *Controller) processNode(
 
 	rcx.StateManager.SetNodeState(id, nodeState)
 	return resources, err
+}
+
+// processVariableNode resolves a variable node and stores the result as observed state.
+// Variable nodes have no cluster presence — the resolved desired state becomes the
+// observed state directly, making the node ready for downstream references.
+func (c *Controller) processVariableNode(
+	node *runtime.Node,
+	state *NodeState,
+	desiredList []*unstructured.Unstructured,
+) {
+	node.SetObserved(desiredList)
+	setStateFromReadiness(node, state)
 }
 
 // processRegularNode builds applyset inputs for a single-resource node.
@@ -485,6 +499,9 @@ func (c *Controller) processApplyResults(
 			}
 		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
 			// External refs/collections handled before applyset.
+			continue
+		case graph.NodeTypeVariable, graph.NodeTypeVariableCollection:
+			// Variable nodes have no cluster resources; already handled in processNode.
 			continue
 		case graph.NodeTypeInstance:
 			panic("instance node should not be in apply results")

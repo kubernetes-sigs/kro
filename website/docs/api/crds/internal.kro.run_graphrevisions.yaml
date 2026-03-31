@@ -104,7 +104,7 @@ spec:
                               description: |-
                                 ExternalRef references an existing resource in the cluster instead of creating one.
                                 This is useful for reading existing resources and using their values in other resources.
-                                Exactly one of template or externalRef must be provided.
+                                Exactly one if template, externalRef, or variable must be provided.
                               properties:
                                 apiVersion:
                                   description: |-
@@ -246,17 +246,25 @@ spec:
                               description: |-
                                 Template is the Kubernetes resource manifest to create.
                                 It can contain CEL expressions (using ${...} syntax) that reference other resources.
-                                Exactly one of template or externalRef must be provided.
+                                Exactly one if template, externalRef, or variable must be provided.
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            variable:
+                              description: |-
+                                Variable defines a computed value that participates in the DAG without creating
+                                Kubernetes resources. Variables are maps of key-value pairs where values can be
+                                constants, CEL expressions referencing schema.spec, or expressions referencing
+                                other resources in the RGD.
                               type: object
                               x-kubernetes-preserve-unknown-fields: true
                           required:
                           - id
                           type: object
                           x-kubernetes-validations:
-                          - message: exactly one of template or externalRef must be
-                              provided
-                            rule: (has(self.template) && !has(self.externalRef)) ||
-                              (!has(self.template) && has(self.externalRef))
+                          - message: exactly one of template, externalRef, or variable
+                              must be provided
+                            rule: '(has(self.template) ? 1 : 0) + (has(self.externalRef)
+                              ? 1 : 0) + (has(self.variable) ? 1 : 0) == 1'
                         type: array
                       schema:
                         description: |-

@@ -129,15 +129,17 @@ var _ = Describe("Variable Nodes", func() {
 					},
 					nil,
 				),
-				generator.WithVariable("fullName", "${schema.spec.appName + '-' + schema.spec.environment}", nil, nil, nil),
+				generator.WithVariable("fullName", map[string]interface{}{
+					"var": "${schema.spec.appName + '-' + schema.spec.environment}",
+				}, nil, nil, nil),
 				generator.WithResource("configmap", map[string]interface{}{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"metadata": map[string]interface{}{
-						"name": "${fullName}",
+						"name": "${fullName.var}",
 					},
 					"data": map[string]interface{}{
-						"name": "${fullName}",
+						"name": "${fullName.var}",
 					},
 				}, nil, nil),
 			)

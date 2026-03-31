@@ -4415,3 +4415,753 @@ func TestBuilderHelperCases(t *testing.T) {
 		t.Run(tt.name, tt.run)
 	}
 }
+
+func TestGraphBuilder_VariableNodeValidation(t *testing.T) {
+	builder := newUnitTestBuilder()
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+	}{
+		{
+			name: "valid variable node with constants",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"prefix": "my-prefix",
+					"port":   8080,
+					"debug":  true,
+				}, nil, nil, nil),
+			},
+		},
+		{
+			name: "valid variable node with static CEL expressions",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name":        "string",
+						"environment": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.environment}",
+				}, nil, nil, nil),
+			},
+		},
+		{
+			name: "valid variable node referenced by template resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name":        "string",
+						"environment": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.environment}",
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${naming.prefix}-config",
+					},
+				}, nil, nil),
+			},
+		},
+		{
+			name: "variable node top-level key conflicts with resource ID (stutter)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"naming": "would-cause-stutter",
+				}, nil, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "top-level key",
+		},
+		{
+			name: "variable node with reserved keyword ID is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("variables", map[string]interface{}{
+					"key": "value",
+				}, nil, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "reserved keyword",
+		},
+		{
+			name: "variable-to-variable reference is valid",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name":        "string",
+						"environment": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.environment}",
+				}, nil, nil, nil),
+				generator.WithVariable("labels", map[string]interface{}{
+					"appName": "${naming.prefix + '-app'}",
+				}, nil, nil, nil),
+			},
+		},
+		{
+			name: "variable node with forEach produces collection",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"appImage": "string",
+						"workers":  "[]string",
+					},
+					nil,
+				),
+				generator.WithVariable("containers", map[string]interface{}{
+					"name":  "${worker}",
+					"image": "${schema.spec.appImage}",
+				},
+					nil, nil,
+					[]krov1alpha1.ForEachDimension{
+						{"worker": "${schema.spec.workers}"},
+					},
+				),
+			},
+		},
+		{
+			name: "variable node with includeWhen is valid",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name":    "string",
+						"enabled": "boolean",
+					},
+					nil,
+				),
+				generator.WithVariable("conditionalConfig", map[string]interface{}{
+					"key": "${schema.spec.name}",
+				}, nil, []string{"${schema.spec.enabled}"}, nil),
+			},
+		},
+		{
+			name: "cyclic dependency between variable nodes is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("nodeA", map[string]interface{}{
+					"val": "${nodeB.val}",
+				}, nil, nil, nil),
+				generator.WithVariable("nodeB", map[string]interface{}{
+					"val": "${nodeA.val}",
+				}, nil, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "cycle",
+		},
+		{
+			name: "nested map variable node with CEL expressions",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name":        "string",
+						"environment": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"outer": map[string]interface{}{
+						"inner": "${schema.spec.name + '-' + schema.spec.environment}",
+					},
+					"topLevel": "constant",
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${config.outer.inner + '-cm'}",
+					},
+				}, nil, nil),
+			},
+		},
+		{
+			name: "variable node referenced in status fields",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+						"env":  "string",
+					},
+					map[string]interface{}{
+						"computedPrefix": "${naming.prefix}",
+					},
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.env}",
+				}, nil, nil, nil),
+			},
+		},
+		{
+			name: "variable node referencing non-existent resource ID is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestData", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithVariable("broken", map[string]interface{}{
+					"val": "${doesNotExist.field}",
+				}, nil, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "doesNotExist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-data", tt.resourceGraphDefinitionOpts...)
+			_, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGraphBuilder_VariableNodeDependencies(t *testing.T) {
+	builder := newUnitTestBuilder()
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		wantErr                     bool
+		errMsg                      string
+		validateGraph               func(*testing.T, *Graph)
+	}{
+		{
+			name: "variable node with no dependencies (constants only)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string"},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"port": 8080,
+					"host": "localhost",
+				}, nil, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				node := g.Resources["config"]
+				require.NotNil(t, node)
+				assert.Equal(t, NodeTypeVariable, node.Meta.Type)
+				assert.Empty(t, node.Meta.Dependencies)
+			},
+		},
+		{
+			name: "variable node depends on schema only (static var)",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string", "env": "string"},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.env}",
+				}, nil, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				node := g.Resources["naming"]
+				require.NotNil(t, node)
+				assert.Empty(t, node.Meta.Dependencies, "schema refs don't create resource deps")
+			},
+		},
+		{
+			name: "variable-to-variable dependency chain",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string", "env": "string"},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.env}",
+				}, nil, nil, nil),
+				generator.WithVariable("fullLabels", map[string]interface{}{
+					"app": "${naming.prefix + '-app'}",
+				}, nil, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				naming := g.Resources["naming"]
+				require.NotNil(t, naming)
+				assert.Empty(t, naming.Meta.Dependencies)
+
+				labels := g.Resources["fullLabels"]
+				require.NotNil(t, labels)
+				assert.Equal(t, []string{"naming"}, labels.Meta.Dependencies)
+			},
+		},
+		{
+			name: "template resource depends on variable node",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string", "env": "string"},
+					nil,
+				),
+				generator.WithVariable("naming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-' + schema.spec.env}",
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "${naming.prefix}-config"},
+				}, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				cm := g.Resources["configmap"]
+				require.NotNil(t, cm)
+				assert.Equal(t, []string{"naming"}, cm.Meta.Dependencies)
+			},
+		},
+		{
+			name: "variable node forEach does not require iterator in identity",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"workers": "[]string", "image": "string"},
+					nil,
+				),
+				generator.WithVariable("containers", map[string]interface{}{
+					"name":  "${worker}",
+					"image": "${schema.spec.image}",
+				},
+					nil, nil,
+					[]krov1alpha1.ForEachDimension{
+						{"worker": "${schema.spec.workers}"},
+					},
+				),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				node := g.Resources["containers"]
+				require.NotNil(t, node)
+				assert.Equal(t, NodeTypeVariableCollection, node.Meta.Type)
+				assert.Len(t, node.ForEach, 1)
+			},
+		},
+		{
+			name: "map variable node with array field mixing CEL expressions and constants",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"primary": "string", "secondary": "string"},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"hosts": []interface{}{
+						"${schema.spec.primary}",
+						"${schema.spec.secondary}",
+						"fallback.example.com",
+					},
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "test"},
+					"data":       map[string]interface{}{"key": "value"},
+				}, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				node := g.Resources["config"]
+				require.NotNil(t, node)
+				assert.Equal(t, NodeTypeVariable, node.Meta.Type)
+			},
+		},
+		{
+			name: "map variable node with conditional omit expression in array",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"enabled": "boolean", "host": "string"},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"hosts": []interface{}{
+						"${schema.spec.enabled ? schema.spec.host : omit()}",
+						"${schema.spec.enabled ? omit() : schema.spec.host}",
+						"fallback.example.com",
+					},
+					"structArr": []interface {
+					}{
+						map[string]interface{}{
+							"key1": map[string]interface{}{"key": "val"},
+							"key2": map[string]interface{}{"k1": "v1", "k2": "${schema.spec.enabled ? omit() : schema.spec.host}"},
+						},
+					},
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "test"},
+					"data":       map[string]interface{}{"key": "value"},
+				}, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				node := g.Resources["config"]
+				require.NotNil(t, node)
+				assert.Equal(t, NodeTypeVariable, node.Meta.Type)
+			},
+		},
+		{
+			name: "variable node with heterogeneous constant array is rejected",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string"},
+					nil,
+				),
+				generator.WithVariable("config", map[string]interface{}{
+					"items": []interface{}{"hello", 42.0, true},
+				}, nil, nil, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]interface{}{"name": "test"},
+					"data":       map[string]interface{}{"key": "value"},
+				}, nil, nil),
+			},
+			wantErr: true,
+			errMsg:  "heterogeneous array",
+		},
+		{
+			name: "variable node with includeWhen creates dependency on referenced resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"TestDeps", "v1alpha1",
+					map[string]interface{}{"name": "string", "enabled": "boolean"},
+					nil,
+				),
+				generator.WithVariable("conditionalNaming", map[string]interface{}{
+					"prefix": "${schema.spec.name + '-enabled'}",
+				}, nil, []string{"${schema.spec.enabled}"}, nil),
+				generator.WithResource("configmap", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name": "${conditionalNaming.prefix + '-cm'}",
+					},
+				}, nil, nil),
+			},
+			validateGraph: func(t *testing.T, g *Graph) {
+				dataNode := g.Resources["conditionalNaming"]
+				require.NotNil(t, dataNode)
+				assert.Equal(t, NodeTypeVariable, dataNode.Meta.Type)
+				assert.NotEmpty(t, dataNode.IncludeWhen)
+
+				cm := g.Resources["configmap"]
+				require.NotNil(t, cm)
+				assert.Equal(t, []string{"conditionalNaming"}, cm.Meta.Dependencies)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("test-deps", tt.resourceGraphDefinitionOpts...)
+			graph, err := builder.NewResourceGraphDefinition(rgd, defaultRGDConfig)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, graph)
+			if tt.validateGraph != nil {
+				tt.validateGraph(t, graph)
+			}
+		})
+	}
+}
+
+func TestInferDataSchema(t *testing.T) {
+	tests := []struct {
+		name      string
+		obj       map[string]interface{}
+		exprTypes map[string]*cel.Type
+		expected  *extv1.JSONSchemaProps
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name: "string constant",
+			obj:  map[string]interface{}{"key": "hello"},
+			expected: &extv1.JSONSchemaProps{
+				Type:       "object",
+				Properties: map[string]extv1.JSONSchemaProps{"key": {Type: "string"}},
+			},
+		},
+		{
+			name: "boolean constant",
+			obj:  map[string]interface{}{"enabled": true},
+			expected: &extv1.JSONSchemaProps{
+				Type:       "object",
+				Properties: map[string]extv1.JSONSchemaProps{"enabled": {Type: "boolean"}},
+			},
+		},
+		{
+			name: "float64 constant (JSON numbers)",
+			obj:  map[string]interface{}{"ratio": 3.14},
+			expected: &extv1.JSONSchemaProps{
+				Type:       "object",
+				Properties: map[string]extv1.JSONSchemaProps{"ratio": {Type: "number"}},
+			},
+		},
+		{
+			name: "string array",
+			obj:  map[string]interface{}{"regions": []interface{}{"us-east-1", "eu-west-1"}},
+			expected: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"regions": {Type: "array", Items: &extv1.JSONSchemaPropsOrArray{Schema: &extv1.JSONSchemaProps{Type: "string"}}},
+				},
+			},
+		},
+		{
+			name: "empty array",
+			obj:  map[string]interface{}{"empty": []interface{}{}},
+			expected: &extv1.JSONSchemaProps{
+				Type:       "object",
+				Properties: map[string]extv1.JSONSchemaProps{"empty": {Type: "array"}},
+			},
+		},
+		{
+			name: "nested map",
+			obj: map[string]interface{}{
+				"outer": map[string]interface{}{"inner": "value"},
+			},
+			expected: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"outer": {
+						Type:       "object",
+						Properties: map[string]extv1.JSONSchemaProps{"inner": {Type: "string"}},
+					},
+				},
+			},
+		},
+		{
+			name: "mixed scalar types at top level",
+			obj: map[string]interface{}{
+				"name":    "test",
+				"port":    float64(8080),
+				"enabled": true,
+			},
+			expected: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"name":    {Type: "string"},
+					"port":    {Type: "number"},
+					"enabled": {Type: "boolean"},
+				},
+			},
+		},
+		{
+			name:    "heterogeneous scalar array is rejected",
+			obj:     map[string]interface{}{"items": []interface{}{"hello", float64(42)}},
+			wantErr: true,
+			errMsg:  "heterogeneous array",
+		},
+		{
+			name:    "heterogeneous array nested in map is rejected",
+			obj:     map[string]interface{}{"outer": map[string]interface{}{"items": []interface{}{true, "no"}}},
+			wantErr: true,
+			errMsg:  "heterogeneous array",
+		},
+		{
+			name: "array of structs infers element schema",
+			obj: map[string]interface{}{
+				"endpoints": []interface{}{
+					map[string]interface{}{"name": "web", "port": float64(80)},
+					map[string]interface{}{"name": "api", "port": float64(443)},
+				},
+			},
+			expected: &extv1.JSONSchemaProps{
+				Type: "object",
+				Properties: map[string]extv1.JSONSchemaProps{
+					"endpoints": {
+						Type: "array",
+						Items: &extv1.JSONSchemaPropsOrArray{Schema: &extv1.JSONSchemaProps{
+							Type: "object",
+							Properties: map[string]extv1.JSONSchemaProps{
+								"name": {Type: "string"},
+								"port": {Type: "number"},
+							},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "array of structs with mismatched fields is rejected",
+			obj: map[string]interface{}{
+				"items": []interface{}{
+					map[string]interface{}{"name": "a"},
+					map[string]interface{}{"name": "b", "extra": true},
+				},
+			},
+			wantErr: true,
+			errMsg:  "heterogeneous array",
+		},
+		{
+			name: "expression type overrides constant",
+			obj:  map[string]interface{}{"count": "placeholder"},
+			exprTypes: map[string]*cel.Type{
+				"count": cel.IntType,
+			},
+			expected: &extv1.JSONSchemaProps{
+				Type:       "object",
+				Properties: map[string]extv1.JSONSchemaProps{"count": {Type: "integer"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exprTypes := tt.exprTypes
+			if exprTypes == nil {
+				exprTypes = make(map[string]*cel.Type)
+			}
+			result, err := inferDataSchema(tt.obj, "", exprTypes)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCelTypeToJSONSchema(t *testing.T) {
+	tests := []struct {
+		name         string
+		celType      *cel.Type
+		expectedType string
+	}{
+		{"string", cel.StringType, "string"},
+		{"bool", cel.BoolType, "boolean"},
+		{"int", cel.IntType, "integer"},
+		{"double", cel.DoubleType, "number"},
+		{"unknown falls back to object", cel.DynType, "object"},
+		{"list of strings", cel.ListType(cel.StringType), "array"},
+		{"list of ints", cel.ListType(cel.IntType), "array"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := celTypeToJSONSchema(tt.celType)
+			assert.Equal(t, tt.expectedType, schema.Type)
+			// For list types, verify Items schema is populated.
+			if tt.celType.Parameters() != nil && len(tt.celType.Parameters()) == 1 {
+				require.NotNil(t, schema.Items)
+				require.NotNil(t, schema.Items.Schema)
+			}
+		})
+	}
+}
+
+func TestUnmarshalRawMap(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{
+			name: "map data",
+			raw:  `{"prefix":"hello","port":8080}`,
+		},
+		{
+			name:    "scalar string rejected",
+			raw:     `"hello-world"`,
+			wantErr: true,
+		},
+		{
+			name:    "scalar number rejected",
+			raw:     `42`,
+			wantErr: true,
+		},
+		{
+			name:    "scalar boolean rejected",
+			raw:     `true`,
+			wantErr: true,
+		},
+		{
+			name:    "bare array rejected",
+			raw:     `[80,443,8080]`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataMap, err := unmarshalRawMap([]byte(tt.raw), "test")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, dataMap)
+		})
+	}
+}

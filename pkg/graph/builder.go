@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 	"golang.org/x/exp/maps"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	apiservercel "k8s.io/apiserver/pkg/cel"
+	"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/client-go/rest"
 	"k8s.io/kube-openapi/pkg/validation/spec"
@@ -275,6 +277,18 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	}
 	celSchemas[SchemaVarName] = schemaWithoutStatus
 
+	// Infer variable node schemas before creating the final typed environment.
+	// Variable nodes don't have K8s-backed schemas, so we infer types from their
+	// CEL expressions and constant values. This must run first so that
+	// downstream resources can reference variable node fields with full type info.
+	inferEnv, err := krocel.TypedEnvironment(celSchemas)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create inference CEL environment: %w", err)
+	}
+	if err := b.buildVariableNodeSchemas(nodes, topologicalOrder, inferEnv, celSchemas, schemaCache); err != nil {
+		return nil, err
+	}
+
 	// Create a single typed CEL environment with all schemas for compilation.
 	// TypedEnvironmentWithProvider returns both the env and the DeclTypeProvider it
 	// creates internally, avoiding duplicate schema-to-DeclType conversions.
@@ -388,12 +402,21 @@ func (b *Builder) buildRGResource(
 		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
 
-	// 2. Unmarshal the resource into a map[string]interface{}.
-	resourceObject := map[string]interface{}{}
-	if len(rgResource.Template.Raw) > 0 {
-		err := yaml.UnmarshalStrict(rgResource.Template.Raw, &resourceObject)
+	if len(rgResource.Variable.Raw) > 0 {
+		node, err := b.buildVariableNode(rgResource, order)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal resource %s: %w", rgResource.ID, err)
+			return nil, nil, fmt.Errorf("failed to build variable %q: %w", rgResource.ID, err)
+		}
+		return node, nil, nil
+	}
+
+	// 2. Unmarshal the resource into a map[string]interface{}.
+	var resourceObject map[string]interface{}
+	if len(rgResource.Template.Raw) > 0 {
+		var err error
+		resourceObject, err = unmarshalRawMap(rgResource.Template.Raw, rgResource.ID)
+		if err != nil {
+			return nil, nil, err
 		}
 	} else {
 		var err error
@@ -460,33 +483,6 @@ func (b *Builder) buildRGResource(
 		}
 	}
 
-	templateVariables := make([]*variable.ResourceField, 0, len(fieldDescriptors))
-	for _, fieldDescriptor := range fieldDescriptors {
-		templateVariables = append(templateVariables, &variable.ResourceField{
-			// Assume variables are static; we'll validate them later
-			Kind:            variable.ResourceVariableKindStatic,
-			FieldDescriptor: fieldDescriptor,
-		})
-	}
-
-	// 7. Parse ReadyWhen expressions
-	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
-	}
-
-	// 8. Parse condition expressions
-	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
-	}
-
-	// 9. Parse forEach dimensions
-	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
-	}
-
 	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
@@ -495,27 +491,122 @@ func (b *Builder) buildRGResource(
 		} else {
 			nodeType = NodeTypeExternal
 		}
-	} else if len(forEachDimensions) > 0 {
+	} else if len(rgResource.ForEach) > 0 {
 		nodeType = NodeTypeCollection
 	}
 
 	// Note that dependencies are not set here - they're extracted later in buildDependencyGraph.
-	node := &Node{
-		Meta: NodeMeta{
+	node, err := assembleNode(
+		NodeMeta{
 			ID:         rgResource.ID,
 			Index:      order,
 			Type:       nodeType,
 			GVR:        mapping.Resource,
 			Namespaced: mapping.Scope.Name() == meta.RESTScopeNameNamespace,
-			// Dependencies will be set by buildDependencyGraph
 		},
-		Template:    &unstructured.Unstructured{Object: resourceObject},
+		resourceObject,
+		fieldDescriptors,
+		rgResource,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return node, resourceSchema, nil
+}
+
+// buildVariableNode builds a node from a variable definition.
+func (b *Builder) buildVariableNode(
+	v *v1alpha1.Resource,
+	order int,
+) (*Node, error) {
+	dataMap, err := unmarshalRawMap(v.Variable.Raw, v.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Reject top-level keys that match the variable ID to prevent stuttered
+	// CEL references like ${naming.naming}.
+	if _, conflict := dataMap[v.ID]; conflict {
+		return nil, fmt.Errorf(
+			"variable %q: top-level key %q conflicts with variable ID (would require stuttered reference ${%s.%s})",
+			v.ID, v.ID, v.ID, v.ID,
+		)
+	}
+
+	fieldDescriptors, _, err := parser.ParseSchemalessResource(dataMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse variable %s: %w", v.ID, err)
+	}
+
+	nodeType := NodeTypeVariable
+	if len(v.ForEach) > 0 {
+		nodeType = NodeTypeVariableCollection
+	}
+
+	return assembleNode(
+		NodeMeta{
+			ID:    v.ID,
+			Index: order,
+			Type:  nodeType,
+		},
+		dataMap,
+		fieldDescriptors,
+		v,
+	)
+}
+
+// unmarshalRawMap strictly unmarshals raw JSON/YAML bytes into a map.
+// Returns an error if the content is not a JSON/YAML object (e.g. scalar or array).
+func unmarshalRawMap(raw []byte, id string) (map[string]interface{}, error) {
+	var content map[string]interface{}
+	if err := yaml.UnmarshalStrict(raw, &content); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal resource %s: data must be a map: %w", id, err)
+	}
+	return content, nil
+}
+
+// assembleNode builds a Node from pre-extracted field descriptors and the
+// resource definition's condition/forEach fields. It converts field descriptors
+// to resource variables, parses conditions and forEach, and assembles the Node.
+// The caller is responsible for determining the correct nodeType (including
+// collection variants) and setting it in meta.Type before calling.
+func assembleNode(
+	meta NodeMeta,
+	obj map[string]interface{},
+	fieldDescriptors []variable.FieldDescriptor,
+	rgResource *v1alpha1.Resource,
+) (*Node, error) {
+	templateVariables := make([]*variable.ResourceField, 0, len(fieldDescriptors))
+	for _, fd := range fieldDescriptors {
+		templateVariables = append(templateVariables, &variable.ResourceField{
+			// Assume variables are static; we'll validate them later
+			Kind:            variable.ResourceVariableKindStatic,
+			FieldDescriptor: fd,
+		})
+	}
+
+	readyWhen, err := parser.ParseConditionExpressions(rgResource.ReadyWhen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse readyWhen expressions: %v", err)
+	}
+
+	includeWhen, err := parser.ParseConditionExpressions(rgResource.IncludeWhen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse includeWhen expressions: %v", err)
+	}
+
+	forEachDimensions, err := parseForEachDimensions(rgResource.ForEach)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse forEach dimensions: %v", err)
+	}
+
+	return &Node{
+		Meta:        meta,
+		Template:    &unstructured.Unstructured{Object: obj},
 		Variables:   templateVariables,
 		IncludeWhen: includeWhen,
 		ReadyWhen:   readyWhen,
 		ForEach:     forEachDimensions,
-	}
-	return node, resourceSchema, nil
+	}, nil
 }
 
 // buildDependencyGraph builds the dependency graph between the nodes in the
@@ -546,7 +637,9 @@ func (b *Builder) buildDependencyGraph(
 		}
 
 		// Validate that all forEach dimensions are used in resource identity fields.
-		if len(iteratorNames) > 0 {
+		// Variable nodes are exempt: they don't create K8s resources, so there's no
+		// metadata.name requiring unique identity per iteration.
+		if len(iteratorNames) > 0 && node.Meta.Type != NodeTypeVariable && node.Meta.Type != NodeTypeVariableCollection {
 			var missing []string
 			for _, iterName := range iteratorNames {
 				if !slices.Contains(usedIterators, iterName) {
@@ -1376,6 +1469,296 @@ func getSchemaWithoutStatus(crd *extv1.CustomResourceDefinition) (*spec.Schema, 
 	return specSchema, nil
 }
 
+// buildVariableNodeSchemas infers schemas for variable nodes in topological order and
+// extends the CEL environment after each one. This supports variable-to-variable references.
+// Compilation (program creation) happens later in validateAndCompileNode.
+func (b *Builder) buildVariableNodeSchemas(
+	nodes map[string]*Node,
+	topologicalOrder []string,
+	env *cel.Env,
+	celSchemas map[string]*spec.Schema,
+	schemaCache *schema.Cache,
+) error {
+	for _, id := range topologicalOrder {
+		node, ok := nodes[id]
+		if !ok || (node.Meta.Type != NodeTypeVariable && node.Meta.Type != NodeTypeVariableCollection) {
+			continue
+		}
+
+		// 1. Extend env with forEach iterator types so that expressions
+		// referencing iterators (e.g. ${worker}) can be type-checked.
+		// forEach expressions get parsed+checked again in validateAndCompileForEach
+		// because this runs before the final typed env exists.
+		inferEnv, err := extendEnvWithIterators(env, node.ForEach)
+		if err != nil {
+			return fmt.Errorf("variable node %q: %w", id, err)
+		}
+
+		// 2. Parse and type-check CEL expressions to infer output types, then
+		// infer the node's OpenAPI schema from those types and constant values.
+		dataSchema, err := inferVariableNodeSchema(node, inferEnv)
+		if err != nil {
+			return fmt.Errorf("failed to infer schema for variable node %q: %w", id, err)
+		}
+
+		// 3. Convert to spec.Schema for the CEL environment.
+		specSchema, err := schema.ConvertJSONSchemaPropsToSpecSchema(dataSchema)
+		if err != nil {
+			return fmt.Errorf("failed to convert schema for variable node %q: %w", id, err)
+		}
+
+		// 4. For variable nodes with forEach, the exposed type is a list of the variable schema.
+		if len(node.ForEach) > 0 {
+			specSchema = schemaCache.WrapAsList(specSchema)
+		}
+
+		// 3. Store the inferred schema in celSchemas for downstream use.
+		celSchemas[id] = specSchema
+
+		// 4. Extend the CEL environment with the inferred schema so that
+		// downstream variable nodes can reference this one.
+		env, err = extendEnvWithTypedVar(env, id, specSchema)
+		if err != nil {
+			return fmt.Errorf("failed to extend CEL environment with variable node %q: %w", id, err)
+		}
+	}
+
+	return nil
+}
+
+// extendEnvWithIterators extends a CEL environment with forEach iterator
+// variables by parsing each forEach expression, type-checking it, and
+// extracting the list element type. Returns the original env unchanged if
+// there are no forEach dimensions.
+func extendEnvWithIterators(env *cel.Env, forEachDims []ForEachDimension) (*cel.Env, error) {
+	if len(forEachDims) == 0 {
+		return env, nil
+	}
+	opts := make([]cel.EnvOption, 0, len(forEachDims))
+	for _, iter := range forEachDims {
+		parsed, issues := env.Parse(iter.Expression.Original)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("forEach parse %q: %w", iter.Expression.Original, issues.Err())
+		}
+		checked, issues := env.Check(parsed)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("forEach check %q: %w", iter.Expression.Original, issues.Err())
+		}
+		elemType, err := krocel.ListElementType(checked.OutputType())
+		if err != nil {
+			return nil, fmt.Errorf("forEach iterator %q: %w", iter.Name, err)
+		}
+		opts = append(opts, cel.Variable(iter.Name, elemType))
+	}
+	return env.Extend(opts...)
+}
+
+// extendEnvWithTypedVar extends a CEL environment with a single typed variable
+// derived from a spec.Schema. It follows the same pattern as
+// buildContext.extendWithTypedVar but operates without a buildContext (used
+// during variable node schema inference, before the buildContext is created).
+func extendEnvWithTypedVar(parent *cel.Env, varName string, s *spec.Schema) (*cel.Env, error) {
+	declType := krocel.SchemaDeclTypeWithMetadata(&openapi.Schema{Schema: s}, false)
+	if declType == nil {
+		return nil, fmt.Errorf("failed to build DeclType for schema of %q", varName)
+	}
+
+	typeName := krocel.TypeNamePrefix + varName
+	declType = declType.MaybeAssignTypeName(typeName)
+
+	provider := krocel.NewDeclTypeProvider(declType)
+	provider.SetRecognizeKeywordAsFieldName(true)
+
+	registry := types.NewEmptyRegistry()
+	wrappedProvider, err := provider.WithTypeProvider(registry)
+	if err != nil {
+		return nil, err
+	}
+
+	return parent.Extend(
+		cel.Variable(varName, declType.CelType()),
+		cel.CustomTypeProvider(wrappedProvider),
+	)
+}
+
+// inferVariableNodeSchema infers an OpenAPI schema for a variable node from its template.
+// For CEL expression fields, the type is inferred from the compiled expression's output type.
+// For constant fields, the type is inferred from the YAML value.
+func inferVariableNodeSchema(node *Node, env *cel.Env) (*extv1.JSONSchemaProps, error) {
+	if node.Template == nil || node.Template.Object == nil {
+		return &extv1.JSONSchemaProps{Type: "object"}, nil
+	}
+
+	// Build expression type overrides keyed by field path.
+	exprTypes := make(map[string]*cel.Type)
+	for _, v := range node.Variables {
+		if v.Expression == nil {
+			continue
+		}
+		if v.Expression.OriginalTemplate == "" {
+			// Standalone expression: infer type from CEL output.
+			parsed, issues := env.Parse(v.Expression.Original)
+			if issues != nil && issues.Err() != nil {
+				return nil, fmt.Errorf("parse %q: %w", v.Expression.Original, issues.Err())
+			}
+			checked, issues := env.Check(parsed)
+			if issues != nil && issues.Err() != nil {
+				return nil, fmt.Errorf("check %q: %w", v.Expression.Original, issues.Err())
+			}
+			exprTypes[v.Path] = checked.OutputType()
+		} else {
+			// String template (interpolation): result is always string.
+			exprTypes[v.Path] = cel.StringType
+		}
+	}
+
+	// Recursively infer the schema from the data, using expression types where available.
+	return inferDataSchema(node.Template.Object, "", exprTypes)
+}
+
+// inferDataSchema recursively infers a JSONSchemaProps from a data value.
+// At each leaf, it checks exprTypes first (for CEL-expression-inferred types),
+// then falls back to inferring from the Go value. For arrays, it infers the
+// element schema from the first element and validates that all elements are
+// structurally identical — heterogeneous arrays are rejected.
+func inferDataSchema(data interface{}, path string, exprTypes map[string]*cel.Type) (*extv1.JSONSchemaProps, error) {
+	// If this path has an expression-inferred type, use it.
+	// DynType means the CEL type checker couldn't determine a concrete type
+	// (e.g. omit() returns dyn), so fall through to infer from the Go value.
+	if t, ok := exprTypes[path]; ok && t != cel.DynType {
+		return celTypeToJSONSchema(t), nil
+	}
+
+	switch v := data.(type) {
+	case map[string]interface{}:
+		props := make(map[string]extv1.JSONSchemaProps, len(v))
+		for key, val := range v {
+			fieldPath := joinFieldPath(path, key)
+			fieldSchema, err := inferDataSchema(val, fieldPath, exprTypes)
+			if err != nil {
+				return nil, err
+			}
+			if fieldSchema != nil {
+				props[key] = *fieldSchema
+			}
+		}
+		return &extv1.JSONSchemaProps{
+			Type:       "object",
+			Properties: props,
+		}, nil
+
+	case []interface{}:
+		if len(v) == 0 {
+			return &extv1.JSONSchemaProps{Type: "array"}, nil
+		}
+		firstSchema, err := inferDataSchema(v[0], fmt.Sprintf("%s[%d]", path, 0), exprTypes)
+		if err != nil {
+			return nil, err
+		}
+		for i := 1; i < len(v); i++ {
+			elemSchema, err := inferDataSchema(v[i], fmt.Sprintf("%s[%d]", path, i), exprTypes)
+			if err != nil {
+				return nil, err
+			}
+			if !jsonSchemaStructurallyEqual(firstSchema, elemSchema) {
+				return nil, fmt.Errorf("heterogeneous array at path %q: element [%d] differs structurally from first element", path, i)
+			}
+		}
+		return &extv1.JSONSchemaProps{
+			Type:  "array",
+			Items: &extv1.JSONSchemaPropsOrArray{Schema: firstSchema},
+		}, nil
+
+	case string:
+		return &extv1.JSONSchemaProps{Type: "string"}, nil
+	case bool:
+		return &extv1.JSONSchemaProps{Type: "boolean"}, nil
+	case float64:
+		return &extv1.JSONSchemaProps{Type: "number"}, nil
+	case int64:
+		return &extv1.JSONSchemaProps{Type: "integer"}, nil
+	default:
+		return &extv1.JSONSchemaProps{}, nil
+	}
+}
+
+// joinFieldPath builds a dotted field path, matching the format used by
+// parser.ParseSchemalessResource so expression type lookups align.
+func joinFieldPath(base, field string) string {
+	if field == "" || strings.Contains(field, ".") {
+		return base + "[\"" + field + "\"]"
+	}
+	if base == "" {
+		return field
+	}
+	return base + "." + field
+}
+
+// jsonSchemaStructurallyEqual reports whether two JSON schemas have the same
+// type structure (type names and nested property/item shapes). It does not
+// compare descriptions, defaults, or other non-structural metadata.
+func jsonSchemaStructurallyEqual(a, b *extv1.JSONSchemaProps) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Type != b.Type {
+		return false
+	}
+	// Compare object properties.
+	if len(a.Properties) != len(b.Properties) {
+		return false
+	}
+	for key, aProp := range a.Properties {
+		bProp, ok := b.Properties[key]
+		if !ok {
+			return false
+		}
+		if !jsonSchemaStructurallyEqual(&aProp, &bProp) {
+			return false
+		}
+	}
+	// Compare array items.
+	if (a.Items == nil) != (b.Items == nil) {
+		return false
+	}
+	if a.Items != nil && b.Items != nil {
+		return jsonSchemaStructurallyEqual(a.Items.Schema, b.Items.Schema)
+	}
+	return true
+}
+
+// celTypeToJSONSchema converts a single CEL type to a JSONSchemaProps.
+// Optional types are unwrapped to their inner type (optional means the field
+// may be absent, not a different value type).
+func celTypeToJSONSchema(t *cel.Type) *extv1.JSONSchemaProps {
+	switch t {
+	case cel.StringType:
+		return &extv1.JSONSchemaProps{Type: "string"}
+	case cel.BoolType:
+		return &extv1.JSONSchemaProps{Type: "boolean"}
+	case cel.IntType:
+		return &extv1.JSONSchemaProps{Type: "integer"}
+	case cel.DoubleType:
+		return &extv1.JSONSchemaProps{Type: "number"}
+	default:
+		if params := t.Parameters(); len(params) == 1 {
+			// Unwrap optional_type(T) → T.
+			if strings.HasPrefix(t.String(), "optional_type(") {
+				return celTypeToJSONSchema(params[0])
+			}
+			// list(T) → array with items schema.
+			return &extv1.JSONSchemaProps{
+				Type:  "array",
+				Items: &extv1.JSONSchemaPropsOrArray{Schema: celTypeToJSONSchema(params[0])},
+			}
+		}
+		return &extv1.JSONSchemaProps{Type: "object"}
+	}
+}
+
 // collectNodeSchemas builds a map of node IDs to their OpenAPI schemas.
 // Collections (forEach) and external collections (selector) are wrapped as
 // list types so other nodes can reference them as arrays and use CEL list functions.
@@ -1383,7 +1766,11 @@ func collectNodeSchemas(c *schema.Cache, nodes map[string]*Node, nodeSchemas map
 	result := make(map[string]*spec.Schema)
 	for id, node := range nodes {
 		if sch, ok := nodeSchemas[id]; ok {
-			if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
+			if node.Meta.Type == NodeTypeVariable || node.Meta.Type == NodeTypeVariableCollection {
+				// Variable node schemas are inferred by buildVariableNodeSchemas,
+				// not from K8s OpenAPI schemas.
+				continue
+			} else if node.Meta.Type == NodeTypeCollection || node.Meta.Type == NodeTypeExternalCollection {
 				result[id] = c.WrapAsList(sch)
 			} else {
 				result[id] = sch

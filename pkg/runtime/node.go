@@ -249,6 +249,10 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 		result, err = n.hardResolveSingleResource(vars)
 	case graph.NodeTypeExternalCollection:
 		result, err = n.hardResolveSingleResource(vars)
+	case graph.NodeTypeVariable:
+		result, err = n.hardResolveSingleResource(n.templateVars)
+	case graph.NodeTypeVariableCollection:
+		result, err = n.hardResolveCollection(vars, false)
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))
 	}
@@ -257,9 +261,19 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 		return nil, err
 	}
 
+	// Collections (real K8s resources) must have unique identities to avoid
+	// applying two objects with the same name/namespace. Variable collections
+	// have no K8s identity, so skip.
+	if n.Spec.Meta.Type == graph.NodeTypeCollection {
+		if err = validateUniqueIdentities(result); err != nil {
+			return nil, fmt.Errorf("node %q identity collision: %w", n.Spec.Meta.ID, err)
+		}
+	}
+
 	// Normalize namespaces unless an external collection is intentionally using
 	// an empty namespace to list across all namespaces.
-	if n.Spec.Meta.Type != graph.NodeTypeInstance && n.Spec.Meta.Type != graph.NodeTypeExternalCollection {
+	if n.Spec.Meta.Type != graph.NodeTypeInstance && n.Spec.Meta.Type != graph.NodeTypeExternalCollection &&
+		n.Spec.Meta.Type != graph.NodeTypeVariable && n.Spec.Meta.Type != graph.NodeTypeVariableCollection {
 		if err = n.normalizeNamespaces(result); err != nil {
 			return nil, err
 		}
@@ -292,7 +306,7 @@ func (n *Node) DeleteTargets() ([]*unstructured.Unstructured, error) {
 			return orderedIntersection(n.observed, desired), nil
 		}
 		return n.observed, nil
-	case graph.NodeTypeInstance, graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
+	case graph.NodeTypeInstance, graph.NodeTypeExternal, graph.NodeTypeExternalCollection, graph.NodeTypeVariable, graph.NodeTypeVariableCollection:
 		panic(fmt.Sprintf("DeleteTargets called for node type %v", n.Spec.Meta.Type))
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))

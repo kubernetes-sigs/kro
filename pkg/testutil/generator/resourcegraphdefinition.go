@@ -158,6 +158,32 @@ func WithScope(scope krov1alpha1.ResourceScope) SchemaOption {
 	}
 }
 
+// WithVariable adds a variable to the ResourceGraphDefinition.
+// Variables compute values without creating Kubernetes resources.
+func WithVariable(
+	id string,
+	variable map[string]interface{},
+	readyWhen []string,
+	includeWhen []string,
+	forEach []krov1alpha1.ForEachDimension,
+) ResourceGraphDefinitionOption {
+	return func(rgd *krov1alpha1.ResourceGraphDefinition) {
+		raw, err := json.Marshal(variable)
+		if err != nil {
+			panic(err)
+		}
+		rgd.Spec.Resources = append(rgd.Spec.Resources, &krov1alpha1.Resource{
+			ID:          id,
+			ReadyWhen:   readyWhen,
+			IncludeWhen: includeWhen,
+			ForEach:     forEach,
+			Variable: runtime.RawExtension{
+				Raw: raw,
+			},
+		})
+	}
+}
+
 // WithResourceCollection adds a collection resource with forEach iterators to the ResourceGraphDefinition.
 func WithResourceCollection(
 	id string,

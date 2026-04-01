@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -264,15 +265,13 @@ func (n *Node) templateVarsForPaths(paths []string) []*variable.ResourceField {
 		return n.templateVars
 	}
 
-	pathSet := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		pathSet[p] = struct{}{}
-	}
-
 	result := make([]*variable.ResourceField, 0, len(n.templateVars))
 	for _, v := range n.templateVars {
-		if _, ok := pathSet[v.Path]; ok {
-			result = append(result, v)
+		for _, p := range paths {
+			if v.Path == p || strings.HasPrefix(v.Path, p+".") {
+				result = append(result, v)
+				break
+			}
 		}
 	}
 	return result

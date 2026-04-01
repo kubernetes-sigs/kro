@@ -140,7 +140,7 @@ ifeq ($(WHAT),integration)
 		-coverpkg=github.com/kubernetes-sigs/kro/pkg/... \
 		./test/integration/suites/...
 else ifeq ($(WHAT),unit)
-	go test -race -v ./pkg/... -coverprofile unit-cover.out
+	go test -race ./pkg/... -coverprofile unit-cover.out
 else ifeq ($(WHAT),upgrade)
 	KRO_UPGRADE_FROM_VERSION=$(KRO_UPGRADE_FROM_VERSION) \
 	KRO_UPGRADE_MODE=$(MODE) \

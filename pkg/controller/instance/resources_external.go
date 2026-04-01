@@ -27,6 +27,93 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
 
+// observeExternalRef fetches the external ref and calls SetObserved on the node
+// so that downstream CEL expressions can reference its fields. Unlike
+// processExternalRefNode it skips watch registration and readiness checks,
+// making it safe to call during deletion.
+// Returns true if the ref was found and observed, false if it was not found.
+func (c *Controller) observeExternalRef(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+	desired *unstructured.Unstructured,
+) (bool, error) {
+	ri := resourceClientFor(rcx, node.Spec.Meta, desired.GetNamespace())
+	actual, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("external ref get %s %s/%s: %w",
+			desired.GroupVersionKind().String(), desired.GetNamespace(), desired.GetName(), err)
+	}
+	node.SetObserved([]*unstructured.Unstructured{actual})
+	return true, nil
+}
+
+// observeExternalCollection lists the external collection and calls SetObserved
+// on the node so that downstream CEL expressions can iterate over its items.
+// Unlike processExternalCollectionNode it skips watch registration and readiness
+// checks, making it safe to call during deletion.
+func (c *Controller) observeExternalCollection(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+) error {
+	id := node.Spec.Meta.ID
+	nodeMeta := node.Spec.Meta
+
+	// Resolve the full template to get the selector. This is needed because
+	// GetDesiredIdentity returns nil for ExternalCollection nodes (they have no
+	// name-based identity). The selector typically only references schema/instance
+	// fields so resolveFull should succeed even during deletion.
+	desired, err := node.GetDesired()
+	if err != nil || len(desired) == 0 {
+		// Can't resolve selector; leave observed nil and let downstream DataPending
+		// handling take over (same as today for unresolvable nodes).
+		return nil
+	}
+
+	var selector labels.Selector
+	selectorRaw, found, err := unstructured.NestedMap(desired[0].Object, "metadata", "selector")
+	if err != nil || !found {
+		selector = labels.Everything()
+	} else {
+		ls := &metav1.LabelSelector{}
+		if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
+			return fmt.Errorf("failed to convert selector for %s: %w", id, err)
+		}
+		selector, err = metav1.LabelSelectorAsSelector(ls)
+		if err != nil {
+			return fmt.Errorf("invalid label selector for %s: %w", id, err)
+		}
+	}
+
+	ns := desired[0].GetNamespace()
+	if !nodeMeta.Namespaced {
+		ns = ""
+	}
+
+	var list *unstructured.UnstructuredList
+	if ns != "" {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	} else {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("failed to list external collection %s during deletion: %w", id, err)
+	}
+
+	items := make([]*unstructured.Unstructured, len(list.Items))
+	for i := range list.Items {
+		items[i] = &list.Items[i]
+	}
+	node.SetObserved(items)
+	return nil
+}
+
 // processExternalRefNode reads an external ref object and updates node state.
 // Returns the resulting NodeState; the caller registers it.
 func (c *Controller) processExternalRefNode(

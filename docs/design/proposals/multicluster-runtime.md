@@ -651,14 +651,383 @@ spec:
 
 1. **KREP-013 first**: Ship MCR integration with `ClusterClientFactory` and
    multicluster reconciliation. This is the foundation.
-2. **KREP-012 on top**: Add `Target` field to `Resource` struct, extend
+2. **Selective distribution**: Add `kro.run/distribute` label support to
+   the RGD controller's CRD distribution logic. This is a small change
+   on top of step 1.
+3. **KREP-012 on top**: Add `Target` field to `Resource` struct, extend
    `ClusterClientFactory` with on-demand engagement, update instance
-   controller to resolve per-resource targets. The runtime plumbing is
-   already in place.
+   controller to resolve per-resource targets.
+4. **Meta RGD composition**: Add originating cluster annotation propagation,
+   implicit Target resolution, and cross-cluster finalizer-based cleanup.
+   This builds on steps 2 and 3.
 
 This ordering avoids duplicate work. KREP-012 implemented standalone would
 need its own cluster client management, Secret watching, and connection
-lifecycle - all of which KREP-013 already provides.
+lifecycle - all of which KREP-013 already provides. Meta RGD composition
+is the final layer that combines selective distribution with Target
+resolution to enable the hub composition / spoke execution model.
+
+## Selective RGD Distribution and Meta RGD Composition
+
+### The Problem
+
+KREP-013's default behavior distributes all RGD CRDs to all spoke clusters.
+This is appropriate for flat RGD sets, but breaks down with **composed RGDs**
+(RGD chaining). Consider a platform team that defines:
+
+- `Database` RGD - manages PostgreSQL StatefulSet, ConfigMap, Service
+- `WebApplication` RGD - manages Deployment, Service, Ingress
+- `FullStackApp` RGD (meta) - composes `Database` and `WebApplication`
+  instances, wiring them together
+
+If all three CRDs are distributed to spokes, users could create `Database` or
+`WebApplication` instances directly, bypassing the intended abstraction. The
+platform team wants spoke users to only see `FullStackApp` - the lower-level
+RGDs are implementation details that should remain hub-internal.
+
+### Distribution Policy
+
+RGDs gain a distribution policy via a label that controls whether their CRDs
+are distributed to spoke clusters:
+
+```yaml
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: full-stack-app
+  labels:
+    kro.run/distribute: "true"    # CRD distributed to spokes
+spec:
+  # ...
+---
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: database
+  labels:
+    kro.run/distribute: "false"   # CRD stays on hub only. Defaults to true.
+spec:
+  # ...
+```
+
+The default value of `kro.run/distribute` is `"true"` to preserve backward
+compatibility - all RGDs are distributed unless explicitly opted out. Platform
+teams mark lower-level RGDs as `"false"` to keep them hub-internal.
+
+The RGD controller checks this label during CRD distribution:
+
+```go
+func (c *RGDController) distributeCRD(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition, crd *apiextensionsv1.CustomResourceDefinition) error {
+    if rgd.Labels["kro.run/distribute"] == "false" {
+        // Only apply CRD to the hub cluster
+        return c.applyLocalCRD(ctx, crd)
+    }
+    // Apply to hub + all engaged spoke clusters
+    return c.applyGlobalCRD(ctx, crd)
+}
+```
+
+### Hub Composition, Spoke Execution Model
+
+When a meta RGD's instance is created on a spoke, the reconciliation splits
+across hub and spoke:
+
+1. **Spoke**: User creates a `FullStackApp` instance
+2. **Hub**: Instance controller picks up the reconcile (via MCR)
+3. **Hub**: Creates `Database` and `WebApplication` instances **on the hub**
+   (their CRDs only exist on the hub)
+4. **Hub**: The `Database` and `WebApplication` instance controllers reconcile,
+   creating leaf resources (StatefulSet, Deployment, Service, etc.)
+5. **Spoke**: Leaf resources are targeted to the **originating spoke cluster**
+   via KREP-012 Target resolution
+
+This creates a two-tier reconciliation model:
+
+```
+Spoke Cluster                          Hub Cluster
+  FullStackApp instance ──────────────> Instance Controller
+  (user-facing CRD)                        |
+                                           ├── Database instance (hub-only CRD)
+                                           │     └── StatefulSet ──────> Spoke
+                                           │     └── Service ──────────> Spoke
+                                           │     └── ConfigMap ────────> Spoke
+                                           │
+                                           └── WebApplication instance (hub-only CRD)
+                                                 └── Deployment ───────> Spoke
+                                                 └── Service ──────────> Spoke
+                                                 └── Ingress ──────────> Spoke
+```
+
+### Implicit Target: Originating Cluster
+
+For this model to work, leaf resources in hub-only RGDs need to know which
+spoke cluster to target. When a meta RGD instance is created on a spoke,
+the originating cluster name is propagated through the composition chain.
+
+The meta RGD's instance controller sets the originating cluster in the
+context. When it creates child RGD instances on the hub, it annotates them
+with the originating cluster:
+
+```go
+const OriginatingClusterAnnotation = "kro.run/originating-cluster"
+
+// In the meta RGD's instance controller, when creating a child RGD instance
+// on the hub:
+func (c *Controller) createChildInstance(rcx *ReconcileContext, node *graph.Node) error {
+    obj := node.Object.DeepCopy()
+
+    // Stamp the originating cluster so child controllers know where
+    // to place leaf resources
+    annotations := obj.GetAnnotations()
+    if annotations == nil {
+        annotations = map[string]string{}
+    }
+    annotations[OriginatingClusterAnnotation] = rcx.ClusterName
+    obj.SetAnnotations(annotations)
+
+    // Create on hub (empty cluster name = local)
+    hubClient, _, _ := c.clientFactory.GetClients("")
+    _, err := hubClient.Resource(node.GVR).Namespace(obj.GetNamespace()).
+        Apply(rcx.Ctx, obj.GetName(), obj, metav1.ApplyOptions{FieldManager: "kro"})
+    return err
+}
+```
+
+The child RGD's instance controller reads this annotation and uses it as
+the implicit Target for leaf resources that don't have an explicit Target:
+
+```go
+func (c *Controller) reconcileResource(rcx *ReconcileContext, node *graph.Node) error {
+    client := rcx.Client  // Default: same cluster as instance (hub)
+
+    if node.Target != nil {
+        // Explicit target from RGD spec (KREP-012)
+        targetClient, err := c.clientFactory.GetOrCreate(rcx.Ctx,
+            node.Target.Cluster.KubeconfigSecretName,
+            node.Target.Cluster.KubeconfigSecretNamespace)
+        if err != nil {
+            return err
+        }
+        client = targetClient
+    } else if origin := rcx.Instance.GetAnnotations()[OriginatingClusterAnnotation]; origin != "" {
+        // Implicit target: originating spoke cluster
+        targetClient, _, err := c.clientFactory.GetClients(origin)
+        if err != nil {
+            return err
+        }
+        client = targetClient
+    }
+
+    return c.applyResource(rcx, node, client)
+}
+```
+
+This means hub-only RGDs don't need explicit Target fields - when composed
+by a meta RGD, their leaf resources automatically go to the spoke that
+triggered the composition. If used standalone on the hub (e.g., for testing),
+they create resources locally as usual.
+
+### Status Propagation
+
+Status flows back up the chain:
+
+1. Leaf resources report status on the spoke (standard Kubernetes)
+2. Hub-only RGD instance controller reads leaf status from the spoke
+   (via `ClusterClientFactory`) and updates the hub instance's status
+3. Meta RGD instance controller reads child instance status from the hub
+   and updates the spoke instance's status
+
+The existing CEL-based status propagation (`${database.status.connectionString}`)
+works unchanged - the only difference is which cluster the status is read from.
+
+### Example: Full Platform Stack
+
+```yaml
+# Hub-only: not distributed to spokes
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: database
+  labels:
+    kro.run/distribute: "false"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: Database
+    spec:
+      name: string
+      storage: string | default="10Gi"
+    status:
+      connectionString: string
+      ready: boolean
+  resources:
+    - id: statefulset
+      template:
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            spec:
+              containers:
+              - name: postgres
+                image: postgres:16
+          volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              resources:
+                requests:
+                  storage: ${schema.spec.storage}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          selector:
+            app: ${schema.spec.name}
+          ports:
+          - port: 5432
+---
+# Hub-only: not distributed to spokes
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: web-application
+  labels:
+    kro.run/distribute: "false"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WebApplication
+    spec:
+      name: string
+      image: string
+      dbHost: string
+    status:
+      endpoint: string
+      ready: boolean
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}
+          template:
+            spec:
+              containers:
+              - name: app
+                image: ${schema.spec.image}
+                env:
+                - name: DB_HOST
+                  value: ${schema.spec.dbHost}
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}
+        spec:
+          selector:
+            app: ${schema.spec.name}
+          ports:
+          - port: 80
+            targetPort: 8080
+---
+# Meta RGD: distributed to spokes - the only CRD spoke users see
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: full-stack-app
+  labels:
+    kro.run/distribute: "true"
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: FullStackApp
+    spec:
+      appName: string
+      appImage: string
+    status:
+      dbConnectionString: string
+      appEndpoint: string
+      ready: boolean
+  resources:
+    - id: database
+      template:
+        apiVersion: v1alpha1
+        kind: Database
+        metadata:
+          name: ${schema.spec.appName + "-db"}
+        spec:
+          name: ${schema.spec.appName + "-db"}
+    - id: webapp
+      template:
+        apiVersion: v1alpha1
+        kind: WebApplication
+        metadata:
+          name: ${schema.spec.appName}
+        spec:
+          name: ${schema.spec.appName}
+          image: ${schema.spec.appImage}
+          dbHost: ${database.status.connectionString}
+```
+
+On a spoke cluster, a user only sees and interacts with `FullStackApp`:
+
+```yaml
+# Created by a user on spoke-cluster-1
+apiVersion: v1alpha1
+kind: FullStackApp
+metadata:
+  name: my-app
+  namespace: team-a
+spec:
+  appName: my-app
+  appImage: registry.example.com/my-app:v1.2.3
+```
+
+The result: a PostgreSQL StatefulSet, app Deployment, and Services all
+running on spoke-cluster-1 - orchestrated through hub-only composition
+RGDs that the spoke user never sees.
+
+### Considerations
+
+**Namespace mapping**: When leaf resources are created on a spoke, they use
+the namespace from the template. The originating instance's namespace should
+be used as the default if the template doesn't specify one. This may require
+namespace existence checks on the spoke.
+
+**Garbage collection**: Deleting the meta RGD instance on the spoke triggers
+deletion of child RGD instances on the hub (standard owner reference
+semantics). Child instance controllers then delete leaf resources on the
+spoke. Cross-cluster owner references don't exist in Kubernetes, so this
+relies on KRO's own finalizer-based cleanup rather than native GC.
+
+**Failure isolation**: If a spoke is unreachable, the hub-side composition
+still runs - child RGD instances are created on the hub. Leaf resource
+creation to the spoke will fail and be retried. The meta RGD instance
+status on the spoke will show degraded state once the spoke is reachable
+again.
+
+**Circular composition**: KRO's existing DAG validation prevents circular
+dependencies within an RGD. Cross-RGD circular composition (A composes B,
+B composes A) is prevented by the schema resolver - an RGD cannot reference
+a CRD that doesn't yet exist. However, this should be explicitly validated
+and surfaced as a clear error.
 
 ## Addressing Concerns
 
@@ -734,6 +1103,10 @@ should establish the practical ceiling. Mitigation strategies:
 - `ClusterClientFactory` for per-cluster clients
 - Cluster-aware instance reconciliation with same-cluster locality
 - CRD distribution from hub to spoke clusters
+- Selective RGD distribution via `kro.run/distribute` label
+- Meta RGD composition with hub composition / spoke execution model
+- Originating cluster propagation for implicit Target resolution
+- Cross-cluster finalizer-based garbage collection for composed instances
 - `--enable-multicluster` opt-in flag and related CLI configuration
 - E2E test infrastructure using kind
 
@@ -741,8 +1114,8 @@ should establish the practical ceiling. Mitigation strategies:
 
 The following are out of scope for this KREP but may be addressed in future:
 
-- Cross-cluster resource dependencies within a single instance
-- Per-cluster RGD targeting (selectively distributing RGDs to specific clusters)
+- Per-cluster RGD targeting (distributing specific RGDs to specific clusters
+  based on cluster labels/selectors, as opposed to all-or-nothing distribution)
 - Cluster API provider for cluster discovery
 - API server version compatibility checking
 - Performance benchmarks and optimization for large fleet sizes (50+ clusters)
@@ -756,8 +1129,8 @@ The following are out of scope and not planned:
 
 ### Non-Goals
 
-- Change the RGD API or schema
-- Require users to modify existing RGDs for multicluster support
+- Require users to modify existing RGDs for multicluster support (distribution
+  defaults to enabled; composition features are opt-in)
 - Replace specialized multi-cluster tools (Admiralty, Liqo, etc.)
 - Provide cluster fleet management beyond resource orchestration
 
@@ -800,6 +1173,13 @@ This change is fully backward compatible:
 - Cluster remove: delete a spoke Secret, verify KRO handles disengagement
   gracefully
 - RGD update: modify RGD on hub, verify CRD updates propagate to all spokes
+- Selective distribution: create RGD with `kro.run/distribute: "false"`, verify
+  CRD exists on hub only, not on spokes
+- Meta RGD composition: create meta RGD (distributed) composing hub-only RGDs,
+  create instance on spoke, verify child RGD instances on hub, verify leaf
+  resources on originating spoke
+- Composition cleanup: delete meta RGD instance on spoke, verify child
+  instances deleted on hub, verify leaf resources deleted on spoke
 
 ## POC
 
@@ -809,3 +1189,4 @@ A proof-of-concept implementation is available at
 The POC demonstrates the full integration: MCR manager setup, multicluster
 dynamic controller, cluster client factory, cluster-aware instance
 reconciliation, and e2e test infrastructure with kind clusters.
+  

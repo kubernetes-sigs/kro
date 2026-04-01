@@ -77,49 +77,35 @@ func (c *Controller) planNodesForDeletion(
 			continue
 		}
 
-		// External nodes are never deleted by the controller. Observe them now so
-		// downstream managed nodes can resolve their identity from the CEL context.
-		// Both NodeTypeExternal and NodeTypeExternalCollection must be handled here,
-		// before GetDesiredIdentity, because ExternalCollection returns nil from
-		// identity resolution (it has no name-based identity).
-		switch nodeMeta.Type {
-		case graph.NodeTypeExternal:
-			desired, err := node.GetDesiredIdentity()
-			if err != nil || len(desired) == 0 {
-				state.SetSkipped()
-				continue
-			}
-			if _, err := c.observeExternalRef(rcx, node, desired[0]); err != nil {
-				state.SetError(err)
-				return nil, err
-			}
-			state.SetSkipped()
-			continue
+		isExternal := nodeMeta.Type == graph.NodeTypeExternal || nodeMeta.Type == graph.NodeTypeExternalCollection
 
-		case graph.NodeTypeExternalCollection:
-			if err := c.observeExternalCollection(rcx, node); err != nil {
-				state.SetError(err)
-				return nil, err
-			}
-			state.SetSkipped()
-			continue
-		}
-
-		// Resolve identity up front so deletion never blocks on readiness or full template
-		// resolution. If we can't get a stable identity, we treat the node as deleted.
+		// Resolve identity without readiness gating. External nodes use this to
+		// locate the resource for observation; managed nodes use it as the deletion target.
 		desired, err := node.GetDesiredIdentity()
 		if err != nil {
-			if runtime.IsDataPending(err) {
-				// If identity can't be resolved during deletion, treat it as deleted. There is
-				// a case where identity depends on another resource that lost some data and we
-				// can't resolve it anymore. For that case we need a better deletion/versioning/tracking
-				// mechanism - as of today it is unsolved.
+			if !isExternal && runtime.IsDataPending(err) {
+				// Identity depends on a resource that lost its data. Treat as deleted —
+				// there is no better mechanism today for tracking identity across data loss.
 				state.SetDeleted()
 				continue
 			}
 			state.SetError(err)
 			return nil, err
 		}
+
+		// External nodes are never deleted by the controller. Observe them so
+		// downstream managed nodes can resolve their identity from the CEL context.
+		if isExternal {
+			if len(desired) > 0 {
+				if err := c.observeExternal(rcx, node, desired[0]); err != nil {
+					state.SetError(err)
+					return nil, err
+				}
+			}
+			state.SetSkipped()
+			continue
+		}
+
 		if len(desired) == 0 {
 			state.SetDeleted()
 			continue

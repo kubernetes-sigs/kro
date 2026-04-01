@@ -54,9 +54,15 @@ type Node struct {
 	resourceSchema *spec.Schema
 }
 
-var identityPaths = []string{
-	"metadata.name",
-	"metadata.namespace",
+// identityPaths are the template field path prefixes resolved in identity mode,
+// keyed by node type. Only paths relevant to identifying the resource for
+// observation or deletion are included — full template resolution is not needed.
+var identityPaths = map[graph.NodeType][]string{
+	// Single resources are identified by name and namespace.
+	graph.NodeTypeResource: {"metadata.name", "metadata.namespace"},
+	graph.NodeTypeExternal: {"metadata.name", "metadata.namespace"},
+	// External collections have no name; the selector is their identity.
+	graph.NodeTypeExternalCollection: {"metadata.namespace", "metadata.selector"},
 }
 
 // resolveMode controls how template resolution behaves.
@@ -217,7 +223,7 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	// Select vars based on mode.
 	vars := n.templateVars
 	if mode == resolveIdentity {
-		vars = n.templateVarsForPaths(identityPaths)
+		vars = n.templateVarsForPaths(identityPaths[n.Spec.Meta.Type])
 	}
 
 	switch n.Spec.Meta.Type {
@@ -232,10 +238,6 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
 		result, err = n.hardResolveSingleResource(vars)
 	case graph.NodeTypeExternalCollection:
-		if mode == resolveIdentity {
-			// External collections have no identity to resolve; they use selectors.
-			return nil, nil
-		}
 		result, err = n.hardResolveSingleResource(vars)
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))

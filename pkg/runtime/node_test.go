@@ -1986,6 +1986,22 @@ func (b *testNodeBuilder) withTemplateVar(path string, expr string) *testNodeBui
 	return b
 }
 
+func (b *testNodeBuilder) withTemplateVarRefs(path string, expr string, refs ...string) *testNodeBuilder {
+	compiled := mustCompileTestExpr(expr)
+	compiled.References = refs
+	b.templateExprs = append(b.templateExprs, &expressionEvaluationState{
+		Expression: compiled,
+		Kind:       variable.ResourceVariableKindStatic,
+	})
+	b.templateVars = append(b.templateVars, &variable.ResourceField{
+		FieldDescriptor: variable.FieldDescriptor{
+			Path:       path,
+			Expression: compiled,
+		},
+	})
+	return b
+}
+
 // withTemplate sets the template.
 func (b *testNodeBuilder) withTemplate(obj map[string]any) *testNodeBuilder {
 	b.template = &unstructured.Unstructured{Object: obj}
@@ -2432,13 +2448,18 @@ func TestNode_TemplateVarsForPaths(t *testing.T) {
 		},
 		{
 			name:      "filters to identity paths",
-			paths:     identityPaths,
+			paths:     identityPaths[graph.NodeTypeResource],
 			wantPaths: []string{"metadata.name", "metadata.namespace"},
 		},
 		{
 			name:      "returns empty slice for unknown paths",
 			paths:     []string{"status.ready"},
 			wantPaths: nil,
+		},
+		{
+			name:      "prefix match includes nested paths",
+			paths:     []string{"metadata.namespace", "metadata.selector"},
+			wantPaths: []string{"metadata.namespace"},
 		},
 	}
 
@@ -2576,12 +2597,73 @@ func TestNode_GetDesiredIdentity(t *testing.T) {
 			},
 		},
 		{
-			name: "external collection has no desired identity",
+			name: "external collection resolves static selector as identity",
 			node: func() *Node {
-				return newTestNode("external", graph.NodeTypeExternalCollection).build()
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Pod",
+						"metadata": map[string]any{
+							"namespace": "default",
+							"selector":  map[string]any{"app": "foo"},
+						},
+					}).
+					build()
 			},
 			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
 				require.NoError(t, err)
+				require.Len(t, result, 1)
+				assert.Equal(t, "default", result[0].GetNamespace())
+				sel, _, _ := unstructured.NestedStringMap(result[0].Object, "metadata", "selector")
+				assert.Equal(t, map[string]string{"app": "foo"}, sel)
+			},
+		},
+		{
+			name: "external collection resolves CEL selector as identity",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).
+					withObserved(map[string]any{"spec": map[string]any{"app": "bar"}}).
+					build()
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Pod",
+						"metadata": map[string]any{
+							"namespace": "default",
+							"selector":  map[string]any{"app": "${schema.spec.app}"},
+						},
+					}).
+					withTemplateVarRefs("metadata.selector.app", "schema.spec.app", "schema").
+					withDep(schema).
+					build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.NoError(t, err)
+				require.Len(t, result, 1)
+				sel, _, _ := unstructured.NestedStringMap(result[0].Object, "metadata", "selector")
+				assert.Equal(t, map[string]string{"app": "bar"}, sel)
+			},
+		},
+		{
+			name: "external collection returns DataPending when selector dep is unobserved",
+			node: func() *Node {
+				schema := newTestNode(graph.InstanceNodeID, graph.NodeTypeInstance).build() // no observed
+				return newTestNode("external", graph.NodeTypeExternalCollection).
+					withTemplate(map[string]any{
+						"apiVersion": "v1",
+						"kind":       "Pod",
+						"metadata": map[string]any{
+							"namespace": "default",
+							"selector":  map[string]any{"app": "${schema.spec.app}"},
+						},
+					}).
+					withTemplateVarRefs("metadata.selector.app", "schema.spec.app", "schema").
+					withDep(schema).
+					build()
+			},
+			validate: func(t *testing.T, result []*unstructured.Unstructured, err error) {
+				require.Error(t, err)
+				assert.True(t, IsDataPending(err))
 				assert.Nil(t, result)
 			},
 		},

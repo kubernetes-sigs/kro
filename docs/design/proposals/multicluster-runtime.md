@@ -420,9 +420,19 @@ health probe system.
 (`controller-runtime/pkg/metrics`), GraphRevision controller
 (`ctrl.NewControllerManagedBy` builder).
 
+**Medium-high coupling** - `DynamicController` has bidirectional coupling
+with the instance controller via the `WatchCoordinator`: the DynamicController
+dispatches reconcile events to instance controllers, and instance controllers
+feed `WatchRequest`s back to the `WatchCoordinator` (which manages informers
+via `WatchManager`). The coordinator maintains per-instance watch state,
+reverse indexes for event routing, and handles informer lifecycle — all of
+which are cluster-scoped. In multicluster mode, the `WatchManager` needs
+per-cluster informers (watching child resources on the correct spoke), and
+the `WatchCoordinator`'s indexes need to be cluster-aware (routing events
+from spoke A only to instances on spoke A).
+
 **Low coupling** - Instance controller (already uses custom abstractions,
-resolves graphs from the in-memory `revisions.Registry`),
-`DynamicController` (only needs `Runnable` interface and `ctrl.Request` type).
+resolves graphs from the in-memory `revisions.Registry`).
 
 ### Required Changes
 
@@ -486,12 +496,36 @@ The only change is updating `SetupWithManager()` to accept the kro manager
 interface and use the appropriate builder pattern, consistent with the RGD
 controller restructuring.
 
-#### 4. DynamicController Abstraction
+#### 4. DynamicController and Watch System Abstraction
 
-The `DynamicController` currently implements controller-runtime's `Runnable`
-interface and uses `ctrl.Request`. For multicluster, the
-`MulticlusterDynamicController` wraps per-cluster instances. Both need to
-satisfy a common interface:
+The `DynamicController` has deeper coupling than just the `Runnable` interface
+and `ctrl.Request` type. Instance controllers feed `WatchRequest`s back to
+the `WatchCoordinator`, which manages per-GVR informers via the
+`WatchManager`. This creates a bidirectional dependency:
+
+```
+DynamicController → instance controller (dispatches reconcile events)
+instance controller → WatchCoordinator → WatchManager (feeds back watch requests)
+```
+
+The `WatchManager` creates informers using `metadatainformer.NewFilteredMetadataInformer`
+with a single metadata client. The `WatchCoordinator` maintains per-instance
+watch state and reverse indexes (scalar + collection) for event routing — all
+currently scoped to a single cluster.
+
+For multicluster, the watch system needs cluster awareness:
+
+- **`WatchManager`**: needs per-cluster metadata clients and per-cluster
+  informers. A child resource watch on spoke A must use spoke A's metadata
+  client, not the hub's. The `createInformer` func needs a cluster parameter.
+- **`WatchCoordinator`**: the reverse indexes (`scalarIndex`, `collectionIndex`)
+  must include cluster identity so events from spoke A route only to instances
+  on spoke A. The `instanceKey` struct gains a `clusterName` field.
+- **`EnqueueFunc`**: the callback `func(parentGVR, instance)` needs to include
+  cluster name so the DynamicController enqueues to the correct per-cluster
+  work queue.
+
+The abstraction interface for the RGD controller:
 
 ```go
 // pkg/dynamiccontroller/interface.go
@@ -502,8 +536,14 @@ type Interface interface {
         parentGVK schema.GroupVersionKind, handler Handler,
         childGVRs ...schema.GroupVersionResource) error
     Deregister(ctx context.Context, gvr schema.GroupVersionResource) error
+    Coordinator() *WatchCoordinator
 }
 ```
+
+The `MulticlusterDynamicController` wraps per-cluster `DynamicController`
+instances, each with its own `WatchManager` and cluster-scoped informers.
+The `WatchCoordinator` is shared but cluster-aware — it routes events to
+the correct instance based on both GVR and cluster name.
 
 The RGD controller depends on this interface, not the concrete type. At startup,
 `main.go` creates either a `DynamicController` or
@@ -1187,6 +1227,21 @@ should establish the practical ceiling. Mitigation strategies:
 
 The following are out of scope for this KREP but may be addressed in future:
 
+- **Phased rollout of GraphRevisions across clusters**: controlling how a new
+  GraphRevision is rolled out across spoke clusters (e.g., canary one spoke,
+  then progressively roll out to the rest, similar to Deployment rollout
+  strategies). MCR operates at the reconcile loop level and does not have
+  built-in rollout orchestration — this would require API-level additions
+  (e.g., a rollout policy on the RGD or a separate rollout resource) to
+  coordinate which spokes serve which revision.
+- **Per-cluster GraphRevision differentiation**: serving different compiled
+  graphs to different spoke clusters (e.g., spoke A gets GraphRevision 3,
+  spoke B gets GraphRevision 5). The current design serves the latest Active
+  revision from the hub's in-memory registry to all spokes uniformly. Supporting
+  per-cluster revision pinning would require extending the revision resolver
+  with cluster-aware selection and an API surface to express the desired
+  mapping. This relates to per-cluster RGD targeting but operates at the
+  revision level rather than the RGD level.
 - Per-cluster RGD targeting (distributing specific RGDs to specific clusters
   based on cluster labels/selectors, as opposed to all-or-nothing distribution)
 - Cluster API provider for cluster discovery

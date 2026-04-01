@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kubernetes-sigs/kro/pkg/metadata"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -30,6 +29,7 @@ import (
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
 	crdcompat "github.com/kubernetes-sigs/kro/pkg/graph/crd/compat"
+	"github.com/kubernetes-sigs/kro/pkg/metadata"
 )
 
 const (

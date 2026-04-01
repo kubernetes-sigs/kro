@@ -17,10 +17,11 @@ package graph
 import (
 	"slices"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
-	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
+	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 )
 
 // Well-known node/variable identifiers used in CEL expressions.

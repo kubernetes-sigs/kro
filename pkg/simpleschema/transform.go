@@ -18,9 +18,10 @@ import (
 	"errors"
 	"fmt"
 
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
 	"github.com/kubernetes-sigs/kro/pkg/graph/dag"
 	"github.com/kubernetes-sigs/kro/pkg/simpleschema/types"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // customType stores the schema and required state for a custom type.

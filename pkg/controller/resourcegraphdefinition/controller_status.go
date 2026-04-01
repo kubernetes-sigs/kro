@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/go-logr/logr"
+
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"

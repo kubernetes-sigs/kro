@@ -19,10 +19,11 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/kube-openapi/pkg/validation/spec"
+
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	schemacache "github.com/kubernetes-sigs/kro/pkg/graph/schema"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
-	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 // newSchema creates a spec.Schema with properly initialized VendorExtensible

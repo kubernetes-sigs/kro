@@ -24,9 +24,10 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
-	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 )
 
 // ErrUnsupportedType is returned when the type is not supported.

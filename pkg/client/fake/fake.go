@@ -18,13 +18,14 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/kubernetes-sigs/kro/pkg/client"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/kubernetes-sigs/kro/pkg/client"
 )
 
 // FakeSet is a fake implementation of SetInterface for testing

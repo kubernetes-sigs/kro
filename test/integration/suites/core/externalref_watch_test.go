@@ -170,7 +170,7 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
 						MatchExpressions: []metav1.LabelSelectorRequirement{
 							{
 								Key:      "team",
@@ -178,7 +178,7 @@ var _ = Describe("ExternalRef Watch", func() {
 								Values:   []string{"${schema.spec.teamName}"},
 							},
 						},
-					},
+					}),
 				},
 			}, nil, nil),
 		)
@@ -259,6 +259,242 @@ var _ = Describe("ExternalRef Watch", func() {
 		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
 	})
 
+	It("external collection with matchLabels CEL resolves dynamic values", func(ctx SpecContext) {
+		By("creating RGD with external collection ref using matchLabels with CEL")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-matchlabels",
+			generator.WithSchema(
+				"TestExtCollMatchLabels", "v1alpha1",
+				map[string]interface{}{
+					"teamName": "string",
+				},
+				map[string]interface{}{
+					"configCount": "${string(size(extconfigs))}",
+				},
+			),
+			generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"team": "${schema.spec.teamName}",
+						},
+					}),
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating ConfigMaps with label team=bravo")
+		cm1 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bravo-labels-1",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "bravo"},
+			},
+			Data: map[string]string{"key": "value1"},
+		}
+		cm2 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "bravo-labels-2",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "bravo"},
+			},
+			Data: map[string]string{"key": "value2"},
+		}
+		Expect(env.Client.Create(ctx, cm1)).To(Succeed())
+		Expect(env.Client.Create(ctx, cm2)).To(Succeed())
+
+		By("creating a ConfigMap with a different team label to verify it's excluded")
+		cmOther := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "charlie-labels-1",
+				Namespace: namespace,
+				Labels:    map[string]string{"team": "charlie"},
+			},
+			Data: map[string]string{"key": "other"},
+		}
+		Expect(env.Client.Create(ctx, cmOther)).To(Succeed())
+
+		By("creating the instance with teamName=bravo")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollMatchLabels",
+				"metadata": map[string]interface{}{
+					"name":      "test-matchlabels",
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"teamName": "bravo",
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("waiting for instance to become ACTIVE with configCount=2")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("2"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
+	It("external collection rebinds when instance selector input changes", func(ctx SpecContext) {
+		By("creating RGD with external collection selector derived from instance input")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-selector-rebind",
+			generator.WithSchema(
+				"TestExtCollSelectorRebind", "v1alpha1",
+				map[string]interface{}{
+					"teamName": "string",
+				},
+				map[string]interface{}{
+					"configCount":  "${string(size(extconfigs))}",
+					"matchedNames": "${extconfigs.sortBy(c, c.metadata.name).map(c, c.metadata.name).join(\",\")}",
+				},
+			),
+			generator.WithExternalRef("extconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"team": "${schema.spec.teamName}",
+						},
+					}),
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating ConfigMaps for alpha and beta teams")
+		for _, cm := range []*corev1.ConfigMap{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "alpha-team-1",
+					Namespace: namespace,
+					Labels:    map[string]string{"team": "alpha"},
+				},
+				Data: map[string]string{"key": "a1"},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "alpha-team-2",
+					Namespace: namespace,
+					Labels:    map[string]string{"team": "alpha"},
+				},
+				Data: map[string]string{"key": "a2"},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "beta-team-1",
+					Namespace: namespace,
+					Labels:    map[string]string{"team": "beta"},
+				},
+				Data: map[string]string{"key": "b1"},
+			},
+		} {
+			Expect(env.Client.Create(ctx, cm)).To(Succeed())
+		}
+
+		By("creating the instance with teamName=alpha")
+		instance := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollSelectorRebind",
+				"metadata": map[string]interface{}{
+					"name":      "test-selector-rebind",
+					"namespace": namespace,
+				},
+				"spec": map[string]interface{}{
+					"teamName": "alpha",
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("waiting for the alpha selection to be reflected in status")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("2"))
+
+			matchedNames, found, err := unstructured.NestedString(instance.Object, "status", "matchedNames")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(matchedNames).To(Equal("alpha-team-1,alpha-team-2"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("updating the instance selector input from alpha to beta")
+		Expect(env.Client.Get(ctx, types.NamespacedName{
+			Name:      instance.GetName(),
+			Namespace: namespace,
+		}, instance)).To(Succeed())
+		instance.Object["spec"] = map[string]interface{}{
+			"teamName": "beta",
+		}
+		Expect(env.Client.Update(ctx, instance)).To(Succeed())
+
+		By("waiting for status to rebind to the beta selection")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("1"))
+
+			matchedNames, found, err := unstructured.NestedString(instance.Object, "status", "matchedNames")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(matchedNames).To(Equal("beta-team-1"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 	It("external collection watch reacts to new matching resources", func(ctx SpecContext) {
 		By("creating RGD with external collection ref using label selector")
 		rgd := generator.NewResourceGraphDefinition("test-extcoll-watch",
@@ -273,11 +509,11 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"watch-test": "reactive",
 						},
-					},
+					}),
 				},
 			}, nil, nil),
 		)
@@ -383,11 +619,11 @@ var _ = Describe("ExternalRef Watch", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							"app": "sorttest",
 						},
-					},
+					}),
 				},
 			}, nil, nil),
 		)

@@ -6,7 +6,6 @@ package v1alpha1
 
 import (
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -125,7 +124,7 @@ func (in *ExternalRefMetadata) DeepCopyInto(out *ExternalRefMetadata) {
 	*out = *in
 	if in.Selector != nil {
 		in, out := &in.Selector, &out.Selector
-		*out = new(metav1.LabelSelector)
+		*out = new(v1.JSON)
 		(*in).DeepCopyInto(*out)
 	}
 }

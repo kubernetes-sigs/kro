@@ -22,6 +22,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 
@@ -772,6 +773,131 @@ func TestValidateCombinableResourceFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateCombinableResourceFields(tt.res)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateExternalRefMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata v1alpha1.ExternalRefMetadata
+		wantErr  string
+	}{
+		{
+			name: "name only is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Name: "cm",
+			},
+		},
+		{
+			name: "selector object is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "demo"},
+				}),
+			},
+		},
+		{
+			name: "selector CEL string is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON("${schema.spec.selector}"),
+			},
+		},
+		{
+			name: "matchLabels CEL object is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(map[string]any{
+					"matchLabels": "${schema.spec.matchLabels}",
+				}),
+			},
+		},
+		{
+			name: "matchExpressions CEL object is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(map[string]any{
+					"matchExpressions": "${schema.spec.matchExpressions}",
+				}),
+			},
+		},
+		{
+			name: "matchLabels CEL value is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(map[string]any{
+					"matchLabels": map[string]any{
+						"team": "${schema.spec.teamName}",
+					},
+				}),
+			},
+		},
+		{
+			name: "matchExpressions CEL value is valid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(map[string]any{
+					"matchExpressions": []map[string]any{{
+						"key":      "team",
+						"operator": "In",
+						"values":   []any{"${schema.spec.teamName}"},
+					}},
+				}),
+			},
+		},
+		{
+			name:     "missing both name and selector",
+			metadata: v1alpha1.ExternalRefMetadata{},
+			wantErr:  "exactly one of name or selector must be provided",
+		},
+		{
+			name: "null selector and no name is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(nil),
+			},
+			wantErr: "exactly one of name or selector must be provided",
+		},
+		{
+			name: "both name and selector are invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Name:     "cm",
+				Selector: v1alpha1.MustJSON(metav1.LabelSelector{}),
+			},
+			wantErr: "exactly one of name or selector must be provided",
+		},
+		{
+			name: "scalar selector string is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON("app=demo"),
+			},
+			wantErr: "selector must be a Kubernetes LabelSelector object or a CEL expression that resolves to one",
+		},
+		{
+			name: "non object non string selector is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(42),
+			},
+			wantErr: "selector must resolve to a Kubernetes LabelSelector object",
+		},
+		{
+			name: "invalid selector object is invalid",
+			metadata: v1alpha1.ExternalRefMetadata{
+				Selector: v1alpha1.MustJSON(map[string]any{
+					"matchExpressions": []map[string]any{{
+						"key":      "app",
+						"operator": "InvalidOperator",
+					}},
+				}),
+			},
+			wantErr: "invalid label selector",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateExternalRefMetadata(tt.metadata)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return

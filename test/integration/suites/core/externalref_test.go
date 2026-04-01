@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
@@ -150,7 +151,7 @@ var _ = Describe("ExternalRef", func() {
 				Namespace: namespace,
 			},
 			Spec: appsv1.DeploymentSpec{
-				Replicas: new(int32(2)),
+				Replicas: ptr.To(int32(2)),
 				Selector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{
 						"app": "test-deployment",
@@ -241,7 +242,7 @@ var _ = Describe("ExternalRef", func() {
 			Namespace: deployment1.Namespace,
 		}, deployment1)).To(Succeed())
 		originalExternalDeployment := deployment1.DeepCopy()
-		deployment1.Spec.Replicas = new(int32(4))
+		deployment1.Spec.Replicas = ptr.To(int32(4))
 		Expect(env.Client.Patch(ctx, deployment1, client.MergeFrom(originalExternalDeployment))).To(Succeed())
 
 		Eventually(func(g Gomega, ctx SpecContext) {
@@ -452,7 +453,7 @@ var _ = Describe("ExternalRef", func() {
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{},
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{}),
 				},
 			}, nil, nil),
 		)
@@ -534,6 +535,107 @@ var _ = Describe("ExternalRef", func() {
 		Expect(env.Client.Delete(ctx, instance)).To(Succeed())
 	})
 
+	It("should resolve an external collection selector from instance spec", func(ctx SpecContext) {
+		namespace := fmt.Sprintf("test-%s", rand.String(5))
+		uniqueLabel := fmt.Sprintf("instance-selector-%s", rand.String(5))
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		}
+		Expect(env.Client.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, ns)).To(Succeed())
+		})
+
+		By("creating ConfigMaps that will be matched by an instance-supplied selector")
+		cm1 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "selector-instance-alpha",
+				Namespace: namespace,
+				Labels:    map[string]string{"issue-1228": uniqueLabel},
+			},
+			Data: map[string]string{"key": "value1"},
+		}
+		cm2 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "selector-instance-beta",
+				Namespace: namespace,
+				Labels:    map[string]string{"issue-1228": uniqueLabel},
+			},
+			Data: map[string]string{"key": "value2"},
+		}
+		Expect(env.Client.Create(ctx, cm1)).To(Succeed())
+		Expect(env.Client.Create(ctx, cm2)).To(Succeed())
+
+		By("creating an RGD whose external collection selector comes from instance spec")
+		rgd := generator.NewResourceGraphDefinition("test-extcoll-instance-selector",
+			generator.WithSchema(
+				"TestExtCollInstanceSelector", "v1alpha1",
+				map[string]any{
+					"selector": "object",
+				},
+				map[string]any{
+					"configCount": "${string(size(allconfigs))}",
+				},
+			),
+			generator.WithExternalRef("allconfigs", &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: krov1alpha1.MustJSON("${schema.spec.selector}"),
+				},
+			}, nil, nil),
+		)
+
+		Expect(env.Client.Create(ctx, rgd)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(env.Client.Delete(ctx, rgd)).To(Succeed())
+		})
+
+		By("waiting for the RGD to become active")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{Name: rgd.Name}, rgd)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(rgd.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+		}, 10*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+		By("creating an instance with a full selector object in spec")
+		instance := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "TestExtCollInstanceSelector",
+				"metadata": map[string]any{
+					"name":      "test-instance-selector",
+					"namespace": namespace,
+				},
+				"spec": map[string]any{
+					"selector": map[string]any{
+						"matchLabels": map[string]any{"issue-1228": uniqueLabel},
+					},
+				},
+			},
+		}
+		Expect(env.Client.Create(ctx, instance)).To(Succeed())
+
+		By("ensuring the instance resolves the external collection")
+		Eventually(func(g Gomega, ctx SpecContext) {
+			err := env.Client.Get(ctx, types.NamespacedName{
+				Name:      instance.GetName(),
+				Namespace: namespace,
+			}, instance)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(instance.Object).To(HaveKey("status"))
+			g.Expect(instance.Object["status"]).To(HaveKeyWithValue("state", "ACTIVE"))
+
+			configCount, found, err := unstructured.NestedString(instance.Object, "status", "configCount")
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(configCount).To(Equal("2"))
+		}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+	})
+
 	It("should list external collection resources across all namespaces when namespace is omitted", func(ctx SpecContext) {
 		// This test verifies that an external collection without an explicit
 		// namespace lists resources across ALL namespaces, not just the
@@ -582,9 +684,9 @@ var _ = Describe("ExternalRef", func() {
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
 					// No Namespace — should list across all namespaces.
-					Selector: &metav1.LabelSelector{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
 						MatchLabels: map[string]string{"suite": uniqueLabel},
-					},
+					}),
 				},
 			}, nil, nil),
 		)

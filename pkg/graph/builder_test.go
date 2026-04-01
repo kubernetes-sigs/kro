@@ -3847,9 +3847,25 @@ spec:
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Metadata: krov1alpha1.ExternalRefMetadata{
-					Selector: &metav1.LabelSelector{
+					Selector: krov1alpha1.MustJSON(metav1.LabelSelector{
 						MatchLabels: map[string]string{"app": "demo"},
-					},
+					}),
+				},
+			},
+		}, 0, true)
+		require.NoError(t, err)
+		assert.Equal(t, NodeTypeExternalCollection, node.Meta.Type)
+	})
+
+	t.Run("external selector CEL string becomes collection", func(t *testing.T) {
+		builder := newUnitTestBuilder()
+		node, _, err := builder.buildRGResource(testParser, &krov1alpha1.Resource{
+			ID: "external",
+			ExternalRef: &krov1alpha1.ExternalRef{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Metadata: krov1alpha1.ExternalRefMetadata{
+					Selector: krov1alpha1.MustJSON("${schema.spec.selector}"),
 				},
 			},
 		}, 0, true)

@@ -387,6 +387,11 @@ func (b *Builder) buildRGResource(
 	if err := validateCombinableResourceFields(rgResource); err != nil {
 		return nil, nil, fmt.Errorf("invalid combination of resource fields: %w", err)
 	}
+	if rgResource.ExternalRef != nil {
+		if err := validateExternalRefMetadata(rgResource.ExternalRef.Metadata); err != nil {
+			return nil, nil, fmt.Errorf("invalid external ref metadata for resource %s: %w", rgResource.ID, err)
+		}
+	}
 
 	// 2. Unmarshal the resource into a map[string]interface{}.
 	resourceObject := map[string]interface{}{}
@@ -490,7 +495,7 @@ func (b *Builder) buildRGResource(
 	// Determine node type.
 	nodeType := NodeTypeResource
 	if rgResource.ExternalRef != nil {
-		if rgResource.ExternalRef.Metadata.Selector != nil {
+		if rgResource.ExternalRef.Metadata.HasSelector() {
 			nodeType = NodeTypeExternalCollection
 		} else {
 			nodeType = NodeTypeExternal

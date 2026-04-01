@@ -14,6 +14,10 @@
 package v1alpha1
 
 import (
+	"bytes"
+	"encoding/json"
+	"strings"
+
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,7 +124,6 @@ type CRDMetadata struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="(has(self.name) && !has(self.selector)) || (!has(self.name) && has(self.selector))",message="exactly one of name or selector must be provided"
 type ExternalRefMetadata struct {
 	// Name is the name of the external resource to reference.
 	// Mutually exclusive with Selector.
@@ -136,10 +139,43 @@ type ExternalRefMetadata struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Selector is a label selector for collection external references.
 	// When set, all resources matching the selector are included.
+	// The selector may be a literal Kubernetes LabelSelector object or a full CEL
+	// expression that resolves to one at reconcile time.
 	// Mutually exclusive with Name.
 	//
 	// +kubebuilder:validation:Optional
-	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+	Selector *extv1.JSON `json:"selector,omitempty"`
+}
+
+func (m ExternalRefMetadata) HasName() bool {
+	return strings.TrimSpace(m.Name) != ""
+}
+
+func (m ExternalRefMetadata) HasSelector() bool {
+	if m.Selector == nil {
+		return false
+	}
+
+	raw := bytes.TrimSpace(m.Selector.Raw)
+	return len(raw) > 0 && string(raw) != "null"
+}
+
+func MarshalJSONValue(value any) (*extv1.JSON, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &extv1.JSON{Raw: raw}, nil
+}
+
+func MustJSON(value any) *extv1.JSON {
+	jsonValue, err := MarshalJSONValue(value)
+	if err != nil {
+		panic(err)
+	}
+
+	return jsonValue
 }
 
 // ExternalRef is a reference to an external resource that already exists in the cluster.

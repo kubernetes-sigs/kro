@@ -77,6 +77,34 @@ func (c *Controller) planNodesForDeletion(
 			continue
 		}
 
+		// External nodes are never deleted by the controller. Observe them now so
+		// downstream managed nodes can resolve their identity from the CEL context.
+		// Both NodeTypeExternal and NodeTypeExternalCollection must be handled here,
+		// before GetDesiredIdentity, because ExternalCollection returns nil from
+		// identity resolution (it has no name-based identity).
+		switch nodeMeta.Type {
+		case graph.NodeTypeExternal:
+			desired, err := node.GetDesiredIdentity()
+			if err != nil || len(desired) == 0 {
+				state.SetSkipped()
+				continue
+			}
+			if _, err := c.observeExternalRef(rcx, node, desired[0]); err != nil {
+				state.SetError(err)
+				return nil, err
+			}
+			state.SetSkipped()
+			continue
+
+		case graph.NodeTypeExternalCollection:
+			if err := c.observeExternalCollection(rcx, node); err != nil {
+				state.SetError(err)
+				return nil, err
+			}
+			state.SetSkipped()
+			continue
+		}
+
 		// Resolve identity up front so deletion never blocks on readiness or full template
 		// resolution. If we can't get a stable identity, we treat the node as deleted.
 		desired, err := node.GetDesiredIdentity()
@@ -100,9 +128,6 @@ func (c *Controller) planNodesForDeletion(
 		// At this point, identity is resolvable and we can safely observe (GET/LIST)
 		// to find the next deletable node.
 		switch nodeMeta.Type {
-		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
-			state.SetSkipped()
-			continue
 
 		case graph.NodeTypeInstance:
 			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))

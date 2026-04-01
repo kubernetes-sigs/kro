@@ -43,7 +43,9 @@ controller to watch and reconcile resources across multiple clusters.
 ```
 Hub Cluster
   - RGDs (definitions only)
-  - KRO Controller (multicluster-aware)
+  - GraphRevisions (immutable snapshots, hub-only)
+  - In-memory revision registry (compiled graphs)
+  - KRO Controllers (RGD, GraphRevision, multicluster-aware instance)
   - Cluster discovery (kubeconfig Secrets)
         |
         +----------------------+----------------------+
@@ -70,16 +72,32 @@ Key design points:
 
 **Hub and Spoke Separation**
 
-RGDs are authored and stored only in the hub cluster. The RGD controller runs
-with `EngageWithLocalCluster(true)` and `EngageWithProviderClusters(false)` -
-it only watches the hub. When an RGD is reconciled, KRO distributes the
-generated CRD to all engaged spoke clusters and registers a
-`MulticlusterDynamicController` for the instance GVR.
+RGDs, GraphRevisions, and the in-memory revision registry all live exclusively
+on the hub cluster. The reconciliation flow in multicluster mode follows the
+same pipeline as single-cluster, with CRD distribution added at the serving
+stage:
 
-Instance controllers run with `EngageWithProviderClusters(true)` - they watch
-all spoke clusters. When a user creates an instance in any spoke, the hub's
-instance controller reconciles it, creating child resources in the same spoke
-cluster as the instance.
+1. **RGD controller** (hub-only, `EngageWithLocalCluster(true)`,
+   `EngageWithProviderClusters(false)`): watches RGDs on the hub. When the
+   spec changes, hashes the spec, validates, and creates a `GraphRevision`
+   object on the hub.
+2. **GraphRevision controller** (hub-only): compiles the immutable snapshot
+   in the GraphRevision, stores the compiled graph in the hub's in-memory
+   `revisions.Registry`.
+3. **RGD controller** (re-reconcile): sees the latest revision is Active in
+   the registry, enters `ensureServingState()` — applies the CRD to the hub
+   **and distributes it to all engaged spoke clusters**, then registers a
+   `MulticlusterDynamicController` for the instance GVR.
+4. **Instance controllers** (`EngageWithProviderClusters(true)`): watch all
+   spoke clusters. When a user creates an instance in any spoke, the hub's
+   instance controller resolves the latest compiled graph from the registry
+   and reconciles it, creating child resources in the same spoke cluster as
+   the instance.
+
+GraphRevisions are never distributed to spokes. They are an internal hub
+concern — spokes only receive the generated CRDs. The revision registry is
+hub-local in-memory state that instance controllers on the hub read from
+directly.
 
 **Same-Cluster Locality**
 
@@ -233,54 +251,85 @@ context is cancelled.
 
 ### Instance Controller Changes
 
-The instance controller becomes cluster-aware:
+The instance controller becomes cluster-aware while continuing to resolve
+compiled graphs from the hub-local in-memory registry:
 
 ```go
 func (c *Controller) Reconcile(ctx context.Context, clusterName string, req ctrl.Request) error {
-    // Get cluster-specific clients
+    // Resolve the latest compiled graph from the hub's in-memory registry.
+    // This is unchanged from single-cluster mode — the registry is hub-local
+    // and always available to the instance controller.
+    entry, ok := c.revisionResolver.GetLatestRevision()
+    if !ok || entry.State != revisions.RevisionStateActive {
+        return fmt.Errorf("no active graph revision")
+    }
+    graph := entry.CompiledGraph
+
+    // Get cluster-specific clients for the spoke
     dynClient, mapper, err := c.clientFactory.GetClients(clusterName)
 
-    // Fetch instance from the correct cluster
+    // Fetch instance from the correct spoke cluster
     instance, err := dynClient.Resource(c.gvr).Namespace(req.Namespace).Get(ctx, req.Name, ...)
 
-    // All child resources are created in the same cluster
+    // All child resources are created in the same spoke cluster
     rcx := &ReconcileContext{
         ClusterName: clusterName,
         Client:      dynClient,
+        Graph:       graph,
         // ...
     }
 }
 ```
 
-The reconcile signature gains a `clusterName` parameter. All operations within
-a single reconcile use the same cluster's clients, maintaining same-cluster
-locality.
+The reconcile signature gains a `clusterName` parameter. Graph resolution
+remains hub-local (the compiled graph lives in the hub's in-memory registry).
+All resource operations within a single reconcile use the spoke cluster's
+clients, maintaining same-cluster locality.
 
 ### RGD Controller Changes
 
-The RGD controller remains hub-only but gains multicluster awareness for CRD
-distribution and instance controller setup:
+The RGD controller remains hub-only but gains multicluster awareness in
+`ensureServingState()` for CRD distribution and instance controller setup:
 
 - Uses `mcbuilder.ControllerManagedBy()` with `EngageWithLocalCluster(true)`
   and `EngageWithProviderClusters(false)` - only watches RGDs on the hub.
+- The GraphRevision issuance, compilation, and registry flow is unchanged.
+  GraphRevisions are created, compiled, and stored on the hub exactly as in
+  single-cluster mode.
+- `ensureServingState()` gains a CRD distribution step: after applying the
+  CRD to the hub, it distributes to all engaged spoke clusters via
+  `ClusterClientFactory` (respecting `kro.run/distribute` label).
 - When registering a GVR with the `MulticlusterDynamicController`, the GVR is
   automatically registered on all engaged clusters (current and future).
-- CRD distribution to spoke clusters is handled through the
-  `ClusterClientFactory`.
+- The instance controller is created with `r.revisionsRegistry.ResolverForRGD()`
+  as today — the resolver reads from the hub-local in-memory registry.
 
 ### CRD Distribution
 
-When an RGD is reconciled and a CRD is generated, KRO distributes the CRD to
-all engaged spoke clusters:
+CRD distribution is tied to the GraphRevision lifecycle. Distribution only
+happens when a revision successfully compiles and the RGD enters serving
+state — not when the RGD spec is first submitted. This ensures spokes never
+receive CRDs for invalid or uncompiled graphs:
 
-1. RGD controller generates CRD (existing behavior)
-2. CRD is applied to the hub cluster (existing behavior)
-3. CRD is applied to all engaged spoke clusters via `ClusterClientFactory`
-4. When a new cluster is engaged, all existing CRDs are distributed to it
+1. RGD spec changes → RGD controller creates a `GraphRevision` (hub-only)
+2. GraphRevision controller compiles the snapshot → stores compiled graph in
+   the in-memory registry with state `Active`
+3. RGD controller re-reconciles → sees Active revision → enters
+   `ensureServingState()`:
+   a. CRD is applied to the hub cluster (existing behavior)
+   b. CRD is applied to all engaged spoke clusters via `ClusterClientFactory`
+      (respecting the `kro.run/distribute` label)
+4. When a new cluster is engaged, all existing active CRDs are distributed
+   to it
 
 CRD distribution uses server-side apply to handle conflicts gracefully. If a
 spoke cluster is temporarily unreachable, distribution is retried on the next
 reconcile.
+
+GraphRevision objects themselves are never distributed — they remain hub-only.
+The in-memory revision registry is local to the hub controller process.
+Instance controllers on the hub resolve compiled graphs from this registry
+when reconciling spoke instances.
 
 ### CLI Flags
 
@@ -364,12 +413,15 @@ but others embed controller-runtime types directly (the RGD controller embeds
 `client.Client`). The key coupling points fall into three categories:
 
 **High coupling** - Manager creation/lifecycle, RGD controller's embedded
-client and builder pattern, health probe system.
+client and builder pattern, GraphRevision controller's builder pattern,
+health probe system.
 
 **Medium coupling** - Logging (`logr`), metrics registry
-(`controller-runtime/pkg/metrics`).
+(`controller-runtime/pkg/metrics`), GraphRevision controller
+(`ctrl.NewControllerManagedBy` builder).
 
-**Low coupling** - Instance controller (already uses custom abstractions),
+**Low coupling** - Instance controller (already uses custom abstractions,
+resolves graphs from the in-memory `revisions.Registry`),
 `DynamicController` (only needs `Runnable` interface and `ctrl.Request` type).
 
 ### Required Changes
@@ -414,8 +466,27 @@ The restructuring:
   (`mcbuilder.ControllerManagedBy`) without polluting the reconciler struct
 - Move `SetupWithManager` to accept the kro manager interface instead of
   `ctrl.Manager`
+- `ensureServingState()` gains a CRD distribution hook that calls
+  `ClusterClientFactory` to apply CRDs to spoke clusters after hub-local
+  application
 
-#### 3. DynamicController Abstraction
+#### 3. GraphRevision Controller — Hub-Only, No MCR Changes
+
+The `GraphRevisionReconciler` remains hub-only and requires minimal changes:
+- It watches `GraphRevision` objects on the hub (these are never distributed)
+- It compiles snapshots and stores results in the hub-local `revisions.Registry`
+- Its `SetupWithManager()` uses `EngageWithLocalCluster(true)` and
+  `EngageWithProviderClusters(false)` — same as the RGD controller
+- The in-memory `revisions.Registry` is shared between the GraphRevision
+  controller (writes compiled graphs) and instance controllers (reads them)
+- No multicluster awareness is needed in this controller — it is purely a
+  hub-side compilation pipeline
+
+The only change is updating `SetupWithManager()` to accept the kro manager
+interface and use the appropriate builder pattern, consistent with the RGD
+controller restructuring.
+
+#### 4. DynamicController Abstraction
 
 The `DynamicController` currently implements controller-runtime's `Runnable`
 interface and uses `ctrl.Request`. For multicluster, the
@@ -438,7 +509,7 @@ The RGD controller depends on this interface, not the concrete type. At startup,
 `main.go` creates either a `DynamicController` or
 `MulticlusterDynamicController` and passes it through the interface.
 
-#### 4. Client Factory Pattern
+#### 5. Client Factory Pattern
 
 The instance controller currently takes `kroclient.SetInterface` which is a
 single-cluster client set. For multicluster, `ClusterClientFactory` wraps
@@ -467,7 +538,7 @@ In multicluster mode, it returns cluster-specific clients. The instance
 controller uses the factory interface, making it cluster-aware without
 importing MCR.
 
-#### 5. Reconcile Signature Alignment
+#### 6. Reconcile Signature Alignment
 
 The instance controller's `Reconcile(ctx, req) error` and the RGD controller's
 `Reconcile(ctx, obj) (Result, error)` differ. For multicluster, both need a
@@ -498,12 +569,14 @@ The restructuring can be done incrementally without changing behavior:
 1. **Extract interfaces** (`Manager`, `DynamicController.Interface`,
    `client.Factory`) - pure refactor, no behavioral change
 2. **Remove embedded `client.Client`** from RGD controller - use explicit field
-3. **Introduce `client.Factory`** with `SingleClusterFactory` - existing tests
+3. **Decouple GraphRevision controller** - accept kro manager interface,
+   same builder pattern restructuring as the RGD controller
+4. **Introduce `client.Factory`** with `SingleClusterFactory` - existing tests
    pass unchanged
-4. **Add context-based cluster name** - no-op in single-cluster mode
-5. **Add MCR integration** behind `--enable-multicluster` flag
+5. **Add context-based cluster name** - no-op in single-cluster mode
+6. **Add MCR integration** behind `--enable-multicluster` flag
 
-Each step is independently mergeable and testable. Steps 1-4 benefit kro's
+Each step is independently mergeable and testable. Steps 1-5 benefit kro's
 code quality regardless of whether multicluster ships, by reducing concrete
 type dependencies and improving testability.
 
@@ -1161,9 +1234,11 @@ This change is fully backward compatible:
 
 **Integration tests**:
 - Single-cluster mode: all existing tests pass with `multicluster.NewManager`
-  and nil provider (regression gate)
-- Multicluster mode: RGD reconcile distributes CRDs, instance reconcile uses
-  correct cluster clients
+  and nil provider (regression gate), including GraphRevision lifecycle
+- Multicluster mode: RGD reconcile creates GraphRevision on hub, GraphRevision
+  compiles and activates, CRD distribution only happens after activation,
+  instance reconcile uses correct cluster clients with hub-local graph
+  resolution
 
 **E2E tests**:
 - Hub + 2 spokes: create RGD on hub, verify CRDs on spokes, create instance on

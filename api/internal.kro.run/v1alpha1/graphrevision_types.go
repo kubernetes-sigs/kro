@@ -14,8 +14,9 @@
 package v1alpha1
 
 import (
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 // GraphRevision condition types.

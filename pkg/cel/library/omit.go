@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+
 	"github.com/kubernetes-sigs/kro/pkg/cel/sentinels"
 )
 

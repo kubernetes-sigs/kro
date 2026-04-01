@@ -19,9 +19,10 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 // SynthesizeCRD generates a CustomResourceDefinition for a given API version and kind

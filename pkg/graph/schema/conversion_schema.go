@@ -17,9 +17,10 @@ package schema
 import (
 	"fmt"
 
-	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 )
 
 // ConvertJSONSchemaPropsToSpecSchema converts an extv1.JSONSchemaProps to a spec.Schema.

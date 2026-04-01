@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"time"
 
-	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	krov1alpha1 "github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 var _ = ginkgo.Describe("Post-Upgrade", ginkgo.Ordered, func() {

@@ -18,8 +18,9 @@
 package apis
 
 import (
-	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 )
 
 type Object interface {

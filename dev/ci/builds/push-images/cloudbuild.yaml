@@ -7,3 +7,4 @@ steps:
   entrypoint: dev/tasks/push-images
   env:
   - IMAGE_PREFIX=us-central1-docker.pkg.dev/k8s-staging-images/kro/
+  - GOTOOLCHAIN=auto

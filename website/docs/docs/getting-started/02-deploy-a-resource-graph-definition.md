@@ -31,6 +31,35 @@ Before you begin, make sure you have the following:
   cluster.
 - `kubectl` installed and configured to interact with your Kubernetes cluster.
 
+:::info[RBAC Configuration for an Aggregation mode]
+
+```yaml title="kro-quickstart-rbac.yaml"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    rbac.kro.run/aggregate-to-controller: "true"
+  name: kro:controller:my-application
+rules:
+  - apiGroups: ["kro.run"]
+    resources: ["applications"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["*"]
+```
+
+```bash
+kubectl apply -f kro-quickstart-rbac.yaml
+```
+:::
+
 ## Create your Application RGD
 
 Let's create an RGD that combines a `Deployment`, a `Service` and

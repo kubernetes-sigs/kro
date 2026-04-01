@@ -2,6 +2,8 @@ module github.com/kubernetes-sigs/kro
 
 go 1.26.0
 
+toolchain go1.26.1
+
 require (
 	github.com/go-logr/logr v1.4.3
 	github.com/gobuffalo/flect v1.0.3

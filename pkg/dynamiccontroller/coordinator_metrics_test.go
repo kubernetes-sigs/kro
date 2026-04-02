@@ -23,13 +23,15 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // resetCoordinatorMetrics zeroes the global gauge vectors used by the
 // coordinator so that tests don't leak state into each other.
 func resetCoordinatorMetrics() {
-	instanceWatchCount.Reset()
-	watchRequestCount.Reset()
+	metrics.DynInstanceWatchCount.Reset()
+	metrics.DynWatchRequestCount.Reset()
 }
 
 func TestMetrics_InstanceWatchCount_SingleAdd(t *testing.T) {
@@ -43,7 +45,7 @@ func TestMetrics_InstanceWatchCount_SingleAdd(t *testing.T) {
 	}))
 	watcher.Done(true)
 
-	got := testutil.ToFloat64(instanceWatchCount.WithLabelValues(testParentGVR.String()))
+	got := testutil.ToFloat64(metrics.DynInstanceWatchCount.WithLabelValues(testParentGVR.String()))
 	assert.Equal(t, float64(1), got)
 }
 
@@ -62,7 +64,7 @@ func TestMetrics_InstanceWatchCount_RemoveInstance(t *testing.T) {
 
 	// After removing the only instance, the label set should be deleted.
 	// Collecting the metric should yield 0 children.
-	assert.Equal(t, 0, testutil.CollectAndCount(instanceWatchCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynInstanceWatchCount),
 		"instanceWatchCount label set should be deleted after last instance removed")
 }
 
@@ -80,13 +82,13 @@ func TestMetrics_InstanceWatchCount_RemoveParentGVR_MultipleInstances(t *testing
 		w.Done(true)
 	}
 
-	got := testutil.ToFloat64(instanceWatchCount.WithLabelValues(testParentGVR.String()))
+	got := testutil.ToFloat64(metrics.DynInstanceWatchCount.WithLabelValues(testParentGVR.String()))
 	assert.Equal(t, float64(3), got, "should have 3 instances before removal")
 
 	// RemoveParentGVR removes all 3 at once.
 	coord.RemoveParentGVR(testParentGVR)
 
-	assert.Equal(t, 0, testutil.CollectAndCount(instanceWatchCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynInstanceWatchCount),
 		"instanceWatchCount label set should be deleted after RemoveParentGVR")
 }
 
@@ -101,13 +103,13 @@ func TestMetrics_WatchRequestCount_ScalarAddRemove(t *testing.T) {
 	}))
 	w.Done(true)
 
-	got := testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	got := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), got)
 
 	coord.RemoveInstance(testParentGVR, inst)
 
 	// Both scalar and collection labels should be deleted for this GVR.
-	assert.Equal(t, 0, testutil.CollectAndCount(watchRequestCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynWatchRequestCount),
 		"watchRequestCount labels should be deleted after GVR fully removed")
 }
 
@@ -123,12 +125,12 @@ func TestMetrics_WatchRequestCount_CollectionAddRemove(t *testing.T) {
 	}))
 	w.Done(true)
 
-	got := testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
+	got := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
 	assert.Equal(t, float64(1), got)
 
 	coord.RemoveInstance(testParentGVR, inst)
 
-	assert.Equal(t, 0, testutil.CollectAndCount(watchRequestCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynWatchRequestCount),
 		"watchRequestCount labels should be deleted after GVR fully removed")
 }
 
@@ -156,7 +158,7 @@ func TestMetrics_WatchRequestCount_PartialRemoval_KeepsOtherGVR(t *testing.T) {
 	// Remove inst1 — services gauge should be unaffected.
 	coord.RemoveInstance(testParentGVR, inst1)
 
-	svcGauge := testutil.ToFloat64(watchRequestCount.WithLabelValues(testServiceGVR.String(), "scalar"))
+	svcGauge := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testServiceGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), svcGauge, "service scalar gauge should remain 1")
 }
 
@@ -180,19 +182,19 @@ func TestMetrics_WatchRequestCount_MultipleScalarsForSameGVR(t *testing.T) {
 	}))
 	w2.Done(true)
 
-	got := testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	got := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
 	assert.Equal(t, float64(2), got, "two scalar entries for same GVR")
 
 	// Remove one — gauge should go to 1, not 0 or stay at 2.
 	coord.RemoveInstance(testParentGVR, inst1)
 
-	got = testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	got = testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), got, "one scalar entry remaining")
 
 	// Remove the other — labels should be deleted.
 	coord.RemoveInstance(testParentGVR, inst2)
 
-	assert.Equal(t, 0, testutil.CollectAndCount(watchRequestCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynWatchRequestCount),
 		"watchRequestCount labels should be deleted after all entries removed")
 }
 
@@ -218,17 +220,17 @@ func TestMetrics_WatchRequestCount_MixedScalarAndCollection_RemoveParentGVR(t *t
 	}))
 	w2.Done(true)
 
-	deployScalar := testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
-	cmCollection := testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
+	deployScalar := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	cmCollection := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
 	assert.Equal(t, float64(1), deployScalar)
 	assert.Equal(t, float64(1), cmCollection)
 
 	// RemoveParentGVR removes both instances.
 	coord.RemoveParentGVR(testParentGVR)
 
-	assert.Equal(t, 0, testutil.CollectAndCount(watchRequestCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynWatchRequestCount),
 		"all watchRequestCount labels should be deleted after RemoveParentGVR")
-	assert.Equal(t, 0, testutil.CollectAndCount(instanceWatchCount),
+	assert.Equal(t, 0, testutil.CollectAndCount(metrics.DynInstanceWatchCount),
 		"instanceWatchCount should be deleted after RemoveParentGVR")
 }
 
@@ -247,8 +249,8 @@ func TestMetrics_WatchRequestCount_DoneCleansUpStaleRequests(t *testing.T) {
 	}))
 	w1.Done(true)
 
-	deployGauge := testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
-	svcGauge := testutil.ToFloat64(watchRequestCount.WithLabelValues(testServiceGVR.String(), "scalar"))
+	deployGauge := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	svcGauge := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testServiceGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), deployGauge)
 	assert.Equal(t, float64(1), svcGauge)
 
@@ -259,7 +261,7 @@ func TestMetrics_WatchRequestCount_DoneCleansUpStaleRequests(t *testing.T) {
 	}))
 	w2.Done(true)
 
-	deployGauge = testutil.ToFloat64(watchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
+	deployGauge = testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testDeployGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), deployGauge, "deployment gauge should remain 1")
 
 	// Service GVR should have its labels deleted (not just set to 0).
@@ -294,20 +296,20 @@ func TestMetrics_WatchRequestCount_CollectionRemoval_WithScalarRemaining(t *test
 	}))
 	w2.Done(true)
 
-	cmScalar := testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "scalar"))
-	cmCollection := testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
+	cmScalar := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "scalar"))
+	cmCollection := testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
 	assert.Equal(t, float64(1), cmScalar)
 	assert.Equal(t, float64(1), cmCollection)
 
 	// Remove inst2 (collection watcher). Scalar watcher should be unaffected.
 	coord.RemoveInstance(testParentGVR, inst2)
 
-	cmScalar = testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "scalar"))
+	cmScalar = testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "scalar"))
 	assert.Equal(t, float64(1), cmScalar, "scalar gauge should remain 1 after collection removal")
 
 	// Collection gauge should be 0 (Sub was called), and labels should NOT
 	// be deleted yet because the scalar index still has entries for this GVR.
-	cmCollection = testutil.ToFloat64(watchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
+	cmCollection = testutil.ToFloat64(metrics.DynWatchRequestCount.WithLabelValues(testCmGVR.String(), "collection"))
 	assert.Equal(t, float64(0), cmCollection, "collection gauge should be 0 after removal")
 }
 
@@ -332,18 +334,18 @@ func TestMetrics_InstanceWatchCount_MultipleParentGVRs(t *testing.T) {
 	}))
 	w2.Done(true)
 
-	got1 := testutil.ToFloat64(instanceWatchCount.WithLabelValues(testParentGVR.String()))
-	got2 := testutil.ToFloat64(instanceWatchCount.WithLabelValues(parentGVR2.String()))
+	got1 := testutil.ToFloat64(metrics.DynInstanceWatchCount.WithLabelValues(testParentGVR.String()))
+	got2 := testutil.ToFloat64(metrics.DynInstanceWatchCount.WithLabelValues(parentGVR2.String()))
 	assert.Equal(t, float64(1), got1)
 	assert.Equal(t, float64(1), got2)
 
 	// Remove one parent — the other should be unaffected.
 	coord.RemoveParentGVR(testParentGVR)
 
-	got2 = testutil.ToFloat64(instanceWatchCount.WithLabelValues(parentGVR2.String()))
+	got2 = testutil.ToFloat64(metrics.DynInstanceWatchCount.WithLabelValues(parentGVR2.String()))
 	assert.Equal(t, float64(1), got2, "other parent GVR gauge should be unaffected")
 
 	// The removed parent's labels should be cleaned up.
-	assert.Equal(t, 1, testutil.CollectAndCount(instanceWatchCount),
+	assert.Equal(t, 1, testutil.CollectAndCount(metrics.DynInstanceWatchCount),
 		"only one parent GVR label set should remain")
 }

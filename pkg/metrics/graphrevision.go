@@ -12,25 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphrevision
+package metrics
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
 	graphRevisionCompileLabels = []string{"result"}
 
-	graphRevisionCompileTotal            *prometheus.CounterVec
-	graphRevisionCompileDuration         *prometheus.HistogramVec
-	graphRevisionStatusUpdateErrorsTotal *prometheus.CounterVec
-	graphRevisionActivationDeferredTotal *prometheus.CounterVec
-	graphRevisionFinalizerEvictionsTotal *prometheus.CounterVec
-)
-
-func init() {
-	graphRevisionCompileTotal = prometheus.NewCounterVec(
+	GraphRevisionCompileTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_graph_revision_compile_total",
 			Help: "Total number of GraphRevision compile attempts by result",
@@ -38,7 +27,7 @@ func init() {
 		graphRevisionCompileLabels,
 	)
 
-	graphRevisionCompileDuration = prometheus.NewHistogramVec(
+	GraphRevisionCompileDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "kro_graph_revision_compile_duration_seconds",
 			Help:    "Duration of GraphRevision compile attempts in seconds",
@@ -47,7 +36,7 @@ func init() {
 		graphRevisionCompileLabels,
 	)
 
-	graphRevisionStatusUpdateErrorsTotal = prometheus.NewCounterVec(
+	GraphRevisionStatusUpdateErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_graph_revision_status_update_errors_total",
 			Help: "Total number of GraphRevision status update failures",
@@ -55,7 +44,7 @@ func init() {
 		[]string{},
 	)
 
-	graphRevisionActivationDeferredTotal = prometheus.NewCounterVec(
+	GraphRevisionActivationDeferredTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_graph_revision_activation_deferred_total",
 			Help: "Total number of times GraphRevision activation was deferred until status persistence succeeds",
@@ -63,19 +52,11 @@ func init() {
 		[]string{},
 	)
 
-	graphRevisionFinalizerEvictionsTotal = prometheus.NewCounterVec(
+	GraphRevisionFinalizerEvictionsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_graph_revision_finalizer_evictions_total",
 			Help: "Total number of registry evictions triggered by GraphRevision finalizer cleanup",
 		},
 		[]string{},
 	)
-
-	metrics.Registry.MustRegister(
-		graphRevisionCompileTotal,
-		graphRevisionCompileDuration,
-		graphRevisionStatusUpdateErrorsTotal,
-		graphRevisionActivationDeferredTotal,
-		graphRevisionFinalizerEvictionsTotal,
-	)
-}
+)

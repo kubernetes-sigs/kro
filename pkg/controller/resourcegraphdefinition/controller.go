@@ -40,6 +40,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 type resourceGraphBuilder interface {
@@ -268,8 +269,8 @@ func (r *ResourceGraphDefinitionReconciler) Reconcile(
 		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
-		deletionDuration.WithLabelValues(o.Name).Observe(time.Since(startTime).Seconds())
-		deletionsTotal.WithLabelValues(o.Name).Inc()
+		metrics.RGDDeletionDuration.WithLabelValues(o.Name).Observe(time.Since(startTime).Seconds())
+		metrics.RGDDeletionsTotal.WithLabelValues(o.Name).Inc()
 		return ctrl.Result{}, nil
 	}
 

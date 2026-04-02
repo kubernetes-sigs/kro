@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metrics registers additional Prometheus metrics that are not
-// included by controller-runtime's default client-go adapter.
-//
-// Import this package with a blank identifier to activate registration:
-//
-//	_ "github.com/kubernetes-sigs/kro/pkg/metrics"
+// Package metrics defines and registers all kro Prometheus metrics.
+// Call Register with a prometheus.Registerer to wire everything up.
 package metrics

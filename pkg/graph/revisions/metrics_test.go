@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 func TestRegistryMetricsTrackEntriesTransitionsAndEvictions(t *testing.T) {
@@ -28,7 +29,7 @@ func TestRegistryMetricsTrackEntriesTransitionsAndEvictions(t *testing.T) {
 
 	reg := NewRegistry()
 	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStatePending})
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("pending")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
 
 	reg.Put(Entry{
 		RGDName:       "demo-rgd",
@@ -36,18 +37,18 @@ func TestRegistryMetricsTrackEntriesTransitionsAndEvictions(t *testing.T) {
 		State:         RevisionStateActive,
 		CompiledGraph: &graph.Graph{},
 	})
-	assert.Equal(t, 0.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("pending")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("active")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryTransitions.WithLabelValues("pending", "active")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryTransitions.WithLabelValues("pending", "active")))
 
 	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateFailed})
-	assert.Equal(t, 0.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("active")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("failed")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryTransitions.WithLabelValues("active", "failed")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("failed")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryTransitions.WithLabelValues("active", "failed")))
 
 	reg.Delete("demo-rgd", 1)
-	assert.Equal(t, 0.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("failed")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEvictions.WithLabelValues()))
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("failed")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEvictions.WithLabelValues()))
 }
 
 func TestRegistryMetricsTrackBulkEvictions(t *testing.T) {
@@ -59,23 +60,23 @@ func TestRegistryMetricsTrackBulkEvictions(t *testing.T) {
 	reg.Put(Entry{RGDName: "other-rgd", Revision: 1, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
 
 	reg.DeleteAll("demo-rgd")
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("active")))
-	assert.Equal(t, 0.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("pending")))
-	assert.Equal(t, 2.0, testutil.ToFloat64(graphRevisionRegistryEvictions.WithLabelValues()))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
+	assert.Equal(t, 2.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEvictions.WithLabelValues()))
 
 	reg.Put(Entry{RGDName: "demo-rgd", Revision: 1, State: RevisionStateFailed})
 	reg.Put(Entry{RGDName: "demo-rgd", Revision: 2, State: RevisionStateActive, CompiledGraph: &graph.Graph{}})
 	reg.Put(Entry{RGDName: "demo-rgd", Revision: 3, State: RevisionStatePending})
 
 	reg.DeleteRevisionsBefore("demo-rgd", 3)
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("active")))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("pending")))
-	assert.Equal(t, 0.0, testutil.ToFloat64(graphRevisionRegistryEntries.WithLabelValues("failed")))
-	assert.Equal(t, 4.0, testutil.ToFloat64(graphRevisionRegistryEvictions.WithLabelValues()))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("active")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("pending")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEntries.WithLabelValues("failed")))
+	assert.Equal(t, 4.0, testutil.ToFloat64(metrics.GraphRevisionRegistryEvictions.WithLabelValues()))
 }
 
 func resetRegistryMetrics() {
-	graphRevisionRegistryEntries.Reset()
-	graphRevisionRegistryTransitions.Reset()
-	graphRevisionRegistryEvictions.Reset()
+	metrics.GraphRevisionRegistryEntries.Reset()
+	metrics.GraphRevisionRegistryTransitions.Reset()
+	metrics.GraphRevisionRegistryEvictions.Reset()
 }

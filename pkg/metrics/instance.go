@@ -12,27 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package instance
+package metrics
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
-
-func init() {
-	metrics.Registry.MustRegister(
-		instanceStateTransitionsTotal,
-		instanceReconcileDurationSeconds,
-		instanceReconcileTotal,
-		instanceReconcileErrorsTotal,
-		instanceGraphResolutionSuccessTotal,
-		instanceGraphResolutionFailuresTotal,
-		instanceGraphResolutionPendingTotal,
-	)
-}
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	instanceStateTransitionsTotal = prometheus.NewCounterVec(
+	InstanceStateTransitionsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_state_transitions_total",
 			Help: "Total number of instance state transitions per GVR",
@@ -40,7 +25,7 @@ var (
 		[]string{"gvr", "from_state", "to_state"},
 	)
 
-	instanceReconcileDurationSeconds = prometheus.NewHistogramVec(
+	InstanceReconcileDurationSeconds = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "instance_reconcile_duration_seconds",
 			Help:    "Duration of instance reconciliation in seconds per GVR",
@@ -49,7 +34,7 @@ var (
 		[]string{"gvr"},
 	)
 
-	instanceReconcileTotal = prometheus.NewCounterVec(
+	InstanceReconcileTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_reconcile_total",
 			Help: "Total number of instance reconciliations per GVR",
@@ -57,7 +42,7 @@ var (
 		[]string{"gvr"},
 	)
 
-	instanceReconcileErrorsTotal = prometheus.NewCounterVec(
+	InstanceReconcileErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_reconcile_errors_total",
 			Help: "Total number of instance reconciliation errors per GVR",
@@ -65,7 +50,7 @@ var (
 		[]string{"gvr"},
 	)
 
-	instanceGraphResolutionSuccessTotal = prometheus.NewCounterVec(
+	InstanceGraphResolutionSuccessTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_graph_resolution_success_total",
 			Help: "Total number of successful graph resolutions during instance reconciliation",
@@ -73,7 +58,7 @@ var (
 		[]string{"gvr"},
 	)
 
-	instanceGraphResolutionFailuresTotal = prometheus.NewCounterVec(
+	InstanceGraphResolutionFailuresTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_graph_resolution_failures_total",
 			Help: "Total number of graph resolution failures during instance reconciliation",
@@ -81,7 +66,7 @@ var (
 		[]string{"gvr", "reason"},
 	)
 
-	instanceGraphResolutionPendingTotal = prometheus.NewCounterVec(
+	InstanceGraphResolutionPendingTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "instance_graph_resolution_pending_total",
 			Help: "Total number of graph resolutions deferred due to pending revision",

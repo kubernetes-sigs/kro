@@ -28,6 +28,7 @@ import (
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // setResourceGraphDefinitionStatus calculates the ResourceGraphDefinition status and updates it
@@ -54,7 +55,7 @@ func (r *ResourceGraphDefinitionReconciler) updateStatus(
 	}
 
 	if oldState != o.Status.State && oldState != "" {
-		stateTransitionsTotal.WithLabelValues(o.Name, string(oldState), string(o.Status.State)).Inc()
+		metrics.RGDStateTransitionsTotal.WithLabelValues(o.Name, string(oldState), string(o.Status.State)).Inc()
 	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {

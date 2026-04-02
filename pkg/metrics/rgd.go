@@ -12,36 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package resourcegraphdefinition
+package metrics
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
 	rgdLabels                   = []string{"name"}
-	stateTransitionLabels       = []string{"name", "from", "to"}
-	graphRevisionReasonLabels   = []string{"reason"}
-	graphRevisionResultLabels   = []string{"result"}
-	graphRevisionRegistryLabels = []string{"reason"}
+	rgdStateTransitionLabels    = []string{"name", "from", "to"}
+	rgdGraphRevisionReasonLabel = []string{"reason"}
+	rgdGraphRevisionResultLabel = []string{"result"}
 
-	graphBuildTotal                *prometheus.CounterVec
-	graphBuildDuration             *prometheus.HistogramVec
-	graphBuildErrorsTotal          *prometheus.CounterVec
-	stateTransitionsTotal          *prometheus.CounterVec
-	deletionsTotal                 *prometheus.CounterVec
-	deletionDuration               *prometheus.HistogramVec
-	graphRevisionIssueTotal        *prometheus.CounterVec
-	graphRevisionWaitTotal         *prometheus.CounterVec
-	graphRevisionResolutionTotal   *prometheus.CounterVec
-	graphRevisionRegistryMissTotal *prometheus.CounterVec
-	graphRevisionGCDeletedTotal    *prometheus.CounterVec
-	graphRevisionGCErrorsTotal     *prometheus.CounterVec
-)
-
-func init() {
-	graphBuildTotal = prometheus.NewCounterVec(
+	RGDGraphBuildTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rgd_graph_build_total",
 			Help: "Total number of resource graph builds",
@@ -49,7 +30,7 @@ func init() {
 		rgdLabels,
 	)
 
-	graphBuildDuration = prometheus.NewHistogramVec(
+	RGDGraphBuildDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "rgd_graph_build_duration_seconds",
 			Help:    "Duration of resource graph builds in seconds",
@@ -58,7 +39,7 @@ func init() {
 		rgdLabels,
 	)
 
-	graphBuildErrorsTotal = prometheus.NewCounterVec(
+	RGDGraphBuildErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rgd_graph_build_errors_total",
 			Help: "Total number of resource graph build errors",
@@ -66,15 +47,15 @@ func init() {
 		rgdLabels,
 	)
 
-	stateTransitionsTotal = prometheus.NewCounterVec(
+	RGDStateTransitionsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rgd_state_transitions_total",
 			Help: "Total number of RGD state transitions",
 		},
-		stateTransitionLabels,
+		rgdStateTransitionLabels,
 	)
 
-	deletionsTotal = prometheus.NewCounterVec(
+	RGDDeletionsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rgd_deletions_total",
 			Help: "Total number of RGD deletions",
@@ -82,7 +63,7 @@ func init() {
 		rgdLabels,
 	)
 
-	deletionDuration = prometheus.NewHistogramVec(
+	RGDDeletionDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "rgd_deletion_duration_seconds",
 			Help:    "Duration of RGD deletions in seconds",
@@ -91,39 +72,39 @@ func init() {
 		rgdLabels,
 	)
 
-	graphRevisionIssueTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionIssueTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_issue_total",
 			Help: "Total number of GraphRevision objects issued by the RGD controller",
 		},
-		graphRevisionReasonLabels,
+		rgdGraphRevisionReasonLabel,
 	)
 
-	graphRevisionWaitTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionWaitTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_wait_total",
 			Help: "Total number of times the RGD controller waited for GraphRevision progress",
 		},
-		graphRevisionReasonLabels,
+		rgdGraphRevisionReasonLabel,
 	)
 
-	graphRevisionResolutionTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionResolutionTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_resolution_total",
 			Help: "Total number of GraphRevision resolution outcomes in the RGD controller",
 		},
-		graphRevisionResultLabels,
+		rgdGraphRevisionResultLabel,
 	)
 
-	graphRevisionRegistryMissTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionRegistryMissTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_registry_miss_total",
 			Help: "Total number of times the RGD controller observed GraphRevisions ahead of the in-memory registry",
 		},
-		graphRevisionRegistryLabels,
+		rgdGraphRevisionReasonLabel,
 	)
 
-	graphRevisionGCDeletedTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionGCDeletedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_gc_deleted_total",
 			Help: "Total number of GraphRevision objects deleted by RGD garbage collection",
@@ -131,26 +112,11 @@ func init() {
 		[]string{},
 	)
 
-	graphRevisionGCErrorsTotal = prometheus.NewCounterVec(
+	RGDGraphRevisionGCErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kro_rgd_graph_revision_gc_errors_total",
 			Help: "Total number of GraphRevision garbage collection errors in the RGD controller",
 		},
 		[]string{},
 	)
-
-	metrics.Registry.MustRegister(
-		graphBuildTotal,
-		graphBuildDuration,
-		graphBuildErrorsTotal,
-		stateTransitionsTotal,
-		deletionsTotal,
-		deletionDuration,
-		graphRevisionIssueTotal,
-		graphRevisionWaitTotal,
-		graphRevisionResolutionTotal,
-		graphRevisionRegistryMissTotal,
-		graphRevisionGCDeletedTotal,
-		graphRevisionGCErrorsTotal,
-	)
-}
+)

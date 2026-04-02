@@ -19,12 +19,13 @@ import (
 	"fmt"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // CheckReadiness evaluates readyWhen expressions using observed state.
 // Ignored nodes are treated as ready for dependency gating purposes.
 func (n *Node) CheckReadiness() error {
-	nodeReadyCheckTotal.Inc()
+	metrics.NodeReadyCheckTotal.Inc()
 
 	// Ignored nodes are satisfied for dependency gating - dependents shouldn't block.
 	ignored, err := n.IsIgnored()
@@ -37,7 +38,7 @@ func (n *Node) CheckReadiness() error {
 
 	err = n.checkObservedReadiness()
 	if err != nil && errors.Is(err, ErrWaitingForReadiness) {
-		nodeNotReadyTotal.Inc()
+		metrics.NodeNotReadyTotal.Inc()
 	}
 
 	return err

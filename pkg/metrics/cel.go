@@ -12,36 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cel
+package metrics
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	exprEvalTotal    prometheus.Counter
-	exprEvalDuration prometheus.Histogram
-)
-
-func init() {
-	exprEvalTotal = prometheus.NewCounter(
+	ExprEvalTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "cel_expr_eval_total",
 			Help: "Total number of CEL expression evaluations",
 		},
 	)
 
-	exprEvalDuration = prometheus.NewHistogram(
+	ExprEvalDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "cel_expr_eval_duration_seconds",
 			Help:    "Duration of CEL expression evaluations in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
 	)
-
-	metrics.Registry.MustRegister(
-		exprEvalTotal,
-		exprEvalDuration,
-	)
-}
+)

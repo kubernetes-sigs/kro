@@ -15,9 +15,11 @@
 package revisions
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // RevisionState is the runtime status of a revision in the in-memory cache.
@@ -102,9 +104,9 @@ func (r *Registry) Put(entry Entry) {
 	}
 
 	if existing, ok := bucket.entries[entry.Revision]; ok {
-		graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(existing.State)).Dec()
+		metrics.GraphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(existing.State)).Dec()
 		if existing.State != entry.State {
-			graphRevisionRegistryTransitions.WithLabelValues(
+			metrics.GraphRevisionRegistryTransitions.WithLabelValues(
 				revisionStateLabel(existing.State),
 				revisionStateLabel(entry.State),
 			).Inc()
@@ -112,7 +114,7 @@ func (r *Registry) Put(entry Entry) {
 	}
 
 	bucket.entries[entry.Revision] = entry
-	graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Inc()
+	metrics.GraphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Inc()
 	if !bucket.hasLatest || entry.Revision > bucket.latestRevision {
 		bucket.latestRevision = entry.Revision
 		bucket.hasLatest = true
@@ -201,8 +203,8 @@ func (r *Registry) Delete(rgdName string, revision int64) {
 	}
 
 	delete(bucket.entries, revision)
-	graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
-	graphRevisionRegistryEvictions.WithLabelValues().Inc()
+	metrics.GraphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
+	metrics.GraphRevisionRegistryEvictions.WithLabelValues().Inc()
 	if len(bucket.entries) == 0 {
 		delete(r.byRGD, rgdName)
 		return
@@ -230,9 +232,9 @@ func (r *Registry) DeleteAll(rgdName string) {
 	}
 
 	for _, entry := range bucket.entries {
-		graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
+		metrics.GraphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(entry.State)).Dec()
 	}
-	graphRevisionRegistryEvictions.WithLabelValues().Add(float64(len(bucket.entries)))
+	metrics.GraphRevisionRegistryEvictions.WithLabelValues().Add(float64(len(bucket.entries)))
 	delete(r.byRGD, rgdName)
 }
 
@@ -251,13 +253,13 @@ func (r *Registry) DeleteRevisionsBefore(rgdName string, minRevision int64) {
 	deleted := 0
 	for revision := range bucket.entries {
 		if revision < minRevision {
-			graphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(bucket.entries[revision].State)).Dec()
+			metrics.GraphRevisionRegistryEntries.WithLabelValues(revisionStateLabel(bucket.entries[revision].State)).Dec()
 			delete(bucket.entries, revision)
 			deleted++
 		}
 	}
 	if deleted > 0 {
-		graphRevisionRegistryEvictions.WithLabelValues().Add(float64(deleted))
+		metrics.GraphRevisionRegistryEvictions.WithLabelValues().Add(float64(deleted))
 	}
 
 	if len(bucket.entries) == 0 {
@@ -271,6 +273,12 @@ func (r *Registry) DeleteRevisionsBefore(rgdName string, minRevision int64) {
 	}
 
 	recomputeLatest(bucket)
+}
+
+// revisionStateLabel converts a RevisionState to a lowercase string suitable
+// for use as a Prometheus label value.
+func revisionStateLabel(state RevisionState) string {
+	return strings.ToLower(string(state))
 }
 
 func recomputeLatest(bucket *rgdBucket) {

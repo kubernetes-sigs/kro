@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
+
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -85,7 +87,7 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	nodeIgnoredCheckTotal.Inc()
+	metrics.NodeIgnoredCheckTotal.Inc()
 
 	// Check if any dependency is ignored (contagious).
 	for _, dep := range n.deps {
@@ -94,7 +96,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, err
 		}
 		if ignored {
-			nodeIgnoredTotal.Inc()
+			metrics.NodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -150,7 +152,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
-			nodeIgnoredTotal.Inc()
+			metrics.NodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -191,10 +193,10 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		nodeEvalDuration.Observe(duration.Seconds())
-		nodeEvalTotal.Inc()
+		metrics.NodeEvalDuration.Observe(duration.Seconds())
+		metrics.NodeEvalTotal.Inc()
 		if err != nil {
-			nodeEvalErrorsTotal.Inc()
+			metrics.NodeEvalErrorsTotal.Inc()
 		}
 	}()
 

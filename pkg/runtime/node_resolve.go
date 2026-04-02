@@ -23,6 +23,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
 )
 
@@ -58,7 +59,7 @@ func (n *Node) hardResolveCollection(vars []*variable.ResourceField, setIndexLab
 		return nil, err
 	}
 
-	collectionSize.Observe(float64(len(items)))
+	metrics.CollectionSize.Observe(float64(len(items)))
 
 	if len(items) == 0 {
 		// Resolved empty collection: return non-nil empty slice to distinguish

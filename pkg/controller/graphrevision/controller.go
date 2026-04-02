@@ -34,6 +34,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 type compileGraphFunc func(*krov1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error)
@@ -109,7 +110,7 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 		// Evict only after finalizer removal succeeds. If patching fails, the GR is
 		// still present in the API and must remain visible in cache for warmup paths.
 		r.registry.Delete(obj.Spec.Snapshot.Name, obj.Spec.Revision)
-		graphRevisionFinalizerEvictionsTotal.WithLabelValues().Inc()
+		metrics.GraphRevisionFinalizerEvictionsTotal.WithLabelValues().Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -120,9 +121,9 @@ func (r *GraphRevisionReconciler) Reconcile(ctx context.Context, obj *internalv1
 	topologicalOrder, resources, activeEntry, reconcileErr := r.reconcileGraphRevision(ctx, obj)
 
 	if err := r.updateStatus(ctx, obj, topologicalOrder, resources); err != nil {
-		graphRevisionStatusUpdateErrorsTotal.WithLabelValues().Inc()
+		metrics.GraphRevisionStatusUpdateErrorsTotal.WithLabelValues().Inc()
 		if reconcileErr == nil && activeEntry != nil {
-			graphRevisionActivationDeferredTotal.WithLabelValues().Inc()
+			metrics.GraphRevisionActivationDeferredTotal.WithLabelValues().Inc()
 		}
 		reconcileErr = errors.Join(reconcileErr, err)
 		return ctrl.Result{}, reconcileErr
@@ -194,8 +195,8 @@ func (r *GraphRevisionReconciler) compileGraphRevision(
 	startTime := time.Now()
 	result := "failed"
 	defer func() {
-		graphRevisionCompileDuration.WithLabelValues(result).Observe(time.Since(startTime).Seconds())
-		graphRevisionCompileTotal.WithLabelValues(result).Inc()
+		metrics.GraphRevisionCompileDuration.WithLabelValues(result).Observe(time.Since(startTime).Seconds())
+		metrics.GraphRevisionCompileTotal.WithLabelValues(result).Inc()
 	}()
 
 	snapshotRGD := &krov1alpha1.ResourceGraphDefinition{

@@ -91,7 +91,7 @@ All RGD controller metrics include the label `name` (the `metadata.name` of the 
 
 ## REST Client Metrics
 
-Registered via `pkg/metrics/clientgo.go`. These fill gaps left by controller-runtime v0.16+, which stopped registering client-go latency, size, and retry histograms.
+Registered via the centralized `pkg/metrics.Register(...)` path. These fill gaps left by controller-runtime v0.16+, which stopped registering client-go latency, size, and retry histograms.
 
 | Metric | Type | Labels | Description | Stability |
 |--------|------|--------|-------------|-----------|

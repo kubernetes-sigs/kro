@@ -12,54 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dynamiccontroller
+package metrics
 
-import (
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-
-	"github.com/prometheus/client_golang/prometheus"
-)
-
-func init() {
-	// Register metrics with the global prometheus registry
-	metrics.Registry.MustRegister(
-		reconcileTotal,
-		requeueTotal,
-		reconcileDuration,
-		gvrCount,
-		queueLength,
-		handlerCount,
-		handlerAttachTotal,
-		handlerDetachTotal,
-		handlerErrorsTotal,
-		informerSyncDuration,
-		informerEventsTotal,
-		watchCount,
-		instanceWatchCount,
-		watchRequestCount,
-		routeTotal,
-		routeMatchTotal,
-	)
-}
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	// reconcileTotal is a counter that tracks the total number of reconciliations per GVR
-	reconcileTotal = prometheus.NewCounterVec(
+	DynReconcileTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_reconcile_total",
 			Help: "Total number of reconciliations per GVR",
 		},
 		[]string{"gvr"},
 	)
-	requeueTotal = prometheus.NewCounterVec(
+	DynRequeueTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_requeue_total",
 			Help: "Total number of requeues per GVR",
 		},
 		[]string{"gvr", "type"},
 	)
-	// tracking the duration of reconciliations per GVR
-	reconcileDuration = prometheus.NewHistogramVec(
+	DynReconcileDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "dynamic_controller_reconcile_duration_seconds",
 			Help:    "Duration of reconciliations per GVR",
@@ -67,38 +39,38 @@ var (
 		},
 		[]string{"gvr"},
 	)
-	gvrCount = prometheus.NewGauge(
+	DynGVRCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_gvr_count",
 			Help: "Number of Instance GVRs currently managed by the controller",
 		},
 	)
-	queueLength = prometheus.NewGauge(
+	DynQueueLength = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_queue_length",
 			Help: "Current length of the workqueue",
 		},
 	)
-	handlerCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	DynHandlerCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "dynamic_controller_handler_count_total",
 		Help: "Number of active handlers used for distributing events to instance controllers",
 	}, []string{"type"})
-	handlerAttachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	DynHandlerAttachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dynamic_controller_handler_attach_total",
 		Help: "Total number of handler attachments by handler type",
 	}, []string{"type"})
-	handlerDetachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	DynHandlerDetachTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "dynamic_controller_handler_detach_total",
 		Help: "Total number of handler detachments by handler type",
 	}, []string{"type"})
-	handlerErrorsTotal = prometheus.NewCounterVec(
+	DynHandlerErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_handler_errors_total",
 			Help: "Total number of errors encountered by handlers per GVR",
 		},
 		[]string{"gvr"},
 	)
-	informerSyncDuration = prometheus.NewHistogramVec(
+	DynInformerSyncDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "dynamic_controller_informer_sync_duration_seconds",
 			Help:    "Duration of informer cache sync per GVR",
@@ -106,42 +78,41 @@ var (
 		},
 		[]string{"gvr"},
 	)
-	informerEventsTotal = prometheus.NewCounterVec(
+	DynInformerEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_informer_events_total",
 			Help: "Total number of events processed by informers per GVR and event type",
 		},
 		[]string{"gvr", "event_type"},
 	)
-	// New watch-layer metrics
-	watchCount = prometheus.NewGauge(
+	DynWatchCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_watch_count",
 			Help: "Number of active informers managed by the WatchManager",
 		},
 	)
-	instanceWatchCount = prometheus.NewGaugeVec(
+	DynInstanceWatchCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_instance_watch_count",
 			Help: "Number of active instance watchers by parent GVR",
 		},
 		[]string{"parent_gvr"},
 	)
-	watchRequestCount = prometheus.NewGaugeVec(
+	DynWatchRequestCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "dynamic_controller_watch_request_count",
 			Help: "Number of active watch requests by GVR and type (scalar/collection)",
 		},
 		[]string{"gvr", "type"},
 	)
-	routeTotal = prometheus.NewCounterVec(
+	DynRouteTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_route_total",
 			Help: "Total events routed through the coordinator by GVR",
 		},
 		[]string{"gvr"},
 	)
-	routeMatchTotal = prometheus.NewCounterVec(
+	DynRouteMatchTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dynamic_controller_route_match_total",
 			Help: "Total events that matched at least one instance by GVR",

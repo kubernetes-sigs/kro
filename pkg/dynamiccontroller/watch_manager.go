@@ -28,6 +28,8 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // WatchManager manages informer lifecycle per GVR.
@@ -103,7 +105,7 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID stri
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancel = cancel
 	go w.informer.RunWithContext(ctx)
-	watchCount.Set(float64(len(m.watches)))
+	metrics.DynWatchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Informer started", "gvr", gvr)
 
 	// Release the lock before blocking on cache sync.
@@ -115,12 +117,12 @@ func (m *WatchManager) EnsureWatch(gvr schema.GroupVersionResource, ownerID stri
 	defer syncCancel()
 
 	if !cache.WaitForCacheSync(syncCtx.Done(), w.informer.HasSynced) {
-		informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
+		metrics.DynInformerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 		m.forceStopWatch(gvr)
 		m.ReleaseWatch(gvr, ownerID)
 		return fmt.Errorf("cache sync timeout for %s", gvr)
 	}
-	informerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
+	metrics.DynInformerSyncDuration.WithLabelValues(gvr.String()).Observe(time.Since(syncStart).Seconds())
 	return nil
 }
 
@@ -232,7 +234,7 @@ func (m *WatchManager) stopWatchLocked(gvr schema.GroupVersionResource, force bo
 	_ = w.informer.RemoveEventHandler(w.handlerReg)
 	w.cancel()
 	delete(m.watches, gvr)
-	watchCount.Set(float64(len(m.watches)))
+	metrics.DynWatchCount.Set(float64(len(m.watches)))
 	m.log.V(1).Info("Watch stopped", "gvr", gvr)
 }
 

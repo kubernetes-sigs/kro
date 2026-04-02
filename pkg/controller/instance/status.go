@@ -25,6 +25,7 @@ import (
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
 	"github.com/kubernetes-sigs/kro/pkg/apis"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -199,7 +200,7 @@ func (c *Controller) updateStatus(rcx *ReconcileContext) error {
 	newState := rcx.StateManager.State
 	if v1alpha1.InstanceState(previousState) != newState {
 		gvk := rcx.Instance.GroupVersionKind().String()
-		instanceStateTransitionsTotal.WithLabelValues(
+		metrics.InstanceStateTransitionsTotal.WithLabelValues(
 			gvk,
 			previousState,
 			string(newState),

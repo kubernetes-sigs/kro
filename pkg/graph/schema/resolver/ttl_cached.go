@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/cel/openapi/resolver"
 	"k8s.io/kube-openapi/pkg/validation/spec"
+
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // TTLCachedSchemaResolver caches schemas with LRU eviction and time-based expiration
@@ -46,7 +48,7 @@ func NewTTLCachedSchemaResolver(
 	cache := lru.NewLRU(
 		maxSize,
 		func(key schema.GroupVersionKind, value *spec.Schema) {
-			cacheEvictionsTotal.Inc()
+			metrics.SchemaResolverCacheEvictionsTotal.Inc()
 		},
 		ttl,
 	)
@@ -62,11 +64,11 @@ func NewTTLCachedSchemaResolver(
 func (c *TTLCachedSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*spec.Schema, error) {
 	// Check cache first
 	if schema, ok := c.cache.Get(gvk); ok {
-		cacheHitsTotal.Inc()
+		metrics.SchemaResolverCacheHitsTotal.Inc()
 		return schema, nil
 	}
 
-	cacheMissesTotal.Inc()
+	metrics.SchemaResolverCacheMissesTotal.Inc()
 
 	// Use singleflight to ensure only one API call per GVK
 	key := gvk.String()
@@ -79,21 +81,21 @@ func (c *TTLCachedSchemaResolver) ResolveSchema(gvk schema.GroupVersionKind) (*s
 		// Actually fetch from delegate
 		start := time.Now()
 		schema, err := c.delegate.ResolveSchema(gvk)
-		apiCallDuration.Observe(time.Since(start).Seconds())
+		metrics.SchemaResolverAPICallDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
-			schemaResolutionErrorsTotal.Inc()
+			metrics.SchemaResolutionErrorsTotal.Inc()
 			return nil, err
 		}
 
 		// Store in cache (LRU handles eviction automatically)
 		c.cache.Add(gvk, schema)
-		cacheSize.Set(float64(c.cache.Len()))
+		metrics.SchemaResolverCacheSize.Set(float64(c.cache.Len()))
 
 		return schema, nil
 	})
 
 	if shared {
-		singleflightDeduplicatedTotal.Inc()
+		metrics.SchemaResolverSingleflightDeduplicatedTotal.Inc()
 	}
 
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/cel"
 
 	"github.com/kubernetes-sigs/kro/pkg/cel/conversion"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // Expression wraps a CEL expression with its compiled program and metadata.
@@ -87,8 +88,8 @@ func (e *Expression) UserExpression() string {
 func (e *Expression) Eval(ctx map[string]any) (any, error) {
 	startTime := time.Now()
 	defer func() {
-		exprEvalDuration.Observe(time.Since(startTime).Seconds())
-		exprEvalTotal.Inc()
+		metrics.ExprEvalDuration.Observe(time.Since(startTime).Seconds())
+		metrics.ExprEvalTotal.Inc()
 	}()
 
 	out, _, err := e.Program.Eval(ctx)

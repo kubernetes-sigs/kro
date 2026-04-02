@@ -29,6 +29,7 @@ import (
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	internalv1alpha1 "github.com/kubernetes-sigs/kro/api/internal.kro.run/v1alpha1"
@@ -59,7 +60,7 @@ func init() {
 }
 
 func main() {
-	metrics.Register()
+	metrics.Register(ctrlmetrics.Registry)
 
 	var (
 		metricsAddr                                 string

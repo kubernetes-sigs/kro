@@ -74,7 +74,7 @@ var (
 
 	RGDGraphRevisionIssueTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_issue_total",
+			Name: "rgd_graph_revision_issue_total",
 			Help: "Total number of GraphRevision objects issued by the RGD controller",
 		},
 		rgdGraphRevisionReasonLabel,
@@ -82,7 +82,7 @@ var (
 
 	RGDGraphRevisionWaitTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_wait_total",
+			Name: "rgd_graph_revision_wait_total",
 			Help: "Total number of times the RGD controller waited for GraphRevision progress",
 		},
 		rgdGraphRevisionReasonLabel,
@@ -90,7 +90,7 @@ var (
 
 	RGDGraphRevisionResolutionTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_resolution_total",
+			Name: "rgd_graph_revision_resolution_total",
 			Help: "Total number of GraphRevision resolution outcomes in the RGD controller",
 		},
 		rgdGraphRevisionResultLabel,
@@ -98,7 +98,7 @@ var (
 
 	RGDGraphRevisionRegistryMissTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_registry_miss_total",
+			Name: "rgd_graph_revision_registry_miss_total",
 			Help: "Total number of times the RGD controller observed GraphRevisions ahead of the in-memory registry",
 		},
 		rgdGraphRevisionReasonLabel,
@@ -106,7 +106,7 @@ var (
 
 	RGDGraphRevisionGCDeletedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_gc_deleted_total",
+			Name: "rgd_graph_revision_gc_deleted_total",
 			Help: "Total number of GraphRevision objects deleted by RGD garbage collection",
 		},
 		[]string{},
@@ -114,7 +114,7 @@ var (
 
 	RGDGraphRevisionGCErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_rgd_graph_revision_gc_errors_total",
+			Name: "rgd_graph_revision_gc_errors_total",
 			Help: "Total number of GraphRevision garbage collection errors in the RGD controller",
 		},
 		[]string{},

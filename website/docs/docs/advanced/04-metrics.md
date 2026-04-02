@@ -8,7 +8,7 @@ kro exposes Prometheus metrics for monitoring controller health and performance.
 
 :::warning Metrics Stability
 
-kro-specific metrics (Dynamic Controller, Schema Resolver, REST Client) are in **ALPHA** and subject to change or removal without notice. Metric names, labels, and types may change between releases with no backwards-compatibility guarantees.
+kro-specific metrics are in **ALPHA** and subject to change or removal without notice. Metric names, labels, and types may change between releases with no backwards-compatibility guarantees.
 
 Only **controller-runtime** and **workqueue** metrics are considered **STABLE**.
 
@@ -41,6 +41,11 @@ metrics:
 | `dynamic_controller_handler_detach_total` | Counter | Total number of handler detachments by type | ALPHA |
 | `dynamic_controller_informer_events_total` | Counter | Total number of events processed by informers per GVR and event type | ALPHA |
 | `dynamic_controller_informer_sync_duration_seconds` | Histogram | Duration of informer cache sync per GVR in seconds | ALPHA |
+| `dynamic_controller_watch_count` | Gauge | Number of active informers managed by the WatchManager | ALPHA |
+| `dynamic_controller_instance_watch_count` | Gauge | Number of active instance watchers by parent GVR | ALPHA |
+| `dynamic_controller_watch_request_count` | Gauge | Number of active watch requests by GVR and type (scalar/collection) | ALPHA |
+| `dynamic_controller_route_total` | Counter | Total events routed through the coordinator by GVR | ALPHA |
+| `dynamic_controller_route_match_total` | Counter | Total events that matched at least one instance by GVR | ALPHA |
 
 ## Schema Resolver Metrics
 
@@ -88,6 +93,42 @@ All RGD controller metrics include the label `name` (the `metadata.name` of the 
 | `rgd_state_transitions_total` | Counter | Total number of RGD state transitions (additional labels: `from`, `to`) | ALPHA |
 | `rgd_deletions_total` | Counter | Total number of RGD deletions | ALPHA |
 | `rgd_deletion_duration_seconds` | Histogram | Duration of RGD deletions in seconds | ALPHA |
+| `rgd_graph_revision_issue_total` | Counter | Total number of GraphRevision objects issued by the RGD controller | ALPHA |
+| `rgd_graph_revision_wait_total` | Counter | Total number of times the RGD controller waited for GraphRevision progress | ALPHA |
+| `rgd_graph_revision_resolution_total` | Counter | Total number of GraphRevision resolution outcomes | ALPHA |
+| `rgd_graph_revision_registry_miss_total` | Counter | Total number of times the RGD controller observed GraphRevisions ahead of the in-memory registry | ALPHA |
+| `rgd_graph_revision_gc_deleted_total` | Counter | Total number of GraphRevision objects deleted by RGD garbage collection | ALPHA |
+| `rgd_graph_revision_gc_errors_total` | Counter | Total number of GraphRevision garbage collection errors | ALPHA |
+
+## Instance Controller Metrics
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `instance_state_transitions_total` | Counter | Total number of instance state transitions per GVR | ALPHA |
+| `instance_reconcile_duration_seconds` | Histogram | Duration of instance reconciliation in seconds per GVR | ALPHA |
+| `instance_reconcile_total` | Counter | Total number of instance reconciliations per GVR | ALPHA |
+| `instance_reconcile_errors_total` | Counter | Total number of instance reconciliation errors per GVR | ALPHA |
+| `instance_graph_resolution_success_total` | Counter | Total number of successful graph resolutions during instance reconciliation | ALPHA |
+| `instance_graph_resolution_failures_total` | Counter | Total number of graph resolution failures during instance reconciliation | ALPHA |
+| `instance_graph_resolution_pending_total` | Counter | Total number of graph resolutions deferred due to pending revision | ALPHA |
+
+## GraphRevision Controller Metrics
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `graph_revision_compile_total` | Counter | Total number of GraphRevision compile attempts by result | ALPHA |
+| `graph_revision_compile_duration_seconds` | Histogram | Duration of GraphRevision compile attempts in seconds | ALPHA |
+| `graph_revision_status_update_errors_total` | Counter | Total number of GraphRevision status update failures | ALPHA |
+| `graph_revision_activation_deferred_total` | Counter | Total number of times GraphRevision activation was deferred until status persistence succeeds | ALPHA |
+| `graph_revision_finalizer_evictions_total` | Counter | Total number of registry evictions triggered by GraphRevision finalizer cleanup | ALPHA |
+
+## Revision Registry Metrics
+
+| Metric | Type | Description | Stability |
+|--------|------|-------------|-----------|
+| `graph_revision_registry_entries` | Gauge | Current number of GraphRevision entries in the in-memory registry by state | ALPHA |
+| `graph_revision_registry_transitions_total` | Counter | Total number of GraphRevision registry state transitions | ALPHA |
+| `graph_revision_registry_evictions_total` | Counter | Total number of GraphRevision registry evictions | ALPHA |
 
 ## REST Client Metrics
 

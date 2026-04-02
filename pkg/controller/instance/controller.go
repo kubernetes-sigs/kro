@@ -180,6 +180,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	}
 	if apierrors.IsNotFound(err) {
 		log.Info("instance not found (likely deleted)")
+		if features.FeatureGate.Enabled(features.InstanceConditionMetrics) {
+			metrics.DeleteInstanceMetrics(c.gvr, req.Namespace, req.Name)
+		}
 		return nil
 	}
 	if err != nil {
@@ -187,9 +190,13 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 		return err
 	}
 
-	// Emit condition events on every return path (behind feature gate).
+	// Snapshot initial conditions and emit telemetry on every return path.
+	// Events and metrics are gated behind separate feature flags so operators
+	// can enable them independently.
+	eventsEnabled := features.FeatureGate.Enabled(features.InstanceConditionEvents)
+	metricsEnabled := features.FeatureGate.Enabled(features.InstanceConditionMetrics)
 	var rcx *ReconcileContext
-	if features.FeatureGate.Enabled(features.InstanceConditionEvents) {
+	if eventsEnabled || metricsEnabled {
 		initialConditions := conditionsFromInstance(inst)
 		defer func() {
 			obj := inst
@@ -197,7 +204,12 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 				obj = rcx.Instance
 			}
 			finalConditions := conditionsFromInstance(obj)
-			emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+			if eventsEnabled {
+				emitConditionEvents(c.eventRecorder, obj, initialConditions, finalConditions)
+			}
+			if metricsEnabled {
+				metrics.EmitConditionMetrics(log, c.gvr, obj, initialConditions, finalConditions)
+			}
 		}()
 	}
 

@@ -22,7 +22,7 @@ var (
 
 	GraphRevisionRegistryEntries = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "kro_graph_revision_registry_entries",
+			Name: "graph_revision_registry_entries",
 			Help: "Current number of GraphRevision entries in the in-memory registry by state",
 		},
 		graphRevisionRegistryStateLabels,
@@ -30,7 +30,7 @@ var (
 
 	GraphRevisionRegistryTransitions = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_graph_revision_registry_transitions_total",
+			Name: "graph_revision_registry_transitions_total",
 			Help: "Total number of GraphRevision registry state transitions",
 		},
 		graphRevisionRegistryTransitionLabels,
@@ -38,7 +38,7 @@ var (
 
 	GraphRevisionRegistryEvictions = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_graph_revision_registry_evictions_total",
+			Name: "graph_revision_registry_evictions_total",
 			Help: "Total number of GraphRevision registry evictions",
 		},
 		[]string{},

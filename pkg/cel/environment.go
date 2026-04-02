@@ -119,6 +119,7 @@ func BaseDeclarations() []cel.EnvOption {
 			library.Random(),
 			library.Maps(),
 			library.JSON(),
+			library.Hash(),
 			library.Lists(),
 			// Omit() is registered globally so CEL can parse and type-check it
 			// everywhere. The graph builder rejects it in restricted contexts

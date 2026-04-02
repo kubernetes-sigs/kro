@@ -114,4 +114,4 @@ kro is complementary to, not competitive with, other Kubernetes tools.
 
 ### Path to v1
 
-The project is actively iterating toward a v1 GA API. Features are proposed and tracked through individual KREPs, each reviewed and merged on its own timeline.
+The project is actively iterating toward a v1 GA API. Features are proposed and tracked through individual KREPs, each reviewed and merged on its own timeline. See the [v1 roadmap](../v1-roadmap.md) for release history, planned features, and implementation tracking.

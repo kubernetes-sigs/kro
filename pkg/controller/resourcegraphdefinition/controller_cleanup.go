@@ -24,7 +24,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/features"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // cleanupResourceGraphDefinition handles the deletion of a ResourceGraphDefinition by shutting down its associated
@@ -35,15 +37,21 @@ import (
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
+	gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+
 	// Check in-memory map to avoid stale status data
 	if _, registered := r.registeredControllers.Load(rgd.UID); registered {
 		// shutdown microcontroller
-		gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
 		if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
 			return fmt.Errorf("failed to shutdown microcontroller: %w", err)
 		}
 	} else {
 		ctrl.LoggerFrom(ctx).V(1).Info("skipping controller shutdown, controller was never registered", "name", rgd.Name)
+	}
+
+	// Clean up all instance-level condition metrics for this GVR.
+	if features.FeatureGate.Enabled(features.InstanceConditionMetrics) {
+		metrics.DeleteGVRMetrics(gvr)
 	}
 
 	// Registry eviction is NOT done here. The GraphRevision controller evicts

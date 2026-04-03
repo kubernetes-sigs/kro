@@ -158,8 +158,8 @@ This switches the chart to the `-debug` image tag and configures the controller 
 Use the dedicated Make targets when building or publishing the pprof-enabled image:
 
 ```bash
-make build-debug-image RELEASE_VERSION=v0.9.0
-make publish-debug-image RELEASE_VERSION=v0.9.0
+make build-debug-image RELEASE_VERSION=v0.9.1
+make publish-debug-image RELEASE_VERSION=v0.9.1
 ```
 
 If you deploy with `image.ko=true` or use `ko apply` directly, build with `GOFLAGS="-tags=pprof"` so the pprof handlers are compiled into the controller binary.

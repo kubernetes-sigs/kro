@@ -109,13 +109,16 @@ func BaseDeclarations() []cel.EnvOption {
 			ext.Bindings(),
 			cel.OptionalTypes(),
 			ext.Encoders(),
-			// Kubernetes CEL libraries: enable url(), getHost(), regex helpers, etc.
+			// Kubernetes CEL libraries: url(), regex, quantity, ip(), cidr(), semver(), etc.
 			// See https://kubernetes.io/docs/reference/using-api/cel/ and
 			// https://github.com/kubernetes-sigs/kro/issues/880.
 			k8scellib.Lists(),
 			k8scellib.URLs(),
 			k8scellib.Regex(),
 			k8scellib.Quantity(),
+			k8scellib.IP(),
+			k8scellib.CIDR(),
+			k8scellib.SemverLib(),
 			library.Random(),
 			library.Maps(),
 			library.JSON(),

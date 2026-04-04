@@ -157,6 +157,12 @@ article {
   padding: 0.35rem 0.6rem;
 }
 
+/* Full-width markdown tables */
+.markdown table {
+  width: 100%;
+  display: table;
+}
+
 /* Smaller table of contents */
 .table-of-contents {
   font-size: 0.8rem;

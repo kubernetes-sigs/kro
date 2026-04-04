@@ -332,6 +332,9 @@ The `?` operator prevents kro from validating the field's existence at build tim
 | URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)   |
 | Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex)  |
 | Quantity                    | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Quantity) |
+| IP                          | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#IP)     |
+| CIDR                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#CIDR)   |
+| Semver                      | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#SemverLib) |
 
 The kro **Index Mutation** library adds three pure list functions (they return a new list and do not modify the input):
 
@@ -376,6 +379,100 @@ value: ${base64.encode(hash.sha256(schema.spec.data))}
 
 # MD5 hash
 value: ${base64.encode(hash.md5(schema.spec.data))}
+```
+
+### IP
+
+Parse and inspect IPv4 and IPv6 addresses. Supports the same functions available in Kubernetes CEL validation rules.
+
+| Function | Returns | Description |
+|---|---|---|
+| `ip(string)` | `IP` | Parse a string into an IP address. Errors if invalid. |
+| `isIP(string)` | `bool` | Returns true if the string is a valid IPv4 or IPv6 address. |
+| `ip.isCanonical(string)` | `bool` | Returns true if the string is in canonical IP form. |
+| `<IP>.family()` | `int` | Returns `4` or `6`. |
+| `<IP>.isLoopback()` | `bool` | True for `127.x.x.x` (v4) or `::1` (v6). |
+| `<IP>.isGlobalUnicast()` | `bool` | True for globally routable addresses. |
+| `<IP>.isLinkLocalUnicast()` | `bool` | True for link-local unicast (`169.254.x.x` / `fe80::/10`). |
+| `<IP>.isLinkLocalMulticast()` | `bool` | True for link-local multicast (`224.0.0.x` / `ff00::/8`). |
+| `<IP>.isUnspecified()` | `bool` | True for `0.0.0.0` or `::`. |
+| `string(<IP>)` | `string` | Convert back to string. |
+
+**Examples:**
+
+```kro
+# Validate an IP address from user input
+ready: ${isIP(schema.spec.clusterIP)}
+
+# Check IP family for dual-stack logic
+family: ${string(ip(schema.spec.podIP).family())}
+
+# Gate on global unicast
+isRoutable: ${ip(schema.spec.address).isGlobalUnicast()}
+```
+
+### CIDR
+
+Parse and inspect CIDR subnet notation. Works with both IPv4 and IPv6.
+
+| Function | Returns | Description |
+|---|---|---|
+| `cidr(string)` | `CIDR` | Parse a CIDR string (e.g. `192.168.0.0/24`). Errors if invalid or has non-zero host bits. |
+| `isCIDR(string)` | `bool` | Returns true if the string is valid CIDR notation. |
+| `<CIDR>.containsIP(string\|IP)` | `bool` | True if the CIDR contains the given IP. |
+| `<CIDR>.containsCIDR(string\|CIDR)` | `bool` | True if the CIDR fully contains the given subnet. |
+| `<CIDR>.ip()` | `IP` | Returns the address part of the CIDR. |
+| `<CIDR>.prefixLength()` | `int` | Returns the prefix length in bits. |
+| `<CIDR>.masked()` | `CIDR` | Returns the CIDR in canonical masked form. |
+| `string(<CIDR>)` | `string` | Convert back to string. |
+
+**Examples:**
+
+```kro
+# Check if a pod IP falls within the service CIDR
+inRange: ${cidr(schema.spec.serviceCIDR).containsIP(pod.status.podIP)}
+
+# Validate that a user-provided CIDR is valid
+valid: ${isCIDR(schema.spec.subnetCIDR)}
+
+# Extract prefix length
+prefixLen: ${string(cidr(schema.spec.subnetCIDR).prefixLength())}
+
+# Check subnet containment
+isSubnet: ${cidr('10.0.0.0/8').containsCIDR(schema.spec.vpcCIDR)}
+```
+
+### Semver
+
+Parse and compare [semantic versions](https://semver.org). Supports optional normalization to handle common non-strict formats like `v1.0` or `01.02.03`.
+
+| Function | Returns | Description |
+|---|---|---|
+| `semver(string)` | `Semver` | Parse a strict semver string (e.g. `1.2.3`). |
+| `semver(string, bool)` | `Semver` | Parse with normalization enabled (strips `v` prefix, fills missing parts, removes leading zeros). |
+| `isSemver(string)` | `bool` | Returns true if the string is a valid semver. |
+| `isSemver(string, bool)` | `bool` | Same with optional normalization. |
+| `<Semver>.major()` | `int` | Major version number. |
+| `<Semver>.minor()` | `int` | Minor version number. |
+| `<Semver>.patch()` | `int` | Patch version number. |
+| `<Semver>.isGreaterThan(Semver)` | `bool` | True if receiver > operand. |
+| `<Semver>.isLessThan(Semver)` | `bool` | True if receiver < operand. |
+| `<Semver>.compareTo(Semver)` | `int` | Returns `-1`, `0`, or `1`. |
+
+**Examples:**
+
+```kro
+# Gate on minimum version
+ready: ${semver(schema.spec.version).isGreaterThan(semver('2.0.0')) || semver(schema.spec.version).compareTo(semver('2.0.0')) == 0}
+
+# Extract major version for image tag
+majorTag: ${string(semver(schema.spec.appVersion).major())}
+
+# Validate version string
+validVersion: ${isSemver(schema.spec.version)}
+
+# Use normalization for tolerant parsing (v prefix, short forms)
+normalized: ${isSemver(schema.spec.version, true)}
 ```
 
 For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).

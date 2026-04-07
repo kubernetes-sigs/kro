@@ -9,19 +9,17 @@ import "fmt"
 
 // Resource is a parsed Graph resource entry.
 type Resource struct {
-	ID           string
-	Template     map[string]any
-	ExternalRef  map[string]any
-	ForEach      map[string]string
-	IncludeWhen  []string
-	ReadyWhen    []string // CEL conditions; all must be true for the resource to be "ready"
-	Contribution bool     // If true, partial SSA without owner references
+	ID          string
+	Template    map[string]any
+	ExternalRef map[string]any
+	ForEach     map[string]string
+	IncludeWhen []string
+	ReadyWhen   []string // CEL conditions; all must be true for the resource to be "ready"
 }
 
 // GraphSpec holds the parsed spec of a Graph object.
 type GraphSpec struct {
-	Resources      []Resource
-	StatusTemplate map[string]any // CEL expressions to evaluate for user-defined status fields
+	Resources []Resource
 }
 
 // AllIdentifiers returns every identifier that CEL expressions in this spec
@@ -75,8 +73,7 @@ func (s *GraphSpec) AllExpressions() []string {
 	}
 
 	// Collect expressions from each resource
-	for _, res := range s.Resources {
-		// Template expressions
+	for _, res := range s.Resources { // Template expressions
 		var templateStrings []string
 		collectStrings(res.Template, &templateStrings)
 		add(templateStrings)
@@ -96,11 +93,6 @@ func (s *GraphSpec) AllExpressions() []string {
 		add(res.ReadyWhen)
 	}
 
-	// Status template expressions
-	var statusStrings []string
-	collectStrings(s.StatusTemplate, &statusStrings)
-	add(statusStrings)
-
 	return exprs
 }
 
@@ -119,14 +111,7 @@ func extractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
 		return nil, err
 	}
 
-	gs := &GraphSpec{Resources: resources}
-
-	// Parse optional spec.status — a map of CEL expression strings
-	if statusRaw, ok := spec["status"].(map[string]any); ok {
-		gs.StatusTemplate = statusRaw
-	}
-
-	return gs, nil
+	return &GraphSpec{Resources: resources}, nil
 }
 
 // parseResourceList converts a raw resource list into Resources.
@@ -174,9 +159,6 @@ func parseResourceList(raw any) ([]Resource, error) {
 					res.ReadyWhen = append(res.ReadyWhen, s)
 				}
 			}
-		}
-		if contrib, ok := m["contribution"].(bool); ok {
-			res.Contribution = contrib
 		}
 		resources = append(resources, res)
 	}

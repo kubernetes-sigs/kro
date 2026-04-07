@@ -46,6 +46,7 @@ type reconcileState struct {
 	reconcileErr   error
 	resourceCount  int
 	appliedCount   int
+	contributions  []string // resource IDs detected as contributions
 }
 
 // deriveState computes the Graph state from the reconcile outcome.
@@ -70,6 +71,9 @@ func (s *reconcileState) deriveAcceptedCondition() (status string, reason string
 		// Classify the error
 		if errors.Is(s.acceptedErr, ErrCompilationFailed) {
 			return ConditionFalse, "CompilationFailed", s.acceptedErr.Error()
+		}
+		if errors.Is(s.acceptedErr, ErrCycleDetected) {
+			return ConditionFalse, "CycleDetected", s.acceptedErr.Error()
 		}
 		return ConditionFalse, "InvalidSpec", s.acceptedErr.Error()
 	}
@@ -104,19 +108,19 @@ func (s *reconcileState) deriveReadyCondition() (status string, reason string, m
 // updateStatus writes the Graph's status subresource. Reads the latest version
 // from the API server to avoid conflicts. Used for error paths early in the
 // reconcile loop (before pruneAndUpdateStatus takes over).
-func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.Unstructured, state *reconcileState, statusTemplate map[string]any, eval *evaluator) error {
+func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.Unstructured, state *reconcileState) error {
 	latest := &unstructured.Unstructured{}
 	latest.SetGroupVersionKind(GraphGVK)
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(graph), latest); err != nil {
 		return fmt.Errorf("reading latest for status update: %w", err)
 	}
-	return r.updateStatusOnLatest(ctx, latest, state, statusTemplate, eval)
+	return r.updateStatusOnLatest(ctx, latest, state)
 }
 
 // updateStatusOnLatest writes status using a pre-fetched latest object.
 // This avoids a redundant GET when the caller already has a fresh copy
 // (e.g., from pruneAndUpdateStatus).
-func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unstructured.Unstructured, state *reconcileState, statusTemplate map[string]any, eval *evaluator) error {
+func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unstructured.Unstructured, state *reconcileState) error {
 	derivedState := state.deriveState()
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -172,16 +176,15 @@ func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unst
 		},
 	}
 
-	// Merge user-defined status fields (soft resolve — omit fields that fail)
-	if len(statusTemplate) > 0 && eval != nil {
-		userStatus := eval.statusTemplate(statusTemplate)
-		for k, v := range userStatus {
-			// Don't let user fields overwrite controller-managed fields
-			if k == "state" || k == "conditions" {
-				continue
-			}
-			status[k] = v
+	// Surface detected contributions in status (design: "The Graph's status
+	// surfaces which resources were detected as contributions, making the
+	// inference observable.")
+	if len(state.contributions) > 0 {
+		contribs := make([]any, len(state.contributions))
+		for i, id := range state.contributions {
+			contribs[i] = id
 		}
+		status["contributions"] = contribs
 	}
 
 	// Skip the status write if nothing changed. Compare via JSON to avoid

@@ -82,10 +82,6 @@ func TestFullLifecycle(t *testing.T) {
 						},
 					},
 				},
-				"status": map[string]any{
-					"deploymentName": "${deployment.metadata.name}",
-					"serviceName":    "${service.metadata.name}",
-				},
 			},
 		},
 	}
@@ -120,7 +116,7 @@ func TestFullLifecycle(t *testing.T) {
 	// Verify Service is managed by Graph
 	assertManagedBy(t, svc, "test-lifecycle")
 
-	// Wait for status to show Active with user-defined fields
+	// Wait for status to show Active
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
@@ -128,19 +124,16 @@ func TestFullLifecycle(t *testing.T) {
 			return false, nil
 		}
 		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		deployName, _, _ := unstructured.NestedString(g.Object, "status", "deploymentName")
-		return state == "Active" && deployName == "lifecycle-deploy", nil
+		return state == "Active", nil
 	}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))
 
-	deployName, _, _ := unstructured.NestedString(g.Object, "status", "deploymentName")
-	serviceName, _, _ := unstructured.NestedString(g.Object, "status", "serviceName")
-	assert.Equal(t, "lifecycle-deploy", deployName)
-	assert.Equal(t, "lifecycle-deploy-svc", serviceName)
-	t.Logf("Status: deploymentName=%s serviceName=%s", deployName, serviceName)
+	state, _, _ := unstructured.NestedString(g.Object, "status", "state")
+	assert.Equal(t, "Active", state)
+	t.Logf("Status: state=%s", state)
 
 	// --- Phase 2: Update and verify ---
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))

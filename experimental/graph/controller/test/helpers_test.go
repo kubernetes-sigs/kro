@@ -155,7 +155,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 												"\"metadata\": {\"name\": instance.metadata.name, \"namespace\": instance.metadata.namespace}" +
 												"}}]" +
 												" + rgd.spec.resources" +
-												" + [{\"id\": \"statusContrib\", \"contribution\": true, \"template\": {" +
+												" + [{\"id\": \"statusContrib\", \"template\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +
 												"\"metadata\": {\"name\": instance.metadata.name, \"namespace\": instance.metadata.namespace}," +

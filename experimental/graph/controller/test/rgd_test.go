@@ -96,12 +96,10 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 										},
 									},
 									// L2: Contribute status + annotations back to the instance.
-									// A single contribution: true declaration handles both
-									// metadata fields (via regular SSA) and status fields
-									// (via status subresource) automatically.
+									// Auto-detected as contribution: template has only
+									// apiVersion, kind, metadata, and status (no spec).
 									map[string]any{
-										"id":           "statusContrib",
-										"contribution": true,
+										"id": "statusContrib",
 										"template": map[string]any{
 											"apiVersion": "test.kro.run/v1alpha1",
 											"kind":       "SimpleApp",

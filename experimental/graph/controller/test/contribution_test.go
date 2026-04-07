@@ -78,11 +78,11 @@ func TestContribution(t *testing.T) {
 							},
 						},
 					},
-					// Contribution: write status fields back to the external object.
-					// No owner reference — this is a partial SSA apply.
+					// Contribution: write metadata back to the external object.
+					// Auto-detected because the template has only apiVersion,
+					// kind, and metadata keys (no spec/data fields).
 					map[string]any{
-						"id":           "status",
-						"contribution": true,
+						"id": "status",
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
@@ -92,13 +92,6 @@ func TestContribution(t *testing.T) {
 									"kro.run/deployment-name": "${deployment.metadata.name}",
 									"kro.run/deployment-uid":  "${deployment.metadata.uid}",
 								},
-							},
-							// We write to data since ConfigMaps don't have status subresource.
-							// In real usage this would be a status subresource write.
-							"data": map[string]any{
-								"image":          "${schema.data.image}",
-								"replicas":       "${schema.data.replicas}",
-								"deploymentName": "${deployment.metadata.name}",
 							},
 						},
 					},
@@ -125,8 +118,8 @@ func TestContribution(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "webapp-instance", Namespace: ns}, updated); err != nil {
 			return false, nil
 		}
-		data, _, _ := unstructured.NestedStringMap(updated.Object, "data")
-		return data["deploymentName"] == "webapp-instance-deployment", nil
+		ann := updated.GetAnnotations()
+		return ann["kro.run/deployment-name"] == "webapp-instance-deployment", nil
 	}))
 
 	// Re-read the external object to verify
@@ -134,18 +127,19 @@ func TestContribution(t *testing.T) {
 	updatedExternal.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "webapp-instance", Namespace: ns}, updatedExternal))
 
-	// THE PROOF: The external object now has fields written by the Graph
-	data, _, _ := unstructured.NestedStringMap(updatedExternal.Object, "data")
-	assert.Equal(t, "webapp-instance-deployment", data["deploymentName"],
-		"contribution should write deployment name to external object")
-	assert.Equal(t, "nginx:latest", data["image"],
-		"contribution should preserve existing fields")
-
+	// THE PROOF: The external object now has annotations written by the Graph
 	annotations := updatedExternal.GetAnnotations()
 	assert.Equal(t, "webapp-instance-deployment", annotations["kro.run/deployment-name"],
 		"contribution should write annotations to external object")
 	assert.NotEmpty(t, annotations["kro.run/deployment-uid"],
 		"contribution should write server-assigned UID")
+
+	// Original data should be preserved — contribution only touched metadata
+	data, _, _ := unstructured.NestedStringMap(updatedExternal.Object, "data")
+	assert.Equal(t, "nginx:latest", data["image"],
+		"contribution should preserve existing data fields")
+	assert.Equal(t, "3", data["replicas"],
+		"contribution should preserve existing data fields")
 
 	// THE KEY ASSERTION: The external object should NOT be managed by the Graph.
 	// Contributions are partial — they don't set management labels.
@@ -153,9 +147,9 @@ func TestContribution(t *testing.T) {
 	assert.NotEqual(t, "test-contribution", extLabels["internal.kro.run/graph-name"],
 		"contribution should NOT set management labels on external object")
 
-	t.Logf("Contribution applied: webapp-instance now has deploymentName=%s, deployment-uid=%s",
-		data["deploymentName"], annotations["kro.run/deployment-uid"])
-	t.Log("Partial SSA proved: Graph wrote fields to external object without taking ownership")
+	t.Logf("Contribution applied: webapp-instance now has deployment-name=%s, deployment-uid=%s",
+		annotations["kro.run/deployment-name"], annotations["kro.run/deployment-uid"])
+	t.Log("Partial SSA proved: Graph wrote metadata to external object without taking ownership")
 }
 
 // TestResourcePruning proves that removing a resource from the Graph spec

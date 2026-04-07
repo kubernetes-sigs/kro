@@ -1,5 +1,7 @@
 package graphcontroller
 
+import "fmt"
+
 // DAG builds a dependency graph from a list of Resources by scanning their
 // CEL expressions for variable references. It provides topological ordering
 // and dependency-aware planning for the reconcile loop.
@@ -8,10 +10,14 @@ type DAG struct {
 	Nodes []DAGNode
 	// Index from resource ID to node index
 	Index map[string]int
-	// TopologicalOrder is the apply order (respects dependencies)
+	// TopologicalOrder is the apply order (respects dependencies).
+	// Computed via Kahn's algorithm — declaration order is not significant.
 	TopologicalOrder []int
-	// ReverseOrder is the delete order
+	// ReverseOrder is the delete order (reverse of TopologicalOrder).
 	ReverseOrder []int
+	// Contributions are resource IDs that were detected as contributions
+	// from the template shape (only apiVersion/kind/metadata/status keys).
+	Contributions map[string]bool
 }
 
 // DAGNode represents a resource in the dependency graph.
@@ -23,10 +29,14 @@ type DAGNode struct {
 
 // BuildDAG constructs a dependency graph from a resource list.
 // Dependencies are extracted by scanning CEL expressions for variable references.
-func BuildDAG(resources []Resource) *DAG {
+// Returns an error if the dependency graph contains a cycle (ErrCycleDetected).
+// Declaration order is not significant — topological order is computed from
+// the dependency graph via Kahn's algorithm.
+func BuildDAG(resources []Resource) (*DAG, error) {
 	dag := &DAG{
-		Nodes: make([]DAGNode, len(resources)),
-		Index: make(map[string]int, len(resources)),
+		Nodes:         make([]DAGNode, len(resources)),
+		Index:         make(map[string]int, len(resources)),
+		Contributions: make(map[string]bool),
 	}
 
 	for i, res := range resources {
@@ -36,19 +46,99 @@ func BuildDAG(resources []Resource) *DAG {
 			Dependencies: refs,
 		}
 		dag.Index[res.ID] = i
+
+		// Detect contributions from template shape: a template whose keys
+		// are a subset of {apiVersion, kind, metadata, status} is a
+		// contribution — it underspecifies the resource, writing only
+		// metadata and/or status fields on an object someone else owns.
+		if res.Template != nil && isContributionTemplate(res.Template) {
+			dag.Contributions[res.ID] = true
+		}
 	}
 
-	// Topological sort. Since resources are declared in order and can only
-	// reference prior resources, the declaration order IS a valid topological
-	// order. We verify this and use it directly.
-	dag.TopologicalOrder = make([]int, len(resources))
-	dag.ReverseOrder = make([]int, len(resources))
-	for i := range resources {
-		dag.TopologicalOrder[i] = i
-		dag.ReverseOrder[i] = len(resources) - 1 - i
+	// Kahn's algorithm: topological sort with cycle detection.
+	// inDegree counts how many in-graph dependencies each node has.
+	n := len(resources)
+	inDegree := make([]int, n)
+	for i, node := range dag.Nodes {
+		for depID := range node.Dependencies {
+			if _, exists := dag.Index[depID]; exists {
+				inDegree[i]++
+			}
+		}
 	}
 
-	return dag
+	// Seed the queue with nodes that have no in-graph dependencies.
+	var queue []int
+	for i, d := range inDegree {
+		if d == 0 {
+			queue = append(queue, i)
+		}
+	}
+
+	var order []int
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		order = append(order, curr)
+
+		currID := dag.Nodes[curr].Resource.ID
+		// Decrement in-degree for every node that depends on curr.
+		for i, node := range dag.Nodes {
+			if node.Dependencies[currID] {
+				inDegree[i]--
+				if inDegree[i] == 0 {
+					queue = append(queue, i)
+				}
+			}
+		}
+	}
+
+	if len(order) != n {
+		// Nodes remaining with non-zero in-degree form the cycle.
+		var cycleIDs []string
+		for i, d := range inDegree {
+			if d > 0 {
+				cycleIDs = append(cycleIDs, dag.Nodes[i].Resource.ID)
+			}
+		}
+		return nil, fmt.Errorf("resources %v form a dependency cycle: %w", cycleIDs, ErrCycleDetected)
+	}
+
+	dag.TopologicalOrder = order
+	dag.ReverseOrder = make([]int, n)
+	for i, idx := range order {
+		dag.ReverseOrder[n-1-i] = idx
+	}
+
+	return dag, nil
+}
+
+// isContributionTemplate checks if a template's field structure indicates
+// a contribution. A template that contains only apiVersion, kind, metadata,
+// and/or status fields (no spec or other resource-specific fields) is a
+// contribution — it underspecifies the resource, writing only metadata
+// and/or status on an object someone else manages.
+//
+// This implements one of the two detection criteria from the design:
+// "specifying only status and metadata." The other criterion — "omitting
+// required fields" via OpenAPI schema comparison — is not yet implemented.
+// A template that writes a partial spec (some spec fields but not all
+// required ones) will NOT be detected as a contribution by this check.
+// When OpenAPI detection is added, it will catch those cases.
+func isContributionTemplate(tmpl map[string]any) bool {
+	if len(tmpl) == 0 {
+		return false
+	}
+	for key := range tmpl {
+		switch key {
+		case "apiVersion", "kind", "metadata", "status":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // NodeState tracks the reconcile-time state of a single node.

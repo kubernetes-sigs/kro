@@ -34,31 +34,6 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	return &evaluator{cache: e.cache, scope: scope}
 }
 
-// statusTemplate evaluates user-defined status fields against the scope.
-// Uses soft resolution: fields whose expressions fail (data-pending) are omitted
-// rather than causing an error. This matches the existing RGD behavior where
-// status is best-effort.
-func (e *evaluator) statusTemplate(template map[string]any) map[string]any {
-	if len(template) == 0 {
-		return nil
-	}
-
-	result := make(map[string]any, len(template))
-	for key, val := range template {
-		evaluated, err := e.template(val)
-		if err != nil {
-			// Soft resolve: skip fields that can't be evaluated yet
-			continue
-		}
-		result[key] = evaluated
-	}
-
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
 // checkReadiness evaluates readyWhen conditions against an observed resource.
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
 // or data-pending.

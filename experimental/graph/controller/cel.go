@@ -44,6 +44,10 @@ var ErrCompilationFailed = errors.New("compilation failed")
 // field or the Graph spec changes to no longer write that field.
 var ErrFieldConflict = errors.New("field conflict")
 
+// ErrCycleDetected indicates that the dependency graph contains a cycle.
+// This is a permanent error until the spec is fixed.
+var ErrCycleDetected = errors.New("cycle detected")
+
 // celDataPendingPatterns are CEL error patterns that indicate data is not yet
 // available (retryable). Other CEL errors are considered expression bugs.
 //
@@ -148,6 +152,13 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 		return nil, fmt.Errorf("creating CEL env: %w", err)
 	}
 
+	// Build the dependency graph. Cycle detection happens here — a cycle
+	// in the dependency graph sets Accepted=False with CycleDetected reason.
+	dag, err := BuildDAG(spec.Resources)
+	if err != nil {
+		return nil, err
+	}
+
 	expressions := spec.AllExpressions()
 	programs := make(map[string]cel.Program, len(expressions))
 
@@ -168,7 +179,7 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 		env:        env,
 		programs:   programs,
 		spec:       spec,
-		dag:        BuildDAG(spec.Resources),
+		dag:        dag,
 	}, nil
 }
 

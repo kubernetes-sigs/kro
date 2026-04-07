@@ -100,13 +100,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		graphSpec, err := extractGraphSpec(graph.Object)
 		if err != nil {
 			logger.Error(err, "extracting graph spec")
-			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}, nil, nil)
+			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
 			return ctrl.Result{}, err
 		}
 		cache, err = compileGraph(graphSpec, graph.GetGeneration())
 		if err != nil {
 			logger.Error(err, "compiling graph expressions")
-			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}, nil, nil)
+			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
 			return ctrl.Result{}, err
 		}
 		r.Caches.set(cacheKey, cache)
@@ -189,6 +189,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	hasDataPending, hasNotReady, _, _, hasConflict, readyCount := plan.Summary()
 	needsRequeue := hasDataPending || hasNotReady
 
+	// Collect detected contributions for status reporting.
+	var contributions []string
+	for id := range dag.Contributions {
+		contributions = append(contributions, id)
+	}
+
 	// 6. Prune + update status in a single read-modify-write sequence.
 	// Both operations need a fresh read of the Graph object. Consolidating
 	// them avoids a redundant GET.
@@ -200,8 +206,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		hasDataPending: hasDataPending,
 		hasNotReady:    hasNotReady,
 		hasConflict:    hasConflict,
+		contributions:  contributions,
 	}
-	if err := r.pruneAndUpdateStatus(ctx, graph, appliedKeys, hasDataPending, rstate, graphSpec.StatusTemplate, eval); err != nil {
+	if err := r.pruneAndUpdateStatus(ctx, graph, appliedKeys, hasDataPending, rstate); err != nil {
 		logger.Error(err, "prune and status update")
 	}
 
@@ -413,7 +420,9 @@ func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstruct
 	// plus status subresource patch if .status is present.
 	// This absorbs the Kubernetes subresource split — Graph authors don't
 	// need to know about it.
-	if res.Contribution {
+	// Contribution detection is from the template shape (only metadata/status
+	// keys) — determined at compile time and stored in the DAG.
+	if eval.cache.dag.Contributions[res.ID] {
 		applied, err := r.applyContribution(ctx, graph, evalMap, watcher)
 		if err != nil {
 			return "", err
@@ -682,7 +691,7 @@ func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName
 
 // pruneAndUpdateStatus consolidates prune and status update into a single
 // read-modify-write sequence on the Graph object. One GET instead of two.
-func (r *GraphReconciler) pruneAndUpdateStatus(ctx context.Context, graph *unstructured.Unstructured, currentKeys []string, hasDataPending bool, state *reconcileState, statusTemplate map[string]any, eval *evaluator) error {
+func (r *GraphReconciler) pruneAndUpdateStatus(ctx context.Context, graph *unstructured.Unstructured, currentKeys []string, hasDataPending bool, state *reconcileState) error {
 	logger := log.FromContext(ctx)
 
 	// Single GET of the Graph object for both prune and status.
@@ -764,7 +773,7 @@ func (r *GraphReconciler) pruneAndUpdateStatus(ctx context.Context, graph *unstr
 	}
 
 	// --- Update status ---
-	return r.updateStatusOnLatest(ctx, latest, state, statusTemplate, eval)
+	return r.updateStatusOnLatest(ctx, latest, state)
 }
 
 func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructured.Unstructured) (ctrl.Result, error) {
@@ -795,12 +804,12 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// Pass 1: Issue deletes for all managed resources.
-	// Only delete resources that have our template hash annotation — proof
-	// that the controller successfully applied to them. Resources that were
-	// in NodeConflict from the start (pre-existing, never successfully
-	// applied) are left alone.
-	for _, key := range keys {
+	// Pass 1: Issue deletes in reverse topological order.
+	// Rebuild DAG from the spec to determine dependency ordering.
+	// The annotation is an unordered set — deletion ordering comes from the
+	// dependency graph, not from annotation serialization.
+	deleteOrder := r.deletionOrder(graph, keys)
+	for _, key := range deleteOrder {
 		if key == "" {
 			continue
 		}
@@ -857,6 +866,66 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// deletionOrder returns annotation keys ordered for deletion: reverse dependency
+// order from the DAG. Rebuilds the DAG from the Graph spec. Maps resource keys
+// to DAG positions by matching kind/name. Unmatched keys are deleted first.
+func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) []string {
+	graphSpec, err := extractGraphSpec(graph.Object)
+	if err != nil {
+		return keys
+	}
+	dag, err := BuildDAG(graphSpec.Resources)
+	if err != nil {
+		return keys
+	}
+
+	// Map kind/name to DAG index from static template metadata.
+	kindNameToIndex := map[string]int{}
+	for i, node := range dag.Nodes {
+		tmpl := node.Resource.Template
+		if tmpl == nil {
+			continue
+		}
+		kind, _ := tmpl["kind"].(string)
+		md, _ := tmpl["metadata"].(map[string]any)
+		if md == nil {
+			continue
+		}
+		name, _ := md["name"].(string)
+		if kind == "" || name == "" || strings.Contains(name, "${") {
+			continue
+		}
+		kindNameToIndex[kind+"/"+name] = i
+	}
+
+	type scored struct {
+		key   string
+		index int
+	}
+	scored_keys := make([]scored, 0, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		gvk, nn := parseResourceKey(key)
+		idx, ok := kindNameToIndex[gvk.Kind+"/"+nn.Name]
+		if !ok {
+			idx = len(dag.Nodes) // unmatched → deleted first
+		}
+		scored_keys = append(scored_keys, scored{key: key, index: idx})
+	}
+
+	sort.Slice(scored_keys, func(i, j int) bool {
+		return scored_keys[i].index > scored_keys[j].index
+	})
+
+	result := make([]string, len(scored_keys))
+	for i, s := range scored_keys {
+		result[i] = s.key
+	}
+	return result
 }
 
 // SetupWithManager registers the controller with the manager.

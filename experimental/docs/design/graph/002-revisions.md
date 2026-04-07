@@ -133,12 +133,12 @@ re-interpreted. This is the migration path.
 
 ### Ownership
 
-Ownership is tracked via labels and finalizers, not ownerReferences.
-OwnerReferences don't work across scopes (namespace → cluster or vice versa)
-and bind to UIDs that break on delete+recreate. Labels
-(`internal.kro.run/graph-name`) identify the parent. Finalizers on the Graph
-ensure managed resources and revisions are cleaned up before the Graph object
-is removed. Deletion unwinds the graph in reverse dependency order.
+Ownership is tracked via finalizers, not ownerReferences. OwnerReferences
+don't work across scopes (namespace → cluster or vice versa) and bind to
+UIDs that break on delete+recreate. Finalizers on the Graph ensure managed
+resources and revisions are cleaned up before the Graph object is removed.
+Deletion unwinds in reverse dependency order. See 005-ownership for field
+ownership and tracking mechanics.
 
 ### Lineage
 
@@ -166,7 +166,8 @@ The lifecycle has three phases:
    `Active=False`. The controller reconciles managed resources toward the new
    revision: resources present in both revisions are updated if their
    template-hash changed, resources only in the new revision are created,
-   resources only in the old revision are deleted.
+   resources only in the old revision are released and conditionally deleted
+   per the lifecycle algorithm in 005-ownership.
 
 Old revisions are pruned when they no longer have resources in the cluster —
 once all resources have been migrated to the active revision or deleted, the
@@ -194,4 +195,4 @@ and immutable snapshot. A marker field does the work a separate Kind should do.
 carries the cost of coordination without the benefit of independence.
 
 **ownerReferences.** Don't work across scopes. Bind to UIDs that break on
-delete+recreate. Labels and finalizers handle ownership and teardown.
+delete+recreate. Finalizers handle teardown.

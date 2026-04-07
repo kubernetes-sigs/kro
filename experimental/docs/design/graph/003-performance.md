@@ -57,44 +57,24 @@ this. Every informer-based controller has this property.
 
 ## Field Ownership
 
-The controller never forces ownership on resources it creates. When the
-template hash doesn't match and the controller applies, it uses server-side
-apply without forcing ownership.
-
-If a resource already exists and another field manager owns some of the same
-fields, the apply returns a 409. The controller doesn't fight. It marks the
-resource as conflicted and moves on.
-
-A conflict on one resource doesn't stop the rest of the Graph. Independent
-branches keep working. Only resources that depend on the conflicted one are
-blocked. The Graph status reports which resource is conflicted and why.
-
-The controller doesn't poll waiting for conflicts to resolve. The watch on
-the conflicted resource fires if it changes, which triggers a new reconcile.
-If the other actor releases ownership or the resource is deleted, the next
-reconcile succeeds.
-
-If a resource was never successfully applied (it was in conflict from the
-start), the controller doesn't delete it when the Graph is deleted. The
-template hash annotation is the proof of successful ownership — no
-annotation means it was never ours.
-
-Contributions are the exception. A contribution is a partial template that
-writes fields on an object someone else manages. They force ownership because
-that is their purpose. A 409 on a contribution would defeat the reason it
-exists.
+Field ownership mechanics — apply behavior, conflict detection, and deletion
+safety — are defined in 005-ownership. This section covers only the
+performance-relevant interaction: template hashing skips the apply when the
+desired state is unchanged. When the apply is skipped, the controller does
+not re-assert field ownership or inspect managedFields for conflicts.
+Ownership is re-asserted on the next apply triggered by a template change.
 
 ## Drift
 
 Drift from edits that don't take SSA ownership (like kubectl edit) is not
 restored. The controller's template hash still matches, so it skips the
 apply. The edit persists until the Graph's template output changes. At that
-point, SSA restores the controller's desired state because it still owns
-those fields.
+point, the apply restores the controller's desired state.
 
 Drift from edits that take SSA ownership (another controller's server-side
-apply with force) produces a 409. The controller surfaces the conflict. It
-doesn't try to take the field back.
+apply with force) persists until the template hash changes and triggers a
+new apply. The controller detects ownership changes through managedFields
+inspection after applies — see 005-ownership for conflict detection.
 
 This is the same tradeoff as pod-template-hash in Deployments. The
 controller converges on spec change, not continuously.
@@ -113,13 +93,12 @@ writes. The comparison breaks the loop.
 
 ## Plan States
 
-| State         | Meaning                           | Downstream effect    |
+| State         | Meaning                           | Propagation          |
 |---------------|-----------------------------------|----------------------|
 | Ready         | Applied, readyWhen satisfied      | Unblocked            |
-| NotReady      | Applied, readyWhen not satisfied  | Blocked              |
-| DataPending   | Upstream data not available yet   | Blocked (contagious) |
-| Excluded      | includeWhen false                 | Excluded (contagious)|
-| Conflict      | 409, someone else owns the fields | Blocked (contagious) |
+| NotReady      | Applied, readyWhen not satisfied  | Unblocked            |
+| Pending       | Upstream data not available yet   | Blocked              |
+| Excluded      | includeWhen false                 | Blocked              |
 
 ## Steady-State Cost
 
@@ -158,13 +137,6 @@ non-SSA edits persists until the template output changes. This is the
 pod-template-hash tradeoff: steady-state cost drops from N writes to zero.
 Drift restoration on every reconcile is an N-write tax paid continuously for
 an event that rarely happens.
-
-**ForceOwnership on first apply.** First apply without force means a
-pre-existing resource with conflicting field owners returns a 409 immediately.
-Force on first apply would silently take ownership, hiding the conflict until
-the external actor fights back. Surfacing the conflict at first contact is
-more useful than discovering it later. Contributions exist for intentional
-cross-owner writes.
 
 **Full-object informers.** The watch system uses metadata-only informers.
 Full-object informers would eliminate the need for the resource cache and the

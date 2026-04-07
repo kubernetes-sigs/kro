@@ -18,7 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	graphcontroller "github.com/kubernetes-sigs/kro/docs/design/graph/controller"
+	graphcontroller "github.com/kubernetes-sigs/kro/experimental/graph/controller"
 )
 
 // GraphGVK is a local alias for the exported controller GVK.
@@ -248,7 +248,7 @@ func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersio
 func assertManagedBy(t *testing.T, obj *unstructured.Unstructured, graphName string) {
 	t.Helper()
 	labels := obj.GetLabels()
-	assert.Equal(t, graphName, labels["kro.run/graph-name"],
+	assert.Equal(t, graphName, labels["internal.kro.run/graph-name"],
 		"%s should be managed by Graph %s", obj.GetName(), graphName)
 }
 
@@ -301,4 +301,19 @@ func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
 			}},
 		},
 	}
+}
+
+// findCondition finds a condition by type from a conditions slice.
+// Returns the condition map and true if found, nil and false otherwise.
+func findCondition(conditions []any, condType string) (map[string]any, bool) {
+	for _, c := range conditions {
+		cMap, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cMap["type"] == condType {
+			return cMap, true
+		}
+	}
+	return nil, false
 }

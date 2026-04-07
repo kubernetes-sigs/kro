@@ -71,12 +71,18 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 	assert.Equal(t, "Active", state)
 
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-	require.Len(t, conditions, 1)
-	cond := conditions[0].(map[string]any)
-	assert.Equal(t, "Ready", cond["type"])
+	require.Len(t, conditions, 2)
+
+	accepted, ok := findCondition(conditions, "Accepted")
+	require.True(t, ok, "Accepted condition should exist")
+	assert.Equal(t, "True", accepted["status"])
+	assert.Equal(t, "Accepted", accepted["reason"])
+
+	cond, ok := findCondition(conditions, "Ready")
+	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 	assert.Equal(t, "Ready", cond["reason"])
-	t.Logf("Status: state=%s, Ready=%s reason=%s message=%s", state, cond["status"], cond["reason"], cond["message"])
+	t.Logf("Status: state=%s, Accepted=%s, Ready=%s reason=%s message=%s", state, accepted["status"], cond["status"], cond["reason"], cond["message"])
 }
 
 // TestStatusInProgressOnReadyWhen proves that a Graph with a not-ready
@@ -151,12 +157,17 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	assert.Equal(t, "InProgress", state)
 
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-	require.Len(t, conditions, 1)
-	cond := conditions[0].(map[string]any)
-	assert.Equal(t, "Ready", cond["type"])
+	require.Len(t, conditions, 2)
+
+	accepted, ok := findCondition(conditions, "Accepted")
+	require.True(t, ok, "Accepted condition should exist")
+	assert.Equal(t, "True", accepted["status"])
+
+	cond, ok := findCondition(conditions, "Ready")
+	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "False", cond["status"])
 	assert.Equal(t, "ResourcesNotReady", cond["reason"])
-	t.Logf("Before: state=%s Ready=%s reason=%s", state, cond["status"], cond["reason"])
+	t.Logf("Before: state=%s Accepted=%s Ready=%s reason=%s", state, accepted["status"], cond["status"], cond["reason"])
 
 	// Transition source to ready
 	latestSource := &unstructured.Unstructured{}
@@ -182,8 +193,9 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	assert.Equal(t, "Active", state)
 
 	conditions, _, _ = unstructured.NestedSlice(g.Object, "status", "conditions")
-	require.Len(t, conditions, 1)
-	cond = conditions[0].(map[string]any)
+	require.Len(t, conditions, 2)
+	cond, ok = findCondition(conditions, "Ready")
+	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 	assert.Equal(t, "Ready", cond["reason"])
 	t.Logf("After: state=%s Ready=%s reason=%s", state, cond["status"], cond["reason"])
@@ -262,9 +274,14 @@ func TestStatusUserDefinedFields(t *testing.T) {
 
 	// Verify conditions are still present alongside user fields
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
-	require.Len(t, conditions, 1)
-	cond := conditions[0].(map[string]any)
-	assert.Equal(t, "Ready", cond["type"])
+	require.Len(t, conditions, 2)
+
+	accepted, ok := findCondition(conditions, "Accepted")
+	require.True(t, ok, "Accepted condition should exist")
+	assert.Equal(t, "True", accepted["status"])
+
+	cond, ok := findCondition(conditions, "Ready")
+	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 
 	t.Logf("User-defined status: appName=%s appVersion=%s configName=%s (alongside state=%s Ready=%s)",

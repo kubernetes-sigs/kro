@@ -93,19 +93,20 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// 2. Parse spec and compile (or reuse cached).
 	// The compilation phase parses the spec, builds the DAG, and compiles all
 	// CEL expressions. Everything is cached per Graph spec generation.
+	// Failures here set Accepted=False — a terminal state until the spec is fixed.
 	cacheKey := req.NamespacedName.String()
 	cache := r.Caches.get(cacheKey)
 	if cache == nil || cache.generation != graph.GetGeneration() {
 		graphSpec, err := extractGraphSpec(graph.Object)
 		if err != nil {
 			logger.Error(err, "extracting graph spec")
-			_ = r.updateStatus(ctx, graph, &reconcileState{reconcileErr: err}, nil, nil)
+			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}, nil, nil)
 			return ctrl.Result{}, err
 		}
 		cache, err = compileGraph(graphSpec, graph.GetGeneration())
 		if err != nil {
 			logger.Error(err, "compiling graph expressions")
-			_ = r.updateStatus(ctx, graph, &reconcileState{reconcileErr: err}, nil, nil)
+			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}, nil, nil)
 			return ctrl.Result{}, err
 		}
 		r.Caches.set(cacheKey, cache)
@@ -192,6 +193,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Both operations need a fresh read of the Graph object. Consolidating
 	// them avoids a redundant GET.
 	rstate := &reconcileState{
+		accepted:       true,
 		resourceCount:  len(graphSpec.Resources),
 		appliedCount:   readyCount,
 		needsRequeue:   needsRequeue,
@@ -459,8 +461,8 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	labels["kro.run/graph-name"] = graph.GetName()
-	labels["kro.run/graph-namespace"] = graph.GetNamespace()
+	labels["internal.kro.run/graph-name"] = graph.GetName()
+	labels["internal.kro.run/graph-namespace"] = graph.GetNamespace()
 	obj.SetLabels(labels)
 
 	// Watch before apply — ensures the metadata informer is running.

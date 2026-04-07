@@ -150,7 +150,7 @@ func TestContribution(t *testing.T) {
 	// THE KEY ASSERTION: The external object should NOT be managed by the Graph.
 	// Contributions are partial — they don't set management labels.
 	extLabels := updatedExternal.GetLabels()
-	assert.NotEqual(t, "test-contribution", extLabels["kro.run/graph-name"],
+	assert.NotEqual(t, "test-contribution", extLabels["internal.kro.run/graph-name"],
 		"contribution should NOT set management labels on external object")
 
 	t.Logf("Contribution applied: webapp-instance now has deploymentName=%s, deployment-uid=%s",

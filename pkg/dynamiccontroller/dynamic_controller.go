@@ -79,6 +79,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/api/v1alpha1"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 )
 
@@ -236,7 +237,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	defer dc.queue.Done(item)
 
 	// metric: queueLength
-	queueLength.Set(float64(dc.queue.Len()))
+	metrics.DynQueueLength.Set(float64(dc.queue.Len()))
 
 	handler, ok := dc.handlers.Load(item.GVR)
 	if !ok {
@@ -257,15 +258,15 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 	switch typedErr := err.(type) {
 	case *requeue.NoRequeue:
 		dc.log.Error(typedErr, "Error syncing item, not requeuing", "item", item)
-		requeueTotal.WithLabelValues(gvrKey, "no_requeue").Inc()
+		metrics.DynRequeueTotal.WithLabelValues(gvrKey, "no_requeue").Inc()
 		dc.queue.Forget(item)
 	case *requeue.RequeueNeeded:
 		dc.log.V(1).Info("Requeue needed", "item", item, "error", typedErr)
-		requeueTotal.WithLabelValues(gvrKey, "requeue").Inc()
+		metrics.DynRequeueTotal.WithLabelValues(gvrKey, "requeue").Inc()
 		dc.queue.Add(item)
 	case *requeue.RequeueNeededAfter:
 		dc.log.V(1).Info("Requeue needed after delay", "item", item, "error", typedErr, "delay", typedErr.Duration())
-		requeueTotal.WithLabelValues(gvrKey, "requeue_after").Inc()
+		metrics.DynRequeueTotal.WithLabelValues(gvrKey, "requeue_after").Inc()
 		dc.queue.AddAfter(item, typedErr.Duration())
 	default:
 		// we only check here for this not found error here because we want explicit requeue signals to have priority
@@ -274,7 +275,7 @@ func (dc *DynamicController) processNextWorkItem(ctx context.Context) bool {
 			dc.queue.Forget(item)
 			return true
 		}
-		requeueTotal.WithLabelValues(gvrKey, "rate_limited").Inc()
+		metrics.DynRequeueTotal.WithLabelValues(gvrKey, "rate_limited").Inc()
 		if dc.queue.NumRequeues(item) < dc.config.QueueMaxRetries {
 			dc.log.Error(err, "Error syncing item, requeuing with rate limit", "item", item)
 			dc.queue.AddRateLimited(item)
@@ -294,8 +295,8 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		reconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
-		reconcileTotal.WithLabelValues(gvrKey).Inc()
+		metrics.DynReconcileDuration.WithLabelValues(gvrKey).Observe(duration.Seconds())
+		metrics.DynReconcileTotal.WithLabelValues(gvrKey).Inc()
 		dc.log.V(1).Info("Finished syncing object",
 			"gvr", gvrKey, "key", oi.NamespacedName, "duration", duration)
 	}()
@@ -304,7 +305,7 @@ func (dc *DynamicController) syncFunc(ctx context.Context, oi ObjectIdentifiers,
 	// Do not count expected outcomes as handler errors: instance deleted (NotFound)
 	// and requeue signals (RequeueNeeded/RequeueNeededAfter) are normal control flow.
 	if err != nil && !apierrors.IsNotFound(err) && !requeue.IsRequeueError(err) {
-		handlerErrorsTotal.WithLabelValues(gvrKey).Inc()
+		metrics.DynHandlerErrorsTotal.WithLabelValues(gvrKey).Inc()
 	}
 	return err
 }
@@ -319,7 +320,7 @@ func (dc *DynamicController) enqueueParent(parentGVR schema.GroupVersionResource
 		GVR: parentGVR,
 	}
 	dc.log.V(1).Info("Enqueueing object", "objectIdentifiers", oi, "eventType", event.Type)
-	informerEventsTotal.WithLabelValues(parentGVR.String(), string(event.Type)).Inc()
+	metrics.DynInformerEventsTotal.WithLabelValues(parentGVR.String(), string(event.Type)).Inc()
 	dc.queue.Add(oi)
 }
 
@@ -384,9 +385,9 @@ func (dc *DynamicController) Register(
 	cleanupWatch = false
 	dc.parentWatches.Store(parent, reg)
 
-	gvrCount.Inc()
-	handlerAttachTotal.WithLabelValues("parent").Inc()
-	handlerCount.WithLabelValues("parent").Inc()
+	metrics.DynGVRCount.Inc()
+	metrics.DynHandlerAttachTotal.WithLabelValues("parent").Inc()
+	metrics.DynHandlerCount.WithLabelValues("parent").Inc()
 	dc.log.V(1).Info("Attached parent watch", "gvr", parent)
 
 	// Enqueue existing instances from parent cache.
@@ -461,11 +462,9 @@ func (dc *DynamicController) enqueueFromInformer(parentGVR schema.GroupVersionRe
 }
 
 func reconcileEnabledInUpdate(oldMeta, newMeta metav1.Object) bool {
-	oldAnnotations := oldMeta.GetAnnotations()
-	newAnnotations := newMeta.GetAnnotations()
-	oldIsDisabled := strings.EqualFold(oldAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
-	newIsDisabled := strings.EqualFold(newAnnotations[v1alpha1.InstanceReconcileAnnotation], "disabled")
-	return oldIsDisabled && !newIsDisabled
+	oldSuspended := v1alpha1.IsReconcileSuspended(oldMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
+	newSuspended := v1alpha1.IsReconcileSuspended(newMeta.GetAnnotations()[v1alpha1.InstanceReconcileAnnotation])
+	return oldSuspended && !newSuspended
 }
 
 // Deregister removes a parent GVR handler and cleans up coordinator state.
@@ -488,9 +487,9 @@ func (dc *DynamicController) Deregister(_ context.Context, parent schema.GroupVe
 		// automatically if no other owners remain.
 		dc.watches.ReleaseWatch(parent, "parent")
 
-		gvrCount.Dec()
-		handlerDetachTotal.WithLabelValues("parent").Inc()
-		handlerCount.WithLabelValues("parent").Dec()
+		metrics.DynGVRCount.Dec()
+		metrics.DynHandlerDetachTotal.WithLabelValues("parent").Inc()
+		metrics.DynHandlerCount.WithLabelValues("parent").Dec()
 		dc.log.V(1).Info("Detached parent watch", "gvr", parent)
 	}
 

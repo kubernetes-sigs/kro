@@ -12,56 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package revisions
+package metrics
 
-import (
-	"strings"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
-)
+import "github.com/prometheus/client_golang/prometheus"
 
 var (
 	graphRevisionRegistryStateLabels      = []string{"state"}
 	graphRevisionRegistryTransitionLabels = []string{"from", "to"}
 
-	graphRevisionRegistryEntries     *prometheus.GaugeVec
-	graphRevisionRegistryTransitions *prometheus.CounterVec
-	graphRevisionRegistryEvictions   *prometheus.CounterVec
-)
-
-func init() {
-	graphRevisionRegistryEntries = prometheus.NewGaugeVec(
+	GraphRevisionRegistryEntries = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "kro_graph_revision_registry_entries",
+			Name: "graph_revision_registry_entries",
 			Help: "Current number of GraphRevision entries in the in-memory registry by state",
 		},
 		graphRevisionRegistryStateLabels,
 	)
 
-	graphRevisionRegistryTransitions = prometheus.NewCounterVec(
+	GraphRevisionRegistryTransitions = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_graph_revision_registry_transitions_total",
+			Name: "graph_revision_registry_transitions_total",
 			Help: "Total number of GraphRevision registry state transitions",
 		},
 		graphRevisionRegistryTransitionLabels,
 	)
 
-	graphRevisionRegistryEvictions = prometheus.NewCounterVec(
+	GraphRevisionRegistryEvictions = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "kro_graph_revision_registry_evictions_total",
+			Name: "graph_revision_registry_evictions_total",
 			Help: "Total number of GraphRevision registry evictions",
 		},
 		[]string{},
 	)
-
-	metrics.Registry.MustRegister(
-		graphRevisionRegistryEntries,
-		graphRevisionRegistryTransitions,
-		graphRevisionRegistryEvictions,
-	)
-}
-
-func revisionStateLabel(state RevisionState) string {
-	return strings.ToLower(string(state))
-}
+)

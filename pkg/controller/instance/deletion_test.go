@@ -339,6 +339,132 @@ func TestRemoveFinalizerMarksInstanceNotManagedOnError(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, conditionByType(t, rcx.Instance, InstanceManaged).Status)
 }
 
+// TestPlanNodesForDeletionObservesExternalRefRootBeforeManagedNode verifies that
+// when an external ref is the topological root and a managed resource's identity
+// depends on a field from that external ref, the external ref is observed first
+// so the managed resource's identity can be resolved and the resource is selected
+// for deletion.
+func TestPlanNodesForDeletionObservesExternalRefRootBeforeManagedNode(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+
+	// External ref node: static name, no CEL deps.
+	externalNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "external",
+			Type:       graph.NodeTypeExternal,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: newConfigMapObject("source-configmap", "default"),
+	}
+
+	// Managed node: identity depends on external.data.managedName.
+	managedNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "deploy",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestDeployGVR,
+			Namespaced:   true,
+			Dependencies: []string{"external"},
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": controllerTestDeployGVK.GroupVersion().String(),
+				"kind":       controllerTestDeployGVK.Kind,
+				"metadata": map[string]interface{}{
+					"name": "${external.data.managedName}",
+				},
+			},
+		},
+		Variables: []*variable.ResourceField{
+			standaloneField("metadata.name",
+				mustCompileControllerExpr(t, "external.data.managedName", "external"),
+				variable.ResourceVariableKindStatic),
+		},
+	}
+
+	// The external ConfigMap provides the name of the managed resource.
+	sourceCM := newConfigMapObject("source-configmap", "default")
+	sourceCM.Object["data"] = map[string]interface{}{"managedName": "managed-deploy"}
+
+	// The managed resource exists under the name resolved from the external ref.
+	managedDeploy := newDeploymentObject("managed-deploy", "default")
+
+	// Topological order: external first (root), then managed (leaf).
+	controller, rcx, _ := newControllerAndContext(t, instance,
+		newTestGraph(externalNode, managedNode),
+		sourceCM, managedDeploy,
+	)
+
+	node, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+
+	require.NotNil(t, node, "managed resource must be selected for deletion, not treated as already deleted")
+	assert.Equal(t, "deploy", node.Spec.Meta.ID)
+	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["external"].State)
+	assert.Equal(t, v1alpha1.NodeStateInProgress, rcx.StateManager.NodeStates["deploy"].State)
+}
+
+// TestPlanNodesForDeletionObservesExternalCollectionRootBeforeManagedNode verifies
+// the same ordering invariant as the ExternalRef test but for an external collection
+// root whose selector is resolved from a dep field.
+func TestPlanNodesForDeletionObservesExternalCollectionRootBeforeManagedNode(t *testing.T) {
+	instance := newInstanceObject("demo", "default")
+	_ = unstructured.SetNestedField(instance.Object, "default", "spec", "ns")
+
+	// External collection node: selector is static, namespace driven by instance.
+	externalColNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:         "external",
+			Type:       graph.NodeTypeExternalCollection,
+			GVR:        controllerTestCMGVR,
+			Namespaced: true,
+		},
+		Template: &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": controllerTestCMGVK.GroupVersion().String(),
+				"kind":       controllerTestCMGVK.Kind,
+				"metadata": map[string]interface{}{
+					"namespace": "default",
+					"selector":  map[string]interface{}{"app": "source"},
+				},
+			},
+		},
+	}
+
+	// Managed node: depends on data from the external collection items.
+	managedNode := &graph.Node{
+		Meta: graph.NodeMeta{
+			ID:           "deploy",
+			Type:         graph.NodeTypeResource,
+			GVR:          controllerTestDeployGVR,
+			Namespaced:   true,
+			Dependencies: []string{"external"},
+		},
+		Template: newDeploymentObject("managed-deploy", "default"),
+	}
+
+	// Two CMs matching the selector exist in the fake client.
+	cm1 := newConfigMapObject("source-1", "default")
+	cm1.SetLabels(map[string]string{"app": "source"})
+	cm2 := newConfigMapObject("source-2", "default")
+	cm2.SetLabels(map[string]string{"app": "source"})
+	managedDeploy := newDeploymentObject("managed-deploy", "default")
+
+	controller, rcx, _ := newControllerAndContext(t, instance,
+		newTestGraph(externalColNode, managedNode),
+		cm1, cm2, managedDeploy,
+	)
+
+	node, err := controller.planNodesForDeletion(rcx)
+	require.NoError(t, err)
+
+	require.NotNil(t, node, "managed resource must be selected for deletion")
+	assert.Equal(t, "deploy", node.Spec.Meta.ID)
+	assert.Equal(t, v1alpha1.NodeStateSkipped, rcx.StateManager.NodeStates["external"].State)
+	assert.Equal(t, v1alpha1.NodeStateInProgress, rcx.StateManager.NodeStates["deploy"].State)
+}
+
 func newDeletionCollectionNode(t *testing.T, id string) *graph.Node {
 	t.Helper()
 

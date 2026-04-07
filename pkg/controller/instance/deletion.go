@@ -77,21 +77,35 @@ func (c *Controller) planNodesForDeletion(
 			continue
 		}
 
-		// Resolve identity up front so deletion never blocks on readiness or full template
-		// resolution. If we can't get a stable identity, we treat the node as deleted.
+		isExternal := nodeMeta.Type == graph.NodeTypeExternal || nodeMeta.Type == graph.NodeTypeExternalCollection
+
+		// Resolve identity without readiness gating. External nodes use this to
+		// locate the resource for observation; managed nodes use it as the deletion target.
 		desired, err := node.GetDesiredIdentity()
 		if err != nil {
-			if runtime.IsDataPending(err) {
-				// If identity can't be resolved during deletion, treat it as deleted. There is
-				// a case where identity depends on another resource that lost some data and we
-				// can't resolve it anymore. For that case we need a better deletion/versioning/tracking
-				// mechanism - as of today it is unsolved.
+			if !isExternal && runtime.IsDataPending(err) {
+				// Identity depends on a resource that lost its data. Treat as deleted —
+				// there is no better mechanism today for tracking identity across data loss.
 				state.SetDeleted()
 				continue
 			}
 			state.SetError(err)
 			return nil, err
 		}
+
+		// External nodes are never deleted by the controller. Observe them so
+		// downstream managed nodes can resolve their identity from the CEL context.
+		if isExternal {
+			if len(desired) > 0 {
+				if err := c.observeExternal(rcx, node, desired[0]); err != nil {
+					state.SetError(err)
+					return nil, err
+				}
+			}
+			state.SetSkipped()
+			continue
+		}
+
 		if len(desired) == 0 {
 			state.SetDeleted()
 			continue
@@ -100,9 +114,6 @@ func (c *Controller) planNodesForDeletion(
 		// At this point, identity is resolvable and we can safely observe (GET/LIST)
 		// to find the next deletable node.
 		switch nodeMeta.Type {
-		case graph.NodeTypeExternal, graph.NodeTypeExternalCollection:
-			state.SetSkipped()
-			continue
 
 		case graph.NodeTypeInstance:
 			panic(fmt.Sprintf("unexpected instance node in deletion: %s", rid))

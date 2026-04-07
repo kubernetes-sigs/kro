@@ -37,6 +37,7 @@ import (
 	graphhash "github.com/kubernetes-sigs/kro/pkg/graph/hash"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 var errGraphRevisionsNotResolved = errors.New("graph revisions not resolved")
@@ -76,7 +77,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 	resolutionResult := ""
 	defer func() {
 		if resolutionResult != "" {
-			graphRevisionResolutionTotal.WithLabelValues(resolutionResult).Inc()
+			metrics.RGDGraphRevisionResolutionTotal.WithLabelValues(resolutionResult).Inc()
 		}
 	}()
 
@@ -151,7 +152,7 @@ func (r *ResourceGraphDefinitionReconciler) reconcileResourceGraphDefinition(
 		}
 		rgd.Status.LastIssuedRevision = createdGR.Spec.Revision
 		mark.GraphRevisionsCompiling(createdGR.Spec.Revision)
-		graphRevisionIssueTotal.WithLabelValues(issueReason).Inc()
+		metrics.RGDGraphRevisionIssueTotal.WithLabelValues(issueReason).Inc()
 		resolutionResult = graphRevisionResolutionResultIssue
 		return ctrl.Result{RequeueAfter: r.cfg.ProgressRequeueDelay}, rgd.Status.TopologicalOrder, rgd.Status.Resources, nil
 	}
@@ -235,14 +236,14 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 	mark *ConditionsMarker,
 ) error {
 	if hasTerminating {
-		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
+		metrics.RGDGraphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
 		mark.GraphRevisionsSettling()
 		return errGraphRevisionsNotResolved
 	}
 
 	if !warmed {
-		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
-		graphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonLatestNotWarmed).Inc()
+		metrics.RGDGraphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
+		metrics.RGDGraphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonLatestNotWarmed).Inc()
 		mark.GraphRevisionsWarmingUp()
 		return errGraphRevisionsNotResolved
 	}
@@ -257,8 +258,8 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 	// Revision exists in the informer but not yet in the registry — the GR
 	// controller hasn't processed it. Wait rather than re-issuing a duplicate.
 	if latestRevisionView.RuntimeEntry == nil {
-		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
-		graphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonRuntimeEntryMiss).Inc()
+		metrics.RGDGraphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonWarmingUp).Inc()
+		metrics.RGDGraphRevisionRegistryMissTotal.WithLabelValues(graphRevisionRegistryMissReasonRuntimeEntryMiss).Inc()
 		mark.GraphRevisionsWarmingUp()
 		return errGraphRevisionsNotResolved
 	}
@@ -276,7 +277,7 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 		mark.ResourceGraphValid()
 		return nil
 	case revisions.RevisionStatePending:
-		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonCompiling).Inc()
+		metrics.RGDGraphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonCompiling).Inc()
 		mark.GraphRevisionsAwaitingCompilation(latestRevision.Spec.Revision)
 		return errGraphRevisionsNotResolved
 	case revisions.RevisionStateFailed:
@@ -285,7 +286,7 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 		mark.ResourceGraphInvalid(failErr.Error())
 		return failErr
 	default:
-		graphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
+		metrics.RGDGraphRevisionWaitTotal.WithLabelValues(graphRevisionWaitReasonSettling).Inc()
 		mark.GraphRevisionsAwaitingSettlement(latestRevision.Spec.Revision)
 		return errGraphRevisionsNotResolved
 	}
@@ -295,13 +296,13 @@ func (r *ResourceGraphDefinitionReconciler) resolveGraphRevisions(
 func (r *ResourceGraphDefinitionReconciler) buildResourceGraphDefinition(_ context.Context, rgd *v1alpha1.ResourceGraphDefinition) (*graph.Graph, []v1alpha1.ResourceInformation, error) {
 	startTime := time.Now()
 	defer func() {
-		graphBuildDuration.WithLabelValues(rgd.Name).Observe(time.Since(startTime).Seconds())
-		graphBuildTotal.WithLabelValues(rgd.Name).Inc()
+		metrics.RGDGraphBuildDuration.WithLabelValues(rgd.Name).Observe(time.Since(startTime).Seconds())
+		metrics.RGDGraphBuildTotal.WithLabelValues(rgd.Name).Inc()
 	}()
 
 	processedRGD, err := r.rgBuilder.NewResourceGraphDefinition(rgd, r.cfg.RGDConfig)
 	if err != nil {
-		graphBuildErrorsTotal.WithLabelValues(rgd.Name).Inc()
+		metrics.RGDGraphBuildErrorsTotal.WithLabelValues(rgd.Name).Inc()
 		return nil, nil, newGraphError(err)
 	}
 
@@ -693,7 +694,7 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 
 	graphRevisions, _, _, err := r.listGraphRevisions(ctx, rgd)
 	if err != nil {
-		graphRevisionGCErrorsTotal.WithLabelValues().Inc()
+		metrics.RGDGraphRevisionGCErrorsTotal.WithLabelValues().Inc()
 		return fmt.Errorf("listing graph revisions for gc: %w", err)
 	}
 	if len(graphRevisions) <= r.cfg.MaxGraphRevisions {
@@ -712,12 +713,12 @@ func (r *ResourceGraphDefinitionReconciler) garbageCollectGraphRevisions(ctx con
 		if err := r.Delete(ctx, &revision); err != nil {
 			ignoreNotFound := client.IgnoreNotFound(err)
 			if ignoreNotFound != nil {
-				graphRevisionGCErrorsTotal.WithLabelValues().Inc()
+				metrics.RGDGraphRevisionGCErrorsTotal.WithLabelValues().Inc()
 				return fmt.Errorf("deleting graph revision %q: %w", revision.Name, err)
 			}
 			continue
 		}
-		graphRevisionGCDeletedTotal.WithLabelValues().Inc()
+		metrics.RGDGraphRevisionGCDeletedTotal.WithLabelValues().Inc()
 	}
 
 	// Registry eviction is handled by the GR controller's finalizer as each

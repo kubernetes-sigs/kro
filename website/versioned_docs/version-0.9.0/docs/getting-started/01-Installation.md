@@ -36,7 +36,7 @@ Install a specific version for reproducible deployments:
 
 ```bash
 # Set the version you want to install
-export KRO_VERSION=0.8.1
+export KRO_VERSION=0.9.0
 
 # Install kro
 helm install kro oci://registry.k8s.io/kro/charts/kro \
@@ -150,7 +150,7 @@ helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   <TabItem value="specific" label="Specific Version">
 
 ```bash
-export KRO_VERSION=0.8.1
+export KRO_VERSION=0.9.0
 
 helm upgrade kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro-system \

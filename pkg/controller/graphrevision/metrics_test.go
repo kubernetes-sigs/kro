@@ -31,6 +31,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 func TestCompileMetricsTrackSuccessAndFailure(t *testing.T) {
@@ -45,7 +46,7 @@ func TestCompileMetricsTrackSuccessAndFailure(t *testing.T) {
 	}
 	_, _, err := successReconciler.compileGraphRevision(context.Background(), newTestGraphRevision("compile-success"))
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionCompileTotal.WithLabelValues("success")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionCompileTotal.WithLabelValues("success")))
 
 	failureReconciler := &GraphRevisionReconciler{
 		compileGraph: func(*v1alpha1.ResourceGraphDefinition, graph.RGDConfig) (*graph.Graph, error) {
@@ -56,7 +57,7 @@ func TestCompileMetricsTrackSuccessAndFailure(t *testing.T) {
 	}
 	_, _, err = failureReconciler.compileGraphRevision(context.Background(), newTestGraphRevision("compile-failure"))
 	require.Error(t, err)
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionCompileTotal.WithLabelValues("failed")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionCompileTotal.WithLabelValues("failed")))
 }
 
 func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.T) {
@@ -79,8 +80,8 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 
 	_, err := reconciler.Reconcile(context.Background(), revision.DeepCopy())
 	require.Error(t, err)
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionStatusUpdateErrorsTotal.WithLabelValues()))
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionActivationDeferredTotal.WithLabelValues()))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionStatusUpdateErrorsTotal.WithLabelValues()))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionActivationDeferredTotal.WithLabelValues()))
 
 	resetGraphRevisionMetrics()
 
@@ -105,15 +106,15 @@ func TestReconcileMetricsTrackDeferredActivationAndFinalizerEviction(t *testing.
 
 	_, err = reconciler.Reconcile(context.Background(), deleting.DeepCopy())
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, testutil.ToFloat64(graphRevisionFinalizerEvictionsTotal.WithLabelValues()))
+	assert.Equal(t, 1.0, testutil.ToFloat64(metrics.GraphRevisionFinalizerEvictionsTotal.WithLabelValues()))
 }
 
 func resetGraphRevisionMetrics() {
-	graphRevisionCompileTotal.Reset()
-	graphRevisionCompileDuration.Reset()
-	graphRevisionStatusUpdateErrorsTotal.Reset()
-	graphRevisionActivationDeferredTotal.Reset()
-	graphRevisionFinalizerEvictionsTotal.Reset()
+	metrics.GraphRevisionCompileTotal.Reset()
+	metrics.GraphRevisionCompileDuration.Reset()
+	metrics.GraphRevisionStatusUpdateErrorsTotal.Reset()
+	metrics.GraphRevisionActivationDeferredTotal.Reset()
+	metrics.GraphRevisionFinalizerEvictionsTotal.Reset()
 }
 
 func graphRevisionTestScheme(t *testing.T) *runtime.Scheme {

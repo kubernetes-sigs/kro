@@ -318,45 +318,7 @@ The `?` operator prevents kro from validating the field's existence at build tim
 
 ## Available CEL Libraries
 
-| Library                     | Documentation                                                                                  |
-|-----------------------------|------------------------------------------------------------------------------------------------|
-| Lists (cel-go)              | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Lists)                            |
-| Lists (k8s)                 | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Lists) |
-| Strings                     | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Strings)                          |
-| Encoders                    | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#Encoders)                         |
-| Two-Variable Comprehensions | [cel-go/ext](https://pkg.go.dev/github.com/google/cel-go/ext#TwoVarComprehensions)             |
-| Random                      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/random.go)       |
-| JSON                        | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/json.go)         |
-| Index Mutation (lists)      | [kro custom](https://github.com/kubernetes-sigs/kro/blob/main/pkg/cel/library/lists.go)        |
-| URLs                        | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#URLs)   |
-| Regex                       | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Regex)  |
-| Quantity                    | [k8s.io/apiserver/pkg/cel/library](https://pkg.go.dev/k8s.io/apiserver/pkg/cel/library#Quantity) |
-
-The kro **Index Mutation** library adds three pure list functions (they return a new list and do not modify the input):
-
-| Function | Signature | Description |
-|---|---|---|
-| `lists.setAtIndex` | `list(T), int, T → list(T)` | Replace the element at `index` with `value`. Index must be in `[0, size(list))`. |
-| `lists.insertAtIndex` | `list(T), int, T → list(T)` | Insert `value` before `index`. Use `index == size(list)` to append. Index must be in `[0, size(list)]`. |
-| `lists.removeAtIndex` | `list(T), int → list(T)` | Remove the element at `index`. Index must be in `[0, size(list))`. |
-
-**Examples:**
-
-```kro
-# Replace the second tag
-tags: ${lists.setAtIndex(schema.spec.tags, 1, "new-tag")}
-
-# Prepend an environment variable
-envVars: ${lists.insertAtIndex(schema.spec.envVars, 0, "DEBUG=true")}
-
-# Remove the first port
-ports: ${lists.removeAtIndex(schema.spec.ports, 0)}
-
-# Chain operations: swap first two elements
-swapped: ${lists.setAtIndex(lists.setAtIndex(schema.spec.items, 0, schema.spec.items[1]), 1, schema.spec.items[0])}
-```
-
-For the complete CEL language reference, see the [CEL language definitions](https://github.com/google/cel-spec/blob/master/doc/langdef.md#list-of-standard-definitions).
+kro ships with a rich set of CEL function libraries from kro itself, [cel-go](https://github.com/google/cel-go), and [Kubernetes](https://kubernetes.io/docs/reference/using-api/cel/). See the **[CEL Libraries](./04-cel-libraries.md)** page for the full reference with function signatures, examples, and links to upstream documentation.
 
 ## Type Checking and Validation
 
@@ -570,6 +532,7 @@ status:
 
 ## Next Steps
 
+- **[CEL Libraries](./04-cel-libraries.md)** - Full reference for all available CEL functions
 - **[Dependencies & Ordering](./04-dependencies-ordering.md)** - Learn how CEL expressions create dependencies
 - **[Conditional Creation](./02-resource-definitions/02-conditional-creation.md)** - Use CEL for `includeWhen` conditions
 - **[Readiness](./02-resource-definitions/03-readiness.md)** - Use CEL for `readyWhen` conditions

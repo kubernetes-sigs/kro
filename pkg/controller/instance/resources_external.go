@@ -24,8 +24,87 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	apimachineryruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
+
+// observeExternal observes an external node (ref or collection)
+// so that downstream CEL expressions can reference its fields.
+func (c *Controller) observeExternal(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+	desired *unstructured.Unstructured,
+) error {
+	if node.Spec.Meta.Type == graph.NodeTypeExternalCollection {
+		return c.observeExternalCollection(rcx, node, desired)
+	}
+	_, err := c.observeExternalRef(rcx, node, desired)
+	return err
+}
+
+// observeExternalRef fetches the external ref and calls SetObserved on the node
+// so that downstream CEL expressions can reference its fields.
+// Returns true if the ref was found and observed, false if it was not found.
+func (c *Controller) observeExternalRef(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+	desired *unstructured.Unstructured,
+) (bool, error) {
+	ri := resourceClientFor(rcx, node.Spec.Meta, desired.GetNamespace())
+	actual, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("external ref get %s %s/%s: %w",
+			desired.GroupVersionKind().String(), desired.GetNamespace(), desired.GetName(), err)
+	}
+	node.SetObserved([]*unstructured.Unstructured{actual})
+	return true, nil
+}
+
+// observeExternalCollection lists the external collection matching the selector
+// in desired and calls SetObserved on the node so that downstream CEL expressions
+// can iterate over its items.
+func (c *Controller) observeExternalCollection(
+	rcx *ReconcileContext,
+	node *runtime.Node,
+	desired *unstructured.Unstructured,
+) error {
+	id := node.Spec.Meta.ID
+	nodeMeta := node.Spec.Meta
+
+	selector, err := resolveExternalCollectionSelector(id, desired)
+	if err != nil {
+		return err
+	}
+
+	ns := desired.GetNamespace()
+	if !nodeMeta.Namespaced {
+		ns = ""
+	}
+
+	var list *unstructured.UnstructuredList
+	if ns != "" {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	} else {
+		list, err = rcx.Client.Resource(nodeMeta.GVR).List(rcx.Ctx, metav1.ListOptions{
+			LabelSelector: selector.String(),
+		})
+	}
+	if err != nil {
+		return fmt.Errorf("failed to list external collection %s: %w", id, err)
+	}
+
+	items := make([]*unstructured.Unstructured, len(list.Items))
+	for i := range list.Items {
+		items[i] = &list.Items[i]
+	}
+	node.SetObserved(items)
+	return nil
+}
 
 // processExternalRefNode reads an external ref object and updates node state.
 // Returns the resulting NodeState; the caller registers it.
@@ -43,26 +122,20 @@ func (c *Controller) processExternalRefNode(
 	// Register watch BEFORE reading the external resource.
 	requestWatch(rcx, id, node.Spec.Meta.GVR, desired.GetName(), desired.GetNamespace())
 
-	// External refs are read-only: fetch and push into runtime for dependency/readiness.
-	ri := resourceClientFor(rcx, node.Spec.Meta, desired.GetNamespace())
-	actual, err := ri.Get(rcx.Ctx, desired.GetName(), metav1.GetOptions{})
+	found, err := c.observeExternalRef(rcx, node, desired)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return waitingForReadinessState(fmt.Errorf("waiting for external reference %q: %w", id, err)), nil
-		}
-		fetchErr := fmt.Errorf("external ref get %s %s/%s: %w",
-			desired.GroupVersionKind().String(), desired.GetNamespace(), desired.GetName(), err)
-		return errorState(fetchErr), fetchErr
+		return errorState(err), err
+	}
+	if !found {
+		return waitingForReadinessState(fmt.Errorf("waiting for external reference %q: not found", id)), nil
 	}
 
 	rcx.Log.V(2).Info("External reference resolved",
 		"id", id,
 		"gvk", desired.GroupVersionKind().String(),
-		"namespace", actual.GetNamespace(),
-		"name", actual.GetName(),
+		"namespace", desired.GetNamespace(),
+		"name", desired.GetName(),
 	)
-
-	node.SetObserved([]*unstructured.Unstructured{actual})
 
 	if err := node.CheckReadiness(); err != nil {
 		if errors.Is(err, runtime.ErrWaitingForReadiness) {
@@ -88,23 +161,9 @@ func (c *Controller) processExternalCollectionNode(
 		return skippedState(), nil
 	}
 
-	// Extract the resolved selector from the template and convert to labels.Selector.
-	// A missing selector means "select everything" (unfiltered list).
-	var selector labels.Selector
-	selectorRaw, found, err := unstructured.NestedMap(desired[0].Object, "metadata", "selector")
-	if err != nil || !found {
-		selector = labels.Everything()
-	} else {
-		ls := &metav1.LabelSelector{}
-		if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
-			convErr := fmt.Errorf("failed to convert selector for %s: %w", id, err)
-			return errorState(convErr), convErr
-		}
-		selector, err = metav1.LabelSelectorAsSelector(ls)
-		if err != nil {
-			selErr := fmt.Errorf("invalid label selector for %s: %w", id, err)
-			return errorState(selErr), selErr
-		}
+	selector, err := resolveExternalCollectionSelector(id, desired[0])
+	if err != nil {
+		return errorState(err), err
 	}
 
 	// Get namespace from the resolved template. For namespaced resources, an
@@ -118,28 +177,9 @@ func (c *Controller) processExternalCollectionNode(
 	// Register collection watch with the coordinator.
 	requestCollectionWatch(rcx, id, nodeMeta.GVR, ns, selector)
 
-	// LIST external resources matching the selector.
-	var list *unstructured.UnstructuredList
-	if ns != "" {
-		list, err = rcx.Client.Resource(nodeMeta.GVR).Namespace(ns).List(rcx.Ctx, metav1.ListOptions{
-			LabelSelector: selector.String(),
-		})
-	} else {
-		list, err = rcx.Client.Resource(nodeMeta.GVR).List(rcx.Ctx, metav1.ListOptions{
-			LabelSelector: selector.String(),
-		})
+	if err := c.observeExternalCollection(rcx, node, desired[0]); err != nil {
+		return errorState(err), err
 	}
-	if err != nil {
-		listErr := fmt.Errorf("failed to list external collection %s: %w", id, err)
-		return errorState(listErr), listErr
-	}
-
-	items := make([]*unstructured.Unstructured, len(list.Items))
-	for i := range list.Items {
-		items[i] = &list.Items[i]
-	}
-
-	node.SetObserved(items)
 
 	if err := node.CheckReadiness(); err != nil {
 		if errors.Is(err, runtime.ErrWaitingForReadiness) {
@@ -151,7 +191,25 @@ func (c *Controller) processExternalCollectionNode(
 	rcx.Log.V(2).Info("External collection resolved",
 		"id", id,
 		"gvr", nodeMeta.GVR.String(),
-		"count", len(items),
 	)
 	return readyState(), nil
+}
+
+// resolveExternalCollectionSelector extracts and converts the label selector
+// from a resolved external collection template object.
+// A missing selector field means "select everything".
+func resolveExternalCollectionSelector(id string, desired *unstructured.Unstructured) (labels.Selector, error) {
+	selectorRaw, found, err := unstructured.NestedMap(desired.Object, "metadata", "selector")
+	if err != nil || !found {
+		return labels.Everything(), nil
+	}
+	ls := &metav1.LabelSelector{}
+	if err := apimachineryruntime.DefaultUnstructuredConverter.FromUnstructured(selectorRaw, ls); err != nil {
+		return nil, fmt.Errorf("failed to convert selector for %s: %w", id, err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(ls)
+	if err != nil {
+		return nil, fmt.Errorf("invalid label selector for %s: %w", id, err)
+	}
+	return selector, nil
 }

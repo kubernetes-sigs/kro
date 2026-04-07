@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
+
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
 	"github.com/kubernetes-sigs/kro/pkg/runtime/resolver"
@@ -54,9 +56,15 @@ type Node struct {
 	resourceSchema *spec.Schema
 }
 
-var identityPaths = []string{
-	"metadata.name",
-	"metadata.namespace",
+// identityPaths are the template field path prefixes resolved in identity mode,
+// keyed by node type. Only paths relevant to identifying the resource for
+// observation or deletion are included — full template resolution is not needed.
+var identityPaths = map[graph.NodeType][]string{
+	// Single resources are identified by name and namespace.
+	graph.NodeTypeResource: {"metadata.name", "metadata.namespace"},
+	graph.NodeTypeExternal: {"metadata.name", "metadata.namespace"},
+	// External collections have no name; the selector is their identity.
+	graph.NodeTypeExternalCollection: {"metadata.namespace", "metadata.selector"},
 }
 
 // resolveMode controls how template resolution behaves.
@@ -85,7 +93,7 @@ func (n *Node) IsIgnored() (bool, error) {
 		return false, nil
 	}
 
-	nodeIgnoredCheckTotal.Inc()
+	metrics.NodeIgnoredCheckTotal.Inc()
 
 	// Check if any dependency is ignored (contagious).
 	for _, dep := range n.deps {
@@ -94,7 +102,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, err
 		}
 		if ignored {
-			nodeIgnoredTotal.Inc()
+			metrics.NodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -150,7 +158,7 @@ func (n *Node) IsIgnored() (bool, error) {
 			return false, fmt.Errorf("includeWhen %q: %w", expr.Expression.UserExpression(), err)
 		}
 		if !val {
-			nodeIgnoredTotal.Inc()
+			metrics.NodeIgnoredTotal.Inc()
 			return true, nil
 		}
 	}
@@ -191,10 +199,10 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		nodeEvalDuration.Observe(duration.Seconds())
-		nodeEvalTotal.Inc()
+		metrics.NodeEvalDuration.Observe(duration.Seconds())
+		metrics.NodeEvalTotal.Inc()
 		if err != nil {
-			nodeEvalErrorsTotal.Inc()
+			metrics.NodeEvalErrorsTotal.Inc()
 		}
 	}()
 
@@ -217,7 +225,7 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	// Select vars based on mode.
 	vars := n.templateVars
 	if mode == resolveIdentity {
-		vars = n.templateVarsForPaths(identityPaths)
+		vars = n.templateVarsForPaths(identityPaths[n.Spec.Meta.Type])
 	}
 
 	switch n.Spec.Meta.Type {
@@ -232,10 +240,6 @@ func (n *Node) resolve(mode resolveMode) (result []*unstructured.Unstructured, e
 	case graph.NodeTypeResource, graph.NodeTypeExternal:
 		result, err = n.hardResolveSingleResource(vars)
 	case graph.NodeTypeExternalCollection:
-		if mode == resolveIdentity {
-			// External collections have no identity to resolve; they use selectors.
-			return nil, nil
-		}
 		result, err = n.hardResolveSingleResource(vars)
 	default:
 		panic(fmt.Sprintf("unknown node type: %v", n.Spec.Meta.Type))

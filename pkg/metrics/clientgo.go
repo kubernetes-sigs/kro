@@ -21,7 +21,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	clientmetrics "k8s.io/client-go/tools/metrics"
-	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var (
@@ -55,20 +54,11 @@ var (
 	}, []string{"code", "method"})
 )
 
-// Register registers client-go metrics with the controller-runtime
-// prometheus registry and wires up the client-go metrics adapters.
-func Register() {
-	ctrlmetrics.Registry.MustRegister(
-		requestLatency,
-		rateLimiterLatency,
-		requestSize,
-		responseSize,
-		requestRetry,
-	)
-
-	// controller-runtime v0.16+ removed these histograms from its client-go
-	// adapter. The one-shot clientmetrics.Register() has already been consumed
-	// by controller-runtime, so we assign the globals directly.
+// registerClientGoAdapters wires up the client-go metrics adapters.
+// controller-runtime v0.16+ removed these histograms from its client-go
+// adapter. The one-shot clientmetrics.Register() has already been consumed
+// by controller-runtime, so we assign the globals directly.
+func registerClientGoAdapters() {
 	clientmetrics.RequestLatency = &latencyAdapter{metric: requestLatency}
 	clientmetrics.RateLimiterLatency = &latencyAdapter{metric: rateLimiterLatency}
 	clientmetrics.RequestSize = &sizeAdapter{metric: requestSize}
@@ -76,7 +66,6 @@ func Register() {
 	clientmetrics.RequestRetry = &retryAdapter{metric: requestRetry}
 }
 
-// latencyAdapter implements k8s.io/client-go/tools/metrics.LatencyMetric.
 type latencyAdapter struct {
 	metric *prometheus.HistogramVec
 }
@@ -85,7 +74,6 @@ func (l *latencyAdapter) Observe(_ context.Context, verb string, _ url.URL, late
 	l.metric.WithLabelValues(verb).Observe(latency.Seconds())
 }
 
-// sizeAdapter implements k8s.io/client-go/tools/metrics.SizeMetric.
 type sizeAdapter struct {
 	metric *prometheus.HistogramVec
 }
@@ -94,7 +82,6 @@ func (s *sizeAdapter) Observe(_ context.Context, verb string, _ string, size flo
 	s.metric.WithLabelValues(verb).Observe(size)
 }
 
-// retryAdapter implements k8s.io/client-go/tools/metrics.RetryMetric.
 type retryAdapter struct {
 	metric *prometheus.CounterVec
 }

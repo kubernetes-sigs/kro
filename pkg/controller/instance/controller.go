@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -37,6 +36,7 @@ import (
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
 	"github.com/kubernetes-sigs/kro/pkg/metadata"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 	"github.com/kubernetes-sigs/kro/pkg/requeue"
 	"github.com/kubernetes-sigs/kro/pkg/runtime"
 )
@@ -160,11 +160,11 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	defer func() {
 		watcher.Done(err == nil || requeue.IsRequeueError(err))
 		gvr := c.gvr.String()
-		instanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
-		instanceReconcileTotal.WithLabelValues(gvr).Inc()
+		metrics.InstanceReconcileDurationSeconds.WithLabelValues(gvr).Observe(time.Since(start).Seconds())
+		metrics.InstanceReconcileTotal.WithLabelValues(gvr).Inc()
 		if err != nil && !requeue.IsRequeueError(err) {
 			log.V(1).Info("reporting reconcile error metric", "error", err)
-			instanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
+			metrics.InstanceReconcileErrorsTotal.WithLabelValues(gvr).Inc()
 		}
 	}()
 
@@ -264,8 +264,8 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (err error
 	// 7. Reconcile nodes (SSA + prune) and update runtime state, only if the suspend annotation is not present.
 	//--------------------------------------------------------------
 	annotations := inst.GetAnnotations()
-	reconcileState, ok := annotations[v1alpha1.InstanceReconcileAnnotation]
-	if !ok || !strings.EqualFold(reconcileState, "disabled") {
+	reconcileState := annotations[v1alpha1.InstanceReconcileAnnotation]
+	if !v1alpha1.IsReconcileSuspended(reconcileState) {
 		if err := c.reconcileNodes(rcx); err != nil {
 			if deletingErr, ok2 := errors.AsType[*resourceDeletingError](err); ok2 {
 				rcx.Mark.ResourcesDeleting("%v", deletingErr)
@@ -326,7 +326,7 @@ func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
 	gvr := c.gvr.String()
 	latest, ok := c.graphResolver.GetLatestRevision()
 	if !ok {
-		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonNotAvailable).Inc()
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonNotAvailable).Inc()
 		return nil, requeue.NeededAfter(fmt.Errorf("latest issued graph revision not available"), c.reconcileConfig.DefaultRequeueDuration)
 	}
 
@@ -335,19 +335,19 @@ func (c *Controller) resolveCompiledGraph() (*graph.Graph, error) {
 		// Active implies the newest issued revision compiled successfully and its
 		// graph is present; this is guaranteed by the GR reconciler and registry
 		// invariant.
-		instanceGraphResolutionSuccessTotal.WithLabelValues(gvr).Inc()
+		metrics.InstanceGraphResolutionSuccessTotal.WithLabelValues(gvr).Inc()
 		return latest.CompiledGraph, nil
 	case revisions.RevisionStatePending:
-		instanceGraphResolutionPendingTotal.WithLabelValues(gvr).Inc()
+		metrics.InstanceGraphResolutionPendingTotal.WithLabelValues(gvr).Inc()
 		return nil, requeue.NeededAfter(
 			fmt.Errorf("latest issued graph revision %d is pending", latest.Revision),
 			c.reconcileConfig.DefaultRequeueDuration,
 		)
 	case revisions.RevisionStateFailed:
-		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonFailed).Inc()
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonFailed).Inc()
 		return nil, requeue.None(fmt.Errorf("latest issued graph revision %d failed", latest.Revision))
 	default:
-		instanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonUnknown).Inc()
+		metrics.InstanceGraphResolutionFailuresTotal.WithLabelValues(gvr, graphResolutionReasonUnknown).Inc()
 		return nil, requeue.NeededAfter(
 			fmt.Errorf("latest issued graph revision %d has unknown state %q", latest.Revision, latest.State),
 			c.reconcileConfig.DefaultRequeueDuration,

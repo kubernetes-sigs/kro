@@ -22,6 +22,7 @@ import (
 	krocel "github.com/kubernetes-sigs/kro/pkg/cel"
 	"github.com/kubernetes-sigs/kro/pkg/graph"
 	"github.com/kubernetes-sigs/kro/pkg/graph/variable"
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // Compile-time check: Runtime must implement Interface.
@@ -52,8 +53,8 @@ func FromGraph(g *graph.Graph, instance *unstructured.Unstructured, rgdConfig gr
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		runtimeCreationDuration.Observe(duration.Seconds())
-		runtimeCreationTotal.Inc()
+		metrics.RuntimeCreationDuration.Observe(duration.Seconds())
+		metrics.RuntimeCreationTotal.Inc()
 	}()
 	instanceObj := instance.DeepCopy()
 

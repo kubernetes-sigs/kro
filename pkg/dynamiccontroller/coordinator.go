@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/kubernetes-sigs/kro/pkg/metrics"
 )
 
 // InstanceWatcher is the interface the instance reconciler uses to request
@@ -153,7 +155,7 @@ func (c *WatchCoordinator) addWatch(key instanceKey, req WatchRequest) error {
 			previous: make(map[string]*WatchRequest),
 		}
 		c.instances[key] = state
-		instanceWatchCount.WithLabelValues(key.parentGVR.String()).Inc()
+		metrics.DynInstanceWatchCount.WithLabelValues(key.parentGVR.String()).Inc()
 	}
 
 	// Fix reverse index orphaning on nodeID reuse: if an existing entry
@@ -318,7 +320,7 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 	}
 	// All instances for this parent are gone — delete the gauge outright
 	// rather than decrementing once (which would undercount for N > 1).
-	instanceWatchCount.DeleteLabelValues(parentGVR.String())
+	metrics.DynInstanceWatchCount.DeleteLabelValues(parentGVR.String())
 
 	orphanedGVRs := c.findOrphanedGVRsLocked(affectedGVRs)
 	c.mu.Unlock()
@@ -329,7 +331,7 @@ func (c *WatchCoordinator) RemoveParentGVR(parentGVR schema.GroupVersionResource
 // RouteEvent routes a watch event to all matching instances.
 // Called by the watch handler for every event.
 func (c *WatchCoordinator) RouteEvent(event Event) {
-	routeTotal.WithLabelValues(event.GVR.String()).Inc()
+	metrics.DynRouteTotal.WithLabelValues(event.GVR.String()).Inc()
 
 	c.mu.RLock()
 	matched := make(map[instanceKey]struct{})
@@ -361,7 +363,7 @@ func (c *WatchCoordinator) RouteEvent(event Event) {
 		c.enqueue(key.parentGVR, key.instance)
 	}
 	if len(matched) > 0 {
-		routeMatchTotal.WithLabelValues(event.GVR.String()).Inc()
+		metrics.DynRouteMatchTotal.WithLabelValues(event.GVR.String()).Inc()
 		c.log.V(2).Info("Routed event", "gvr", event.GVR, "name", event.Name, "namespace", event.Namespace, "type", event.Type)
 	}
 }
@@ -407,7 +409,7 @@ func (c *WatchCoordinator) addScalarIndexLocked(key instanceKey, req WatchReques
 		nodeID: req.NodeID,
 		key:    key,
 	})
-	watchRequestCount.WithLabelValues(req.GVR.String(), "scalar").Inc()
+	metrics.DynWatchRequestCount.WithLabelValues(req.GVR.String(), "scalar").Inc()
 }
 
 func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRequest) {
@@ -426,7 +428,7 @@ func (c *WatchCoordinator) addCollectionIndexLocked(key instanceKey, req WatchRe
 		namespace: req.Namespace,
 		key:       key,
 	})
-	watchRequestCount.WithLabelValues(req.GVR.String(), "collection").Inc()
+	metrics.DynWatchRequestCount.WithLabelValues(req.GVR.String(), "collection").Inc()
 }
 
 func (c *WatchCoordinator) removeRequestFromIndexesLocked(key instanceKey, req *WatchRequest) {
@@ -463,13 +465,13 @@ func (c *WatchCoordinator) removeScalarIndexLocked(key instanceKey, req *WatchRe
 	}
 	gvrStr := req.GVR.String()
 	if removed > 0 {
-		watchRequestCount.WithLabelValues(gvrStr, "scalar").Sub(float64(removed))
+		metrics.DynWatchRequestCount.WithLabelValues(gvrStr, "scalar").Sub(float64(removed))
 	}
 	if len(byName) == 0 {
 		delete(c.scalarIndex, req.GVR)
 		if len(c.collectionIndex[req.GVR]) == 0 {
-			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
-			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
+			metrics.DynWatchRequestCount.DeleteLabelValues(gvrStr, "scalar")
+			metrics.DynWatchRequestCount.DeleteLabelValues(gvrStr, "collection")
 		}
 	}
 }
@@ -513,13 +515,13 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 	}
 	gvrStr := req.GVR.String()
 	if removed > 0 {
-		watchRequestCount.WithLabelValues(gvrStr, "collection").Sub(float64(removed))
+		metrics.DynWatchRequestCount.WithLabelValues(gvrStr, "collection").Sub(float64(removed))
 	}
 	if len(filtered) == 0 {
 		delete(c.collectionIndex, req.GVR)
 		if len(c.scalarIndex[req.GVR]) == 0 {
-			watchRequestCount.DeleteLabelValues(gvrStr, "scalar")
-			watchRequestCount.DeleteLabelValues(gvrStr, "collection")
+			metrics.DynWatchRequestCount.DeleteLabelValues(gvrStr, "scalar")
+			metrics.DynWatchRequestCount.DeleteLabelValues(gvrStr, "collection")
 		}
 	} else {
 		c.collectionIndex[req.GVR] = filtered
@@ -532,11 +534,11 @@ func (c *WatchCoordinator) removeCollectionIndexLocked(key instanceKey, req *Wat
 func (c *WatchCoordinator) decInstanceWatchCount(parentGVR schema.GroupVersionResource) {
 	for key := range c.instances {
 		if key.parentGVR == parentGVR {
-			instanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
+			metrics.DynInstanceWatchCount.WithLabelValues(parentGVR.String()).Dec()
 			return
 		}
 	}
-	instanceWatchCount.DeleteLabelValues(parentGVR.String())
+	metrics.DynInstanceWatchCount.DeleteLabelValues(parentGVR.String())
 }
 
 // NoopInstanceWatcher is a no-op implementation of InstanceWatcher for use

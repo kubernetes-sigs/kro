@@ -2,164 +2,161 @@
 
 ## Problem statement
 
-The problem we are trying to solve are resource adoption and resource orphaning. 
+Resource lifecycles and ownership have a wide potential scope. Here are some user stories grouped by broad use case.
 
-The goal of resource adoption is to enable customers to safely migrate resources created outside Kro to be managed by Kro. For example, you may have run `kubectl apply -f ...` on a database CR but now want to have Kro manage this resource without causing downtime or impact to existing services. The customer in this case would want the instance to error if it is not found instead of creating a duplicate resource. Customers may want to manage resources under Kro to enable things like RGD configuration updates to propagate to the resource.
+CRUD policies
+- I want to run resources on deletion because I may want to snapshot a database before deleting it.
+- I want to be able to update immutable fields in Kro because I want to change a job spec.
+- I want to create a resource and never update it because some resources like PVC might be expensive or difficult to update.
+- I want to only read a resource because I don't want to use external refs and want to reference the resource.
+- I want to avoid deleting resources because some resources like databases are too risky to be deleted through Kro.
+- I want to control deletion order because I may have implicit dependencies or a more complicated teardown workflow needed for resource cleanup.
 
-The goal of resource orphaning is to allow customers to leave resources behind. An example could be you may want to switch from a Kro controller per namespace to a single Kro installation per cluster. You would want to Orphan resources to allow the other Kro installation to manage the resources.
+Migration into Kro and between Kro resources
+- I want to safely do migrations into Kro from existing resources because I want to manage my cluster in Kro and want to avoid downtime and risk of updating resources poorly.
+- I want to safely do migrations between Kro RGDs or instances because I want to be able to refactor and evolve my Kro definitions over time and avoid downtime.
+
+Singletons
+- I want to define applications with resources that are defined only once across all Kro instances because resources like PrivateEndpoint are one per cluster.
+
+Resource contribution
+- I want to create a controller that updates a subset of fields on a resource because it is a useful pattern to control a small number of fields in Kubernetes.
 
 ## Proposal
 
-The proposal is to add a `resourcePolicy` string enum option to the resource configuration with various configuration options.
-```
-resourcePolicy: Owner | Adopt | Orphan 
-```
+The proposal is to add a new mode of operating resources
+through an annotation called `kro.run/ownership=shared`.
+
+Shared mode will be a new primitive that solves migrating
+between Kro resources, Singletons, and resource contribution.
 
 #### Overview
 
-The default resource policy will be `Owner`. This matches the current behaviour today. 
+##### Exclusive
 
-`Adopt` will avoid creating resources and will take ownership of existing resources and manage them as if kro had created them. `Adopt` will throw an error if resources do not exist.
+The default mode is exclusive. A Kro resource applied with exclusive
+will cause errors for any other Kro instance trying to use it. Otherwise,
+exclusive will work the same as it does today. Exclusive resources will
+adopt resources from other systems but raise errors if they have Kro
+applyset labels.
 
-`Orphan` allows the instance to be deleted without deleting certain resources. Kro removes the ApplySet ownership labels, leaving the resources orphaned and unmanaged.
+##### Shared
 
-We will support configuring these with cel expressions. For example, a schema option can be used on the RGD to determine if the instance should be `Adopt` or `Owner`.
-```
-resources:
-  - id: database
-    kind: RDSInstance
-    resourcePolicy: ${has(schema.spec.adoptResource) ? "Adopt" : "Owner"}
-```
+On create shared mode will error if the resource is exclusively owned. If it is not,
+we will apply and start sharing ownership of the fields. In shared mode we will always
+SSA with force=false. If we do not conflict we will just add ourselves as managing the field.
 
-We would only initially support referencing schema fields in the cel expressions analogous to how `includeWhen` works today.
+If we do conflict we will check if this is a terminal conflict that needs to be
+surfaced to users. We consider conflicts terminal if we do not own the field and
+another Kro field manager does. Otherwise, we consider these conflicts overridable.
+
+| We own field | Another Kro owns field | Conflict Type |
+|--------------|------------------------|---------------|
+| true | false | No conflict |
+| true | true | Overridable |
+| false | false | Overridable |
+| false | true | **Terminal** |
+
+Terminal conflicts will be surfaced in the instance status condition until the conflict is resolved.
+
+Our mechanism for overriding conflict will be a merge-patch editing the field
+managers directly with a precondition checking that the resource version of
+the object has not changed to avoid race conditions.
+
+This mechanism ensures we can make updates to fields without leading into
+deadlock. For example, if we have instance A and B apply the same object
+with replicas=3, any attempt to update either A or B will run into a conflict.
+If we just forced over the conflict then we would run into the two objects
+fighting each other. When we update A with replicas=5, we will kick B out of
+field ownership. When B tries to apply again it will see a conflict, realize
+that it is no longer an owner of replicas and then report a terminal
+conflict. Users would be expected to see this conflict and resolve it
+on a case by case basis.
+
+On delete, if there are no other owners we just delete the object as is. If
+there are other owners we do an empty SSA releasing ownership of all of our
+fields.
+
+These semantics allow partial objects. With this you can define a Kro resource
+that just changes a single field or a few fields.
+
+These also allow singletons and shared dependencies between Kro installations.
+Using these shared dependencies can accomplish migrating a resource safely
+between Kro instances and RGDs.
 
 #### Design details
 
-We would need to update the Resource config option to take in `resourcePolicy`. 
+There are two main complexities with this design
 
-##### Adopt 
+##### Label updates
 
-Currently, Kro handles most of the adoption use case. If you have an instance point to a preexisting Kubernetes object, Kro will take ownership of it. The current behaviour is essentially `AdoptOrCreate`.
+We have a large amount of labels that only support a single Kro instance managing
+the resource like `applyset.kubernetes.io/part-of={applySetID}`.
 
-To get the `Adopt` semantics, we will need to update the reconciliation loop to throw an error if the resource does not exist and has `resourcePolicy: Adopt`.
+We need to keep the old labels around for compatibility but start adding additional
+labels to be of the form `applyset-{applySetID}` to support multiple owners.
 
-The one exception to this resource adoption is if another Kro instance is managing the resource. Then a `resource belongs to a different ApplySet` will be thrown. This is not planned to be changed to prevent Kro installations fighting over a resource.
+We will track an annotation called `internal.kro.run/migrated-to-new-labels` that we will look
+at to know if we should use the new or old labels in label selectors.
 
-#### Orphan
+##### Field manager
 
-The only difference for resources with `Orphan` is deletion will remove ApplySet labels with an update call instead of deleting the Kubernetes resource.
-
-When an instance with `resourcePolicy: Orphan` is deleted, Kro will remove the `applyset.kubernetes.io/part-of` label from the resource and skip issuing the delete call. The resource remains in the cluster without any ownership labels.
-
-Removing the ownership labels allows other Kro instances to take ownership of this.
+The actual parsing and updating of field managers is non-trivial. We will need to be very careful to
+correctly parse the error message and be able to successfully update field managers.
 
 ## Scoping
 
 #### What is in scope for this proposal?
 
-The scope for this proposal is just the `Orphan` and `Adopt` use case.
+This proposal addresses resource contribution, singletons, and migrating resources between Kro installations safely.
 
 #### What is not in scope?
 
-Resource lifecycles is a very broad concept with many directions we could take.
+CRUD policies are not in scope. One could imagine modeling `delete: retain` as setting a dummy
+owner like `applyset-retain: true`. This would not work however since our semantics for delete
+include doing an empty SSA. This empty SSA would fail if there is a dummy owner that does not
+own any fields.
 
-Here are some related problems that could provide value if solved but this design does not try to address.
-
-##### adoption checking ownership with other systems
-
-One situation that may come up is you adopt a pod that is being managed by a replicaset. This may lead to both the replicaset and Kro making updates to this resource.
-
-This will be left up to the user to validate anything they adopt is not going to be managed by other resources in unexpected ways.
-
-##### adoption doesn't cause updates
-
-One problem could be you may want to have a migration of resources without any changes to those resources. To do this you may want a feature where you ensure a resource can be adopted without making any updates to the field.
-
-This is out of scope to avoid adding extra complexity into this feature.
-
-##### updatePolicy
-
-Some resources like job spec are immutable and can not be updated by a typical patch command. Instead of issuing an update, a user may want to have the option of configuring a resource to be deleted and recreated.
-
-A potential design could have considered this as a part of the resource policy.
-
-For the given proposal `updatePolicy` does not fit in clearly and would end up being a separate field and topic.
-
-##### createOnDelete
-
-A useful option for Kro would be the ability to create resources to help clean up resources. An example could be creating a job that creates a database backup before the database is deleted.
-
-This is a much larger item and would require having sub RGD graphs. This also does not fit in cleanly to the suggested design. The suggested resource policy does not prohibit taking an approach like Helm hooks.
-
-##### Additional resource policies
-
-This design does allow for the expansion of additional resource policies.
-
-One idea discussed before is `SharedOwnership`. This would effectively be a singleton. You may have resources that should be created at most once per cluster. `PrivateEndpoint` is an example of this. Multiple instances would point to the same object and only create it if the object does not exist. They would only delete it when they are the last instance to manage it. This feature should be implemented eventually but carries enough complexity that decoupling this from this design is needed.
-
-Another option could be `watcher`. This has significant overlap with externalRefs so is avoided for now. In the future we could consider deprecating externalRef and making `watcher` solve this use case.
+Migrating into Kro is not in scope. To handle migration into Kro, a robust dry run would be ideal
+to preview what would happen.
 
 ## Other solutions considered
 
-### Naming
+The most controversial part of the solution will be handling conflicts.
 
-The naming `Owner | Adopt | Orphan` has one noun and two verbs. This is to avoid the awkward label of `Own`. An alternative would be to name them all verbs as `Own | Adopt | Orphan`.
+There are a couple of alternatives that we could take to avoid fiddling with field managers manually.
 
-An alternative would be to name them all nouns as `Owner | Adopter | Orphaner` which may be unnecessarily verbose.
+The fundamental issue that makes this hard is SSA operates on a binary force=true or force=false. We really
+want to force=true for fields we can overwrite and force=false for fields we don't own but another Kro instance owns.
 
-### Granular controls
+### Accept some race conditions
 
-An alternative would be letting users configure these options at a lower level.
+Simplest idea could be
+
+1. apply with force=false
+2. if we run into conflicts check if they are all on fields we own, then apply with force=true
+
+Issue is if object state is
 ```
-lifecycle:
-  # Create phase: How to obtain the resource
-  # - Create (default): Create new resource
-  # - Never: Error if resource does not exist, claim ownership (adoption), 
-  create: Create | Never
-  
-  # Update phase: How to handle spec changes
-  # - Patch (default): Apply changes via server-side apply
-  # - Recreate: Delete and recreate resource with new spec
-  # - Never: Don't update, error if spec changes
-  update: Patch | Never
-  
-  # Delete phase: What to do when instance is deleted
-  # - Delete (default): Remove the resource
-  # - Never: Don't delete (orphan the resource)
-  delete: Delete | Never
+replicas (owned by A, owned by B): 4
 ```
 
-An advantage to this design is it more natural to extend this to support more use cases.
+1. A attempts to apply replicas=5, image=aNewImage, fails with conflict over replicas
+2. B successfully applies image=bNewImage
+3. A only sees replicas conflict, then thinks it's good to force apply
 
-Immutable resources can be handled with a new update policy. 
-```
-lifecycle:
-  update: DeleteAndRecreate
-```
+With this we just overwrote another Kro's image field that we don't own. We only thought it was safe to
+force because we saw the single conflict but there was another one that we would not have decided to override.
+We don't thrash from here, A would own both fields and B would report a conflict
+but, we don't have any strong guarantees in the system
 
-Resources requiring resources to be created on deletion (for example a database which creates a job to run a backup) could be a delete policy.
-```
-lifecycle:
-  delete: PostDeleteHook
-PostDeleteHook:
-  ... jobDefinition here
-```
+### Apply twice
 
-This design does have merit but a major pitfall is usability. Valid use cases like adoption can be expressed with `create: never`. Questionable use cases can also be expressed like 
-```
-lifecycle:
-  create: Never
-  update: Never
-  delete: Delete
-```
+We could try and split the patch into overridable fields and apply with force=true while we
+apply non overridable fields with force=false.
 
-It is not clear why someone would want to have a resource that can't be updated and only deleted. It would be very difficult for a user to understand what is going on in these misconfigured use cases, especially since this could be configured on just a single resource in an RGD. The signal for resources not being changed would not be easy to surface to users. Named policies limit users to sensible policies and avoid having them run into a footgun.   
-
-It's possible we could add validation and throw errors to prevent footgun cases, but this ends up having the configuration options be equivalent to having named policies with a less clear user interface.
-
-Another disadvantage is that `SharedOwnership` doesn't fit this model. SharedOwnership requires reference counting across multiple owners, not just per-resource create/update/delete decisions. This would need a fundamentally different mechanism beyond lifecycle phase configuration.
-
-Another option could be to allow both named policies and the low level configuration option. Having two ways to configure the same thing adds extra complexity. Focusing on one way that handles all the use cases we want to support is preferable.
+This is mainly listed to be exhaustive for possibilities but this solution feels like it adds complexity
+with no strong guarantees.
 
 ## Testing strategy
 
@@ -171,40 +168,7 @@ Testing will follow existing patterns using chainsaw for e2e tests. No special i
 
 Unit tests will be added to cover changed code.
 
-End to end tests will validate
-- failing to adopt a resource because it is missing
-- successfully adopting a resource
-- validating the adopted resource can be updated
-- orphaning a resource
-- validating that another instance can adopt this resource
-- failing to adopt a resource owned by another instance
-
-## Discussion and notes
-
-### Other tools allowing configurable resource policy
-
-**Helm**
-- `helm.sh/resource-policy: keep` - Annotation prevents deletion during uninstall/upgrade/rollback, orphans resource
-- `helm.sh/hook-delete-policy: before-hook-creation | hook-succeeded | hook-failed` - Controls hook resource cleanup
-- Adoption via annotations: `meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`, `app.kubernetes.io/managed-by: Helm`
-
-**ArgoCD**
-- `argocd.argoproj.io/sync-options: Prune=false` - Prevent resource deletion when removed from Git
-- `argocd.argoproj.io/sync-options: Delete=false` - Retain resource after Application deletion (orphan)
-- `PrunePropagationPolicy: foreground | background | orphan` - Controls deletion propagation
-- Auto-prune disabled by default, requires explicit enablement
-
-**Crossplane**
-- `deletionPolicy: Delete | Orphan` - Controls deletion behavior
-- `managementPolicies: ["Create", "Update", "Delete", "LateInitialize"]` - Controls which lifecycle phases are active
-- Supports resource adoption via `spec.forProvider` matching
-
-**ACK (AWS Controllers for Kubernetes)**
-- `services.k8s.aws/deletion-policy: delete | retain` - Annotation-based deletion control
-- Supports per-resource, per-namespace, or controller-wide configuration
-- Resource adoption via `services.k8s.aws/adoption-fields` annotation
-
-**Terraform**
-- `lifecycle.create_before_destroy` - Create replacement before destroying original
-- `lifecycle.prevent_destroy` - Block resource deletion entirely
-- `lifecycle.ignore_changes` - Ignore drift in specific attributes
+End-to-end tests will validate
+- resource contribution example
+- shared ownership with conflict cases
+- shared ownership failing to use exclusive resource 

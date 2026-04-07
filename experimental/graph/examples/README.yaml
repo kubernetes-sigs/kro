@@ -1,0 +1,67 @@
+# Graph: A primitive for composing Kubernetes resources.
+#
+# A Graph is a scope. It owns and reconciles its resources. Create a Graph →
+# resources are created and continuously reconciled. Delete it → cascade delete.
+# Nested Graphs create nested scopes — each with their own resource lifecycle.
+#
+# Evaluation model:
+#   Each Graph is an independent Kubernetes object. KRO reconciles a Graph by:
+#   1. Evaluating ${...} expressions in its spec against its resource scope
+#   2. Stripping one $ from $${...} → ${...} (deferred to the next layer)
+#   3. Creating/updating the resulting resources via the Kubernetes API
+#
+#   If a resource is itself a Graph, it gets persisted to the cluster and
+#   KRO's controller reconciles it independently — same three steps at the
+#   next layer. The API server is the boundary between evaluation passes.
+#   There is no re-scanning of results. Each controller does exactly one
+#   pass on its own spec. Nested evaluation is recursive through Kubernetes
+#   persistence, not through string re-scanning.
+#
+#   Expressions inside data (e.g. ${...} strings in rgd.spec.resources) survive
+#   as opaque strings through CEL — they are only evaluated when the next-level
+#   controller processes its own spec.
+#
+#   spec.resources can itself be a CEL expression that evaluates to an array
+#   of resource definitions (see CEL list concatenation in example 3).
+#
+# Resource model:
+#   - externalRef: reads an object from the cluster into scope.
+#     With a name → single object. With a selector → collection.
+#   - forEach: stamps the template once per item in a collection.
+#     When forEach stamps a Graph, each item gets its own scope — independent
+#     reconciliation, lifecycle, and error isolation.
+#   - includeWhen: list of CEL conditions; all must be true or the resource
+#     is skipped and does not enter scope for downstream expressions.
+#
+#   Ownership vs contribution:
+#     A resource the Graph creates is owned — full server-side apply, cascade
+#     deleted with the Graph. A template targeting an object the Graph doesn't
+#     own is a contribution — partial server-side apply. Contribution creates
+#     a dependency: the Graph waits for the target to be ready before writing.
+#
+#   New Graph scope inside ForEach:
+#     A parent Graph watches a collection via externalRef(selector) and stamps
+#     one child Graph per item via forEach. Each child reads its specific item
+#     via externalRef(name). The collection watch only fires on create/delete.
+#     The per-item watch fires on spec changes — O(1) reactivity per instance,
+#     not O(N) re-evaluation of the entire collection. See examples 2 and 3.
+#
+#   Cleanup:
+#     Graphs are namespace-scoped and can own cluster-scoped objects. Owner
+#     references won't work cross-scope; use finalizers instead. Deletion
+#     unwinds the graph recursively.
+#
+# CEL extensions:
+#   - plural(string) → pluralized string (e.g. plural("WebApp").lowerAscii() → "webapps")
+#   - simpleSchema.toOpenAPI(schema, resources) → converts a SimpleSchema map
+#     to an OpenAPI v3 schema. Delegates to the existing Go implementation.
+#
+# Examples:
+#   1-graph.yaml           — A simple Graph (bundle of resources)
+#   2-graph-kind.yaml      — A Graph that implements a Kind (what an RGD compiles to)
+#   3-graph-rgd.yaml       — A Graph that implements the full RGD system
+#   4-webapp.yaml          — A WebApp instance (input to examples 2 and 3)
+#   5-rgd.yaml             — An RGD definition (input to example 3)
+#
+# Verify with the poc:
+#   go run ./docs/design/graph/poc docs/design/graph/examples/*.yaml

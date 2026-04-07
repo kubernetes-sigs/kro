@@ -1,0 +1,16 @@
+# 4. A WebApp instance
+#
+# What a user creates after example 2 or 3 is running. The WebApp controller
+# (example 2) or the RGD system (example 3) watches these and reconciles.
+apiVersion: kro.run/v1alpha1
+kind: WebApp
+metadata:
+  name: my-webapp
+  namespace: default
+spec:
+  image: nginx:latest
+  replicas: 3
+  port: 80
+status:
+  deploymentReady: true
+  address: test.example.com

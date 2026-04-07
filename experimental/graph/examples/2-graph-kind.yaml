@@ -1,0 +1,87 @@
+# 2. A Graph that implements a Kind
+#
+# This is what a single RGD compiles down to. Given an RGD that defines a
+# "WebApp" kind with a Deployment and Service, this is the equivalent Graph.
+# It watches all WebApp instances and creates a scoped Graph per instance.
+# Each inner Graph owns its resources and contributes status back to the instance.
+# ---------------------------------------------------------------------------
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: webapp-controller # (L0)
+spec:
+  resources:
+    - id: watchWebapps
+      externalRef:
+        apiVersion: kro.run/v1alpha1
+        kind: WebApp
+        metadata:
+          selector: {}
+
+    # One Graph per WebApp instance. Each is its own scope — resources
+    # within can reference each other and contribute status back.
+    - id: controllers
+      forEach:
+        webapp: ${watchWebapps}
+      template:
+        apiVersion: kro.run/v1alpha1
+        kind: Graph
+        metadata:
+          name: ${webapp.metadata.name}-webapp # (L1)
+        spec:
+          resources:
+            # Read the specific instance. L0 bakes in the name;
+            # L1 reads it fresh to stay reactive to spec changes.
+            - id: schema
+              externalRef:
+                apiVersion: kro.run/v1alpha1
+                kind: WebApp
+                metadata:
+                  name: ${webapp.metadata.name}
+                  namespace: ${webapp.metadata.namespace}
+
+            - id: deployment
+              template:
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: $${schema.metadata.name}
+                spec:
+                  replicas: $${schema.spec.replicas}
+                  selector:
+                    matchLabels:
+                      app: $${schema.metadata.name}
+                  template:
+                    metadata:
+                      labels:
+                        app: $${schema.metadata.name}
+                    spec:
+                      containers:
+                        - name: app
+                          image: $${schema.spec.image}
+
+            - id: service
+              template:
+                apiVersion: v1
+                kind: Service
+                metadata:
+                  name: $${schema.metadata.name}-svc
+                spec:
+                  selector:
+                    app: $${schema.metadata.name}
+                  ports:
+                    - port: $${schema.spec.port}
+
+            # Contribute status back to the WebApp instance.
+            # This is a partial server-side apply — the Graph doesn't own
+            # the WebApp, it just writes the status fields it computes.
+            - id: status
+              template:
+                apiVersion: kro.run/v1alpha1
+                kind: WebApp
+                metadata:
+                  name: $${schema.metadata.name}
+                  namespace: $${schema.metadata.namespace}
+                status:
+                  deploymentReady: $${deployment.status.availableReplicas == deployment.spec.replicas}
+                  address: $${service.status.loadBalancer.ingress[0].hostname}

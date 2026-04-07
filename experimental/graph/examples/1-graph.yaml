@@ -1,0 +1,41 @@
+# 1. A Graph
+#
+# A set of resources managed by kro. Create the Graph → resources are created
+# and continuously reconciled. Delete it → cascade delete.
+# Equivalent to a Helm install or Argo Application.
+# ---------------------------------------------------------------------------
+apiVersion: kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: my-app
+spec:
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: my-app
+        spec:
+          replicas: 3
+          selector:
+            matchLabels:
+              app: my-app
+          template:
+            metadata:
+              labels:
+                app: my-app
+            spec:
+              containers:
+                - name: app
+                  image: nginx
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${deployment.metadata.name}-svc
+        spec:
+          selector: ${deployment.spec.selector.matchLabels}
+          ports:
+            - port: 80

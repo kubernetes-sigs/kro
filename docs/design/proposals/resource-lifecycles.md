@@ -73,9 +73,9 @@ that it is no longer an owner of replicas and then report a terminal
 conflict. Users would be expected to see this conflict and resolve it
 on a case by case basis.
 
-On delete, if there are no other owners we just delete the object as is. If
-there are other owners we do an empty SSA releasing ownership of all of our
-fields.
+On instance delete or pruning if the rgd no longer requires the resource, if there 
+are no other owners we just delete the object as is. If there are other owners we do
+an empty SSA releasing ownership of all of our fields.
 
 These semantics allow partial objects. With this you can define a Kro resource
 that just changes a single field or a few fields.

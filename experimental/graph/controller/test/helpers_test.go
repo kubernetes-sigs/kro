@@ -24,6 +24,9 @@ import (
 // GraphGVK is a local alias for the exported controller GVK.
 var GraphGVK = graphcontroller.GraphGVK
 
+// GraphRevisionGVK is a local alias for the exported revision GVK.
+var GraphRevisionGVK = graphcontroller.GraphRevisionGVK
+
 // --- Helpers ---
 
 func buildGraphCRD() *apiextensionsv1.CustomResourceDefinition {
@@ -316,4 +319,93 @@ func findCondition(conditions []any, condType string) (map[string]any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// ---------------------------------------------------------------------------
+// GraphRevision CRD + helpers
+// ---------------------------------------------------------------------------
+
+func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "graphrevisions.internal.kro.run"},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: "internal.kro.run",
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Plural:   "graphrevisions",
+				Singular: "graphrevision",
+				Kind:     "GraphRevision",
+				ListKind: "GraphRevisionList",
+			},
+			Scope: apiextensionsv1.NamespaceScoped,
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
+				Name:    "v1alpha1",
+				Served:  true,
+				Storage: true,
+				Schema: &apiextensionsv1.CustomResourceValidation{
+					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+						Type:                   "object",
+						XPreserveUnknownFields: ptr(true),
+					},
+				},
+				Subresources: &apiextensionsv1.CustomResourceSubresources{
+					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+				},
+			}},
+		},
+	}
+}
+
+// waitForRevision polls until a GraphRevision with the given name exists.
+func waitForRevision(ctx context.Context, c client.Client, key types.NamespacedName) (*unstructured.Unstructured, error) {
+	rev := &unstructured.Unstructured{}
+	rev.SetGroupVersionKind(GraphRevisionGVK)
+	err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		if err := c.Get(ctx, key, rev); err != nil {
+			return false, nil
+		}
+		return true, nil
+	})
+	return rev, err
+}
+
+// waitForRevisionCondition polls until a GraphRevision has a specific condition status.
+func waitForRevisionCondition(ctx context.Context, c client.Client, key types.NamespacedName, condType, expectedStatus string) error {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		rev := &unstructured.Unstructured{}
+		rev.SetGroupVersionKind(GraphRevisionGVK)
+		if err := c.Get(ctx, key, rev); err != nil {
+			return false, nil
+		}
+		status, _ := rev.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		conditions, _ := status["conditions"].([]any)
+		cond, found := findCondition(conditions, condType)
+		if !found {
+			return false, nil
+		}
+		return cond["status"] == expectedStatus, nil
+	})
+}
+
+// assertRevisionLabels checks that a GraphRevision has the expected ownership labels.
+func assertRevisionLabels(t *testing.T, rev *unstructured.Unstructured, graphName string, generation int64) {
+	t.Helper()
+	labels := rev.GetLabels()
+	assert.Equal(t, graphName, labels[graphcontroller.LabelGraphName],
+		"revision should have graph-name label")
+	assert.Equal(t, fmt.Sprintf("%d", generation), labels[graphcontroller.LabelGraphGeneration],
+		"revision should have graph-generation label")
+	assert.NotEmpty(t, labels[graphcontroller.LabelRevisionHash],
+		"revision should have content hash label")
+}
+
+// countRevisions returns the number of GraphRevisions for a Graph in a namespace.
+func countRevisions(ctx context.Context, c client.Client, graphName, namespace string) (int, error) {
+	revisions, err := graphcontroller.ListRevisionsForTest(ctx, c, graphName, namespace)
+	if err != nil {
+		return 0, err
+	}
+	return len(revisions), nil
 }

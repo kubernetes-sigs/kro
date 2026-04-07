@@ -50,6 +50,15 @@ func TestMain(m *testing.M) {
 		panic("waiting for Graph CRD: " + err.Error())
 	}
 
+	revisionCRD := buildGraphRevisionCRD()
+	if err := k8sClient.Create(ctx, revisionCRD); err != nil {
+		panic("creating GraphRevision CRD: " + err.Error())
+	}
+
+	if err := waitForCRD(ctx, k8sClient, "graphrevisions.internal.kro.run"); err != nil {
+		panic("waiting for GraphRevision CRD: " + err.Error())
+	}
+
 	metadataClient, err := k8smetadata.NewForConfig(cfg)
 	if err != nil {
 		panic("creating metadata client: " + err.Error())

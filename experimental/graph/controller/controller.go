@@ -1,13 +1,18 @@
 // Package graphcontroller implements a proof-of-concept Graph controller.
 //
-// The controller watches Graph custom resources and reconciles them by:
-//  1. Parsing spec.resources into a DAG (dependency graph from CEL expression analysis)
-//  2. Compiling all CEL expressions eagerly (cached per Graph spec generation)
-//  3. Walking the DAG in topological order, evaluating pre-compiled CEL programs
-//  4. Applying evaluated templates to the API server via server-side apply
-//  5. Reading back created resources to populate scope for downstream expressions
-//  6. Checking readyWhen/includeWhen conditions and propagating exclusion through the DAG
-//  7. Registering dynamic watches on externalRef targets and owned resources
+// The controller watches Graph custom resources and reconciles them in two phases:
+//
+// Phase 1 — Revision management:
+//  1. Ensure a GraphRevision exists for the current Graph spec generation
+//  2. If the spec changed, materialize + compile + create a new revision
+//  3. Manage revision activation (old stays Active until new revision converges)
+//
+// Phase 2 — Resource reconciliation (from the active revision):
+//  1. Parse the active revision's spec into a DAG
+//  2. Walk the DAG in topological order, evaluating pre-compiled CEL programs
+//  3. Apply evaluated templates via server-side apply
+//  4. Prune resources removed between revisions
+//  5. Update revision and Graph status
 package graphcontroller
 
 import (
@@ -54,7 +59,7 @@ const (
 type GraphReconciler struct {
 	Client    client.Client
 	Watcher   *WatchCoordinator // nil = no dynamic watches (backward compat with existing tests)
-	Caches    *graphCaches      // per-Graph compiled expression caches
+	Caches    *graphCaches      // per-revision compiled expression caches
 	Resources *resourceCache    // per-resource full object cache
 }
 
@@ -90,38 +95,41 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}()
 	}
 
-	// 2. Parse spec and compile (or reuse cached).
-	// The compilation phase parses the spec, builds the DAG, and compiles all
-	// CEL expressions. Everything is cached per Graph spec generation.
-	// Failures here set Accepted=False — a terminal state until the spec is fixed.
-	cacheKey := req.NamespacedName.String()
-	cache := r.Caches.get(cacheKey)
-	if cache == nil || cache.generation != graph.GetGeneration() {
-		graphSpec, err := extractGraphSpec(graph.Object)
-		if err != nil {
-			logger.Error(err, "extracting graph spec")
-			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
-			return ctrl.Result{}, err
-		}
-		cache, err = compileGraph(graphSpec, graph.GetGeneration())
-		if err != nil {
-			logger.Error(err, "compiling graph expressions")
-			_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
-			return ctrl.Result{}, err
-		}
-		r.Caches.set(cacheKey, cache)
-		logger.V(1).Info("compiled graph expressions",
-			"generation", graph.GetGeneration(),
-			"expressions", len(cache.programs))
+	// -----------------------------------------------------------------------
+	// Phase 1: Revision management
+	// -----------------------------------------------------------------------
+	//
+	// Ensure a GraphRevision exists for the current generation. If the spec
+	// changed (generation bumped), materialize a new revision. A revision can
+	// only be created if compilation succeeds — its existence proves validity.
+
+	activeRevision, previousRevision, err := r.ensureRevision(ctx, graph)
+	if err != nil {
+		// Compilation or materialization failure — no revision created.
+		// Report the error on the Graph and return.
+		logger.Error(err, "ensuring revision")
+		_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
+		return ctrl.Result{}, err
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 2: Resource reconciliation from the active revision
+	// -----------------------------------------------------------------------
+
+	// Parse and compile the active revision's spec (cached by revision name).
+	revisionSpec, cache, err := r.compileRevision(activeRevision)
+	if err != nil {
+		logger.Error(err, "compiling revision spec")
+		_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
+		return ctrl.Result{}, err
 	}
 
 	eval := newEvaluator(cache)
-	graphSpec := cache.spec
 	dag := cache.dag
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
-	// 4. Walk DAG in topological order: observe, plan, execute.
+	// Walk DAG in topological order: observe, plan, execute.
 	for _, idx := range dag.TopologicalOrder {
 		node := &dag.Nodes[idx]
 		res := node.Resource
@@ -185,7 +193,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		plan.SetState(dag, res.ID, NodeReady)
 	}
 
-	// 5. Derive aggregate state from the DAG plan
+	// Derive aggregate state from the DAG plan
 	hasDataPending, hasNotReady, _, _, hasConflict, readyCount := plan.Summary()
 	needsRequeue := hasDataPending || hasNotReady
 
@@ -195,12 +203,21 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		contributions = append(contributions, id)
 	}
 
-	// 6. Prune + update status in a single read-modify-write sequence.
-	// Both operations need a fresh read of the Graph object. Consolidating
-	// them avoids a redundant GET.
+	// -----------------------------------------------------------------------
+	// Prune resources removed between revisions
+	// -----------------------------------------------------------------------
+	if !hasDataPending && previousRevision != nil {
+		if err := r.pruneRemovedResources(ctx, graph, previousRevision, appliedKeys); err != nil {
+			logger.Error(err, "pruning removed resources")
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Update status on Graph and revision
+	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
 		accepted:       true,
-		resourceCount:  len(graphSpec.Resources),
+		resourceCount:  len(revisionSpec.Resources),
 		appliedCount:   readyCount,
 		needsRequeue:   needsRequeue,
 		hasDataPending: hasDataPending,
@@ -208,14 +225,138 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		hasConflict:    hasConflict,
 		contributions:  contributions,
 	}
-	if err := r.pruneAndUpdateStatus(ctx, graph, appliedKeys, hasDataPending, rstate); err != nil {
-		logger.Error(err, "prune and status update")
+	if err := r.updateStatus(ctx, graph, rstate); err != nil {
+		logger.Error(err, "status update")
 	}
+
+	// Update revision status conditions
+	allReady := !needsRequeue && !hasConflict && rstate.accepted
+	r.updateRevisionStatus(ctx, activeRevision, previousRevision, allReady)
 
 	if needsRequeue {
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: Revision management
+// ---------------------------------------------------------------------------
+
+// ensureRevision guarantees that a GraphRevision exists for the current Graph
+// generation. Returns the active revision to reconcile from, and the previous
+// revision (if any) for prune diffing.
+//
+// On first reconcile (no revisions exist): creates revision, returns it as active.
+// On spec change (new generation): creates new revision, returns it as active
+// and the old active revision as previous.
+// On steady state: returns existing active revision, nil previous.
+func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructured.Unstructured) (active *unstructured.Unstructured, previous *unstructured.Unstructured, err error) {
+	logger := log.FromContext(ctx)
+	graphName := graph.GetName()
+	namespace := graph.GetNamespace()
+	generation := graph.GetGeneration()
+
+	// Check if a revision already exists for this generation
+	revName := revisionName(graphName, generation)
+	existing, err := getRevision(ctx, r.Client, revName, namespace)
+	if err == nil {
+		// Revision exists for this generation. Find previous (if any).
+		prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
+		return existing, prev, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, nil, fmt.Errorf("checking revision %s: %w", revName, err)
+	}
+
+	// No revision for this generation. Parse, compile, and create one.
+	// If compilation fails, no revision is created — the failure is reported
+	// on the Graph. A revision can only exist if processing succeeded.
+	graphSpec, err := extractGraphSpec(graph.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("extracting graph spec: %w", err)
+	}
+
+	// Compile to verify validity before creating the revision.
+	_, err = compileGraph(graphSpec, generation)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Materialize the revision
+	revision := materialize(graph, graphSpec)
+	if err := createRevision(ctx, r.Client, revision); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Race: another reconcile created it. Fetch and use it.
+			existing, getErr := getRevision(ctx, r.Client, revName, namespace)
+			if getErr != nil {
+				return nil, nil, fmt.Errorf("fetching existing revision after race: %w", getErr)
+			}
+			prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
+			return existing, prev, nil
+		}
+		return nil, nil, fmt.Errorf("creating revision %s: %w", revName, err)
+	}
+	logger.Info("created revision", "revision", revName, "generation", generation)
+
+	// Set initial conditions on the new revision
+	_ = setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision")
+
+	// Find previous active revision for prune diffing
+	prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
+
+	// Re-fetch the revision to get the server-assigned metadata
+	active, err = getRevision(ctx, r.Client, revName, namespace)
+	if err != nil {
+		return nil, nil, fmt.Errorf("re-fetching revision %s: %w", revName, err)
+	}
+
+	return active, prev, nil
+}
+
+// findPreviousRevision finds the most recent revision before the given
+// generation that was active.
+func (r *GraphReconciler) findPreviousRevision(ctx context.Context, graphName, namespace string, currentGen int64) (*unstructured.Unstructured, error) {
+	revisions, err := listRevisions(ctx, r.Client, graphName, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Walk backwards through sorted revisions (ascending by generation)
+	for i := len(revisions) - 1; i >= 0; i-- {
+		rev := revisions[i]
+		gen := revisionGeneration(rev)
+		if gen < currentGen {
+			return rev, nil
+		}
+	}
+	return nil, nil
+}
+
+// compileRevision parses and compiles a revision's spec, using the cache
+// keyed by namespace/revision-name. The namespace prefix prevents collisions
+// when two Graphs in different namespaces share the same name (and thus
+// produce identically-named revisions).
+func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *graphCache, error) {
+	cacheKey := revision.GetNamespace() + "/" + revision.GetName()
+	cache := r.Caches.get(cacheKey)
+	if cache != nil {
+		return cache.spec, cache, nil
+	}
+
+	spec, err := extractRevisionSpec(revision)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	generation := revisionGeneration(revision)
+	cache, err = compileGraph(spec, generation)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	r.Caches.set(cacheKey, cache)
+	return spec, cache, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -466,13 +607,13 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	// Label managed resources for visibility and selector queries.
 	// Labels work for both namespaced and cluster-scoped resources,
 	// unlike owner references which require same-scope.
-	labels := obj.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
+	lbls := obj.GetLabels()
+	if lbls == nil {
+		lbls = map[string]string{}
 	}
-	labels["internal.kro.run/graph-name"] = graph.GetName()
-	labels["internal.kro.run/graph-namespace"] = graph.GetNamespace()
-	obj.SetLabels(labels)
+	lbls[LabelGraphName] = graph.GetName()
+	lbls[LabelGraphNamespace] = graph.GetNamespace()
+	obj.SetLabels(lbls)
 
 	// Watch before apply — ensures the metadata informer is running.
 	gvr := gvkToGVR(obj.GroupVersionKind())
@@ -673,8 +814,6 @@ apply:
 	return readBack, nil
 }
 
-const appliedResourcesAnnotation = "internal.kro.run/applied-resources"
-
 func resourceKey(obj *unstructured.Unstructured) string {
 	gvk := obj.GroupVersionKind()
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
@@ -689,92 +828,133 @@ func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName
 		types.NamespacedName{Namespace: parts[3], Name: parts[4]}
 }
 
-// pruneAndUpdateStatus consolidates prune and status update into a single
-// read-modify-write sequence on the Graph object. One GET instead of two.
-func (r *GraphReconciler) pruneAndUpdateStatus(ctx context.Context, graph *unstructured.Unstructured, currentKeys []string, hasDataPending bool, state *reconcileState) error {
+// pruneRemovedResources deletes managed resources that exist in the previous
+// revision but not in the current applied set. This replaces the old
+// annotation-based prune tracking — the revision IS the record.
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousRevision *unstructured.Unstructured, currentKeys []string) error {
 	logger := log.FromContext(ctx)
 
-	// Single GET of the Graph object for both prune and status.
-	latest := &unstructured.Unstructured{}
-	latest.SetGroupVersionKind(GraphGVK)
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(graph), latest); err != nil {
-		return fmt.Errorf("reading latest for prune+status: %w", err)
+	// Parse the previous revision's spec to get its resource templates
+	prevSpec, err := extractRevisionSpec(previousRevision)
+	if err != nil {
+		return fmt.Errorf("parsing previous revision spec: %w", err)
 	}
 
-	// --- Prune stale resources (only safe when all resources were resolved) ---
-	if !hasDataPending {
-		annotations := latest.GetAnnotations()
-		if annotations == nil {
-			annotations = map[string]string{}
+	// Build current key set for fast lookup
+	currentSet := map[string]bool{}
+	for _, k := range currentKeys {
+		currentSet[k] = true
+	}
+
+	// Check the concrete resource keys from the previous revision's spec.
+	// For each resource with a static name, verify it should still exist.
+	prevGenStr := fmt.Sprintf("%d", revisionGeneration(previousRevision))
+	for _, res := range prevSpec.Resources {
+		if res.Template == nil {
+			continue
+		}
+		// Extract static name from template metadata
+		md, _ := res.Template["metadata"].(map[string]any)
+		if md == nil {
+			continue
+		}
+		name, _ := md["name"].(string)
+		if name == "" || strings.Contains(name, "${") {
+			// Dynamic name — can't determine prune target from spec alone.
+			// These are handled by the current key set comparison below.
+			continue
 		}
 
-		previousKeysStr := annotations[appliedResourcesAnnotation]
-		var previousKeys []string
-		if previousKeysStr != "" {
-			previousKeys = strings.Split(previousKeysStr, ";")
+		apiVersion, _ := res.Template["apiVersion"].(string)
+		kind, _ := res.Template["kind"].(string)
+
+		// Build the resource key as would be produced during reconciliation
+		gv, _ := schema.ParseGroupVersion(apiVersion)
+		gvk := gv.WithKind(kind)
+		key := strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, graph.GetNamespace(), name}, "/")
+
+		if currentSet[key] {
+			continue // still exists in current revision
 		}
 
-		currentSet := map[string]bool{}
-		for _, k := range currentKeys {
-			currentSet[k] = true
+		// Resource was in previous revision but not applied in current cycle.
+		// Check if it exists and is ours before deleting.
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: graph.GetNamespace()}, obj); err != nil {
+			continue // already gone
 		}
 
-		for _, prevKey := range previousKeys {
-			if currentSet[prevKey] || prevKey == "" {
-				continue
-			}
-			gvk, nn := parseResourceKey(prevKey)
-			if gvk.Kind == "" {
-				continue
-			}
-			obj := &unstructured.Unstructured{}
-			obj.SetGroupVersionKind(gvk)
-			obj.SetName(nn.Name)
-			obj.SetNamespace(nn.Namespace)
-
-			// Check if we successfully owned this resource (has our hash annotation)
-			if err := r.Client.Get(ctx, nn, obj); err != nil {
-				continue // already gone
-			}
-			objAnnotations := obj.GetAnnotations()
-			if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
-				logger.V(1).Info("skipping prune for resource without template hash", "key", prevKey)
-				continue
-			}
-
-			if err := r.Client.Delete(ctx, obj); err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					return fmt.Errorf("pruning %s: %w", prevKey, err)
-				}
-			} else {
-				logger.Info("pruned stale resource", "key", prevKey)
-				r.Resources.remove(prevKey)
-			}
+		// Verify ownership: must have our graph-name label and template hash
+		objLabels := obj.GetLabels()
+		if objLabels == nil || objLabels[LabelGraphName] != graph.GetName() {
+			continue // not ours
+		}
+		objAnnotations := obj.GetAnnotations()
+		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
+			continue // never successfully applied by us
 		}
 
-		// Only write the annotation if the key set actually changed.
-		// This prevents a spurious write → resourceVersion bump → watch
-		// event → re-reconcile loop in steady state.
-		sort.Strings(currentKeys)
-		newKeysStr := strings.Join(currentKeys, ";")
-		if newKeysStr != previousKeysStr {
-			annotations[appliedResourcesAnnotation] = newKeysStr
-			latest.SetAnnotations(annotations)
+		// Verify it's from the previous generation (not updated by current revision)
+		if genLabel, ok := objLabels[LabelGraphGeneration]; ok && genLabel != prevGenStr {
+			continue // already updated to a different generation
+		}
 
-			if err := r.Client.Update(ctx, latest); err != nil {
-				return fmt.Errorf("updating applied resources annotation: %w", err)
+		if err := r.Client.Delete(ctx, obj); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("pruning %s: %w", key, err)
 			}
-
-			// Re-read for status update (annotation Update bumps resourceVersion)
-			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(graph), latest); err != nil {
-				return fmt.Errorf("re-reading after annotation update: %w", err)
-			}
+		} else {
+			logger.Info("pruned resource from previous revision", "key", key)
+			r.Resources.remove(key)
 		}
 	}
 
-	// --- Update status ---
-	return r.updateStatusOnLatest(ctx, latest, state)
+	return nil
 }
+
+// updateRevisionStatus updates the conditions on the active and previous
+// revisions based on the reconcile outcome.
+//
+// TODO: Implement old revision garbage collection. The design specifies that
+// old revisions are pruned when they no longer have resources in the cluster.
+// Currently revisions accumulate across Graph updates (but are cleaned up on
+// Graph deletion). After activation, list non-active revisions and delete
+// those whose unique resources no longer exist in the cluster.
+// See: experimental/docs/design/graph/002-revisions.md § Lifecycle
+func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active, previous *unstructured.Unstructured, allReady bool) {
+	logger := log.FromContext(ctx)
+
+	if allReady {
+		// All resources are ready — activate this revision
+		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionTrue, "Ready", "All resources reconciled"); err != nil {
+			logger.V(1).Info("failed to set revision Ready", "error", err)
+		}
+		if revisionConditionStatus(active, RevisionConditionActive) != ConditionTrue {
+			if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionActive, ConditionTrue, "Active", "This is the current revision"); err != nil {
+				logger.V(1).Info("failed to set revision Active", "error", err)
+			}
+			// Deactivate the previous revision
+			if previous != nil {
+				if err := setRevisionCondition(ctx, r.Client, previous, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
+					logger.V(1).Info("failed to deactivate previous revision", "error", err)
+				}
+			}
+		}
+	} else {
+		// Resources still converging — mark as not yet ready.
+		// Use Unknown (not False) to distinguish "not yet evaluated" from
+		// "evaluated and failed." Per the design: Ready starts Unknown,
+		// converges to True when fully propagated.
+		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionUnknown, "Progressing", "Resources not yet fully reconciled"); err != nil {
+			logger.V(1).Info("failed to set revision Ready=Unknown", "error", err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Deletion
+// ---------------------------------------------------------------------------
 
 func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructured.Unstructured) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -783,31 +963,68 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		r.Watcher.removeGraph(types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()})
 	}
 
-	// Clean up the expression cache for this Graph.
-	cacheKey := types.NamespacedName{Name: graph.GetName(), Namespace: graph.GetNamespace()}.String()
-	r.Caches.remove(cacheKey)
+	// Clean up all expression caches for this Graph's revisions.
+	revisions, _ := listRevisions(ctx, r.Client, graph.GetName(), graph.GetNamespace())
+	for _, rev := range revisions {
+		r.Caches.remove(rev.GetNamespace() + "/" + rev.GetName())
+	}
 
 	// Clean up the resource cache.
 	r.Resources.removeAll()
 
-	// Actively delete all managed resources tracked in the annotation.
-	// Without owner references, the finalizer is responsible for cleanup.
-	// Two passes: first issue deletes, then verify all are gone.
-	// If any resource still exists (e.g., a child Graph with its own finalizer),
-	// requeue to wait for it to finish its own cleanup chain.
-	annotations := graph.GetAnnotations()
+	// Collect all managed resource keys from all revisions for this Graph.
+	// This ensures we clean up resources from any revision, not just the latest.
+	allKeys := map[string]bool{}
+	for _, rev := range revisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, res := range spec.Resources {
+			if res.Template == nil {
+				continue
+			}
+			// Skip contribution templates — they write to objects owned by
+			// someone else. The Graph controller must not delete them on
+			// teardown; it only wrote partial metadata/status fields.
+			if isContributionTemplate(res.Template) {
+				continue
+			}
+			md, _ := res.Template["metadata"].(map[string]any)
+			if md == nil {
+				continue
+			}
+			name, _ := md["name"].(string)
+			if name == "" || strings.Contains(name, "${") {
+				continue // dynamic names — need label-based lookup
+			}
+			apiVersion, _ := res.Template["apiVersion"].(string)
+			kind, _ := res.Template["kind"].(string)
+			gv, _ := schema.ParseGroupVersion(apiVersion)
+			gvk := gv.WithKind(kind)
+			key := strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, graph.GetNamespace(), name}, "/")
+			allKeys[key] = true
+		}
+	}
+
+	// Convert to slice for ordered deletion
 	var keys []string
-	if annotations != nil {
-		keysStr := annotations[appliedResourcesAnnotation]
-		if keysStr != "" {
-			keys = strings.Split(keysStr, ";")
+	for k := range allKeys {
+		keys = append(keys, k)
+	}
+
+	// Also include dynamically-named resources found by label selector.
+	// This catches forEach-stamped resources that aren't in the static spec.
+	dynamicKeys, _ := r.findManagedResourceKeys(ctx, graph)
+	for _, k := range dynamicKeys {
+		if !allKeys[k] {
+			keys = append(keys, k)
 		}
 	}
 
 	// Pass 1: Issue deletes in reverse topological order.
-	// Rebuild DAG from the spec to determine dependency ordering.
-	// The annotation is an unordered set — deletion ordering comes from the
-	// dependency graph, not from annotation serialization.
+	// Track which keys we actually attempted to delete (had our hash).
+	deletedKeys := map[string]bool{}
 	deleteOrder := r.deletionOrder(graph, keys)
 	for _, key := range deleteOrder {
 		if key == "" {
@@ -826,12 +1043,13 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if err := r.Client.Get(ctx, nn, obj); err != nil {
 			continue // already gone
 		}
-		annotations := obj.GetAnnotations()
-		if annotations == nil || annotations[templateHashAnnotation] == "" {
+		objAnnotations := obj.GetAnnotations()
+		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
 			logger.V(1).Info("skipping delete for resource without template hash (never successfully applied)", "key", key)
 			continue
 		}
 
+		deletedKeys[key] = true
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return ctrl.Result{}, fmt.Errorf("deleting managed resource %s: %w", key, err)
@@ -841,13 +1059,10 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		}
 	}
 
-	// Pass 2: Verify all managed resources are actually gone.
-	// Child Graphs have their own finalizers — they may still exist after Delete
-	// while they clean up their own children. Wait for the full chain to unwind.
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
+	// Pass 2: Verify managed resources that we actually deleted are gone.
+	// Only check resources that had our template hash — others (e.g., conflicted
+	// resources that were never successfully applied) are not our responsibility.
+	for key := range deletedKeys {
 		gvk, nn := parseResourceKey(key)
 		if gvk.Kind == "" {
 			continue
@@ -855,9 +1070,19 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(gvk)
 		if err := r.Client.Get(ctx, nn, check); err == nil {
-			// Resource still exists (finalizer hasn't completed yet) — requeue
 			logger.V(1).Info("waiting for managed resource to be deleted", "key", key)
 			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
+		}
+	}
+
+	// Pass 3: Delete all GraphRevisions.
+	for _, rev := range revisions {
+		if err := deleteRevision(ctx, r.Client, rev); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				logger.Error(err, "deleting revision", "revision", rev.GetName())
+			}
+		} else {
+			logger.V(1).Info("deleted revision", "revision", rev.GetName())
 		}
 	}
 
@@ -868,7 +1093,69 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	return ctrl.Result{}, nil
 }
 
-// deletionOrder returns annotation keys ordered for deletion: reverse dependency
+// findManagedResourceKeys discovers dynamically-named resources (forEach, CEL
+// names) by listing resources with our graph-name label. Returns resource keys.
+//
+// The GVK list is derived from the revision specs — every resource template
+// declares its apiVersion and kind, so we know exactly which types to scan.
+// This avoids a hardcoded GVK list that would silently miss new resource types.
+func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *unstructured.Unstructured) ([]string, error) {
+	// Collect unique GVKs from all revisions for this Graph.
+	revisions, err := listRevisions(ctx, r.Client, graph.GetName(), graph.GetNamespace())
+	if err != nil {
+		return nil, err
+	}
+
+	gvkSet := map[schema.GroupVersionKind]bool{}
+	for _, rev := range revisions {
+		spec, err := extractRevisionSpec(rev)
+		if err != nil {
+			continue
+		}
+		for _, res := range spec.Resources {
+			if res.Template == nil {
+				continue
+			}
+			if isContributionTemplate(res.Template) {
+				continue // contributions don't create resources we own
+			}
+			apiVersion, _ := res.Template["apiVersion"].(string)
+			kind, _ := res.Template["kind"].(string)
+			if apiVersion == "" || kind == "" {
+				continue
+			}
+			gv, _ := schema.ParseGroupVersion(apiVersion)
+			gvkSet[gv.WithKind(kind)] = true
+		}
+	}
+
+	var keys []string
+	for gvk := range gvkSet {
+		list := &unstructured.UnstructuredList{}
+		listGVK := gvk
+		listGVK.Kind = gvk.Kind + "List"
+		list.SetGroupVersionKind(listGVK)
+
+		selector := labels.SelectorFromSet(map[string]string{
+			LabelGraphName: graph.GetName(),
+		})
+
+		if err := r.Client.List(ctx, list, &client.ListOptions{
+			Namespace:     graph.GetNamespace(),
+			LabelSelector: selector,
+		}); err != nil {
+			continue // skip GVKs we can't list (e.g., CRD deleted)
+		}
+
+		for _, item := range list.Items {
+			keys = append(keys, resourceKey(&item))
+		}
+	}
+
+	return keys, nil
+}
+
+// deletionOrder returns resource keys ordered for deletion: reverse dependency
 // order from the DAG. Rebuilds the DAG from the Graph spec. Maps resource keys
 // to DAG positions by matching kind/name. Unmatched keys are deleted first.
 func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) []string {

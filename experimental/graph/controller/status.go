@@ -106,8 +106,7 @@ func (s *reconcileState) deriveReadyCondition() (status string, reason string, m
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version
-// from the API server to avoid conflicts. Used for error paths early in the
-// reconcile loop (before pruneAndUpdateStatus takes over).
+// from the API server to avoid conflicts.
 func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.Unstructured, state *reconcileState) error {
 	latest := &unstructured.Unstructured{}
 	latest.SetGroupVersionKind(GraphGVK)

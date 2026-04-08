@@ -83,7 +83,8 @@ spec:
 The spec contains one field:
 
 - `nodes` — same structure as Graph nodes (`id`, `template`, `readyWhen`, `includeWhen`,
-  `forEach`) with internal metadata injected and template hashes computed. Dependencies between
+  `propagateWhen`, `finalizes`, `forEach`) with internal metadata injected and template hashes
+  computed. Dependencies between
   resources are derived from CEL expression references and cached in memory, not persisted.
 
 The spec is immutable, enforced by CEL validation (`self == oldSelf`). A structural change to the

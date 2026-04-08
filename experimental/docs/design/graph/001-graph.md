@@ -207,6 +207,29 @@ propagateWhen propagates immediately — dependents re-evaluate on every reconci
   template: ...
 ```
 
+#### finalizes
+
+A node `id`. The resource is created when the target becomes a prune candidate — it does not
+exist during normal operation. It must reach readyWhen before the target's removal completes.
+
+Finalizers fire regardless of why the target is being removed — Graph teardown, spec mutation,
+includeWhen toggle, or forEach scale-down.
+
+```yaml
+- id: snapshot
+  finalizes: pvc
+  template:
+    apiVersion: snapshot.storage.k8s.io/v1
+    kind: VolumeSnapshot
+    metadata:
+      name: ${pvc.metadata.name}-final
+    spec:
+      source:
+        persistentVolumeClaimName: ${pvc.metadata.name}
+  readyWhen:
+    - ${snapshot.status.readyToUse == true}
+```
+
 ## Dependencies
 
 Dependencies are inferred from CEL expression references. If resource B's template contains

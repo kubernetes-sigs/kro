@@ -44,9 +44,9 @@ type reconcileState struct {
 	hasNotReady    bool
 	hasConflict    bool
 	reconcileErr   error
-	resourceCount  int
+	nodeCount      int
 	appliedCount   int
-	contributions  []string // resource IDs detected as contributions
+	contributions  []string // node IDs detected as contributions
 }
 
 // deriveState computes the Graph state from the reconcile outcome.
@@ -102,7 +102,7 @@ func (s *reconcileState) deriveReadyCondition() (status string, reason string, m
 	if s.needsRequeue {
 		return ConditionFalse, "Progressing", "Reconciliation in progress"
 	}
-	return ConditionTrue, "Ready", fmt.Sprintf("All %d resources reconciled", s.appliedCount)
+	return ConditionTrue, "Ready", fmt.Sprintf("All %d nodes reconciled", s.appliedCount)
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version

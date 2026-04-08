@@ -9,7 +9,7 @@ kind: Graph
 metadata:
   name: my-app
 spec:
-  resources:
+  nodes:
     - id: deployment
       template:
         apiVersion: apps/v1

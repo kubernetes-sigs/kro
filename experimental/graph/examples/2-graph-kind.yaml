@@ -10,7 +10,7 @@ kind: Graph
 metadata:
   name: webapp-controller # (L0)
 spec:
-  resources:
+  nodes:
     - id: watchWebapps
       externalRef:
         apiVersion: kro.run/v1alpha1
@@ -29,7 +29,7 @@ spec:
         metadata:
           name: ${webapp.metadata.name}-webapp # (L1)
         spec:
-          resources:
+          nodes:
             # Read the specific instance. L0 bakes in the name;
             # L1 reads it fresh to stay reactive to spec changes.
             - id: schema

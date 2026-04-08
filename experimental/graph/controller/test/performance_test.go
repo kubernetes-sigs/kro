@@ -79,7 +79,7 @@ func TestFieldConflictBlocksDependents(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "conflicted",
 						"template": map[string]any{
@@ -171,7 +171,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "target",
 						"template": map[string]any{
@@ -253,7 +253,7 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "cm",
 						"template": map[string]any{
@@ -334,7 +334,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "cm",
 						"template": map[string]any{
@@ -375,7 +375,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 	graphLatest := &unstructured.Unstructured{}
 	graphLatest.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-hash-change", Namespace: ns}, graphLatest))
-	resources := []any{
+	nodes := []any{
 		map[string]any{
 			"id": "cm",
 			"template": map[string]any{
@@ -388,7 +388,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 			},
 		},
 	}
-	unstructured.SetNestedSlice(graphLatest.Object, resources, "spec", "resources")
+	unstructured.SetNestedSlice(graphLatest.Object, nodes, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, graphLatest))
 	t.Log("updated Graph spec: version=v2")
 
@@ -428,7 +428,7 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "cm",
 						"template": map[string]any{
@@ -516,7 +516,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "conflicted",
 						"template": map[string]any{

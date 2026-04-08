@@ -46,7 +46,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "config",
 						"externalRef": map[string]any{
@@ -137,7 +137,7 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "items",
 						"externalRef": map[string]any{

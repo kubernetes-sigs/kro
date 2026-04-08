@@ -7,7 +7,7 @@
 //  2. If the spec changed, materialize + compile + create a new revision
 //  3. Manage revision activation (old stays Active until new revision converges)
 //
-// Phase 2 — Resource reconciliation (from the active revision):
+// Phase 2 — Node reconciliation (from the active revision):
 //  1. Parse the active revision's spec into a DAG
 //  2. Walk the DAG in topological order, evaluating pre-compiled CEL programs
 //  3. Apply evaluated templates via server-side apply
@@ -113,7 +113,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// -----------------------------------------------------------------------
-	// Phase 2: Resource reconciliation from the active revision
+	// Phase 2: Node reconciliation from the active revision
 	// -----------------------------------------------------------------------
 
 	// Parse and compile the active revision's spec (cached by revision name).
@@ -132,65 +132,64 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Walk DAG in topological order: observe, plan, execute.
 	for _, idx := range dag.TopologicalOrder {
 		node := &dag.Nodes[idx]
-		res := node.Resource
 
 		// Skip if already excluded by contagious propagation
-		if plan.States[res.ID] == NodeExcluded {
-			logger.V(1).Info("skipping contagiously excluded resource", "resource", res.ID)
+		if plan.States[node.ID] == NodeExcluded {
+			logger.V(1).Info("skipping contagiously excluded node", "node", node.ID)
 			continue
 		}
 
 		// Check if dependencies allow processing
 		if canProcess, blockedBy := plan.CanProcess(node); !canProcess {
-			logger.V(1).Info("skipping resource due to blocked dependency",
-				"resource", res.ID, "blockedBy", blockedBy)
-			plan.SetState(dag, res.ID, NodeExcluded)
+			logger.V(1).Info("skipping node due to blocked dependency",
+				"node", node.ID, "blockedBy", blockedBy)
+			plan.SetState(dag, node.ID, NodeExcluded)
 			continue
 		}
 
 		// Evaluate includeWhen
-		if len(res.IncludeWhen) > 0 {
-			included, err := eval.includeWhen(res.IncludeWhen)
+		if len(node.IncludeWhen) > 0 {
+			included, err := eval.includeWhen(node.IncludeWhen)
 			if err != nil {
 				if errors.Is(err, ErrDataPending) {
-					logger.V(1).Info("includeWhen data pending", "resource", res.ID)
-					plan.SetState(dag, res.ID, NodeDataPending)
+					logger.V(1).Info("includeWhen data pending", "node", node.ID)
+					plan.SetState(dag, node.ID, NodeDataPending)
 					continue
 				}
-				logger.Error(err, "evaluating includeWhen", "resource", res.ID)
+				logger.Error(err, "evaluating includeWhen", "node", node.ID)
 				return ctrl.Result{}, err
 			}
 			if !included {
-				logger.V(1).Info("resource excluded by includeWhen", "resource", res.ID)
-				plan.SetState(dag, res.ID, NodeExcluded)
+				logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
+				plan.SetState(dag, node.ID, NodeExcluded)
 				continue
 			}
 		}
 
-		// Dispatch by resource type. All handlers return (keys, error) with
+		// Dispatch by node type. All handlers return (keys, error) with
 		// the same error contract: ErrDataPending, ErrWaitingForReadiness, or fatal.
-		keys, err := r.reconcileResource(ctx, graph, res, eval, watcher)
+		keys, err := r.reconcileNode(ctx, graph, *node, eval, watcher)
 		if err != nil {
 			if errors.Is(err, ErrDataPending) {
-				logger.V(1).Info("resource data pending", "resource", res.ID)
-				plan.SetState(dag, res.ID, NodeDataPending)
+				logger.V(1).Info("node data pending", "node", node.ID)
+				plan.SetState(dag, node.ID, NodeDataPending)
 				continue
 			}
 			if errors.Is(err, ErrWaitingForReadiness) {
-				logger.V(1).Info("resource not ready", "resource", res.ID)
-				plan.SetState(dag, res.ID, NodeNotReady)
+				logger.V(1).Info("node not ready", "node", node.ID)
+				plan.SetState(dag, node.ID, NodeNotReady)
 				appliedKeys = append(appliedKeys, keys...)
 				continue
 			}
 			if errors.Is(err, ErrFieldConflict) {
-				logger.Info("resource field conflict", "resource", res.ID, "error", err)
-				plan.SetState(dag, res.ID, NodeConflict)
+				logger.Info("node field conflict", "node", node.ID, "error", err)
+				plan.SetState(dag, node.ID, NodeConflict)
 				continue
 			}
-			return ctrl.Result{}, fmt.Errorf("resource %s: %w", res.ID, err)
+			return ctrl.Result{}, fmt.Errorf("node %s: %w", node.ID, err)
 		}
 		appliedKeys = append(appliedKeys, keys...)
-		plan.SetState(dag, res.ID, NodeReady)
+		plan.SetState(dag, node.ID, NodeReady)
 	}
 
 	// Derive aggregate state from the DAG plan
@@ -217,7 +216,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 	rstate := &reconcileState{
 		accepted:       true,
-		resourceCount:  len(revisionSpec.Resources),
+		nodeCount:      len(revisionSpec.Nodes),
 		appliedCount:   readyCount,
 		needsRequeue:   needsRequeue,
 		hasDataPending: hasDataPending,
@@ -360,23 +359,23 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 }
 
 // ---------------------------------------------------------------------------
-// Resource reconciliation methods
+// Node reconciliation methods
 // ---------------------------------------------------------------------------
 
-// reconcileResource dispatches to the appropriate handler based on resource type.
+// reconcileNode dispatches to the appropriate handler based on node type.
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrDataPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileResource(ctx context.Context, graph *unstructured.Unstructured, res Resource, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	switch {
-	case res.ForEach != nil:
-		return r.reconcileForEach(ctx, graph, res, eval, watcher)
-	case res.ExternalRef != nil:
-		err := r.reconcileExternalRef(ctx, graph, res, eval, watcher)
+	case node.ForEach != nil:
+		return r.reconcileForEach(ctx, graph, node, eval, watcher)
+	case node.ExternalRef != nil:
+		err := r.reconcileExternalRef(ctx, graph, node, eval, watcher)
 		return nil, err
-	case res.Template != nil:
-		key, err := r.reconcileTemplate(ctx, graph, res, eval, watcher)
+	case node.Template != nil:
+		key, err := r.reconcileTemplate(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
 		}
@@ -387,12 +386,12 @@ func (r *GraphReconciler) reconcileResource(ctx context.Context, graph *unstruct
 }
 
 // reconcileExternalRef reads an existing object (or collection) from the API server into scope.
-func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstructured.Unstructured, res Resource, eval *evaluator, watcher *graphWatcher) error {
+func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
-	ref, err := eval.toMap(res.ExternalRef)
+	ref, err := eval.toMap(node.ExternalRef)
 	if err != nil {
-		return fmt.Errorf("externalRef %s: %w", res.ID, err)
+		return fmt.Errorf("externalRef %s: %w", node.ID, err)
 	}
 
 	apiVersion, _ := ref["apiVersion"].(string)
@@ -404,7 +403,7 @@ func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstr
 	// selector → collection
 	if md != nil {
 		if selectorRaw, hasSelector := md["selector"]; hasSelector {
-			return r.reconcileExternalRefSelector(ctx, graph, res, eval, gvk, selectorRaw, watcher)
+			return r.reconcileExternalRefSelector(ctx, graph, node, eval, gvk, selectorRaw, watcher)
 		}
 	}
 
@@ -417,7 +416,7 @@ func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstr
 
 	// Register watch BEFORE reading
 	if watcher != nil {
-		watcher.watchScalar(res.ID, gvkToGVR(gvk), name, namespace)
+		watcher.watchScalar(node.ID, gvkToGVR(gvk), name, namespace)
 	}
 
 	obj := &unstructured.Unstructured{}
@@ -426,22 +425,22 @@ func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstr
 		return fmt.Errorf("reading %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
 	}
 
-	eval.scope[res.ID] = normalizeTypes(obj.Object)
-	logger.V(1).Info("resolved externalRef", "resource", res.ID, "gvk", gvk, "name", obj.GetName())
+	eval.scope[node.ID] = normalizeTypes(obj.Object)
+	logger.V(1).Info("resolved externalRef", "node", node.ID, "gvk", gvk, "name", obj.GetName())
 
 	// Check readyWhen
-	if len(res.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(res.ReadyWhen, eval.scope[res.ID], res.ID); err != nil {
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
 			return err
 		}
-		logger.V(1).Info("externalRef ready", "resource", res.ID)
+		logger.V(1).Info("externalRef ready", "node", node.ID)
 	}
 
 	return nil
 }
 
 // reconcileExternalRefSelector reads a collection matching a label selector.
-func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, graph *unstructured.Unstructured, res Resource, eval *evaluator, gvk schema.GroupVersionKind, selectorRaw any, watcher *graphWatcher) error {
+func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, gvk schema.GroupVersionKind, selectorRaw any, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	var labelSelector labels.Selector
@@ -463,7 +462,7 @@ func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, grap
 	}
 
 	if watcher != nil {
-		watcher.watchCollection(res.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
+		watcher.watchCollection(node.ID, gvkToGVR(gvk), graph.GetNamespace(), labelSelector)
 	}
 
 	listGVK := gvk
@@ -482,17 +481,17 @@ func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, grap
 	for i, item := range list.Items {
 		items[i] = normalizeTypes(item.Object)
 	}
-	eval.scope[res.ID] = items
-	logger.V(1).Info("resolved externalRef selector", "resource", res.ID, "gvk", gvk, "count", len(items))
+	eval.scope[node.ID] = items
+	logger.V(1).Info("resolved externalRef selector", "node", node.ID, "gvk", gvk, "count", len(items))
 	return nil
 }
 
 // reconcileForEach iterates a collection and stamps the template per item.
-func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, res Resource, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
 
-	for varName, collectionExpr := range res.ForEach {
+	for varName, collectionExpr := range node.ForEach {
 		collection, err := eval.evalString(collectionExpr)
 		if err != nil {
 			if isDataPending(err) {
@@ -505,56 +504,56 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		if !ok {
 			items = []any{collection}
 		}
-		logger.V(1).Info("forEach expanding", "resource", res.ID, "var", varName, "count", len(items))
+		logger.V(1).Info("forEach expanding", "node", node.ID, "var", varName, "count", len(items))
 
 		var allApplied []any
 		for _, item := range items {
-			if res.Template == nil {
+			if node.Template == nil {
 				continue
 			}
 			innerScope := copyScope(eval.scope)
 			innerScope[varName] = item
 			innerEval := eval.withScope(innerScope)
 
-			evalMap, err := innerEval.toMap(res.Template)
+			evalMap, err := innerEval.toMap(node.Template)
 			if err != nil {
-				return nil, fmt.Errorf("forEach %s item: %w", res.ID, err)
+				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 			}
 
 			applied, err := r.applyResource(ctx, graph, evalMap, watcher)
 			if err != nil {
-				return keys, fmt.Errorf("applying %s item: %w", res.ID, err)
+				return keys, fmt.Errorf("applying %s item: %w", node.ID, err)
 			}
 			allApplied = append(allApplied, applied.Object)
 			keys = append(keys, resourceKey(applied))
 		}
-		eval.scope[res.ID] = allApplied
+		eval.scope[node.ID] = allApplied
 	}
 
 	// Check readyWhen per-item: all items must pass for the collection to be Ready.
-	// Uses the same checkReadiness as singletons — the resource ID in scope resolves
+	// Uses the same checkReadiness as singletons — the node ID in scope resolves
 	// to a single applied item for each evaluation. Apply-all-then-gate: all items
 	// are applied and in scope before any readiness check, so scale-up isn't
 	// serialized through prior item readiness.
-	if len(res.ReadyWhen) > 0 {
-		for _, applied := range eval.scope[res.ID].([]any) {
-			if err := eval.checkReadiness(res.ReadyWhen, applied, res.ID); err != nil {
+	if len(node.ReadyWhen) > 0 {
+		for _, applied := range eval.scope[node.ID].([]any) {
+			if err := eval.checkReadiness(node.ReadyWhen, applied, node.ID); err != nil {
 				return keys, err // ErrWaitingForReadiness — all items applied, but not all ready
 			}
 		}
-		logger.V(1).Info("all forEach items ready", "resource", res.ID)
+		logger.V(1).Info("all forEach items ready", "node", node.ID)
 	}
 
 	return keys, nil
 }
 
 // reconcileTemplate evaluates and applies a template, checks readyWhen.
-func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstructured.Unstructured, res Resource, eval *evaluator, watcher *graphWatcher) (string, error) {
+func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
 	logger := log.FromContext(ctx)
 
-	evalMap, err := eval.toMap(res.Template)
+	evalMap, err := eval.toMap(node.Template)
 	if err != nil {
-		return "", fmt.Errorf("template %s: %w", res.ID, err)
+		return "", fmt.Errorf("template %s: %w", node.ID, err)
 	}
 
 	// Contributions auto-split: regular SSA for metadata/spec fields,
@@ -563,13 +562,13 @@ func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstruct
 	// need to know about it.
 	// Contribution detection is from the template shape (only metadata/status
 	// keys) — determined at compile time and stored in the DAG.
-	if eval.cache.dag.Contributions[res.ID] {
+	if eval.cache.dag.Contributions[node.ID] {
 		applied, err := r.applyContribution(ctx, graph, evalMap, watcher)
 		if err != nil {
 			return "", err
 		}
-		eval.scope[res.ID] = applied.Object
-		logger.V(1).Info("contributed to resource", "resource", res.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
+		eval.scope[node.ID] = applied.Object
+		logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 		return "", nil
 	}
 
@@ -578,16 +577,16 @@ func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstruct
 		return "", err
 	}
 
-	eval.scope[res.ID] = applied.Object
+	eval.scope[node.ID] = applied.Object
 	key := resourceKey(applied)
-	logger.V(1).Info("applied resource", "resource", res.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName(), "uid", applied.GetUID())
+	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName(), "uid", applied.GetUID())
 
 	// Check readyWhen
-	if len(res.ReadyWhen) > 0 {
-		if err := eval.checkReadiness(res.ReadyWhen, eval.scope[res.ID], res.ID); err != nil {
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
 			return key, err
 		}
-		logger.V(1).Info("resource ready", "resource", res.ID)
+		logger.V(1).Info("resource ready", "node", node.ID)
 	}
 
 	return key, nil
@@ -847,14 +846,14 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	}
 
 	// Check the concrete resource keys from the previous revision's spec.
-	// For each resource with a static name, verify it should still exist.
+	// For each node with a static name, verify it should still exist.
 	prevGenStr := fmt.Sprintf("%d", revisionGeneration(previousRevision))
-	for _, res := range prevSpec.Resources {
-		if res.Template == nil {
+	for _, node := range prevSpec.Nodes {
+		if node.Template == nil {
 			continue
 		}
 		// Extract static name from template metadata
-		md, _ := res.Template["metadata"].(map[string]any)
+		md, _ := node.Template["metadata"].(map[string]any)
 		if md == nil {
 			continue
 		}
@@ -865,8 +864,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue
 		}
 
-		apiVersion, _ := res.Template["apiVersion"].(string)
-		kind, _ := res.Template["kind"].(string)
+		apiVersion, _ := node.Template["apiVersion"].(string)
+		kind, _ := node.Template["kind"].(string)
 
 		// Build the resource key as would be produced during reconciliation
 		gv, _ := schema.ParseGroupVersion(apiVersion)
@@ -980,17 +979,17 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if err != nil {
 			continue
 		}
-		for _, res := range spec.Resources {
-			if res.Template == nil {
+		for _, node := range spec.Nodes {
+			if node.Template == nil {
 				continue
 			}
 			// Skip contribution templates — they write to objects owned by
 			// someone else. The Graph controller must not delete them on
 			// teardown; it only wrote partial metadata/status fields.
-			if isContributionTemplate(res.Template) {
+			if isContributionTemplate(node.Template) {
 				continue
 			}
-			md, _ := res.Template["metadata"].(map[string]any)
+			md, _ := node.Template["metadata"].(map[string]any)
 			if md == nil {
 				continue
 			}
@@ -998,8 +997,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if name == "" || strings.Contains(name, "${") {
 				continue // dynamic names — need label-based lookup
 			}
-			apiVersion, _ := res.Template["apiVersion"].(string)
-			kind, _ := res.Template["kind"].(string)
+			apiVersion, _ := node.Template["apiVersion"].(string)
+			kind, _ := node.Template["kind"].(string)
 			gv, _ := schema.ParseGroupVersion(apiVersion)
 			gvk := gv.WithKind(kind)
 			key := strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, graph.GetNamespace(), name}, "/")
@@ -1112,15 +1111,15 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 		if err != nil {
 			continue
 		}
-		for _, res := range spec.Resources {
-			if res.Template == nil {
+		for _, node := range spec.Nodes {
+			if node.Template == nil {
 				continue
 			}
-			if isContributionTemplate(res.Template) {
+			if isContributionTemplate(node.Template) {
 				continue // contributions don't create resources we own
 			}
-			apiVersion, _ := res.Template["apiVersion"].(string)
-			kind, _ := res.Template["kind"].(string)
+			apiVersion, _ := node.Template["apiVersion"].(string)
+			kind, _ := node.Template["kind"].(string)
 			if apiVersion == "" || kind == "" {
 				continue
 			}
@@ -1163,7 +1162,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	if err != nil {
 		return keys
 	}
-	dag, err := BuildDAG(graphSpec.Resources)
+	dag, err := BuildDAG(graphSpec.Nodes)
 	if err != nil {
 		return keys
 	}
@@ -1171,7 +1170,7 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	// Map kind/name to DAG index from static template metadata.
 	kindNameToIndex := map[string]int{}
 	for i, node := range dag.Nodes {
-		tmpl := node.Resource.Template
+		tmpl := node.Template
 		if tmpl == nil {
 			continue
 		}

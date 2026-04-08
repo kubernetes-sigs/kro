@@ -34,7 +34,7 @@ metadata:
       name: my-app
       uid: ...
 spec:
-  resources:
+  nodes:
     - id: deployment
       readyWhen:
         - ${deployment.status.availableReplicas > 0}
@@ -82,7 +82,7 @@ spec:
 
 The spec contains one field:
 
-- `resources` — same structure as Graph resources (`id`, `template`, `readyWhen`, `includeWhen`,
+- `nodes` — same structure as Graph nodes (`id`, `template`, `readyWhen`, `includeWhen`,
   `forEach`) with internal metadata injected and template hashes computed. Dependencies between
   resources are derived from CEL expression references and cached in memory, not persisted.
 

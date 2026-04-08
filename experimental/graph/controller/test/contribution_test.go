@@ -51,7 +51,7 @@ func TestContribution(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Read the external object into scope
 					map[string]any{
 						"id": "schema",
@@ -167,7 +167,7 @@ func TestResourcePruning(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "keep",
 						"template": map[string]any{
@@ -218,7 +218,7 @@ func TestResourcePruning(t *testing.T) {
 				"data":       map[string]any{"state": "permanent"},
 			},
 		},
-	}, "spec", "resources")
+	}, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Wait for the removed ConfigMap to be deleted

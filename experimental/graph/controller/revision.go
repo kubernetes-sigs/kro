@@ -83,14 +83,14 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	generation := graph.GetGeneration()
 	generationStr := strconv.FormatInt(generation, 10)
 
-	// Build materialized resource list
-	resources := make([]any, len(spec.Resources))
-	for i, res := range spec.Resources {
-		resources[i] = materializeResource(res, graphName, generationStr)
+	// Build materialized node list
+	nodes := make([]any, len(spec.Nodes))
+	for i, node := range spec.Nodes {
+		nodes[i] = materializeNode(node, graphName, generationStr)
 	}
 
-	// Compute content hash over the materialized resources
-	contentHash := hashDesiredState(map[string]any{"resources": resources})
+	// Compute content hash over the materialized nodes
+	contentHash := hashDesiredState(map[string]any{"nodes": nodes})
 
 	revision := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -106,7 +106,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 				},
 			},
 			"spec": map[string]any{
-				"resources": resources,
+				"nodes": nodes,
 			},
 		},
 	}
@@ -114,44 +114,44 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	return revision
 }
 
-// materializeResource injects ownership labels and template hash into a
-// single resource's template metadata. Returns the resource as a map
+// materializeNode injects ownership labels and template hash into a
+// single node's template metadata. Returns the node as a map
 // suitable for inclusion in the revision spec.
-func materializeResource(res Resource, graphName string, generation string) map[string]any {
+func materializeNode(node Node, graphName string, generation string) map[string]any {
 	entry := map[string]any{
-		"id": res.ID,
+		"id": node.ID,
 	}
 
-	if res.Template != nil {
-		tmpl := deepCopyMap(res.Template)
+	if node.Template != nil {
+		tmpl := deepCopyMap(node.Template)
 		// Don't inject ownership labels on contribution templates — contributions
 		// write to objects someone else owns, and shouldn't claim them with
 		// management labels.
 		if !isContributionTemplate(tmpl) {
-			injectResourceLabels(tmpl, graphName, generation, res.ID)
+			injectResourceLabels(tmpl, graphName, generation, node.ID)
 		}
 		entry["template"] = tmpl
 	}
-	if res.ExternalRef != nil {
-		entry["externalRef"] = deepCopyMap(res.ExternalRef)
+	if node.ExternalRef != nil {
+		entry["externalRef"] = deepCopyMap(node.ExternalRef)
 	}
-	if res.ForEach != nil {
-		fe := make(map[string]any, len(res.ForEach))
-		for k, v := range res.ForEach {
+	if node.ForEach != nil {
+		fe := make(map[string]any, len(node.ForEach))
+		for k, v := range node.ForEach {
 			fe[k] = v
 		}
 		entry["forEach"] = fe
 	}
-	if len(res.IncludeWhen) > 0 {
-		iw := make([]any, len(res.IncludeWhen))
-		for i, s := range res.IncludeWhen {
+	if len(node.IncludeWhen) > 0 {
+		iw := make([]any, len(node.IncludeWhen))
+		for i, s := range node.IncludeWhen {
 			iw[i] = s
 		}
 		entry["includeWhen"] = iw
 	}
-	if len(res.ReadyWhen) > 0 {
-		rw := make([]any, len(res.ReadyWhen))
-		for i, s := range res.ReadyWhen {
+	if len(node.ReadyWhen) > 0 {
+		rw := make([]any, len(node.ReadyWhen))
+		for i, s := range node.ReadyWhen {
 			rw[i] = s
 		}
 		entry["readyWhen"] = rw
@@ -195,22 +195,22 @@ func injectResourceLabels(tmpl map[string]any, graphName, generation, nodeID str
 // ---------------------------------------------------------------------------
 
 // extractRevisionSpec parses a GraphSpec from a GraphRevision object.
-// The revision's spec.resources has the same structure as Graph spec.resources,
+// The revision's spec.nodes has the same structure as Graph spec.nodes,
 // just with labels/hashes already injected into templates.
 func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error) {
 	spec, ok := revision.Object["spec"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("revision %s: missing spec", revision.GetName())
 	}
-	rawResources, ok := spec["resources"]
+	rawNodes, ok := spec["nodes"]
 	if !ok {
-		return nil, fmt.Errorf("revision %s: missing spec.resources", revision.GetName())
+		return nil, fmt.Errorf("revision %s: missing spec.nodes", revision.GetName())
 	}
-	resources, err := parseResourceList(rawResources)
+	nodes, err := parseNodeList(rawNodes)
 	if err != nil {
 		return nil, fmt.Errorf("revision %s: %w", revision.GetName(), err)
 	}
-	return &GraphSpec{Resources: resources}, nil
+	return &GraphSpec{Nodes: nodes}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -390,26 +390,17 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 // Resource diff — for prune tracking across revisions
 // ---------------------------------------------------------------------------
 
-// revisionResourceIDs extracts the set of static resource keys from a
-// revision's spec. For templates with static names, this returns
-// "group/version/kind/name" strings. For templates with CEL expressions in
-// names or forEach resources, the key includes the node ID since the actual
-// names aren't known until evaluation time.
-//
-// This is used for diffing resource sets across revisions to determine
-// what to prune. Dynamically-named resources (forEach, CEL in name) are
-// tracked by the resource keys collected during the DAG walk, not by this
-// function.
-func revisionResourceIDs(spec *GraphSpec) map[string]bool {
-	ids := make(map[string]bool, len(spec.Resources))
-	for _, res := range spec.Resources {
-		ids[res.ID] = true
+// revisionNodeIDs extracts the set of node IDs from a revision's spec.
+func revisionNodeIDs(spec *GraphSpec) map[string]bool {
+	ids := make(map[string]bool, len(spec.Nodes))
+	for _, node := range spec.Nodes {
+		ids[node.ID] = true
 	}
 	return ids
 }
 
-// diffResourceIDs returns resource IDs present in oldIDs but not in newIDs.
-func diffResourceIDs(oldIDs, newIDs map[string]bool) []string {
+// diffNodeIDs returns node IDs present in oldIDs but not in newIDs.
+func diffNodeIDs(oldIDs, newIDs map[string]bool) []string {
 	var removed []string
 	for id := range oldIDs {
 		if !newIDs[id] {

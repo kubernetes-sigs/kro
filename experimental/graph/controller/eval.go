@@ -37,33 +37,33 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 // checkReadiness evaluates readyWhen conditions against an observed resource.
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
 // or data-pending.
-func (e *evaluator) checkReadiness(conditions []string, observed any, resourceID string) error {
+func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID string) error {
 	if len(conditions) == 0 {
 		return nil
 	}
 
-	// Build a scoped evaluator with just this resource
-	readyEval := e.withScope(map[string]any{resourceID: observed})
+	// Build a scoped evaluator with just this node's observed state
+	readyEval := e.withScope(map[string]any{nodeID: observed})
 
 	for _, cond := range conditions {
 		val, err := readyEval.evalString(cond)
 		if err != nil {
 			if isDataPending(err) {
-				return fmt.Errorf("resource %q: readyWhen %q: data not yet available: %w", resourceID, cond, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)
 			}
-			return fmt.Errorf("resource %q: readyWhen %q: %w", resourceID, cond, err)
+			return fmt.Errorf("node %q: readyWhen %q: %w", nodeID, cond, err)
 		}
 		switch v := val.(type) {
 		case bool:
 			if !v {
-				return fmt.Errorf("resource %q: readyWhen %q evaluated to false: %w", resourceID, cond, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, ErrWaitingForReadiness)
 			}
 		case string:
 			if v != "true" {
-				return fmt.Errorf("resource %q: readyWhen %q evaluated to %q: %w", resourceID, cond, v, ErrWaitingForReadiness)
+				return fmt.Errorf("node %q: readyWhen %q evaluated to %q: %w", nodeID, cond, v, ErrWaitingForReadiness)
 			}
 		default:
-			return fmt.Errorf("resource %q: readyWhen %q evaluated to %T, want bool", resourceID, cond, val)
+			return fmt.Errorf("node %q: readyWhen %q evaluated to %T, want bool", nodeID, cond, val)
 		}
 	}
 	return nil
@@ -153,7 +153,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 	return result.String(), nil
 }
 
-// includeWhen evaluates all includeWhen conditions for a resource.
+// includeWhen evaluates all includeWhen conditions for a node.
 func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 	for _, cond := range conditions {
 		val, err := e.evalString(cond)
@@ -277,26 +277,26 @@ func copyScope(scope map[string]any) map[string]any {
 	return result
 }
 
-// extractReferencedIDs scans a Resource for all ${...} expressions (at the
+// extractReferencedIDs scans a Node for all ${...} expressions (at the
 // current evaluation level — not $${...}) and returns the set of top-level
-// scope variable names referenced. Self-references (the resource's own ID)
-// are excluded since readyWhen expressions reference the resource itself
+// scope variable names referenced. Self-references (the node's own ID)
+// are excluded since readyWhen expressions reference the node itself
 // after it's applied, not as a dependency.
-func extractReferencedIDs(res Resource) map[string]bool {
+func extractReferencedIDs(node Node) map[string]bool {
 	refs := map[string]bool{}
 
 	// Collect all string values that might contain expressions
 	var strs []string
-	collectStrings(res.Template, &strs)
-	collectStrings(res.ExternalRef, &strs)
-	for _, s := range res.IncludeWhen {
+	collectStrings(node.Template, &strs)
+	collectStrings(node.ExternalRef, &strs)
+	for _, s := range node.IncludeWhen {
 		strs = append(strs, s)
 	}
-	for _, s := range res.ReadyWhen {
+	for _, s := range node.ReadyWhen {
 		strs = append(strs, s)
 	}
-	if res.ForEach != nil {
-		for _, v := range res.ForEach {
+	if node.ForEach != nil {
+		for _, v := range node.ForEach {
 			strs = append(strs, v)
 		}
 	}
@@ -314,7 +314,7 @@ func extractReferencedIDs(res Resource) map[string]bool {
 				continue // $${...} is deferred, not a reference at this level
 			}
 			id := extractFirstIdentifier(expr)
-			if id != "" && id != res.ID { // exclude self-references
+			if id != "" && id != node.ID { // exclude self-references
 				refs[id] = true
 			}
 		}

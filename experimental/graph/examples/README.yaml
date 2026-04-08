@@ -21,8 +21,8 @@
 #   as opaque strings through CEL — they are only evaluated when the next-level
 #   controller processes its own spec.
 #
-#   spec.resources can itself be a CEL expression that evaluates to an array
-#   of resource definitions (see CEL list concatenation in example 3).
+#   spec.nodes can itself be a CEL expression that evaluates to an array
+#   of node definitions (see CEL list concatenation in example 3).
 #
 # Resource model:
 #   - externalRef: reads an object from the cluster into scope.

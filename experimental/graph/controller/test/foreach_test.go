@@ -28,7 +28,7 @@ func TestForEachBasic(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Base config: provides the list of values to iterate
 					map[string]any{
 						"id": "base",
@@ -131,7 +131,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// externalRef with selector: reads all ConfigMaps with label app=my-kind
 					map[string]any{
 						"id": "instances",
@@ -236,7 +236,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Read all WebApp instances
 					map[string]any{
 						"id": "webapps",
@@ -264,7 +264,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 								"name": "${webapp.metadata.name}-graph",
 							},
 							"spec": map[string]any{
-								"resources": []any{
+								"nodes": []any{
 									// Child reads its specific instance by name
 									map[string]any{
 										"id": "schema",
@@ -364,7 +364,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// forEach stamps 3 ConfigMaps, each with ready = "false"
 					map[string]any{
 						"id": "workers",
@@ -445,7 +445,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 	latest.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, latest))
 
-	updatedResources := []any{
+	updatedNodes := []any{
 		map[string]any{
 			"id": "workers",
 			"forEach": map[string]any{
@@ -480,7 +480,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 			},
 		},
 	}
-	unstructured.SetNestedSlice(latest.Object, updatedResources, "spec", "resources")
+	unstructured.SetNestedSlice(latest.Object, updatedNodes, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, latest))
 	t.Log("Updated Graph: workers now have ready=true")
 
@@ -523,7 +523,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "workers",
 						"forEach": map[string]any{

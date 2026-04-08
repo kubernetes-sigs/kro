@@ -28,7 +28,7 @@ kind: Graph
 metadata:
   name: rgd-implementation # (L0)
 spec:
-  resources:
+  nodes:
     # Create the ResourceGraphDefinition CRD itself.
     - id: rgdCrd
       template:
@@ -119,7 +119,7 @@ spec:
         metadata:
           name: ${rgd.metadata.name} # (L1)
         spec:
-          resources:
+          nodes:
             # Read the specific RGD fresh. L0 bakes in the name;
             # L1 reads it fresh to stay reactive to spec changes.
             - id: rgd
@@ -175,7 +175,7 @@ spec:
                 metadata:
                   name: $${instance.metadata.name}-$${rgd.spec.schema.kind.lowerAscii()} # (L2)
                 spec:
-                  resources: >-
+                  nodes: >-
                     $${
                       [{"id": "schema", "externalRef": {
                         "apiVersion": rgd.spec.schema.group + "/" + rgd.spec.schema.apiVersion,

@@ -132,13 +132,13 @@ func (gc *graphCaches) remove(key string) {
 	delete(gc.caches, key)
 }
 
-// compileGraph builds a CEL environment with all resource IDs declared and
+// compileGraph builds a CEL environment with all node IDs declared and
 // eagerly compiles every expression in the spec. Returns a graphCache ready
 // for use during the reconcile loop, or an error if any expression fails to
 // compile.
 //
-// All resource IDs are declared upfront as DynType. Expressions that reference
-// resources not yet in scope at eval time will produce CEL runtime errors
+// All node IDs are declared upfront as DynType. Expressions that reference
+// nodes not yet in scope at eval time will produce CEL runtime errors
 // (e.g., "no such key") which isDataPending handles correctly.
 func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 	allIDs := spec.AllIdentifiers()
@@ -154,7 +154,7 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 
 	// Build the dependency graph. Cycle detection happens here — a cycle
 	// in the dependency graph sets Accepted=False with CycleDetected reason.
-	dag, err := BuildDAG(spec.Resources)
+	dag, err := BuildDAG(spec.Nodes)
 	if err != nil {
 		return nil, err
 	}

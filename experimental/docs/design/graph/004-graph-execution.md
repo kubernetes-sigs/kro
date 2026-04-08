@@ -287,7 +287,7 @@ enough that you'd write a separate Graph for it by hand.
     metadata:
       name: ${ns.metadata.name}-resources
     spec:
-      resources:
+      nodes:
         - id: nsRef
           template:
             apiVersion: v1
@@ -311,7 +311,7 @@ NetworkPolicy per Namespace:
 
 ```yaml
 spec:
-  resources:
+  nodes:
     - id: config
       template:
         apiVersion: v1

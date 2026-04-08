@@ -26,7 +26,7 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "config",
 						"template": map[string]any{
@@ -117,7 +117,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "source",
 						"externalRef": map[string]any{

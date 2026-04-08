@@ -87,7 +87,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 				"namespace": namespace,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "rgds",
 						"externalRef": map[string]any{
@@ -110,7 +110,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 								"name": "${rgd.metadata.name}-controller",
 							},
 							"spec": map[string]any{
-								"resources": `${[
+								"nodes": `${[
 									{"id": "rgd", "externalRef": {
 										"apiVersion": "test.kro.run/v1alpha1",
 										"kind": "ResourceGraphDefinition",
@@ -151,7 +151,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 										"kind": "Graph",
 										"metadata": {"name": "${instance.metadata.name}-${rgd.spec.schema.kind.lowerAscii()}"},
 										"spec": {
-											"resources": "${" +
+											"nodes": "${" +
 												"[{\"id\": \"schema\", \"externalRef\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +

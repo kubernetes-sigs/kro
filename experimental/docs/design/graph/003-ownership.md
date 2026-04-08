@@ -105,7 +105,7 @@ The label check does not run for Contribute templates. Contribute targets someon
 design — the label indicating another Graph's ownership is expected, not a conflict.
 
 ```yaml
-resources:
+nodes:
   # Owns — default non-force SSA
   - id: deployment
     template:

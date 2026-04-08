@@ -2,63 +2,53 @@ package graphcontroller
 
 import "fmt"
 
-// DAG builds a dependency graph from a list of Resources by scanning their
+// DAG builds a dependency graph from a list of Nodes by scanning their
 // CEL expressions for variable references. It provides topological ordering
 // and dependency-aware planning for the reconcile loop.
 type DAG struct {
-	// Nodes in declaration order (same as spec.resources)
-	Nodes []DAGNode
-	// Index from resource ID to node index
+	// Nodes in declaration order (same as spec.nodes)
+	Nodes []Node
+	// Index from node ID to node index
 	Index map[string]int
 	// TopologicalOrder is the apply order (respects dependencies).
 	// Computed via Kahn's algorithm — declaration order is not significant.
 	TopologicalOrder []int
 	// ReverseOrder is the delete order (reverse of TopologicalOrder).
 	ReverseOrder []int
-	// Contributions are resource IDs that were detected as contributions
+	// Contributions are node IDs that were detected as contributions
 	// from the template shape (only apiVersion/kind/metadata/status keys).
 	Contributions map[string]bool
 }
 
-// DAGNode represents a resource in the dependency graph.
-type DAGNode struct {
-	Resource Resource
-	// Dependencies are IDs of resources this node references in its expressions
-	Dependencies map[string]bool
-}
-
-// BuildDAG constructs a dependency graph from a resource list.
+// BuildDAG constructs a dependency graph from a node list.
 // Dependencies are extracted by scanning CEL expressions for variable references.
 // Returns an error if the dependency graph contains a cycle (ErrCycleDetected).
 // Declaration order is not significant — topological order is computed from
 // the dependency graph via Kahn's algorithm.
-func BuildDAG(resources []Resource) (*DAG, error) {
+func BuildDAG(nodes []Node) (*DAG, error) {
 	dag := &DAG{
-		Nodes:         make([]DAGNode, len(resources)),
-		Index:         make(map[string]int, len(resources)),
+		Nodes:         make([]Node, len(nodes)),
+		Index:         make(map[string]int, len(nodes)),
 		Contributions: make(map[string]bool),
 	}
 
-	for i, res := range resources {
-		refs := extractReferencedIDs(res)
-		dag.Nodes[i] = DAGNode{
-			Resource:     res,
-			Dependencies: refs,
-		}
-		dag.Index[res.ID] = i
+	for i, node := range nodes {
+		node.Dependencies = extractReferencedIDs(node)
+		dag.Nodes[i] = node
+		dag.Index[node.ID] = i
 
 		// Detect contributions from template shape: a template whose keys
 		// are a subset of {apiVersion, kind, metadata, status} is a
 		// contribution — it underspecifies the resource, writing only
 		// metadata and/or status fields on an object someone else owns.
-		if res.Template != nil && isContributionTemplate(res.Template) {
-			dag.Contributions[res.ID] = true
+		if node.Template != nil && isContributionTemplate(node.Template) {
+			dag.Contributions[node.ID] = true
 		}
 	}
 
 	// Kahn's algorithm: topological sort with cycle detection.
 	// inDegree counts how many in-graph dependencies each node has.
-	n := len(resources)
+	n := len(nodes)
 	inDegree := make([]int, n)
 	for i, node := range dag.Nodes {
 		for depID := range node.Dependencies {
@@ -82,7 +72,7 @@ func BuildDAG(resources []Resource) (*DAG, error) {
 		queue = queue[1:]
 		order = append(order, curr)
 
-		currID := dag.Nodes[curr].Resource.ID
+		currID := dag.Nodes[curr].ID
 		// Decrement in-degree for every node that depends on curr.
 		for i, node := range dag.Nodes {
 			if node.Dependencies[currID] {
@@ -99,10 +89,10 @@ func BuildDAG(resources []Resource) (*DAG, error) {
 		var cycleIDs []string
 		for i, d := range inDegree {
 			if d > 0 {
-				cycleIDs = append(cycleIDs, dag.Nodes[i].Resource.ID)
+				cycleIDs = append(cycleIDs, dag.Nodes[i].ID)
 			}
 		}
-		return nil, fmt.Errorf("resources %v form a dependency cycle: %w", cycleIDs, ErrCycleDetected)
+		return nil, fmt.Errorf("nodes %v form a dependency cycle: %w", cycleIDs, ErrCycleDetected)
 	}
 
 	dag.TopologicalOrder = order
@@ -165,7 +155,7 @@ func NewPlanState(dag *DAG) *PlanState {
 		States: make(map[string]NodeState, len(dag.Nodes)),
 	}
 	for _, node := range dag.Nodes {
-		ps.States[node.Resource.ID] = NodePending
+		ps.States[node.ID] = NodePending
 	}
 	return ps
 }
@@ -175,7 +165,7 @@ func NewPlanState(dag *DAG) *PlanState {
 // dependencies are Ready or not referenced at all.
 //
 // Returns (canProcess, blockingNodeID).
-func (ps *PlanState) CanProcess(node *DAGNode) (bool, string) {
+func (ps *PlanState) CanProcess(node *Node) (bool, string) {
 	for depID := range node.Dependencies {
 		state, exists := ps.States[depID]
 		if !exists {
@@ -217,13 +207,13 @@ func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 // propagateExclusion marks all downstream dependents of a node as excluded.
 func (ps *PlanState) propagateExclusion(dag *DAG, excludedID string) {
 	for _, node := range dag.Nodes {
-		if ps.States[node.Resource.ID] != NodePending {
+		if ps.States[node.ID] != NodePending {
 			continue // already processed
 		}
 		if node.Dependencies[excludedID] {
-			ps.States[node.Resource.ID] = NodeExcluded
+			ps.States[node.ID] = NodeExcluded
 			// Recurse: this node's dependents are also excluded
-			ps.propagateExclusion(dag, node.Resource.ID)
+			ps.propagateExclusion(dag, node.ID)
 		}
 	}
 }

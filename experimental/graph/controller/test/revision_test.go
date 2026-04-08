@@ -31,7 +31,7 @@ func TestRevisionCreatedOnGraphCreate(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{
@@ -72,15 +72,15 @@ func TestRevisionCreatedOnGraphCreate(t *testing.T) {
 	// Verify labels
 	assertRevisionLabels(t, rev, "rev-create-test", generation)
 
-	// Verify the revision has a spec with resources
+	// Verify the revision has a spec with nodes
 	spec, ok := rev.Object["spec"].(map[string]any)
 	require.True(t, ok, "revision should have a spec")
-	resources, ok := spec["resources"].([]any)
-	require.True(t, ok, "revision spec should have resources")
-	assert.Len(t, resources, 1, "revision should have 1 resource")
+	nodes, ok := spec["nodes"].([]any)
+	require.True(t, ok, "revision spec should have nodes")
+	assert.Len(t, nodes, 1, "revision should have 1 resource")
 
 	// Verify the materialized resource has injected labels
-	res := resources[0].(map[string]any)
+	res := nodes[0].(map[string]any)
 	assert.Equal(t, "configmap", res["id"])
 	tmpl, ok := res["template"].(map[string]any)
 	require.True(t, ok)
@@ -108,7 +108,7 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{
@@ -148,7 +148,7 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 
 	// Update the Graph spec
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "rev-update-test", Namespace: ns}, latestGraph))
-	resources := []any{
+	nodes := []any{
 		map[string]any{
 			"id": "configmap",
 			"template": map[string]any{
@@ -163,7 +163,7 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 			},
 		},
 	}
-	unstructured.SetNestedSlice(latestGraph.Object, resources, "spec", "resources")
+	unstructured.SetNestedSlice(latestGraph.Object, nodes, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, latestGraph))
 	t.Log("Updated Graph spec: version v1 → v2")
 
@@ -197,9 +197,9 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 
 	// Verify the second revision has updated content
 	spec, _ := rev2.Object["spec"].(map[string]any)
-	rev2Resources, _ := spec["resources"].([]any)
-	require.Len(t, rev2Resources, 1)
-	rev2Tmpl := rev2Resources[0].(map[string]any)["template"].(map[string]any)
+	rev2Nodes, _ := spec["nodes"].([]any)
+	require.Len(t, rev2Nodes, 1)
+	rev2Tmpl := rev2Nodes[0].(map[string]any)["template"].(map[string]any)
 	rev2Data, _ := rev2Tmpl["data"].(map[string]any)
 	assert.Equal(t, "v2", rev2Data["version"], "second revision should have v2")
 }
@@ -219,7 +219,7 @@ func TestRevisionNotCreatedOnCompilationFailure(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "bad",
 						"template": map[string]any{
@@ -279,7 +279,7 @@ func TestRevisionCleanupOnDelete(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{
@@ -359,7 +359,7 @@ func TestRevisionActivation(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{

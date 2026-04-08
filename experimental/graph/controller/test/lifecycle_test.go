@@ -26,7 +26,7 @@ func TestFullLifecycle(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "deployment",
 						"template": map[string]any{
@@ -138,8 +138,8 @@ func TestFullLifecycle(t *testing.T) {
 	// --- Phase 2: Update and verify ---
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))
 	spec := g.Object["spec"].(map[string]any)
-	resources := spec["resources"].([]any)
-	deployRes := resources[0].(map[string]any)
+	nodes := spec["nodes"].([]any)
+	deployRes := nodes[0].(map[string]any)
 	tmpl := deployRes["template"].(map[string]any)
 	deploySpec := tmpl["spec"].(map[string]any)
 	deploySpec["replicas"] = int64(5)
@@ -191,7 +191,7 @@ func TestCascadeDeletion(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configA",
 						"template": map[string]any{
@@ -289,7 +289,7 @@ func TestParallelIndependence(t *testing.T) {
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-parallel", "namespace": ns},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Chain A: externalRef (not ready) → dependent-a
 					map[string]any{
 						"id": "extA",
@@ -362,7 +362,7 @@ func TestContagiousExclusion(t *testing.T) {
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-contagious", "namespace": ns},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Config: controls the feature flag
 					map[string]any{
 						"id": "config",
@@ -457,7 +457,7 @@ func TestDataPendingChain(t *testing.T) {
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-chain", "namespace": ns},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "source",
 						"externalRef": map[string]any{
@@ -550,7 +550,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "sources",
 						"externalRef": map[string]any{
@@ -665,7 +665,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "control",
 						"externalRef": map[string]any{
@@ -744,7 +744,7 @@ func TestDriftNotRestored(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "managed",
 						"template": map[string]any{
@@ -796,7 +796,7 @@ func TestDriftNotRestored(t *testing.T) {
 	graphLatest.SetGroupVersionKind(schema.GroupVersionKind{Group: "kro.run", Version: "v1alpha1", Kind: "Graph"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-drift", Namespace: ns}, graphLatest))
 
-	resources := []any{
+	nodes := []any{
 		map[string]any{
 			"id": "managed",
 			"template": map[string]any{
@@ -809,7 +809,7 @@ func TestDriftNotRestored(t *testing.T) {
 			},
 		},
 	}
-	unstructured.SetNestedSlice(graphLatest.Object, resources, "spec", "resources")
+	unstructured.SetNestedSlice(graphLatest.Object, nodes, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, graphLatest))
 	t.Log("Updated Graph spec: desired=new-value")
 

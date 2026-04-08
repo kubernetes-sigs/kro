@@ -40,7 +40,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Watch all SimpleApp instances in this namespace
 					map[string]any{
 						"id": "instances",
@@ -65,7 +65,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 								"name": "${app.metadata.name}-simpleapp",
 							},
 							"spec": map[string]any{
-								"resources": []any{
+								"nodes": []any{
 									// L2: Read the specific instance by name (baked in by L1)
 									map[string]any{
 										"id": "schema",
@@ -270,16 +270,16 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 }
 
 // TestDynamicResourceListViaCEL proves that a parent Graph can construct a child
-// Graph's spec.resources via a CEL expression — the key mechanism for example 3.
+// Graph's spec.nodes via a CEL expression — the key mechanism for example 3.
 //
 // The parent has a list of resource definitions in a ConfigMap. Its forEach stamps
-// a child Graph whose spec.resources is ${...} — a CEL expression that concatenates
+// a child Graph whose spec.nodes is ${...} — a CEL expression that concatenates
 // a base externalRef with the dynamic resource list. The parent evaluates this
 // expression against its own scope, so the child Graph arrives at the API server
-// with spec.resources as a concrete []any. The child reconciles normally.
+// with spec.nodes as a concrete []any. The child reconciles normally.
 //
 // This proves the evaluation boundary handles structural fields: the parent evaluates
-// spec.resources, the child sees a literal array. No special "Phase 1" needed.
+// spec.nodes, the child sees a literal array. No special "Phase 1" needed.
 func TestDynamicResourceListViaCEL(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -301,10 +301,10 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, source))
 
 	// Parent Graph: forEach over a literal list, stamps child Graphs with
-	// spec.resources constructed from a CEL expression.
-	// The child's resources are:
+	// spec.nodes constructed from a CEL expression.
+	// The child's nodes are:
 	//   [externalRef for the source CM] + [template CM that uses the source data]
-	// This is the example 3 pattern — spec.resources is a ${} expression.
+	// This is the example 3 pattern — spec.nodes is a ${} expression.
 	parent := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -314,7 +314,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "children",
 						"forEach": map[string]any{
@@ -327,12 +327,12 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 								"name": "${item}-graph",
 							},
 							"spec": map[string]any{
-								// This is the key: spec.resources is a CEL expression that
-								// the PARENT evaluates. It constructs the child's resource
+								// This is the key: spec.nodes is a CEL expression that
+								// the PARENT evaluates. It constructs the child's node
 								// list dynamically. CEL output is opaque data — strings
 								// inside (like ${source.data.message}) survive to the child
 								// without needing $${} escaping.
-								"resources": `${[
+								"nodes": `${[
 									{"id": "source", "externalRef": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "dynamic-source"}}},
 									{"id": "result", "template": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": item + "-result"}, "data": {"value": "${source.data.message}"}}}
 								]}`,
@@ -344,19 +344,19 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 		},
 	}
 	require.NoError(t, k8sClient.Create(ctx, parent))
-	t.Log("Parent Graph created with CEL-constructed spec.resources")
+	t.Log("Parent Graph created with CEL-constructed spec.nodes")
 
 	// Child Graph should be created
 	childGraph := &unstructured.Unstructured{}
 	childGraph.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "child-a-graph", Namespace: ns}, childGraph))
 
-	// Verify the child Graph's spec.resources is a concrete []any (not a string)
-	childSpec, _, _ := unstructured.NestedFieldNoCopy(childGraph.Object, "spec", "resources")
-	childResources, ok := childSpec.([]any)
-	require.True(t, ok, "child spec.resources should be []any, got %T", childSpec)
-	assert.Len(t, childResources, 2, "child should have 2 resources (externalRef + template)")
-	t.Logf("Child Graph spec.resources is concrete []any with %d resources", len(childResources))
+	// Verify the child Graph's spec.nodes is a concrete []any (not a string)
+	childSpec, _, _ := unstructured.NestedFieldNoCopy(childGraph.Object, "spec", "nodes")
+	childNodes, ok := childSpec.([]any)
+	require.True(t, ok, "child spec.nodes should be []any, got %T", childSpec)
+	assert.Len(t, childNodes, 2, "child should have 2 nodes (externalRef + template)")
+	t.Logf("Child Graph spec.nodes is concrete []any with %d nodes", len(childNodes))
 
 	// The child Graph should reconcile and create the result ConfigMap
 	resultCM := &unstructured.Unstructured{}

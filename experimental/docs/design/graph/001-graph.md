@@ -15,7 +15,7 @@ kind: Graph
 metadata:
   name: my-app
 spec:
-  resources:
+  nodes:
     - id: deployment
       template:
         apiVersion: apps/v1
@@ -55,12 +55,12 @@ as the entire string) preserves the CEL return type. An embedded expression
 
 ## Spec
 
-### Resources
+### Nodes
 
-`spec.resources` is a list of resource entries. Each entry has an `id` and a `template`. Declaration
+`spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration
 order is not significant — execution order is determined by the dependency graph.
 
-`spec.resources` can itself be a CEL expression that evaluates to an array of resource definitions.
+`spec.nodes` can itself be a CEL expression that evaluates to an array of resource definitions.
 This enables dynamic resource list construction (e.g., CEL list concatenation to compose a resource
 list from parts).
 
@@ -241,7 +241,7 @@ child Graph independently reconciles resources for its item.
     metadata:
       name: ${ns.metadata.name}-resources
     spec:
-      resources:
+      nodes:
         - id: nsRef
           template:
             apiVersion: v1

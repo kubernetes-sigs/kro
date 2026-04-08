@@ -54,7 +54,7 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "source",
 						"externalRef": map[string]any{
@@ -141,7 +141,7 @@ func TestReadyWhenTemplateGatesDownstream(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Resource A: always created, always "ready"
 					map[string]any{
 						"id": "configA",
@@ -257,7 +257,7 @@ func TestDataPendingRequeues(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "source",
 						"externalRef": map[string]any{
@@ -365,7 +365,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Watch the infra resource, gate on phase == "Running"
 					map[string]any{
 						"id": "infra",

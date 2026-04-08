@@ -29,7 +29,7 @@ func TestGraphCreatesDeploymentAndService(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "deployment",
 						"template": map[string]any{
@@ -150,7 +150,7 @@ func TestGraphIncludeWhen(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{
@@ -236,7 +236,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "configmap",
 						"template": map[string]any{
@@ -270,7 +270,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 	latest.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-update", Namespace: ns}, latest))
 
-	resources := []any{
+	nodes := []any{
 		map[string]any{
 			"id": "configmap",
 			"template": map[string]any{
@@ -285,7 +285,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 			},
 		},
 	}
-	unstructured.SetNestedSlice(latest.Object, resources, "spec", "resources")
+	unstructured.SetNestedSlice(latest.Object, nodes, "spec", "nodes")
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Wait for the ConfigMap to be updated
@@ -329,7 +329,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 				"namespace": ns,
 			},
 			"spec": map[string]any{
-				"resources": []any{
+				"nodes": []any{
 					// Resource 1: ConfigMap with data the child will read
 					map[string]any{
 						"id": "sharedData",
@@ -357,7 +357,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 								"name": "${sharedData.metadata.name}-child",
 							},
 							"spec": map[string]any{
-								"resources": []any{
+								"nodes": []any{
 									// Child resource 1: externalRef reads the ConfigMap into child scope
 									map[string]any{
 										"id": "input",
@@ -416,11 +416,11 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 	t.Logf("L0: Child Graph shared-data-child created (uid=%s)", childGraph.GetUID())
 
 	// Verify the child Graph's spec contains ${...} (was $${...} in parent, stripped by one $)
-	childResources, _, _ := unstructured.NestedSlice(childGraph.Object, "spec", "resources")
-	require.Len(t, childResources, 2, "child Graph should have 2 resources (externalRef + template)")
+	childNodes, _, _ := unstructured.NestedSlice(childGraph.Object, "spec", "nodes")
+	require.Len(t, childNodes, 2, "child Graph should have 2 nodes (externalRef + template)")
 
 	// The result template should have ${input.metadata.name}-result (not $${...})
-	resultRes := childResources[1].(map[string]any)
+	resultRes := childNodes[1].(map[string]any)
 	resultTmpl := resultRes["template"].(map[string]any)
 	resultMeta := resultTmpl["metadata"].(map[string]any)
 	assert.Equal(t, "${input.metadata.name}-result", resultMeta["name"],

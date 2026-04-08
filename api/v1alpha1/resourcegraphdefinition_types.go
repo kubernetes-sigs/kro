@@ -139,7 +139,7 @@ type ExternalRefMetadata struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Selector is a label selector for collection external references.
 	// When set, all resources matching the selector are included.
-	// The selector may be a literal Kubernetes LabelSelector object or a full CEL
+	// The selector may be a literal Kubernetes [metav1.LabelSelector] object or a full CEL
 	// expression that resolves to one at reconcile time.
 	// Mutually exclusive with Name.
 	//

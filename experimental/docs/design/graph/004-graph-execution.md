@@ -1,20 +1,20 @@
 # Graph Execution
 
-How the controller reconciles a Graph. The DAG is the dependency structure between resources.
+How the controller reconciles a Graph. The DAG is the dependency structure between nodes.
 Watches bring external state in. The walk converges the DAG toward the active revision's desired
 state. Performance is structural — work is proportional to change, not to DAG size.
 
 ## The DAG
 
-A directed acyclic graph of nodes. Each node is a single resource. Edges are dependencies inferred
-from CEL expression references. A revision materializes a DAG — the static structure the walk
-operates on.
+A directed acyclic graph of nodes. Each node declares exactly one Kubernetes resource. Edges are
+dependencies inferred from CEL expression references. A revision materializes a DAG — the static
+structure the walk operates on.
 
 ### Nodes
 
 A node has:
 
-- **Identity** — resource ID within the Graph's scope
+- **Identity** — node ID within the Graph's scope
 - **Template** — desired state declaration with `${...}` CEL expressions referencing other nodes
 - **Dependencies** — nodes this node's CEL expressions reference (edges in the DAG)
 
@@ -32,7 +32,7 @@ Dependencies are inferred from CEL expression references. If node B's template c
 compile time.
 
 Declaration order in the spec is irrelevant. The dependency graph determines execution order.
-Resources with no dependency relationship are independent and can be processed in parallel.
+Nodes with no dependency relationship are independent and can be processed in parallel.
 
 ## The Walk
 
@@ -80,7 +80,7 @@ Each node in the walk scope lands in exactly one state per reconcile:
 | Error    | Transient failure              | Blocked    | Retries next reconcile              |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal that feeds the
-Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the resource's
+Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the node's
 data is in scope.
 
 Blocked states propagate through the DAG. If A is Pending, B depends on A, B's CEL expressions
@@ -277,7 +277,7 @@ small number of resources with straightforward dependencies between them.
 
 **Nested Graphs** — forEach stamps a child Graph per item. Each child Graph is independently
 reconciled by its own watches. Use nested Graphs when per-item isolation matters — a failure in one
-item shouldn't affect others' reconcile cadence — or when each item's resource graph is complex
+item shouldn't affect others' reconcile cadence — or when each item's subgraph is complex
 enough that you'd write a separate Graph for it by hand.
 
 ```yaml

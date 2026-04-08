@@ -135,13 +135,11 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 					// externalRef with selector: reads all ConfigMaps with label app=my-kind
 					map[string]any{
 						"id": "instances",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]any{
-								"selector": map[string]any{
-									"app": "my-kind",
-								},
+							"selector": map[string]any{
+								"app": "my-kind",
 							},
 						},
 					},
@@ -240,13 +238,11 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 					// Read all WebApp instances
 					map[string]any{
 						"id": "webapps",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]any{
-								"selector": map[string]any{
-									"kind": "WebApp",
-								},
+							"selector": map[string]any{
+								"kind": "WebApp",
 							},
 						},
 					},
@@ -268,7 +264,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 									// Child reads its specific instance by name
 									map[string]any{
 										"id": "schema",
-										"externalRef": map[string]any{
+										"template": map[string]any{
 											"apiVersion": "v1",
 											"kind":       "ConfigMap",
 											"metadata": map[string]any{
@@ -422,14 +418,15 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 		t.Logf("Worker %s created with ready=false", name)
 	}
 
-	// Summary should NOT exist — workers are not ready, downstream is blocked
-	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "worker-summary", Namespace: ns}, 1500*time.Millisecond))
-	t.Log("Summary correctly not created while workers not ready")
+	// readyWhen no longer gates dependents — worker-summary should be created
+	// immediately because worker data is in scope. The Graph status shows InProgress.
+	summaryCheck := &unstructured.Unstructured{}
+	summaryCheck.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "worker-summary", Namespace: ns}, summaryCheck))
+	t.Log("Summary created while workers not ready (readyWhen no longer gates dependents)")
 
 	// Verify Graph status is InProgress
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
@@ -495,7 +492,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 	t.Logf("Summary created with firstWorker=%s after workers became ready", data["firstWorker"])
 
 	// Verify Graph transitions to Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
@@ -582,7 +579,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 	t.Logf("Summary created immediately with firstWorker=%s — all workers ready on first pass", data["firstWorker"])
 
 	// Graph should be Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen-pass", Namespace: ns}, g); err != nil {

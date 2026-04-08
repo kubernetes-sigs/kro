@@ -18,15 +18,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Install the SimpleApp CRD
-	simpleAppCRD := buildSimpleAppCRD()
-	require.NoError(t, k8sClient.Create(ctx, simpleAppCRD))
-	t.Cleanup(func() {
-		_ = k8sClient.Delete(context.Background(), simpleAppCRD)
-	})
-	require.NoError(t, waitForCRD(ctx, k8sClient, "simpleapps.test.kro.run"))
-	t.Log("SimpleApp CRD installed")
-
+	// SimpleApp CRD is pre-installed in TestMain.
 	simpleAppGVK := schema.GroupVersionKind{Group: "test.kro.run", Version: "v1alpha1", Kind: "SimpleApp"}
 
 	// Create the L1 controller Graph:
@@ -44,12 +36,10 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 					// Watch all SimpleApp instances in this namespace
 					map[string]any{
 						"id": "instances",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "SimpleApp",
-							"metadata": map[string]any{
-								"selector": map[string]any{},
-							},
+							"selector":   map[string]any{},
 						},
 					},
 					// Stamp one child Graph per instance
@@ -69,7 +59,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 									// L2: Read the specific instance by name (baked in by L1)
 									map[string]any{
 										"id": "schema",
-										"externalRef": map[string]any{
+										"template": map[string]any{
 											"apiVersion": "test.kro.run/v1alpha1",
 											"kind":       "SimpleApp",
 											"metadata": map[string]any{
@@ -333,9 +323,9 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 								// inside (like ${source.data.message}) survive to the child
 								// without needing $${} escaping.
 								"nodes": `${[
-									{"id": "source", "externalRef": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "dynamic-source"}}},
-									{"id": "result", "template": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": item + "-result"}, "data": {"value": "${source.data.message}"}}}
-								]}`,
+								{"id": "source", "template": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "dynamic-source"}}},
+								{"id": "result", "template": {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": item + "-result"}, "data": {"value": "${source.data.message}"}}}
+							]}`,
 							},
 						},
 					},
@@ -383,9 +373,7 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Install the RGD CRD (idempotent — shared across parallel tests)
-	ensureRGDCRD(t)
-	t.Log("RGD CRD installed")
+	// RGD CRD is pre-installed in TestMain.
 
 	// ── L0 Graph: the RGD controller ──
 	l0Graph := buildRGDControllerGraph(ns)
@@ -411,7 +399,7 @@ func TestFullRGDSystemL0L1L2(t *testing.T) {
 						"replicas": "integer | default=1",
 					},
 				},
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "config",
 						"template": map[string]any{
@@ -537,8 +525,7 @@ func TestRGDLifecyclePort(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Install the RGD CRD (idempotent — shared across parallel tests)
-	ensureRGDCRD(t)
+	// RGD CRD is pre-installed in TestMain.
 
 	// Create the L0 Graph (RGD controller) — same pattern as TestFullRGDSystemL0L1L2
 	l0Graph := buildRGDControllerGraph(ns)
@@ -565,7 +552,7 @@ func TestRGDLifecyclePort(t *testing.T) {
 						"port":     "integer | default=80",
 					},
 				},
-				"resources": []any{
+				"nodes": []any{
 					map[string]any{
 						"id": "deployment",
 						"template": map[string]any{

@@ -1,20 +1,20 @@
 # Graph Execution
 
-How the controller reconciles a Graph. The DAG is the dependency structure between nodes.
+How the controller reconciles a Graph. The DAG is the dependency structure between resources.
 Watches bring external state in. The walk converges the DAG toward the active revision's desired
 state. Performance is structural — work is proportional to change, not to DAG size.
 
 ## The DAG
 
-A directed acyclic graph of nodes. Each node declares exactly one Kubernetes resource. Edges are
-dependencies inferred from CEL expression references. A revision materializes a DAG — the static
-structure the walk operates on.
+A directed acyclic graph of nodes. Each node is a single resource. Edges are dependencies inferred
+from CEL expression references. A revision materializes a DAG — the static structure the walk
+operates on.
 
 ### Nodes
 
 A node has:
 
-- **Identity** — node ID within the Graph's scope
+- **Identity** — resource ID within the Graph's scope
 - **Template** — desired state declaration with `${...}` CEL expressions referencing other nodes
 - **Dependencies** — nodes this node's CEL expressions reference (edges in the DAG)
 
@@ -32,7 +32,7 @@ Dependencies are inferred from CEL expression references. If node B's template c
 compile time.
 
 Declaration order in the spec is irrelevant. The dependency graph determines execution order.
-Nodes with no dependency relationship are independent and can be processed in parallel.
+Resources with no dependency relationship are independent and can be processed in parallel.
 
 ## The Walk
 
@@ -80,7 +80,7 @@ Each node in the walk scope lands in exactly one state per reconcile:
 | Error    | Transient failure              | Blocked    | Retries next reconcile              |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal that feeds the
-Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the node's
+Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the resource's
 data is in scope.
 
 Blocked states propagate through the DAG. If A is Pending, B depends on A, B's CEL expressions
@@ -153,9 +153,6 @@ Prune candidates are removed in reverse dependency order. Owns nodes delete the 
 nodes release fields via skeleton apply. Watch and Collection Watch take no action. If reverse
 dependency ordering is unavailable, prune is blocked — the controller never degrades to unordered
 deletion.
-
-If a prune candidate has finalizer resources (`finalizes` references pointing at it), the
-finalization sequence runs before the resource is removed. See [Teardown](#teardown).
 
 forEach scale-down, includeWhen toggles, and revision transitions all produce the same kind of diff.
 The pruning mechanism is uniform.
@@ -277,7 +274,7 @@ small number of resources with straightforward dependencies between them.
 
 **Nested Graphs** — forEach stamps a child Graph per item. Each child Graph is independently
 reconciled by its own watches. Use nested Graphs when per-item isolation matters — a failure in one
-item shouldn't affect others' reconcile cadence — or when each item's subgraph is complex
+item shouldn't affect others' reconcile cadence — or when each item's resource graph is complex
 enough that you'd write a separate Graph for it by hand.
 
 ```yaml
@@ -411,10 +408,7 @@ Pruning requires reverse dependency ordering — if B depends on A and both are 
 deleted before A. The ordering comes from the most recent revision that defined each pruned resource.
 
 A superseded revision is retained until its unique resources are pruned. This is its only purpose —
-providing prune ordering, template shape (Owns vs Contribute), and finalizes metadata for each
-pruned resource. The old revision's `finalizes` declarations govern the prune of its resources — if a
-new revision changes or drops `finalizes`, the old revision's metadata still applies to resources
-being pruned from it. Fast spec
+providing prune ordering and template shape (Owns vs Contribute) for each pruned resource. Fast spec
 mutations cause superseded revisions to accumulate. This is bounded by the mutation rate — a natural
 bottleneck users manage by not mutating faster than the controller converges.
 
@@ -492,60 +486,6 @@ unordered deletion.
 Owns nodes delete the resource. Contribute nodes release fields via skeleton apply. Watch and
 Collection Watch take no action. If resources persist (child Graphs with finalizers, external
 finalizers), requeue. Once all managed resources are processed, remove the Graph's finalizer.
-
-### Finalization
-
-When a resource is a prune candidate and another node declares `finalizes` pointing at it, the
-deletion is gated on the finalizer resource completing. `finalizes` introduces two behaviors that
-do not emerge from the DAG:
-
-- **Creates during prune** — the finalizer resource does not exist during normal operation. It
-  materializes when the target becomes a prune candidate.
-- **Inverts deletion ordering** — normally, dependents are deleted before dependencies. `finalizes`
-  inverts this for the target/finalizer pair: the target is deleted before the finalizer resource.
-
-The sequence within a prune walk:
-
-1. The prune walk encounters the target. The controller creates the finalizer resource — the target
-   is still fully operational, no `metadata.deletionTimestamp`. This matters: setting
-   `deletionTimestamp` can trigger the target's own controller to start destroying underlying
-   infrastructure before the finalizer resource has a chance to act. The finalizer resource's key is
-   added to the applied set.
-2. The finalizer resource reaches readyWhen. If multiple finalizer nodes target the same
-   resource, dependencies among them determine ordering — all must be Ready before proceeding.
-3. The controller issues DELETE on the target.
-4. The prune walk continues. The finalizer resources are in the applied set but not in the desired
-   state — they are prune candidates. The walk picks them up and deletes them in reverse dependency
-   order.
-
-Finalization state is fully recoverable from the Graph spec, applied set, and cluster state — no
-additional state machine is needed. If the controller crashes at any point, the next reconcile
-re-derives position: the applied set identifies which finalizer resources were created, the cluster
-reveals whether they exist and satisfy readyWhen, and the spec provides the `finalizes` relationships.
-SSA idempotency covers re-creation.
-
-The prune ordering must account for finalizer resource dependencies beyond the target. If a finalizer
-resource's template references a ConfigMap, that ConfigMap must not be deleted until finalization
-completes — even if the ConfigMap is in a different branch of the normal DAG. Resources referenced by
-an in-flight finalizer resource are deferred until finalization completes.
-
-Side effects from completed finalizer resources are not rolled back on partial failure. If one
-finalizer reaches Ready but a sibling fails, the completed finalizer's effects persist. Finalization
-is not transactional.
-
-If the target resource does not exist in the cluster (creation failed, already deleted externally),
-there is nothing to finalize. The controller skips finalization and proceeds with cleanup. The
-Graph's status surfaces this: `FinalizerSkipped` with a message naming the resource.
-
-If the target exists but the finalizer resource cannot be created — dependency failure, admission
-webhook rejection, quota exhaustion, or invalid rendered template — the target's deletion is blocked.
-This is `TeardownBlocked`, not a skip — the target has data that the user intended to finalize.
-
-If the finalizer resource is created but never reaches readyWhen (permanent failure), the target's
-deletion is blocked. This is also `TeardownBlocked`. The condition message distinguishes between
-creation failure and readyWhen failure. To unblock, update the Graph spec to remove or fix the
-finalizer resource. The revision transition prunes the orphaned finalizer resource and deletes the
-target without finalization.
 
 ## Why Not
 

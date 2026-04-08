@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -46,14 +47,37 @@ var GraphGVK = schema.GroupVersionKind{
 }
 
 const (
-	fieldOwner = "graph-controller"
-	finalizer  = "kro.run/graph-controller"
+	finalizer = "kro.run/graph-controller"
 
 	// defaultRequeueAfter is used when a resource is not yet ready
 	// and we need to wait for the dynamic watch to trigger. This is
 	// a fallback — the watch should fire first in most cases.
 	defaultRequeueAfter = 1 * time.Second
 )
+
+// applyAnnotation controls the SSA strategy per resource.
+// Absent (default) → non-force SSA. "Force" → force SSA.
+const applyAnnotation = "kro.run/apply"
+
+// graphFieldOwner returns the SSA field manager identity for a Graph.
+// Per the design (003-ownership): kro.run/<namespace>/<name>
+func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
+	return client.FieldOwner("kro.run/" + graph.GetNamespace() + "/" + graph.GetName())
+}
+
+// gvkToGVR converts a GVK to a GVR using simple pluralization.
+func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
+	resource := strings.ToLower(gvk.Kind) + "s"
+	switch strings.ToLower(gvk.Kind) {
+	case "ingress":
+		resource = "ingresses"
+	}
+	return schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: resource,
+	}
+}
 
 // GraphReconciler reconciles Graph objects.
 type GraphReconciler struct {
@@ -129,67 +153,216 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
-	// Walk DAG in topological order: observe, plan, execute.
-	for _, idx := range dag.TopologicalOrder {
+	// previousScope holds per-node scope data from the last reconcile.
+	// Used by propagateWhen to retain previous data when a dependency
+	// is mid-transition. Stored on the graphCache across reconciles.
+	if cache.previousScope == nil {
+		cache.previousScope = map[string]any{}
+	}
+	// previousKeys holds per-node applied keys from the last reconcile.
+	if cache.previousKeys == nil {
+		cache.previousKeys = map[string][]string{}
+	}
+	if cache.previousPlanStates == nil {
+		cache.previousPlanStates = map[string]NodeState{}
+	}
+	if cache.forEachItems == nil {
+		cache.forEachItems = map[string][]any{}
+	}
+
+	// Walk DAG with eager scheduling: nodes are dispatched as soon as their
+	// dependencies are satisfied. Workers are pure functions — they receive
+	// a read-only scope snapshot and return results. The coordinator is the
+	// single writer to shared state (scope, plan, applied keys).
+	type nodeResult struct {
+		idx        int
+		keys       []string
+		state      NodeState
+		err        error
+		scopeKey   string // node ID to set in scope
+		scopeValue any    // value to set (the full K8s object or collection)
+		// forEach state updates — returned by forEach workers for the
+		// coordinator to merge back into the cache.
+		forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
+		forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
+		forEachItems   map[string][]any               // cache key → collection items
+	}
+
+	results := make(chan nodeResult, len(dag.Nodes))
+	inflight := 0
+
+	// tryDispatch checks if a node can be dispatched. Three outcomes:
+	// 1. All dependencies resolved → dispatch to worker
+	// 2. Some dependency still inflight (Pending) → skip, it'll be retried
+	//    when that dependency completes
+	// 3. Some dependency permanently blocked → mark Excluded
+	tryDispatch := func(idx int) {
 		node := &dag.Nodes[idx]
 
-		// Skip if already excluded by contagious propagation
-		if plan.States[node.ID] == NodeExcluded {
-			logger.V(1).Info("skipping contagiously excluded node", "node", node.ID)
-			continue
+		if plan.States[node.ID] != NodePending {
+			return // already processed or excluded
 		}
 
-		// Check if dependencies allow processing
-		if canProcess, blockedBy := plan.CanProcess(node); !canProcess {
-			logger.V(1).Info("skipping node due to blocked dependency",
+		// Check dependencies. Distinguish "still running" from "permanently blocked."
+		for depID := range node.Dependencies {
+			state, exists := plan.States[depID]
+			if !exists {
+				continue // not a DAG node
+			}
+			switch state {
+			case NodeReady, NodeNotReady:
+				continue // resolved, good
+			case NodePending:
+				return // dependency still inflight — don't dispatch yet, don't exclude
+			default:
+				// Excluded, DataPending, Error, Conflict — permanent block
+				plan.SetState(dag, node.ID, NodeExcluded)
+				return
+			}
+		}
+
+		// Step 2: propagateWhen check
+		if blockedBy := plan.DependencyPropagateBlocked(node); blockedBy != "" {
+			logger.V(1).Info("propagateWhen gate — retaining previous state",
 				"node", node.ID, "blockedBy", blockedBy)
-			plan.SetState(dag, node.ID, NodeExcluded)
-			continue
+			if prev, ok := cache.previousScope[node.ID]; ok {
+				eval.scope[node.ID] = prev
+			}
+			if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+				plan.States[node.ID] = prevState
+			}
+			return
 		}
 
-		// Evaluate includeWhen
+		// Step 4: includeWhen (evaluated in coordinator — reads shared scope)
 		if len(node.IncludeWhen) > 0 {
 			included, err := eval.includeWhen(node.IncludeWhen)
 			if err != nil {
 				if errors.Is(err, ErrDataPending) {
-					logger.V(1).Info("includeWhen data pending", "node", node.ID)
 					plan.SetState(dag, node.ID, NodeDataPending)
-					continue
+				} else {
+					plan.SetState(dag, node.ID, NodeError)
 				}
-				logger.Error(err, "evaluating includeWhen", "node", node.ID)
-				return ctrl.Result{}, err
+				return
 			}
 			if !included {
-				logger.V(1).Info("node excluded by includeWhen", "node", node.ID)
 				plan.SetState(dag, node.ID, NodeExcluded)
-				continue
+				return
 			}
 		}
 
-		// Dispatch by node type. All handlers return (keys, error) with
-		// the same error contract: ErrDataPending, ErrWaitingForReadiness, or fatal.
-		keys, err := r.reconcileNode(ctx, graph, *node, eval, watcher)
-		if err != nil {
-			if errors.Is(err, ErrDataPending) {
-				logger.V(1).Info("node data pending", "node", node.ID)
-				plan.SetState(dag, node.ID, NodeDataPending)
-				continue
+		// Build a snapshot evaluator for the worker. Contains the node's
+		// dependency data and forEach previous state — the worker can't
+		// see or mutate any shared state.
+		workerEval := eval.snapshotFor(node, cache)
+
+		// Dispatch to worker goroutine.
+		go func(n Node, we *evaluator) {
+			keys, err := r.reconcileNode(ctx, graph, n, we, watcher)
+			state := NodeReady
+			if err != nil {
+				switch {
+				case errors.Is(err, ErrDataPending):
+					state = NodeDataPending
+				case errors.Is(err, ErrWaitingForReadiness):
+					state = NodeNotReady
+				case errors.Is(err, ErrFieldConflict):
+					state = NodeConflict
+				default:
+					state = NodeError
+				}
 			}
-			if errors.Is(err, ErrWaitingForReadiness) {
-				logger.V(1).Info("node not ready", "node", node.ID)
-				plan.SetState(dag, node.ID, NodeNotReady)
-				appliedKeys = append(appliedKeys, keys...)
-				continue
+			// The worker's scope now contains the node's output under node.ID.
+			results <- nodeResult{
+				idx:            idx,
+				keys:           keys,
+				state:          state,
+				err:            err,
+				scopeKey:       n.ID,
+				scopeValue:     we.scope[n.ID],
+				forEachUpdates: we.forEachNewKeys,
+				forEachScopes:  we.forEachNewScope,
+				forEachItems:   we.forEachNewItems,
 			}
-			if errors.Is(err, ErrFieldConflict) {
-				logger.Info("node field conflict", "node", node.ID, "error", err)
-				plan.SetState(dag, node.ID, NodeConflict)
-				continue
-			}
-			return ctrl.Result{}, fmt.Errorf("node %s: %w", node.ID, err)
+		}(*node, workerEval)
+		inflight++
+	}
+
+	// Seed: dispatch all nodes with no in-graph dependencies.
+	for _, idx := range dag.Levels[0] {
+		tryDispatch(idx)
+	}
+
+	// Coordinator loop: receive completions, merge into scope, dispatch dependents.
+	var fatalErr error
+	for inflight > 0 {
+		res := <-results
+		inflight--
+
+		node := &dag.Nodes[res.idx]
+
+		// Handle fatal errors — let in-flight finish but stop dispatching.
+		if res.state == NodeError {
+			fatalErr = fmt.Errorf("node %s: %w", node.ID, res.err)
+			plan.SetState(dag, node.ID, NodeError)
+			continue
 		}
-		appliedKeys = append(appliedKeys, keys...)
-		plan.SetState(dag, node.ID, NodeReady)
+
+		// Merge worker output into shared scope.
+		if res.scopeValue != nil {
+			eval.scope[res.scopeKey] = res.scopeValue
+		}
+
+		// Merge forEach state updates into the shared cache.
+		for k, v := range res.forEachItems {
+			cache.forEachItems[k] = v
+		}
+		if cache.forEachItemScope == nil {
+			cache.forEachItemScope = map[string]map[string]any{}
+		}
+		if cache.forEachItemKeys == nil {
+			cache.forEachItemKeys = map[string]map[string][]string{}
+		}
+		for nodeID, itemScopes := range res.forEachScopes {
+			cache.forEachItemScope[nodeID] = itemScopes
+		}
+		for nodeID, itemKeys := range res.forEachUpdates {
+			cache.forEachItemKeys[nodeID] = itemKeys
+		}
+
+		// Update plan state.
+		plan.SetState(dag, node.ID, res.state)
+		if res.state == NodeReady || res.state == NodeNotReady {
+			appliedKeys = append(appliedKeys, res.keys...)
+		}
+
+		// Evaluate propagateWhen (coordinator reads from now-merged scope).
+		if (res.state == NodeReady || res.state == NodeNotReady) &&
+			len(node.PropagateWhen) > 0 && eval.scope[node.ID] != nil {
+			plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
+				node.PropagateWhen, eval.scope[node.ID], node.ID)
+		}
+
+		// Save per-node state for next reconcile.
+		cache.previousScope[node.ID] = eval.scope[node.ID]
+		cache.previousKeys[node.ID] = res.keys
+		cache.previousPlanStates[node.ID] = res.state
+
+		if fatalErr != nil {
+			continue // draining in-flight workers
+		}
+
+		// Check dependents: dispatch any whose dependencies are now satisfied.
+		for _, depIdx := range dag.Dependents[node.ID] {
+			tryDispatch(depIdx)
+		}
+	}
+
+	if fatalErr != nil {
+		return ctrl.Result{}, fatalErr
 	}
 
 	// Derive aggregate state from the DAG plan
@@ -198,8 +371,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Collect detected contributions for status reporting.
 	var contributions []string
-	for id := range dag.Contributions {
-		contributions = append(contributions, id)
+	for id, shape := range dag.Shapes {
+		if shape == ShapeContribute {
+			contributions = append(contributions, id)
+		}
+	}
+
+	// Persist the applied set on the revision for prune diffing and teardown.
+	if len(appliedKeys) > 0 {
+		if err := setAppliedSet(ctx, r.Client, activeRevision, appliedKeys); err != nil {
+			logger.V(1).Info("failed to persist applied set", "error", err)
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -362,59 +544,60 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 // Node reconciliation methods
 // ---------------------------------------------------------------------------
 
-// reconcileNode dispatches to the appropriate handler based on node type.
+// reconcileNode dispatches to the appropriate handler based on node shape.
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrDataPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
 func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
-	switch {
-	case node.ForEach != nil:
+	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher)
-	case node.ExternalRef != nil:
-		err := r.reconcileExternalRef(ctx, graph, node, eval, watcher)
+	}
+
+	shape := node.Shape()
+	switch shape {
+	case ShapeCollectionWatch:
+		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
 		return nil, err
-	case node.Template != nil:
-		key, err := r.reconcileTemplate(ctx, graph, node, eval, watcher)
+	case ShapeWatch:
+		err := r.reconcileWatch(ctx, graph, node, eval, watcher)
+		return nil, err
+	case ShapeContribute:
+		key, err := r.reconcileContribute(ctx, graph, node, eval, watcher)
 		if key != "" {
 			return []string{key}, err
 		}
 		return nil, err
-	default:
-		return nil, nil
+	default: // ShapeOwns
+		key, err := r.reconcileOwns(ctx, graph, node, eval, watcher)
+		if key != "" {
+			return []string{key}, err
+		}
+		return nil, err
 	}
 }
 
-// reconcileExternalRef reads an existing object (or collection) from the API server into scope.
-func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
+// reconcileWatch reads a single existing object from the API server into scope.
+func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
-	ref, err := eval.toMap(node.ExternalRef)
+	tmpl, err := eval.toMap(node.Template)
 	if err != nil {
-		return fmt.Errorf("externalRef %s: %w", node.ID, err)
+		return fmt.Errorf("watch %s: %w", node.ID, err)
 	}
 
-	apiVersion, _ := ref["apiVersion"].(string)
-	kind, _ := ref["kind"].(string)
+	apiVersion, _ := tmpl["apiVersion"].(string)
+	kind, _ := tmpl["kind"].(string)
 	gv, _ := schema.ParseGroupVersion(apiVersion)
 	gvk := gv.WithKind(kind)
-	md, _ := ref["metadata"].(map[string]any)
+	md, _ := tmpl["metadata"].(map[string]any)
 
-	// selector → collection
-	if md != nil {
-		if selectorRaw, hasSelector := md["selector"]; hasSelector {
-			return r.reconcileExternalRefSelector(ctx, graph, node, eval, gvk, selectorRaw, watcher)
-		}
-	}
-
-	// name → single object
 	name, _ := md["name"].(string)
 	namespace, _ := md["namespace"].(string)
 	if namespace == "" {
 		namespace = graph.GetNamespace()
 	}
 
-	// Register watch BEFORE reading
 	if watcher != nil {
 		watcher.watchScalar(node.ID, gvkToGVR(gvk), name, namespace)
 	}
@@ -422,26 +605,44 @@ func (r *GraphReconciler) reconcileExternalRef(ctx context.Context, graph *unstr
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("watch %s: resource %s/%s %s/%s not found: %w", node.ID, apiVersion, kind, namespace, name, ErrDataPending)
+		}
 		return fmt.Errorf("reading %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
 	}
 
 	eval.scope[node.ID] = normalizeTypes(obj.Object)
-	logger.V(1).Info("resolved externalRef", "node", node.ID, "gvk", gvk, "name", obj.GetName())
+	logger.V(1).Info("resolved watch", "node", node.ID, "gvk", gvk, "name", obj.GetName())
 
-	// Check readyWhen
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
 			return err
 		}
-		logger.V(1).Info("externalRef ready", "node", node.ID)
 	}
 
 	return nil
 }
 
-// reconcileExternalRefSelector reads a collection matching a label selector.
-func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, gvk schema.GroupVersionKind, selectorRaw any, watcher *graphWatcher) error {
+// reconcileCollectionWatch reads a collection of resources matching a selector into scope.
+func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
+
+	tmpl, err := eval.toMap(node.Template)
+	if err != nil {
+		return fmt.Errorf("collectionWatch %s: %w", node.ID, err)
+	}
+
+	apiVersion, _ := tmpl["apiVersion"].(string)
+	kind, _ := tmpl["kind"].(string)
+	gv, _ := schema.ParseGroupVersion(apiVersion)
+	gvk := gv.WithKind(kind)
+
+	var selectorRaw any
+	if sel, ok := tmpl["selector"]; ok {
+		selectorRaw = sel
+	} else if md, ok := tmpl["metadata"].(map[string]any); ok {
+		selectorRaw = md["selector"]
+	}
 
 	var labelSelector labels.Selector
 	switch sel := selectorRaw.(type) {
@@ -482,11 +683,17 @@ func (r *GraphReconciler) reconcileExternalRefSelector(ctx context.Context, grap
 		items[i] = normalizeTypes(item.Object)
 	}
 	eval.scope[node.ID] = items
-	logger.V(1).Info("resolved externalRef selector", "node", node.ID, "gvk", gvk, "count", len(items))
+	logger.V(1).Info("resolved collection watch", "node", node.ID, "gvk", gvk, "count", len(items))
 	return nil
 }
 
 // reconcileForEach iterates a collection and stamps the template per item.
+// Implements forEach item diffing from design 004: the parent diffs the
+// current collection against cached state and only re-evaluates changed items.
+//
+// forEach state is passed in via the evaluator's forEachPrev* fields and
+// returned via forEachNew* fields. The coordinator merges the output back
+// into the shared cache — workers never touch shared state directly.
 func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var keys []string
@@ -506,8 +713,61 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 		}
 		logger.V(1).Info("forEach expanding", "node", node.ID, "var", varName, "count", len(items))
 
-		var allApplied []any
+		// Build identity → item map for the current collection.
+		currentItems := make(map[string]any, len(items))
+		var currentOrder []string
 		for _, item := range items {
+			id := forEachItemIdentity(item)
+			currentItems[id] = item
+			currentOrder = append(currentOrder, id)
+		}
+
+		// Build previous identity → item map from the worker's snapshot.
+		cacheKey := node.ID + "/" + varName
+		prevItems := make(map[string]any)
+		if prev, ok := eval.forEachPrevItems[cacheKey]; ok {
+			for _, item := range prev {
+				id := forEachItemIdentity(item)
+				prevItems[id] = item
+			}
+		}
+
+		// Load per-item previous state from nested maps (keyed by node ID, then item ID).
+		prevItemScope := eval.forEachPrevScope[node.ID]
+		if prevItemScope == nil {
+			prevItemScope = map[string]any{}
+		}
+		prevItemKeys := eval.forEachPrevKeys[node.ID]
+		if prevItemKeys == nil {
+			prevItemKeys = map[string][]string{}
+		}
+
+		// Prepare output maps for this node.
+		newItemScope := make(map[string]any)
+		newItemKeys := make(map[string][]string)
+
+		// Diff: identify changed, unchanged, and removed items.
+		var allApplied []any
+		for _, id := range currentOrder {
+			item := currentItems[id]
+			prevItem, existed := prevItems[id]
+
+			// Skip unchanged items: retain previous applied state.
+			if existed && forEachItemUnchanged(prevItem, item) {
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				if prevScope, ok := prevItemScope[id]; ok {
+					allApplied = append(allApplied, prevScope)
+					// Carry forward to new state.
+					newItemScope[id] = prevScope
+					newItemKeys[id] = prevItemKeys[id]
+					logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
+					continue
+				}
+				// No previous scope — fall through to evaluate.
+			}
+
 			if node.Template == nil {
 				continue
 			}
@@ -525,51 +785,78 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				return keys, fmt.Errorf("applying %s item: %w", node.ID, err)
 			}
 			allApplied = append(allApplied, applied.Object)
-			keys = append(keys, resourceKey(applied))
+			itemKeys := []string{resourceKey(applied)}
+			keys = append(keys, itemKeys...)
+
+			// Record per-item state.
+			newItemScope[id] = applied.Object
+			newItemKeys[id] = itemKeys
 		}
+
+		// Record updated state for coordinator to merge back.
+		eval.forEachNewScope[node.ID] = newItemScope
+		eval.forEachNewKeys[node.ID] = newItemKeys
+
+		// Record updated collection for next reconcile's diff.
+		eval.forEachNewItems[cacheKey] = items
+
 		eval.scope[node.ID] = allApplied
 	}
 
 	// Check readyWhen per-item: all items must pass for the collection to be Ready.
-	// Uses the same checkReadiness as singletons — the node ID in scope resolves
-	// to a single applied item for each evaluation. Apply-all-then-gate: all items
-	// are applied and in scope before any readiness check, so scale-up isn't
-	// serialized through prior item readiness.
 	if len(node.ReadyWhen) > 0 {
-		for _, applied := range eval.scope[node.ID].([]any) {
-			if err := eval.checkReadiness(node.ReadyWhen, applied, node.ID); err != nil {
-				return keys, err // ErrWaitingForReadiness — all items applied, but not all ready
+		scopeVal := eval.scope[node.ID]
+		if scopeVal != nil {
+			for _, applied := range scopeVal.([]any) {
+				if err := eval.checkReadiness(node.ReadyWhen, applied, node.ID); err != nil {
+					return keys, err
+				}
 			}
+			logger.V(1).Info("all forEach items ready", "node", node.ID)
 		}
-		logger.V(1).Info("all forEach items ready", "node", node.ID)
 	}
 
 	return keys, nil
 }
 
-// reconcileTemplate evaluates and applies a template, checks readyWhen.
-func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
+// forEachItemIdentity extracts a stable identity from a forEach collection item.
+// Uses metadata.name if the item is a Kubernetes object, otherwise falls back
+// to a content hash. This ensures collection reordering doesn't cause churn.
+func forEachItemIdentity(item any) string {
+	if m, ok := item.(map[string]any); ok {
+		if md, ok := m["metadata"].(map[string]any); ok {
+			if name, ok := md["name"].(string); ok {
+				return name
+			}
+			if uid, ok := md["uid"].(string); ok {
+				return uid
+			}
+		}
+		// No metadata — use content hash
+		return hashDesiredState(m)
+	}
+	// Scalar item — use string representation
+	return fmt.Sprintf("%v", item)
+}
+
+// forEachItemUnchanged returns true if two forEach items have the same content.
+// Uses a content hash comparison to avoid deep equality checks.
+func forEachItemUnchanged(prev, current any) bool {
+	prevMap, prevOk := prev.(map[string]any)
+	currMap, currOk := current.(map[string]any)
+	if prevOk && currOk {
+		return hashDesiredState(prevMap) == hashDesiredState(currMap)
+	}
+	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
+}
+
+// reconcileOwns evaluates and applies an Owns template, checks readyWhen.
+func (r *GraphReconciler) reconcileOwns(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
 	logger := log.FromContext(ctx)
 
 	evalMap, err := eval.toMap(node.Template)
 	if err != nil {
 		return "", fmt.Errorf("template %s: %w", node.ID, err)
-	}
-
-	// Contributions auto-split: regular SSA for metadata/spec fields,
-	// plus status subresource patch if .status is present.
-	// This absorbs the Kubernetes subresource split — Graph authors don't
-	// need to know about it.
-	// Contribution detection is from the template shape (only metadata/status
-	// keys) — determined at compile time and stored in the DAG.
-	if eval.cache.dag.Contributions[node.ID] {
-		applied, err := r.applyContribution(ctx, graph, evalMap, watcher)
-		if err != nil {
-			return "", err
-		}
-		eval.scope[node.ID] = applied.Object
-		logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
-		return "", nil
 	}
 
 	applied, err := r.applyResource(ctx, graph, evalMap, watcher)
@@ -579,17 +866,33 @@ func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstruct
 
 	eval.scope[node.ID] = applied.Object
 	key := resourceKey(applied)
-	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName(), "uid", applied.GetUID())
+	logger.V(1).Info("applied resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
-	// Check readyWhen
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
 			return key, err
 		}
-		logger.V(1).Info("resource ready", "node", node.ID)
 	}
 
 	return key, nil
+}
+
+// reconcileContribute evaluates and applies a Contribute template.
+func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) (string, error) {
+	logger := log.FromContext(ctx)
+
+	evalMap, err := eval.toMap(node.Template)
+	if err != nil {
+		return "", fmt.Errorf("contribute %s: %w", node.ID, err)
+	}
+
+	applied, err := r.applyContribution(ctx, graph, evalMap, watcher)
+	if err != nil {
+		return "", err
+	}
+	eval.scope[node.ID] = applied.Object
+	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
+	return "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +900,7 @@ func (r *GraphReconciler) reconcileTemplate(ctx context.Context, graph *unstruct
 // ---------------------------------------------------------------------------
 
 func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher) (*unstructured.Unstructured, error) {
+	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
 	if obj.GetNamespace() == "" {
@@ -675,7 +979,35 @@ apply:
 	applied.SetName(obj.GetName())
 	applied.SetNamespace(obj.GetNamespace())
 
-	if err := r.Client.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), client.FieldOwner(fieldOwner)); err != nil {
+	// Check kro.run/apply annotation for force SSA.
+	forceApply := false
+	if ann := obj.GetAnnotations(); ann != nil && ann[applyAnnotation] == "Force" {
+		forceApply = true
+	}
+
+	// kro label check: if the existing resource has a different Graph's label,
+	// require Force to proceed. Prevents accidental cross-Graph ownership.
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(obj.GroupVersionKind())
+	if getErr := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing); getErr == nil {
+		existingLabels := existing.GetLabels()
+		if existingLabels != nil {
+			if ownerGraph, ok := existingLabels[LabelGraphName]; ok && ownerGraph != graph.GetName() {
+				if !forceApply {
+					return nil, fmt.Errorf("resource %s/%s %s owned by Graph %q, not %q (use kro.run/apply: Force to take ownership): %w",
+						obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ownerGraph, graph.GetName(), ErrFieldConflict)
+				}
+			}
+		}
+	}
+
+	var patchOpts []client.PatchOption
+	patchOpts = append(patchOpts, fieldOwner)
+	if forceApply {
+		patchOpts = append(patchOpts, client.ForceOwnership)
+	}
+
+	if err := r.Client.Patch(ctx, applied, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("SSA conflict on %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
 		}
@@ -700,15 +1032,18 @@ apply:
 	return readBack, nil
 }
 
-// applyContribution applies a contribution resource — partial SSA with ForceOwnership.
+// applyContribution applies a contribution resource — partial SSA.
 // Contributions intentionally write fields on objects someone else owns.
 // Auto-splits into two API calls when the template contains status fields:
 //   - Regular SSA patch for metadata/spec/other fields (skips .status)
 //   - Status subresource patch for .status fields
 //
 // Hash-gated: if the contribution's evaluated output hasn't changed, the Patch
-// is skipped. When it does change, force-apply writes the new state.
+// is skipped. When it does change, the new state is applied.
+// Uses non-force SSA by default; force only with kro.run/apply: Force.
+// Surfaces SSA conflicts as ErrFieldConflict.
 func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher) (*unstructured.Unstructured, error) {
+	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
 	if obj.GetNamespace() == "" {
@@ -751,10 +1086,30 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	}
 
 apply:
+	// Target must exist — contributions patch into existing resources.
+	targetCheck := &unstructured.Unstructured{}
+	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, targetCheck); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("contribute target %s/%s %s/%s not found: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName(), ErrDataPending)
+		}
+		return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
+	}
+
+	// Check kro.run/apply annotation for force SSA.
+	forceApply := false
+	if ann := obj.GetAnnotations(); ann != nil && ann[applyAnnotation] == "Force" {
+		forceApply = true
+	}
+
+	var patchOpts []client.PatchOption
+	patchOpts = append(patchOpts, fieldOwner)
+	if forceApply {
+		patchOpts = append(patchOpts, client.ForceOwnership)
+	}
+
 	// Regular SSA for non-status fields. Strip .status to avoid silent
 	// stripping by the API server when the status subresource is enabled.
-	// Contributions use ForceOwnership — they intentionally write to
-	// objects managed by others.
 	mainPayload := make(map[string]any, len(evalMap))
 	for k, v := range evalMap {
 		if k != "status" {
@@ -769,7 +1124,10 @@ apply:
 	target.SetGroupVersionKind(obj.GroupVersionKind())
 	target.SetName(obj.GetName())
 	target.SetNamespace(obj.GetNamespace())
-	if err := r.Client.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), client.ForceOwnership, client.FieldOwner(fieldOwner)); err != nil {
+	if err := r.Client.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), patchOpts...); err != nil {
+		if apierrors.IsConflict(err) {
+			return nil, fmt.Errorf("SSA conflict on contribution %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+		}
 		return nil, fmt.Errorf("applying contribution %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 	}
 
@@ -792,7 +1150,15 @@ apply:
 		statusTarget.SetGroupVersionKind(obj.GroupVersionKind())
 		statusTarget.SetName(obj.GetName())
 		statusTarget.SetNamespace(obj.GetNamespace())
-		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, data), client.ForceOwnership, client.FieldOwner(fieldOwner)); err != nil {
+		var statusOpts []client.SubResourcePatchOption
+		statusOpts = append(statusOpts, fieldOwner)
+		if forceApply {
+			statusOpts = append(statusOpts, client.ForceOwnership)
+		}
+		if err := r.Client.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, data), statusOpts...); err != nil {
+			if apierrors.IsConflict(err) {
+				return nil, fmt.Errorf("SSA status conflict on contribution %s/%s %s: %w: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), ErrFieldConflict, err)
+			}
 			return nil, fmt.Errorf("applying status contribution %s/%s %s: %w", obj.GetAPIVersion(), obj.GetKind(), obj.GetName(), err)
 		}
 	}
@@ -983,10 +1349,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			// Skip contribution templates — they write to objects owned by
-			// someone else. The Graph controller must not delete them on
-			// teardown; it only wrote partial metadata/status fields.
-			if isContributionTemplate(node.Template) {
+			// Skip Watch, CollectionWatch, and Contribute templates on teardown.
+			// Watch/CollectionWatch are read-only. Contribute writes to objects
+			// owned by someone else — the Graph must not delete them.
+			shape := DetectShape(node.Template)
+			if shape == ShapeWatch || shape == ShapeCollectionWatch || shape == ShapeContribute {
 				continue
 			}
 			md, _ := node.Template["metadata"].(map[string]any)
@@ -1115,8 +1482,9 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 			if node.Template == nil {
 				continue
 			}
-			if isContributionTemplate(node.Template) {
-				continue // contributions don't create resources we own
+			shape := DetectShape(node.Template)
+			if shape != ShapeOwns {
+				continue // only Owns templates create resources we own
 			}
 			apiVersion, _ := node.Template["apiVersion"].(string)
 			kind, _ := node.Template["kind"].(string)
@@ -1214,43 +1582,19 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	return result
 }
 
-// SetupWithManager registers the controller with the manager.
-func (r *GraphReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	graphObj := &unstructured.Unstructured{}
-	graphObj.SetGroupVersionKind(GraphGVK)
-	return ctrl.NewControllerManagedBy(mgr).
-		For(graphObj).
-		Named("graph").
-		Complete(r)
-}
-
-// gvkToGVR converts a GVK to a GVR using simple pluralization.
-func gvkToGVR(gvk schema.GroupVersionKind) schema.GroupVersionResource {
-	resource := strings.ToLower(gvk.Kind) + "s"
-	switch strings.ToLower(gvk.Kind) {
-	case "ingress":
-		resource = "ingresses"
-	}
-	return schema.GroupVersionResource{
-		Group:    gvk.Group,
-		Version:  gvk.Version,
-		Resource: resource,
-	}
-}
-
-// TestEnv holds the components needed to run integration tests against
-// the Graph controller with a real envtest API server.
-type TestEnv struct {
-	// Shutdown stops the watch manager. Call this in test cleanup.
-	Shutdown func()
-}
-
-// SetupWithManagerForTest wires the Graph controller into a controller-runtime
-// manager with dynamic watch support. Returns a TestEnv for cleanup.
+// SetupWithManager registers the Graph controller with a controller-runtime
+// manager. This is the single setup path for both production and tests.
+// It creates the watch infrastructure internally — callers provide the
+// manager and a rest.Config (needed for the metadata client).
 //
-// This encapsulates the internal watch machinery so test packages don't need
-// access to unexported types.
-func SetupWithManagerForTest(mgr ctrl.Manager, metadataClient metadata.Interface) *TestEnv {
+// Returns a shutdown function that stops the watch manager. The caller
+// must invoke this on teardown.
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config) (shutdown func(), err error) {
+	metadataClient, err := metadata.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("creating metadata client: %w", err)
+	}
+
 	watchChan := make(chan event.GenericEvent, 256)
 
 	watchMgr := newWatchManager(metadataClient, 0, nil, log.Log)
@@ -1277,8 +1621,8 @@ func SetupWithManagerForTest(mgr ctrl.Manager, metadataClient metadata.Interface
 		Named("graph").
 		WatchesRawSource(source.Channel(watchChan, &handler.EnqueueRequestForObject{})).
 		Complete(reconciler); err != nil {
-		panic("setting up graph controller: " + err.Error())
+		return nil, fmt.Errorf("building controller: %w", err)
 	}
 
-	return &TestEnv{Shutdown: watchMgr.shutdown}
+	return watchMgr.shutdown, nil
 }

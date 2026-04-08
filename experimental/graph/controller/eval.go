@@ -13,11 +13,23 @@ import (
 )
 
 // evaluator holds the pre-compiled expression cache and the current scope
-// for a single reconcile cycle. Methods on evaluator replace the previous
-// free functions (evaluateTemplate, evaluateString, etc.).
+// for a single reconcile cycle. The scope is owned by the coordinator —
+// workers receive read-only snapshots and return results for the coordinator
+// to merge. No locking needed.
 type evaluator struct {
 	cache *graphCache
 	scope map[string]any
+
+	// forEach state — populated by the coordinator before dispatching a
+	// forEach worker, and read by reconcileForEach. Workers write to these
+	// maps (they're private to the worker's evaluator copy), and the results
+	// are returned to the coordinator for merging into the shared cache.
+	forEachPrevItems map[string][]any               // cache key → previous collection items
+	forEachPrevScope map[string]map[string]any      // nodeID → itemID → previous scope data
+	forEachPrevKeys  map[string]map[string][]string // nodeID → itemID → previous applied keys
+	forEachNewItems  map[string][]any               // cache key → updated collection items (output)
+	forEachNewScope  map[string]map[string]any      // nodeID → itemID → updated scope data (output)
+	forEachNewKeys   map[string]map[string][]string // nodeID → itemID → updated keys (output)
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
@@ -28,8 +40,59 @@ func newEvaluator(cache *graphCache) *evaluator {
 	}
 }
 
+// snapshotFor builds a worker evaluator for a specific node. The snapshot
+// contains the node's dependency data (read-only) and, for forEach nodes,
+// the previous forEach state from the cache. The worker writes to its own
+// maps — the coordinator merges them back after the worker returns.
+func (e *evaluator) snapshotFor(node *Node, cache *graphCache) *evaluator {
+	snap := make(map[string]any, len(node.Dependencies))
+	for depID := range node.Dependencies {
+		if v, ok := e.scope[depID]; ok {
+			snap[depID] = v
+		}
+	}
+
+	worker := &evaluator{
+		cache:            e.cache,
+		scope:            snap,
+		forEachNewScope:  map[string]map[string]any{},
+		forEachNewKeys:   map[string]map[string][]string{},
+		forEachNewItems:  map[string][]any{},
+		forEachPrevItems: map[string][]any{},
+		forEachPrevScope: map[string]map[string]any{},
+		forEachPrevKeys:  map[string]map[string][]string{},
+	}
+
+	// Copy forEach previous state from the shared cache for this node.
+	if node.ForEach != nil && cache != nil {
+		for varName := range node.ForEach {
+			cacheKey := node.ID + "/" + varName
+			if items, ok := cache.forEachItems[cacheKey]; ok {
+				worker.forEachPrevItems[cacheKey] = items
+			}
+		}
+		// Copy per-item state — keyed by node ID in outer map.
+		if itemScope, ok := cache.forEachItemScope[node.ID]; ok {
+			copied := make(map[string]any, len(itemScope))
+			for k, v := range itemScope {
+				copied[k] = v
+			}
+			worker.forEachPrevScope[node.ID] = copied
+		}
+		if itemKeys, ok := cache.forEachItemKeys[node.ID]; ok {
+			copied := make(map[string][]string, len(itemKeys))
+			for k, v := range itemKeys {
+				copied[k] = v
+			}
+			worker.forEachPrevKeys[node.ID] = copied
+		}
+	}
+
+	return worker
+}
+
 // withScope returns a new evaluator that shares the cache but has its own scope.
-// Used for forEach inner scopes.
+// Used for forEach inner scopes and worker snapshots.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	return &evaluator{cache: e.cache, scope: scope}
 }
@@ -67,6 +130,37 @@ func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID str
 		}
 	}
 	return nil
+}
+
+// checkPropagateWhen evaluates propagateWhen conditions against an observed resource.
+// Returns true if all conditions pass (data should flow to dependents).
+// Returns false if any condition is false or data-pending.
+func (e *evaluator) checkPropagateWhen(conditions []string, observed any, nodeID string) bool {
+	if len(conditions) == 0 {
+		return true
+	}
+
+	propEval := e.withScope(map[string]any{nodeID: observed})
+
+	for _, cond := range conditions {
+		val, err := propEval.evalString(cond)
+		if err != nil {
+			return false // data pending or error → don't propagate
+		}
+		switch v := val.(type) {
+		case bool:
+			if !v {
+				return false
+			}
+		case string:
+			if v != "true" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // toMap evaluates a template and asserts the result is a map.
@@ -288,11 +382,13 @@ func extractReferencedIDs(node Node) map[string]bool {
 	// Collect all string values that might contain expressions
 	var strs []string
 	collectStrings(node.Template, &strs)
-	collectStrings(node.ExternalRef, &strs)
 	for _, s := range node.IncludeWhen {
 		strs = append(strs, s)
 	}
 	for _, s := range node.ReadyWhen {
+		strs = append(strs, s)
+	}
+	for _, s := range node.PropagateWhen {
 		strs = append(strs, s)
 	}
 	if node.ForEach != nil {

@@ -1,0 +1,22 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: graphrevisions.internal.kro.run
+spec:
+  group: internal.kro.run
+  names:
+    plural: graphrevisions
+    singular: graphrevision
+    kind: GraphRevision
+    listKind: GraphRevisionList
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

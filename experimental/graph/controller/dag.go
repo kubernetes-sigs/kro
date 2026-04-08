@@ -1,6 +1,8 @@
 package graphcontroller
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // DAG builds a dependency graph from a list of Nodes by scanning their
 // CEL expressions for variable references. It provides topological ordering
@@ -15,9 +17,16 @@ type DAG struct {
 	TopologicalOrder []int
 	// ReverseOrder is the delete order (reverse of TopologicalOrder).
 	ReverseOrder []int
-	// Contributions are node IDs that were detected as contributions
-	// from the template shape (only apiVersion/kind/metadata/status keys).
-	Contributions map[string]bool
+	// Shapes maps node ID to its detected template shape.
+	Shapes map[string]TemplateShape
+	// Levels groups node indices by topological level. Nodes within
+	// the same level are independent and can be processed in parallel.
+	// Level 0 has no dependencies, level 1 depends only on level 0, etc.
+	Levels [][]int
+	// Dependents maps a node ID to the indices of nodes that depend on it.
+	// Reverse adjacency list for eager scheduling — when a node completes,
+	// check its dependents to see if they can be dispatched.
+	Dependents map[string][]int
 }
 
 // BuildDAG constructs a dependency graph from a node list.
@@ -27,22 +36,25 @@ type DAG struct {
 // the dependency graph via Kahn's algorithm.
 func BuildDAG(nodes []Node) (*DAG, error) {
 	dag := &DAG{
-		Nodes:         make([]Node, len(nodes)),
-		Index:         make(map[string]int, len(nodes)),
-		Contributions: make(map[string]bool),
+		Nodes:      make([]Node, len(nodes)),
+		Index:      make(map[string]int, len(nodes)),
+		Shapes:     make(map[string]TemplateShape),
+		Dependents: make(map[string][]int),
 	}
 
 	for i, node := range nodes {
 		node.Dependencies = extractReferencedIDs(node)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
+		dag.Shapes[node.ID] = node.Shape()
+	}
 
-		// Detect contributions from template shape: a template whose keys
-		// are a subset of {apiVersion, kind, metadata, status} is a
-		// contribution — it underspecifies the resource, writing only
-		// metadata and/or status fields on an object someone else owns.
-		if node.Template != nil && isContributionTemplate(node.Template) {
-			dag.Contributions[node.ID] = true
+	// Build reverse adjacency list: for each node, record which nodes depend on it.
+	for i, node := range dag.Nodes {
+		for depID := range node.Dependencies {
+			if _, exists := dag.Index[depID]; exists {
+				dag.Dependents[depID] = append(dag.Dependents[depID], i)
+			}
 		}
 	}
 
@@ -101,34 +113,30 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		dag.ReverseOrder[n-1-i] = idx
 	}
 
-	return dag, nil
-}
-
-// isContributionTemplate checks if a template's field structure indicates
-// a contribution. A template that contains only apiVersion, kind, metadata,
-// and/or status fields (no spec or other resource-specific fields) is a
-// contribution — it underspecifies the resource, writing only metadata
-// and/or status on an object someone else manages.
-//
-// This implements one of the two detection criteria from the design:
-// "specifying only status and metadata." The other criterion — "omitting
-// required fields" via OpenAPI schema comparison — is not yet implemented.
-// A template that writes a partial spec (some spec fields but not all
-// required ones) will NOT be detected as a contribution by this check.
-// When OpenAPI detection is added, it will catch those cases.
-func isContributionTemplate(tmpl map[string]any) bool {
-	if len(tmpl) == 0 {
-		return false
-	}
-	for key := range tmpl {
-		switch key {
-		case "apiVersion", "kind", "metadata", "status":
-			continue
-		default:
-			return false
+	// Compute topological levels. Level[i] = max(Level[dep] for dep in dependencies) + 1.
+	// Nodes with no dependencies are level 0.
+	nodeLevel := make([]int, n)
+	maxLevel := 0
+	for _, idx := range order {
+		level := 0
+		for depID := range dag.Nodes[idx].Dependencies {
+			if depIdx, ok := dag.Index[depID]; ok {
+				if nodeLevel[depIdx]+1 > level {
+					level = nodeLevel[depIdx] + 1
+				}
+			}
+		}
+		nodeLevel[idx] = level
+		if level > maxLevel {
+			maxLevel = level
 		}
 	}
-	return true
+	dag.Levels = make([][]int, maxLevel+1)
+	for idx, level := range nodeLevel {
+		dag.Levels[level] = append(dag.Levels[level], idx)
+	}
+
+	return dag, nil
 }
 
 // NodeState tracks the reconcile-time state of a single node.
@@ -147,17 +155,40 @@ const (
 // PlanState tracks the state of all nodes during a reconcile cycle.
 type PlanState struct {
 	States map[string]NodeState
+	// PropagateReady tracks whether each node's propagateWhen conditions are
+	// satisfied. Nodes without propagateWhen are always true. Used by the walk
+	// to gate data flow to dependents during transitions.
+	PropagateReady map[string]bool
 }
 
 // NewPlanState creates a fresh plan state with all nodes pending.
 func NewPlanState(dag *DAG) *PlanState {
 	ps := &PlanState{
-		States: make(map[string]NodeState, len(dag.Nodes)),
+		States:         make(map[string]NodeState, len(dag.Nodes)),
+		PropagateReady: make(map[string]bool, len(dag.Nodes)),
 	}
 	for _, node := range dag.Nodes {
 		ps.States[node.ID] = NodePending
+		// Nodes without propagateWhen propagate immediately.
+		ps.PropagateReady[node.ID] = len(node.PropagateWhen) == 0
 	}
 	return ps
+}
+
+// DependencyPropagateBlocked returns the ID of a dependency whose
+// propagateWhen is unsatisfied, or "" if all dependencies propagate.
+// Only checks dependencies that are actual DAG nodes (not CEL builtins).
+func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
+	for depID := range node.Dependencies {
+		propagates, exists := ps.PropagateReady[depID]
+		if !exists {
+			continue // not a DAG node (CEL builtin, forEach variable, etc.)
+		}
+		if !propagates {
+			return depID
+		}
+	}
+	return ""
 }
 
 // CanProcess returns true if the node's dependencies are all in a state
@@ -172,13 +203,13 @@ func (ps *PlanState) CanProcess(node *Node) (bool, string) {
 			continue // not a scope variable (could be a CEL builtin)
 		}
 		switch state {
-		case NodeReady:
-			continue // good
+		case NodeReady, NodeNotReady:
+			// Both are "applied and in scope" — dependents proceed.
+			// readyWhen is a health signal, not a gate.
+			continue
 		case NodePending:
 			// Dependency hasn't been processed yet — shouldn't happen
 			// in topological order, but be safe
-			return false, depID
-		case NodeNotReady:
 			return false, depID
 		case NodeExcluded:
 			return false, depID
@@ -195,6 +226,7 @@ func (ps *PlanState) CanProcess(node *Node) (bool, string) {
 
 // SetState updates a node's state and propagates contagious exclusion.
 // When a node is excluded, all nodes that depend on it are also excluded.
+// NotReady does NOT propagate exclusion — data is in scope regardless.
 func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 	ps.States[id] = state
 

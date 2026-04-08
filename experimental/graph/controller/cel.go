@@ -101,6 +101,17 @@ type graphCache struct {
 	programs   map[string]cel.Program // expression string -> compiled program
 	spec       *GraphSpec             // parsed spec (cached to avoid re-parsing)
 	dag        *DAG                   // dependency graph (cached to avoid re-building)
+
+	// State retained across reconciles for propagateWhen and forEach diffing.
+	previousScope      map[string]any       // node ID → last scope data
+	previousKeys       map[string][]string  // node ID → last applied keys
+	previousPlanStates map[string]NodeState // node ID → last plan state
+	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
+
+	// Per-node forEach item state. Outer key is node ID, inner key is item identity.
+	// Structural boundary prevents prefix collisions between node IDs.
+	forEachItemScope map[string]map[string]any      // nodeID → itemID → scope data
+	forEachItemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
 }
 
 // graphCaches is a concurrent-safe map of Graph name → cache.

@@ -118,7 +118,7 @@ func TestFieldConflictBlocksDependents(t *testing.T) {
 	t.Log("independent ConfigMap created — independent branch continued")
 
 	// 4. Verify the Graph reports FieldConflict.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict", Namespace: ns}, g); err != nil {
@@ -190,7 +190,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// 3. Wait for FieldConflict.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, g); err != nil {
@@ -216,7 +216,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 	t.Log("deleted external ConfigMap — Graph should recreate it")
 
 	// 5. Wait for Graph to become Active.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 15*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, g); err != nil {
@@ -272,7 +272,7 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-hash-skip", Namespace: ns}, g); err != nil {
@@ -307,8 +307,8 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, graphLatest))
 	t.Log("triggered reconcile via label change")
 
-	// Wait for the reconcile to process (give it a few cycles).
-	time.Sleep(3 * time.Second)
+	// Wait for the reconcile to settle (RV stability check, not a fixed sleep).
+	require.NoError(t, waitForSettle(ctx, k8sClient, cmGVK, types.NamespacedName{Name: "hash-target", Namespace: ns}))
 
 	// Verify the ConfigMap's resourceVersion has NOT changed.
 	cmAfter := &unstructured.Unstructured{}
@@ -353,7 +353,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-hash-change", Namespace: ns}, g); err != nil {
@@ -393,7 +393,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 	t.Log("updated Graph spec: version=v2")
 
 	// Wait for the new value and a new hash.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "hash-change-target", Namespace: ns}, check); err != nil {
@@ -445,7 +445,7 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
 	// Wait for Active.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-steady-state", Namespace: ns}, g); err != nil {
@@ -455,8 +455,8 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 		return state == "Active", nil
 	}))
 
-	// Let it settle — wait for any in-flight reconciles to complete.
-	time.Sleep(2 * time.Second)
+	// Let it settle — poll for RV stability rather than fixed sleep.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-steady-state", Namespace: ns}))
 
 	// Record the Graph's resourceVersion.
 	g := &unstructured.Unstructured{}
@@ -472,8 +472,8 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 	cmRV := cm.GetResourceVersion()
 	t.Logf("ConfigMap resourceVersion after settling: %s", cmRV)
 
-	// Wait several potential reconcile cycles.
-	time.Sleep(5 * time.Second)
+	// Wait for potential reconcile cycles — poll for stability, not fixed sleep.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-steady-state", Namespace: ns}))
 
 	// Verify neither object's resourceVersion changed.
 	gAfter := &unstructured.Unstructured{}
@@ -550,7 +550,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	t.Log("graph-owned-cm created")
 
 	// 4. Wait for FieldConflict status.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}, g); err != nil {
@@ -578,7 +578,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	t.Log("Graph deleted")
 
 	// 6. Wait for Graph to be fully deleted.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-delete-conflict", Namespace: ns}, g)

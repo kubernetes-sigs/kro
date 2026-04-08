@@ -120,7 +120,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{

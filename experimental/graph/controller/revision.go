@@ -18,15 +18,17 @@ package graphcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -45,6 +47,10 @@ const (
 	LabelGraphGeneration = "internal.kro.run/graph-generation"
 	LabelNodeID          = "internal.kro.run/node-id"
 	LabelRevisionHash    = "internal.kro.run/hash"
+
+	// AnnotationAppliedSet stores the set of resource keys that this revision
+	// has written to the cluster.
+	AnnotationAppliedSet = "internal.kro.run/applied-set"
 )
 
 // Revision condition types.
@@ -104,6 +110,14 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 					LabelGraphGeneration: generationStr,
 					LabelRevisionHash:    contentHash,
 				},
+				"ownerReferences": []any{
+					map[string]any{
+						"apiVersion": graph.GetAPIVersion(),
+						"kind":       graph.GetKind(),
+						"name":       graphName,
+						"uid":        string(graph.GetUID()),
+					},
+				},
 			},
 			"spec": map[string]any{
 				"nodes": nodes,
@@ -124,16 +138,11 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 
 	if node.Template != nil {
 		tmpl := deepCopyMap(node.Template)
-		// Don't inject ownership labels on contribution templates — contributions
-		// write to objects someone else owns, and shouldn't claim them with
-		// management labels.
-		if !isContributionTemplate(tmpl) {
-			injectResourceLabels(tmpl, graphName, generation, node.ID)
+		shape := DetectShape(tmpl)
+		if shape == ShapeOwns {
+			injectNodeLabels(tmpl, graphName, generation, node.ID)
 		}
 		entry["template"] = tmpl
-	}
-	if node.ExternalRef != nil {
-		entry["externalRef"] = deepCopyMap(node.ExternalRef)
 	}
 	if node.ForEach != nil {
 		fe := make(map[string]any, len(node.ForEach))
@@ -156,13 +165,20 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 		}
 		entry["readyWhen"] = rw
 	}
+	if len(node.PropagateWhen) > 0 {
+		pw := make([]any, len(node.PropagateWhen))
+		for i, s := range node.PropagateWhen {
+			pw[i] = s
+		}
+		entry["propagateWhen"] = pw
+	}
 
 	return entry
 }
 
-// injectResourceLabels stamps ownership labels into a template's metadata.
+// injectNodeLabels stamps ownership labels into a template's metadata.
 // Also computes and sets the template-hash annotation.
-func injectResourceLabels(tmpl map[string]any, graphName, generation, nodeID string) {
+func injectNodeLabels(tmpl map[string]any, graphName, generation, nodeID string) {
 	md, _ := tmpl["metadata"].(map[string]any)
 	if md == nil {
 		md = map[string]any{}
@@ -274,21 +290,6 @@ func listRevisions(ctx context.Context, c client.Client, graphName, namespace st
 	return result, nil
 }
 
-// getActiveRevision finds the currently active revision for a Graph.
-// Returns nil if no active revision exists.
-func getActiveRevision(ctx context.Context, c client.Client, graphName, namespace string) (*unstructured.Unstructured, error) {
-	revisions, err := listRevisions(ctx, c, graphName, namespace)
-	if err != nil {
-		return nil, err
-	}
-	for _, rev := range revisions {
-		if revisionConditionStatus(rev, RevisionConditionActive) == ConditionTrue {
-			return rev, nil
-		}
-	}
-	return nil, nil
-}
-
 // deleteRevision removes a GraphRevision after removing its finalizer.
 func deleteRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
 	if controllerutil.ContainsFinalizer(revision, finalizer) {
@@ -386,31 +387,6 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 	return gen
 }
 
-// ---------------------------------------------------------------------------
-// Resource diff — for prune tracking across revisions
-// ---------------------------------------------------------------------------
-
-// revisionNodeIDs extracts the set of node IDs from a revision's spec.
-func revisionNodeIDs(spec *GraphSpec) map[string]bool {
-	ids := make(map[string]bool, len(spec.Nodes))
-	for _, node := range spec.Nodes {
-		ids[node.ID] = true
-	}
-	return ids
-}
-
-// diffNodeIDs returns node IDs present in oldIDs but not in newIDs.
-func diffNodeIDs(oldIDs, newIDs map[string]bool) []string {
-	var removed []string
-	for id := range oldIDs {
-		if !newIDs[id] {
-			removed = append(removed, id)
-		}
-	}
-	sort.Strings(removed)
-	return removed
-}
-
 // ListRevisionsForTest is a test-facing export of listRevisions.
 func ListRevisionsForTest(ctx context.Context, c client.Client, graphName, namespace string) ([]*unstructured.Unstructured, error) {
 	return listRevisions(ctx, c, graphName, namespace)
@@ -448,24 +424,105 @@ func deepCopyValue(v any) any {
 }
 
 // ---------------------------------------------------------------------------
-// Resource key tracking for prune
+// Applied set — annotation-based tracking of what keys a revision wrote
 // ---------------------------------------------------------------------------
 
-// resourceKeysByNodeID returns a map from node ID to the resource keys
-// (group/version/kind/namespace/name) that were applied for that node.
-// This is populated during the DAG walk.
-func resourceKeysByNodeID(appliedKeys []string) map[string][]string {
-	// Resource keys are "group/version/kind/namespace/name"
-	// We can't directly map back to node ID from the key without the
-	// node-id label on the resource. This helper exists for documentation;
-	// the actual mapping is done during reconciliation using labels.
-	result := make(map[string][]string)
-	for _, key := range appliedKeys {
-		parts := strings.SplitN(key, "/", 5)
-		if len(parts) == 5 {
-			// Use kind/name as a rough grouping key
-			result[parts[2]+"/"+parts[4]] = append(result[parts[2]+"/"+parts[4]], key)
+// setAppliedSet writes the applied key set as a JSON annotation on the revision.
+func setAppliedSet(ctx context.Context, c client.Client, revision *unstructured.Unstructured, keys []string) error {
+	sorted := make([]string, len(keys))
+	copy(sorted, keys)
+	sort.Strings(sorted)
+
+	data, err := json.Marshal(sorted)
+	if err != nil {
+		return fmt.Errorf("marshaling applied set: %w", err)
+	}
+
+	newValue := string(data)
+
+	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
+	if err != nil {
+		return fmt.Errorf("re-fetching revision for applied set: %w", err)
+	}
+
+	annotations := latest.GetAnnotations()
+	if annotations != nil && annotations[AnnotationAppliedSet] == newValue {
+		return nil
+	}
+
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[AnnotationAppliedSet] = newValue
+	latest.SetAnnotations(annotations)
+	return c.Update(ctx, latest)
+}
+
+func getAppliedSet(revision *unstructured.Unstructured) []string {
+	annotations := revision.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	raw, ok := annotations[AnnotationAppliedSet]
+	if !ok || raw == "" {
+		return nil
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return nil
+	}
+	return keys
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton apply — release field ownership without deleting the object
+// ---------------------------------------------------------------------------
+
+func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
+	apiVersion := gvk.Group + "/" + gvk.Version
+	if gvk.Group == "" {
+		apiVersion = gvk.Version
+	}
+	skeleton := map[string]any{
+		"apiVersion": apiVersion,
+		"kind":       gvk.Kind,
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+		},
+	}
+
+	data, err := json.Marshal(skeleton)
+	if err != nil {
+		return fmt.Errorf("marshaling skeleton: %w", err)
+	}
+
+	target := &unstructured.Unstructured{}
+	target.SetGroupVersionKind(gvk)
+	target.SetName(name)
+	target.SetNamespace(namespace)
+	if err := c.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.ForceOwnership); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("skeleton apply for %s/%s: %w", namespace, name, err)
+	}
+
+	if hasStatus {
+		statusData, err := json.Marshal(skeleton)
+		if err != nil {
+			return fmt.Errorf("marshaling status skeleton: %w", err)
+		}
+		statusTarget := &unstructured.Unstructured{}
+		statusTarget.SetGroupVersionKind(gvk)
+		statusTarget.SetName(name)
+		statusTarget.SetNamespace(namespace)
+		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("skeleton status apply for %s/%s: %w", namespace, name, err)
+			}
 		}
 	}
-	return result
+
+	return nil
 }

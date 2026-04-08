@@ -90,12 +90,10 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 				"nodes": []any{
 					map[string]any{
 						"id": "rgds",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "test.kro.run/v1alpha1",
 							"kind":       "ResourceGraphDefinition",
-							"metadata": map[string]any{
-								"selector": map[string]any{},
-							},
+							"selector":   map[string]any{},
 						},
 					},
 					map[string]any{
@@ -111,7 +109,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 							},
 							"spec": map[string]any{
 								"nodes": `${[
-									{"id": "rgd", "externalRef": {
+									{"id": "rgd", "template": {
 										"apiVersion": "test.kro.run/v1alpha1",
 										"kind": "ResourceGraphDefinition",
 										"metadata": {"name": rgd.metadata.name, "namespace": rgd.metadata.namespace}
@@ -135,15 +133,15 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 												"storage": true,
 												"subresources": {"status": {}},
 												"schema": {
-													"openAPIV3Schema": "${simpleSchema.toOpenAPI(rgd.spec.schema, rgd.spec.resources)}"
+													"openAPIV3Schema": "${simpleSchema.toOpenAPI(rgd.spec.schema, rgd.spec.nodes)}"
 												}
 											}]
 										}
 									}},
-									{"id": "instances", "externalRef": {
+									{"id": "instances", "template": {
 										"apiVersion": "${rgd.spec.schema.group}/${rgd.spec.schema.apiVersion}",
 										"kind": "${rgd.spec.schema.kind}",
-										"metadata": {"selector": {}}
+										"selector": {}
 									}},
 									{"id": "instanceGraphs", "forEach": {"instance": "${instances}"},
 									 "template": {
@@ -152,12 +150,12 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 										"metadata": {"name": "${instance.metadata.name}-${rgd.spec.schema.kind.lowerAscii()}"},
 										"spec": {
 											"nodes": "${" +
-												"[{\"id\": \"schema\", \"externalRef\": {" +
+												"[{\"id\": \"schema\", \"template\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +
 												"\"metadata\": {\"name\": instance.metadata.name, \"namespace\": instance.metadata.namespace}" +
 												"}}]" +
-												" + rgd.spec.resources" +
+												" + rgd.spec.nodes" +
 												" + [{\"id\": \"statusContrib\", \"template\": {" +
 												"\"apiVersion\": rgd.spec.schema.group + \"/\" + rgd.spec.schema.apiVersion," +
 												"\"kind\": rgd.spec.schema.kind," +
@@ -224,11 +222,34 @@ func buildRGDCRD() *apiextensionsv1.CustomResourceDefinition {
 }
 
 func waitForResource(ctx context.Context, c client.Client, key types.NamespacedName, obj *unstructured.Unstructured) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, obj); err != nil {
 			return false, nil
 		}
 		return true, nil
+	})
+}
+
+// waitForSettle polls until a resource's resourceVersion is stable across
+// two consecutive checks. This replaces time.Sleep for "wait for reconcile
+// to finish" patterns — it observes completion rather than guessing duration.
+func waitForSettle(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName) error {
+	var lastRV string
+	stableCount := 0
+	return wait.PollUntilContextTimeout(ctx, 150*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		if err := c.Get(ctx, key, obj); err != nil {
+			return false, nil
+		}
+		rv := obj.GetResourceVersion()
+		if rv == lastRV {
+			stableCount++
+			return stableCount >= 3, nil // stable across 3 checks (~450ms)
+		}
+		lastRV = rv
+		stableCount = 0
+		return false, nil
 	})
 }
 

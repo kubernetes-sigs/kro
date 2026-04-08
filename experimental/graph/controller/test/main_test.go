@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	k8smetadata "k8s.io/client-go/metadata"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -41,27 +41,27 @@ func TestMain(m *testing.M) {
 		panic("creating client: " + err.Error())
 	}
 
-	graphCRD := buildGraphCRD()
-	if err := k8sClient.Create(ctx, graphCRD); err != nil {
-		panic("creating Graph CRD: " + err.Error())
+	// Pre-install all CRDs upfront. This eliminates per-test CRD creation
+	// latency — CRD establishment takes 3-5s each, and several tests need
+	// the same CRDs. Install them once at startup.
+	crds := []struct {
+		name    string
+		builder func() *apiextensionsv1.CustomResourceDefinition
+	}{
+		{"graphs.kro.run", buildGraphCRD},
+		{"graphrevisions.internal.kro.run", buildGraphRevisionCRD},
+		{"resourcegraphdefinitions.test.kro.run", buildRGDCRD},
+		{"simpleapps.test.kro.run", buildSimpleAppCRD},
 	}
-
-	if err := waitForCRD(ctx, k8sClient, "graphs.kro.run"); err != nil {
-		panic("waiting for Graph CRD: " + err.Error())
+	for _, crd := range crds {
+		if err := k8sClient.Create(ctx, crd.builder()); err != nil {
+			panic("creating CRD " + crd.name + ": " + err.Error())
+		}
 	}
-
-	revisionCRD := buildGraphRevisionCRD()
-	if err := k8sClient.Create(ctx, revisionCRD); err != nil {
-		panic("creating GraphRevision CRD: " + err.Error())
-	}
-
-	if err := waitForCRD(ctx, k8sClient, "graphrevisions.internal.kro.run"); err != nil {
-		panic("waiting for GraphRevision CRD: " + err.Error())
-	}
-
-	metadataClient, err := k8smetadata.NewForConfig(cfg)
-	if err != nil {
-		panic("creating metadata client: " + err.Error())
+	for _, crd := range crds {
+		if err := waitForCRD(ctx, k8sClient, crd.name); err != nil {
+			panic("waiting for CRD " + crd.name + ": " + err.Error())
+		}
 	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -75,7 +75,11 @@ func TestMain(m *testing.M) {
 		panic("creating manager: " + err.Error())
 	}
 
-	testSetup := graphcontroller.SetupWithManagerForTest(mgr, metadataClient)
+	// Use the same SetupWithManager that production uses.
+	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg)
+	if err != nil {
+		panic("setting up controller: " + err.Error())
+	}
 
 	k8sClient = mgr.GetClient()
 
@@ -91,7 +95,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	testSetup.Shutdown()
+	shutdown()
 	cancel()
 	if err := testEnv.Stop(); err != nil {
 		panic("stopping envtest: " + err.Error())

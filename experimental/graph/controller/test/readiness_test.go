@@ -57,7 +57,7 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -87,10 +87,14 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// The output should NOT be created yet because the source is not ready.
+	// readyWhen no longer gates dependents — downstream resources are created
+	// immediately because data is in scope. The Graph status shows InProgress.
+	// Verify the output IS created (with the initial value from the not-ready source)
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK, types.NamespacedName{Name: "ready-output", Namespace: ns}, 1500*time.Millisecond))
-	t.Log("Output correctly not created while source not ready")
+	outputCM := &unstructured.Unstructured{}
+	outputCM.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "ready-output", Namespace: ns}, outputCM))
+	t.Log("Output created while source not yet ready (readyWhen no longer gates dependents)")
 
 	// Now update the source to be "ready"
 	latestSource := &unstructured.Unstructured{}
@@ -102,7 +106,7 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 	t.Log("Updated source to ready state with value=hello-from-ready")
 
 	// Now the output SHOULD be created/updated with the correct value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "ready-output", Namespace: ns}, result); err != nil {
@@ -260,7 +264,7 @@ func TestDataPendingRequeues(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -309,7 +313,7 @@ func TestDataPendingRequeues(t *testing.T) {
 	t.Log("Added pending_field=resolved-value to source")
 
 	// Now the output should be created with the resolved value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "data-output", Namespace: ns}, result); err != nil {
@@ -369,7 +373,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 					// Watch the infra resource, gate on phase == "Running"
 					map[string]any{
 						"id": "infra",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -401,10 +405,12 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// App config should NOT exist yet — infra is pending, readyWhen blocks downstream
-	require.NoError(t, waitForAbsence(ctx, k8sClient, schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "app-config", Namespace: ns}, 1500*time.Millisecond))
-	t.Log("app-config correctly not created while infra is Pending")
+	// readyWhen no longer gates dependents — app-config should be created immediately
+	// because infra data is in scope. The Graph status shows InProgress/NotReady.
+	appCM := &unstructured.Unstructured{}
+	appCM.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "app-config", Namespace: ns}, appCM))
+	t.Log("app-config created while infra is Pending (readyWhen no longer gates dependents)")
 
 	// Transition infra to "Running"
 	latestInfra := &unstructured.Unstructured{}
@@ -415,7 +421,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	t.Log("Infra transitioned to Running")
 
 	// App config should now be created
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "app-config", Namespace: ns}, result); err != nil {

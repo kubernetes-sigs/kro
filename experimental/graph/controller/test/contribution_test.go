@@ -55,7 +55,7 @@ func TestContribution(t *testing.T) {
 					// Read the external object into scope
 					map[string]any{
 						"id": "schema",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
@@ -112,7 +112,7 @@ func TestContribution(t *testing.T) {
 	t.Logf("Owned resource created: %s (managed by Graph)", deplCM.GetName())
 
 	// Wait for the contribution to be applied to the external object
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "webapp-instance", Namespace: ns}, updated); err != nil {
@@ -222,7 +222,7 @@ func TestResourcePruning(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Wait for the removed ConfigMap to be deleted
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "remove-me", Namespace: ns}, check)

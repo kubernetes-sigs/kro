@@ -49,7 +49,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "config",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "watched-config"},
@@ -91,7 +91,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 
 	// THE PROOF: the output should update to v2, triggered by the dynamic watch
 	// on the externalRef target — not by a Graph spec change.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "output", Namespace: ns}, updated); err != nil {
@@ -140,12 +140,10 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "items",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]any{
-								"selector": map[string]any{"collection": "watched"},
-							},
+							"selector":   map[string]any{"collection": "watched"},
 						},
 					},
 					map[string]any{

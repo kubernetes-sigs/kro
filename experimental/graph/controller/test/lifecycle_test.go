@@ -117,7 +117,7 @@ func TestFullLifecycle(t *testing.T) {
 	assertManagedBy(t, svc, "test-lifecycle")
 
 	// Wait for status to show Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g); err != nil {
@@ -147,7 +147,7 @@ func TestFullLifecycle(t *testing.T) {
 	t.Log("Updated Graph: replicas 2 → 5")
 
 	// Wait for Deployment to be updated
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		d := &unstructured.Unstructured{}
 		d.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "lifecycle-deploy", Namespace: ns}, d); err != nil {
@@ -293,7 +293,7 @@ func TestParallelIndependence(t *testing.T) {
 					// Chain A: externalRef (not ready) → dependent-a
 					map[string]any{
 						"id": "extA",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "source-a"},
 						},
@@ -330,12 +330,12 @@ func TestParallelIndependence(t *testing.T) {
 	assert.Equal(t, "b-works", data["value"])
 	t.Log("Chain B created independently while chain A is blocked")
 
-	// Chain A's dependent should NOT exist
+	// Chain A's dependent SHOULD exist even though extA is not ready.
+	// readyWhen is a health signal, not a gate — data is in scope.
 	cmA := &unstructured.Unstructured{}
 	cmA.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: "dependent-a", Namespace: ns}, cmA)
-	require.Error(t, err, "dependent-a should not exist while extA is not ready")
-	t.Log("Chain A correctly blocked")
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "dependent-a", Namespace: ns}, cmA))
+	t.Log("Chain A created — readyWhen does not gate dependents")
 
 	// Unblock chain A
 	latest := &unstructured.Unstructured{}
@@ -420,7 +420,7 @@ func TestContagiousExclusion(t *testing.T) {
 	t.Log("Feature + dependent correctly excluded (contagious)")
 
 	// Status should be Active (excluded resources don't block readiness)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contagious", Namespace: ns}, g); err != nil {
@@ -460,7 +460,7 @@ func TestDataPendingChain(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "source",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1", "kind": "ConfigMap",
 							"metadata": map[string]any{"name": "chain-source"},
 						},
@@ -502,7 +502,7 @@ func TestDataPendingChain(t *testing.T) {
 	t.Log("Added chainField to source")
 
 	// Both middle and tail should resolve
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "chain-tail", Namespace: ns}, result); err != nil {
@@ -553,12 +553,10 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "sources",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
-							"metadata": map[string]any{
-								"selector": map[string]any{"group": "scale-test"},
-							},
+							"selector":   map[string]any{"group": "scale-test"},
 						},
 					},
 					map[string]any{
@@ -617,7 +615,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 	t.Log("Deleted source scale-a")
 
 	// scale-a-copy should be pruned
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "scale-a-copy", Namespace: ns}, check)
@@ -668,7 +666,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 				"nodes": []any{
 					map[string]any{
 						"id": "control",
-						"externalRef": map[string]any{
+						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata":   map[string]any{"name": "toggle-control"},
@@ -715,7 +713,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 	unstructured.SetNestedField(latestCtl.Object, "false", "data", "enabled")
 	require.NoError(t, k8sClient.Update(ctx, latestCtl))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "gated-resource", Namespace: ns}, check)
@@ -779,10 +777,10 @@ func TestDriftNotRestored(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 	t.Log("Externally mutated: desired=DRIFTED")
 
-	// Wait a few reconcile cycles to confirm drift persists (not restored).
+	// Wait for reconcile to settle — poll for RV stability rather than fixed sleep.
 	// The watch fires (resourceVersion changed), but the template hash matches
 	// so the Patch is skipped.
-	time.Sleep(3 * time.Second)
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK, types.NamespacedName{Name: "test-drift", Namespace: ns}))
 
 	check := &unstructured.Unstructured{}
 	check.SetGroupVersionKind(cmGVK)
@@ -814,7 +812,7 @@ func TestDriftNotRestored(t *testing.T) {
 	t.Log("Updated Graph spec: desired=new-value")
 
 	// Wait for the new value to be applied (template hash changed → Patch fires)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "drift-target", Namespace: ns}, check); err != nil {

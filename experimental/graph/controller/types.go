@@ -7,6 +7,102 @@ package graphcontroller
 
 import "fmt"
 
+// TemplateShape classifies the relationship between a Graph and a resource.
+// Determined by template content — see 003-ownership.md § Template Shapes.
+type TemplateShape int
+
+const (
+	// ShapeOwns — the template specifies fields beyond identity; the controller
+	// creates/owns the resource via SSA. Tracked for cleanup. Deleted on prune.
+	ShapeOwns TemplateShape = iota
+	// ShapeWatch — identity-only template (apiVersion, kind, metadata.name,
+	// optionally metadata.namespace). Read-only GET. Not tracked.
+	ShapeWatch
+	// ShapeCollectionWatch — apiVersion + kind with optional selector, no
+	// metadata.name. Read-only List. Not tracked.
+	ShapeCollectionWatch
+	// ShapeContribute — specifies fields on a resource the Graph does not
+	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
+	ShapeContribute
+)
+
+// DetectShape returns the TemplateShape of a node's template map.
+//
+// Detection order (from 003-ownership.md):
+//  1. CollectionWatch — apiVersion + kind, no metadata.name
+//  2. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
+//  3. Contribute — keys subset of {apiVersion, kind, metadata, status}
+//  4. Owns — fields beyond identity
+func DetectShape(tmpl map[string]any) TemplateShape {
+	if len(tmpl) == 0 {
+		return ShapeOwns
+	}
+
+	md, _ := tmpl["metadata"].(map[string]any)
+	_, hasName := md["name"]
+
+	// 1. Collection Watch: no metadata.name
+	if !hasName {
+		return ShapeCollectionWatch
+	}
+
+	// 2. Watch: only identity fields
+	if isIdentityOnly(tmpl) {
+		return ShapeWatch
+	}
+
+	// 3. Contribute: keys subset of {apiVersion, kind, metadata, status}
+	if isContributeShape(tmpl) {
+		return ShapeContribute
+	}
+
+	return ShapeOwns
+}
+
+// isIdentityOnly returns true if the template contains only identity fields:
+// apiVersion, kind, and metadata with only name and/or namespace.
+func isIdentityOnly(tmpl map[string]any) bool {
+	for key := range tmpl {
+		switch key {
+		case "apiVersion", "kind", "metadata":
+			continue
+		default:
+			return false
+		}
+	}
+	md, _ := tmpl["metadata"].(map[string]any)
+	if md == nil {
+		return true
+	}
+	for key := range md {
+		switch key {
+		case "name", "namespace":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isContributeShape returns true if the template's keys are a subset of
+// {apiVersion, kind, metadata, status} — it underspecifies the resource,
+// writing only metadata and/or status fields.
+func isContributeShape(tmpl map[string]any) bool {
+	if len(tmpl) == 0 {
+		return false
+	}
+	for key := range tmpl {
+		switch key {
+		case "apiVersion", "kind", "metadata", "status":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Node is a parsed Graph node entry — a user's declaration of intent about
 // a Kubernetes resource (or collection of resources via forEach). It is the
 // unit of the dependency graph: each node has an identity, a template, and
@@ -19,16 +115,21 @@ import "fmt"
 // boundary between the user's declaration and the Kubernetes objects it
 // produces.
 type Node struct {
-	ID          string
-	Template    map[string]any
-	ExternalRef map[string]any
-	ForEach     map[string]string
-	IncludeWhen []string
-	ReadyWhen   []string // CEL conditions; all must be true for the node to be "ready"
+	ID            string
+	Template      map[string]any
+	ForEach       map[string]string
+	IncludeWhen   []string
+	ReadyWhen     []string // CEL conditions; all must be true for the node to be "ready"
+	PropagateWhen []string // CEL conditions; all must be true for data to flow to dependents
 
 	// Dependencies are IDs of nodes this node references in its CEL expressions.
 	// Populated by BuildDAG; nil before that.
 	Dependencies map[string]bool
+}
+
+// Shape returns the TemplateShape of this node's template.
+func (n *Node) Shape() TemplateShape {
+	return DetectShape(n.Template)
 }
 
 // GraphSpec holds the parsed spec of a Graph object.
@@ -92,19 +193,15 @@ func (s *GraphSpec) AllExpressions() []string {
 		collectStrings(node.Template, &templateStrings)
 		add(templateStrings)
 
-		// ExternalRef expressions
-		var refStrings []string
-		collectStrings(node.ExternalRef, &refStrings)
-		add(refStrings)
-
 		// ForEach collection expressions
 		for _, v := range node.ForEach {
 			add([]string{v})
 		}
 
-		// Condition expressions (includeWhen, readyWhen)
+		// Condition expressions (includeWhen, readyWhen, propagateWhen)
 		add(node.IncludeWhen)
 		add(node.ReadyWhen)
+		add(node.PropagateWhen)
 	}
 
 	return exprs
@@ -149,9 +246,6 @@ func parseNodeList(raw any) ([]Node, error) {
 		if tmpl, ok := m["template"].(map[string]any); ok {
 			node.Template = tmpl
 		}
-		if extRef, ok := m["externalRef"].(map[string]any); ok {
-			node.ExternalRef = extRef
-		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
 			node.ForEach = make(map[string]string)
 			for k, v := range fe {
@@ -171,6 +265,13 @@ func parseNodeList(raw any) ([]Node, error) {
 			for _, expr := range rw {
 				if s, ok := expr.(string); ok {
 					node.ReadyWhen = append(node.ReadyWhen, s)
+				}
+			}
+		}
+		if pw, ok := m["propagateWhen"].([]any); ok {
+			for _, expr := range pw {
+				if s, ok := expr.(string); ok {
+					node.PropagateWhen = append(node.PropagateWhen, s)
 				}
 			}
 		}

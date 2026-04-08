@@ -289,7 +289,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Wait for the ConfigMap to be updated
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		cm2 := &unstructured.Unstructured{}
 		cm2.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "update-test", Namespace: ns}, cm2); err != nil {
@@ -361,7 +361,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 									// Child resource 1: externalRef reads the ConfigMap into child scope
 									map[string]any{
 										"id": "input",
-										"externalRef": map[string]any{
+										"template": map[string]any{
 											"apiVersion": "v1",
 											"kind":       "ConfigMap",
 											"metadata": map[string]any{

@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubernetes-sigs/kro/pkg/graph/revisions"
@@ -116,13 +118,19 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 			dc := newRunningDynamicController(t)
 			require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
 
-			manager := &stubCRDManager{deleteErr: tt.deleteErr}
+			// Set up CRD with ownership label
+			crdWithOwner := newTestCRD(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind, rgd.Name)
+			manager := &stubCRDManager{
+				deleteErr: tt.deleteErr,
+				getReturn: crdWithOwner,
+			}
 			reconciler := &ResourceGraphDefinitionReconciler{
 				cfg:               Config{AllowCRDDeletion: tt.allowCRDDeletion},
 				dynamicController: dc,
 				crdManager:        manager,
 				revisionsRegistry: revisions.NewRegistry(),
 			}
+			reconciler.registeredControllers.Store(rgd.UID, true)
 
 			err := reconciler.cleanupResourceGraphDefinition(context.Background(), rgd)
 			if tt.wantErr == "" {
@@ -133,6 +141,46 @@ func TestCleanupResourceGraphDefinition(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.wantDeleted, manager.deleted)
+		})
+	}
+}
+
+func TestCleanupSkipsDeregisterWhenNeverRegistered(t *testing.T) {
+	tests := []struct {
+		name                 string
+		markAsRegistered     bool
+		wantDeregisterCalled bool
+	}{
+		{
+			name:                 "skips deregister when controller was never registered",
+			markAsRegistered:     false,
+			wantDeregisterCalled: false,
+		},
+		{
+			name:                 "calls deregister when controller was registered",
+			markAsRegistered:     true,
+			wantDeregisterCalled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := newTestRGD("skip-cleanup")
+			gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+			dc := newRunningDynamicController(t)
+
+			reconciler := &ResourceGraphDefinitionReconciler{
+				dynamicController: dc,
+				crdManager:        &stubCRDManager{},
+				revisionsRegistry: revisions.NewRegistry(),
+			}
+
+			if tt.markAsRegistered {
+				require.NoError(t, dc.Register(context.Background(), gvr, func(context.Context, ctrl.Request) error { return nil }))
+				reconciler.registeredControllers.Store(rgd.UID, true)
+			}
+
+			require.NoError(t, reconciler.cleanupResourceGraphDefinition(context.Background(), rgd))
 		})
 	}
 }
@@ -153,6 +201,7 @@ func TestCleanupPreservesRegistryEntries(t *testing.T) {
 		crdManager:        &stubCRDManager{},
 		revisionsRegistry: registry,
 	}
+	reconciler.registeredControllers.Store(rgd.UID, true)
 
 	require.NoError(t, reconciler.cleanupResourceGraphDefinition(context.Background(), rgd))
 
@@ -172,17 +221,32 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 		name             string
 		allowCRDDeletion bool
 		deleteErr        error
+		crdOwner         string
 		wantDeleted      []string
 		wantErr          string
 	}{
 		{
 			name:        "skips deletion when crd deletion is disabled",
 			deleteErr:   errors.New("should not be called"),
+			crdOwner:    "test-rgd",
 			wantDeleted: nil,
+		},
+		{
+			name:             "skips deletion when not owned by this RGD",
+			allowCRDDeletion: true,
+			crdOwner:         "other-rgd",
+			wantDeleted:      nil,
+		},
+		{
+			name:             "deletes when owned by this RGD",
+			allowCRDDeletion: true,
+			crdOwner:         "test-rgd",
+			wantDeleted:      []string{"networks.example.io"},
 		},
 		{
 			name:             "returns delete errors",
 			allowCRDDeletion: true,
+			crdOwner:         "test-rgd",
 			deleteErr:        errors.New("delete boom"),
 			wantDeleted:      []string{"networks.example.io"},
 			wantErr:          "error deleting CRD",
@@ -191,13 +255,17 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := &stubCRDManager{deleteErr: tt.deleteErr}
+			crd := newTestCRD("example.io", "Network", tt.crdOwner)
+			manager := &stubCRDManager{
+				deleteErr: tt.deleteErr,
+				getReturn: crd,
+			}
 			reconciler := &ResourceGraphDefinitionReconciler{
 				cfg:        Config{AllowCRDDeletion: tt.allowCRDDeletion},
 				crdManager: manager,
 			}
 
-			err := reconciler.cleanupResourceGraphDefinitionCRD(context.Background(), "networks.example.io")
+			err := reconciler.cleanupResourceGraphDefinitionCRD(context.Background(), "test-rgd", "networks.example.io")
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 			} else {
@@ -207,5 +275,17 @@ func TestCleanupResourceGraphDefinitionCRD(t *testing.T) {
 
 			assert.Equal(t, tt.wantDeleted, manager.deleted)
 		})
+	}
+}
+
+func newTestCRD(group, kind, ownerRGD string) *extv1.CustomResourceDefinition {
+	crdName := extractCRDName(group, kind)
+	return &extv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: crdName,
+			Labels: map[string]string{
+				metadata.ResourceGraphDefinitionNameLabel: ownerRGD,
+			},
+		},
 	}
 }

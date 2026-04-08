@@ -24,6 +24,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 
@@ -241,6 +242,130 @@ var _ = Describe("CRD", func() {
 			// Cleanup
 			Expect(env.Client.Delete(ctx, rgd1)).To(Succeed())
 			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
+		})
+
+		It("should not disrupt first RGD's controller when deleting a conflicting RGD", func(ctx SpecContext) {
+			// Create first RGD with a resource
+			rgd1 := generator.NewResourceGraphDefinition("test-controller-preserve-1",
+				generator.WithSchema(
+					"PreserveTest", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("cm", map[string]interface{}{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]interface{}{
+						"name":      "${schema.metadata.name}-cm",
+						"namespace": namespace,
+					},
+					"data": map[string]interface{}{
+						"key": "${schema.spec.name}",
+					},
+				}, nil, nil),
+			)
+			Expect(env.Client.Create(ctx, rgd1)).To(Succeed())
+
+			// Wait for RGD1 to be Active
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-1"}, rgd1)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd1.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Create an instance of RGD1
+			instance1 := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "PreserveTest",
+					"metadata": map[string]interface{}{
+						"name":      "test-instance-1",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"name": "value1",
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, instance1)).To(Succeed())
+
+			// Wait for instance to reconcile and create ConfigMap
+			Eventually(func(g Gomega, ctx SpecContext) {
+				cm := &corev1.ConfigMap{}
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "test-instance-1-cm",
+					Namespace: namespace,
+				}, cm)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(cm.Data["key"]).To(Equal("value1"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Create second RGD with same CRD (will conflict)
+			rgd2 := generator.NewResourceGraphDefinition("test-controller-preserve-2",
+				generator.WithSchema(
+					"PreserveTest", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+			)
+			Expect(env.Client.Create(ctx, rgd2)).To(Succeed())
+
+			// Wait for RGD2 to be Inactive due to conflict
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-2"}, rgd2)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(rgd2.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateInactive))
+			}, 30*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Delete RGD2 (the conflicting one)
+			Expect(env.Client.Delete(ctx, rgd2)).To(Succeed())
+
+			// Wait for RGD2 to be fully deleted
+			Eventually(func(g Gomega, ctx SpecContext) {
+				err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-2"}, rgd2)
+				g.Expect(err).To(MatchError(errors.IsNotFound, "rgd2 should be deleted"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Verify RGD1 is still Active
+			err := env.Client.Get(ctx, types.NamespacedName{Name: "test-controller-preserve-1"}, rgd1)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(rgd1.Status.State).To(Equal(krov1alpha1.ResourceGraphDefinitionStateActive))
+
+			// Create a new instance of RGD1 to verify controller still works
+			instance2 := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "kro.run/v1alpha1",
+					"kind":       "PreserveTest",
+					"metadata": map[string]interface{}{
+						"name":      "test-instance-2",
+						"namespace": namespace,
+					},
+					"spec": map[string]interface{}{
+						"name": "value2",
+					},
+				},
+			}
+			Expect(env.Client.Create(ctx, instance2)).To(Succeed())
+
+			// Verify the new instance reconciles successfully
+			Eventually(func(g Gomega, ctx SpecContext) {
+				cm := &corev1.ConfigMap{}
+				err := env.Client.Get(ctx, types.NamespacedName{
+					Name:      "test-instance-2-cm",
+					Namespace: namespace,
+				}, cm)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(cm.Data["key"]).To(Equal("value2"))
+			}, 20*time.Second, time.Second).WithContext(ctx).Should(Succeed())
+
+			// Cleanup
+			Expect(env.Client.Delete(ctx, instance1)).To(Succeed())
+			Expect(env.Client.Delete(ctx, instance2)).To(Succeed())
+			Expect(env.Client.Delete(ctx, rgd1)).To(Succeed())
 		})
 	})
 

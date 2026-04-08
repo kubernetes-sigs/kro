@@ -17,6 +17,7 @@ package resourcegraphdefinition
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -64,13 +65,14 @@ type ResourceGraphDefinitionReconciler struct {
 	apiReader      client.Reader
 	instanceLogger logr.Logger
 
-	clientSet         kroclient.SetInterface
-	crdManager        kroclient.CRDClient
-	metadataLabeler   metadata.Labeler
-	rgBuilder         resourceGraphBuilder
-	dynamicController *dynamiccontroller.DynamicController
-	revisionsRegistry *revisions.Registry
-	cfg               Config
+	clientSet             kroclient.SetInterface
+	crdManager            kroclient.CRDClient
+	metadataLabeler       metadata.Labeler
+	rgBuilder             resourceGraphBuilder
+	dynamicController     *dynamiccontroller.DynamicController
+	revisionsRegistry     *revisions.Registry
+	registeredControllers sync.Map
+	cfg                   Config
 
 	newEventRecorder func(string) record.EventRecorder
 }

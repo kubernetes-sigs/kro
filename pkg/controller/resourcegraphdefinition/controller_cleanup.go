@@ -35,9 +35,15 @@ import (
 func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx context.Context, rgd *v1alpha1.ResourceGraphDefinition) error {
 	ctrl.LoggerFrom(ctx).V(1).Info("cleaning up resource graph definition", "name", rgd.Name)
 
-	// shutdown microcontroller
-	if err := r.shutdownResourceGraphDefinitionMicroController(ctx, new(metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind))); err != nil {
-		return fmt.Errorf("failed to shutdown microcontroller: %w", err)
+	// Check in-memory map to avoid stale status data
+	if _, registered := r.registeredControllers.Load(rgd.UID); registered {
+		// shutdown microcontroller
+		gvr := metadata.GetResourceGraphDefinitionInstanceGVR(rgd.Spec.Schema.Group, rgd.Spec.Schema.APIVersion, rgd.Spec.Schema.Kind)
+		if err := r.shutdownResourceGraphDefinitionMicroController(ctx, &gvr); err != nil {
+			return fmt.Errorf("failed to shutdown microcontroller: %w", err)
+		}
+	} else {
+		ctrl.LoggerFrom(ctx).V(1).Info("skipping controller shutdown, controller was never registered", "name", rgd.Name)
 	}
 
 	// Registry eviction is NOT done here. The GraphRevision controller evicts
@@ -55,7 +61,7 @@ func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinition(ctx c
 
 	// cleanup CRD
 	crdName := extractCRDName(rgd.Spec.Schema.Group, rgd.Spec.Schema.Kind)
-	if err := r.cleanupResourceGraphDefinitionCRD(ctx, crdName); err != nil {
+	if err := r.cleanupResourceGraphDefinitionCRD(ctx, rgd.Name, crdName); err != nil {
 		return fmt.Errorf("failed to cleanup CRD %s: %w", crdName, err)
 	}
 
@@ -71,13 +77,30 @@ func (r *ResourceGraphDefinitionReconciler) shutdownResourceGraphDefinitionMicro
 	return nil
 }
 
-// cleanupResourceGraphDefinitionCRD deletes the CRD with the given name if CRD deletion is enabled.
-// If CRD deletion is disabled, it logs the skip and returns nil.
-func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, crdName string) error {
+// cleanupResourceGraphDefinitionCRD deletes the CRD if CRD deletion is enabled and this RGD owns it.
+func (r *ResourceGraphDefinitionReconciler) cleanupResourceGraphDefinitionCRD(ctx context.Context, rgdName, crdName string) error {
 	if !r.cfg.AllowCRDDeletion {
 		ctrl.LoggerFrom(ctx).Info(
 			"skipping CRD deletion because allowCRDDeletion is disabled",
 			"crd", crdName,
+		)
+		return nil
+	}
+
+	// Check if we own this CRD by reading its labels
+	crd, err := r.crdManager.Get(ctx, crdName)
+	if err != nil {
+		// CRD already deleted or never existed
+		return nil
+	}
+
+	owner, ok := crd.GetLabels()[metadata.ResourceGraphDefinitionNameLabel]
+	if !ok || owner != rgdName {
+		ctrl.LoggerFrom(ctx).V(1).Info(
+			"skipping CRD deletion, not owned by this RGD",
+			"crd", crdName,
+			"rgd", rgdName,
+			"owner", owner,
 		)
 		return nil
 	}

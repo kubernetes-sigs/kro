@@ -29,8 +29,8 @@ hashes the template again and compares. If the hash matches, the apply is
 skipped entirely — the desired state hasn't changed, so there's nothing to
 send to the API server.
 
-Contributions follow the same pattern. If the contribution's evaluated
-output hasn't changed, the write is skipped.
+Contribute templates follow the same pattern. If the contribute template's
+evaluated output hasn't changed, the write is skipped.
 
 ## Change Detection
 
@@ -57,12 +57,12 @@ this. Every informer-based controller has this property.
 
 ## Field Ownership
 
-Field ownership mechanics — apply behavior, conflict detection, and deletion
-safety — are defined in 005-ownership. This section covers only the
-performance-relevant interaction: template hashing skips the apply when the
-desired state is unchanged. When the apply is skipped, the controller does
-not re-assert field ownership or inspect managedFields for conflicts.
-Ownership is re-asserted on the next apply triggered by a template change.
+Template hashing interacts with field ownership: when the apply is skipped
+(hash matches), the controller does not re-assert field ownership. If an
+external actor takes ownership of fields between reconciles via force SSA,
+the controller won't detect it until the next template change triggers an
+apply. At that point, the non-force SSA apply returns a 409 and the Graph
+errors on the resource.
 
 ## Drift
 
@@ -72,9 +72,9 @@ apply. The edit persists until the Graph's template output changes. At that
 point, the apply restores the controller's desired state.
 
 Drift from edits that take SSA ownership (another controller's server-side
-apply with force) persists until the template hash changes and triggers a
-new apply. The controller detects ownership changes through managedFields
-inspection after applies — see 005-ownership for conflict detection.
+apply) is detected on the next reconcile — the controller's non-force SSA
+apply returns a 409, surfacing the conflict. The Graph errors on the
+resource until the user resolves the ownership contention.
 
 This is the same tradeoff as pod-template-hash in Deployments. The
 controller converges on spec change, not continuously.
@@ -82,12 +82,12 @@ controller converges on spec change, not continuously.
 ## Write Elimination
 
 The controller avoids writes to the Graph object itself when nothing has
-changed. The `internal.kro.run/applied-resources` annotation is only written
-when the set of managed resources changes. The status subresource is only
-written when the status content changes.
+changed. The resource tracking index is only written when the set of managed
+resources changes. The status subresource is only written when the status
+content changes.
 
 Without this, the controller doesn't converge. Every reconcile would write
-the annotation, bumping the resourceVersion, which would trigger a watch
+the tracking index, bumping the resourceVersion, which would trigger a watch
 event, which would trigger another reconcile — an infinite loop of no-op
 writes. The comparison breaks the loop.
 
@@ -99,6 +99,7 @@ writes. The comparison breaks the loop.
 | NotReady      | Applied, readyWhen not satisfied  | Unblocked            |
 | Pending       | Upstream data not available yet   | Blocked              |
 | Excluded      | includeWhen false                 | Blocked              |
+| Error         | Fatal error                       | Blocked              |
 
 ## Steady-State Cost
 

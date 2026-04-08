@@ -70,105 +70,88 @@ A string that names the resource within the Graph's scope. Other resources refer
 in CEL expressions. Must be unique within the Graph. Must be camelCase — hyphens are parsed as
 subtraction by the CEL evaluator (e.g., `my-app` is interpreted as `my` minus `app`).
 
-After a resource is processed, its `id` enters scope with a type that depends on the template shape:
-
-- **Substance template** — the full Kubernetes object (including status after apply).
-- **Metadata-only template** — the full Kubernetes object (read from cluster).
-- **Selector** — an array of objects.
-- **forEach** — an array of the applied objects. The forEach is a single node in the dependency
-  graph; downstream resources depend on the collection as a unit, not on individual items. Per-item
-  scope isolation is achieved by stamping a Graph per item (see Nested Graphs).
+After a resource is processed, its `id` enters scope as a variable available to CEL expressions in
+downstream resources. The value and type depend on the template shape — see below.
 
 #### template
 
-A Kubernetes resource to apply and manage. The Graph applies the template and manages the lifecycle
-of the specified fields. Template fields can contain CEL expressions (`${...}`) that reference other
-resources in scope.
+A Kubernetes resource declaration. The template shape determines how the controller handles it:
 
-The template shape determines behavior:
+- **Owns** — specifies fields beyond identity (labels, annotations, spec, data). The Graph creates
+  the resource if it doesn't exist, applies the specified fields via SSA, and tracks the resource
+  for cleanup.
+- **Watch** — specifies only identity (`apiVersion`, `kind`, `metadata.name`, `metadata.namespace`).
+  The Graph reads the resource into scope without managing it. If the resource does not exist, the
+  node is Pending.
+- **Collection Watch** — specifies `apiVersion` and `kind` with an optional `selector` but no
+  `metadata.name`. The Graph discovers matching resources and enters them into scope as an array.
+  Create and delete events on matching objects trigger re-reconciliation.
+- **Contribute** — specifies a subset of fields on a resource that another actor manages (e.g., only
+  status, or only labels). The Graph applies exactly those fields and tracks them for cleanup. This
+  is how a Graph writes status to a custom resource, adds labels to an existing object, or
+  contributes any partial state.
 
-- **Substance** [TODO: I don't like this term. This is just a normal resource] — specifies fields
-  beyond identity (labels, annotations, spec, data, status). The Graph manages those fields and
-  tracks the resource for cleanup.
-- **Metadata-only [TODO: this is an object watch, we're missing collection watch (kind+optional
-  selector, no metadata)] ** — specifies only identity (`apiVersion`, `kind`, `metadata.name`,
-  `metadata.namespace`). The Graph reads the resource into scope without managing it.
-- **Partial** — specifies a subset of fields (e.g., only status). The Graph manages exactly those
-  fields. This is how a Graph writes status back to an external [todo: this is overspecific, it
-  could be any object] object.
-
-See 005-ownership [todo: dont ref other docs] for the ownership model and field management
-mechanics.
-
-#### selector
-
-Discovers a collection of resources matching label criteria and enters them into scope as an array.
-Create and delete events on matching objects trigger re-reconciliation.
+After processing, the resource enters scope under its `id` — as the full Kubernetes object for Owns,
+Watch, and Contribute templates, or as an array for Collection Watch.
 
 ```yaml
+# Watch — reads an existing ConfigMap into scope
+- id: config
+  template:
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: shared-config
+
+# Collection Watch — discovers all Pods matching a selector
 - id: allPods
   template:
     apiVersion: v1
     kind: Pod
-    selector: {} # optional
+    selector:
+      app: my-app
+
+# Watch — reads the WebApp instance into scope
+- id: webapp
+  template:
+    apiVersion: kro.run/v1alpha1
+    kind: WebApp
+    metadata:
+      name: my-app
+
+# Contribute — writes status fields to the WebApp
+- id: webappStatus
+  template:
+    apiVersion: kro.run/v1alpha1
+    kind: WebApp
+    metadata:
+      name: ${webapp.metadata.name}
+      namespace: ${webapp.metadata.namespace}
+    status:
+      deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
+      address: ${service.status.loadBalancer.ingress[0].hostname}
 ```
 
 #### forEach
 
 Stamps the template once per item in a collection. The collection is a CEL expression referencing a
-selector or any array in scope. Each iteration binds the item to a named variable available within
-the template.
+collection watch or any array in scope. Each iteration binds the item to a named variable available
+within the template.
 
 ```yaml
-- id: controllers
+- id: policies
   forEach:
-    instance: ${watchInstances} [todo: can we use a better example? instances/controllers are not clear]
+    ns: ${namespaces}
   template:
-    apiVersion: kro.run/v1alpha1
-    kind: Graph
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
     metadata:
-      name: ${instance.metadata.name}-controller
+      name: default-deny
+      namespace: ${ns.metadata.name}
     spec:
-      resources: [...]
-```
-
-forEach is not aware of what it stamps [todo: is this note necessary?]. If the template happens to
-be a Graph, the result is a nested scope — but that is a property of the Graph kind, not of forEach.
-See Nested Graphs below.
-
-#### readyWhen
-
-A list of CEL expressions. All must evaluate to `true` for the resource to be considered ready.
-readyWhen is a health signal — it feeds the Graph's aggregated status and tells operators whether
-the system has converged. It does not gate downstream execution. Dependents proceed as soon as the
-resource is applied and its data is in scope, regardless of readyWhen. [todo: add a note that you
-can reference .ready() in cel on any object]
-
-```yaml
-- id: deployment
-  readyWhen:
-    - ${deployment.status.availableReplicas > 0}
-  template: ...
-```
-
-#### propagateWhen
-
-A list of CEL expressions. All must evaluate to `true` for the resource's updated data to flow
-[propagate?] to dependents. During transitions (e.g., a rolling update), dependents skip
-re-evaluation while propagateWhen is unsatisfied — they retain their last-applied state via the
-template hash. When propagateWhen passes, dependents re-evaluate against the now-stable data.
-
-readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
-propagateWhen is a data flow gate (controls when dependents see new values). A resource without
-propagateWhen propagates immediately — dependents re-evaluate on every reconcile.
-
-```yaml
-- id: deployment
-  readyWhen:
-    - ${deployment.status.availableReplicas > 0}
-  propagateWhen:
-    - ${deployment.status.updatedReplicas == deployment.spec.replicas}
-  template: ...
+      podSelector: {}
+      policyTypes:
+        - Ingress
 ```
 
 #### includeWhen
@@ -184,11 +167,48 @@ resources that depend on it cannot evaluate (the data is not in scope) and are a
   template: ...
 ```
 
+#### readyWhen
+
+A list of CEL expressions. All must evaluate to `true` for the resource to be considered ready.
+readyWhen is a health signal — it feeds the Graph's aggregated status and tells operators whether
+the system has converged. It does not gate downstream execution. Dependents proceed as soon as the
+resource is applied and its data is in scope, regardless of readyWhen.
+
+Any object in scope exposes a `.ready()` CEL function that evaluates the object's standard
+Kubernetes readiness conditions.
+
+```yaml
+- id: deployment
+  readyWhen:
+    - ${deployment.status.availableReplicas > 0}
+  template: ...
+```
+
+#### propagateWhen
+
+A list of CEL expressions. All must evaluate to `true` for the resource's updated data to flow to
+dependents. During transitions (e.g., a rolling update), dependents skip re-evaluation while
+propagateWhen is unsatisfied — they retain their last-applied state. When propagateWhen passes,
+dependents re-evaluate against the now-stable data.
+
+readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
+propagateWhen is a data flow gate (controls when dependents see new values). A resource without
+propagateWhen propagates immediately — dependents re-evaluate on every reconcile.
+
+```yaml
+- id: deployment
+  readyWhen:
+    - ${deployment.status.availableReplicas > 0}
+  propagateWhen:
+    - ${deployment.status.updatedReplicas == deployment.spec.replicas}
+  template: ...
+```
+
 ## Dependencies
 
 Dependencies are inferred from CEL expression references. If resource B contains
 `${A.metadata.name}`, B depends on A. The dependency graph is a DAG — cycles are not permitted.
-Resources with no dependency relationship are independent and may be processed in parallel.
+Resources with no dependency relationship are independent and are processed in parallel.
 
 ## Nested Graphs
 
@@ -196,23 +216,49 @@ A Graph whose template contains another Graph creates a nested scope. The inner 
 Kubernetes object — it is created via the API server and reconciled independently by its own
 reconciliation. Each level is a separate reconciliation loop with its own resource scope.
 
-### Per-Instance Controller Pattern
+The combination of collection watch, forEach, and nested Graphs creates per-instance controllers. A
+parent Graph watches a kind via collection watch, forEach stamps one child Graph per item, and each
+child Graph independently reconciles resources for its item.
 
-The combination of selectors, forEach, and nested Graphs produces per-instance controllers:
+```yaml
+# Parent Graph — watches all Namespaces, stamps a child Graph per Namespace
+- id: namespaces
+  template:
+    apiVersion: v1
+    kind: Namespace
+    selector: {}
 
-1. A parent Graph watches a collection via a selector.
-2. forEach stamps one child Graph per item in the collection.
-3. Each child Graph reads its specific item via a metadata-only template.
-
+- id: perNamespace
+  forEach:
+    ns: ${namespaces}
+  template:
+    apiVersion: kro.run/v1alpha1
+    kind: Graph
+    metadata:
+      name: ${ns.metadata.name}-resources
+    spec:
+      resources:
+        - id: ns
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: $${ns.metadata.name}
+        - id: policy
+          template:
+            apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: default-deny
+              namespace: $${ns.metadata.name}
+            spec:
+              podSelector: {}
+              policyTypes:
+                - Ingress
 ```
-parent (L0)          — watches collection, stamps child Graphs
-└─ child (L1)        — reads its specific item, owns its resources
-```
 
-This separates collection membership from per-item reconciliation. The collection watch fires only
-on create and delete — adding or removing items. Each child's metadata-only template watch fires on
-changes to that specific item. A spec change to one item triggers reconciliation of that child only
-— O(1) reactivity per instance, not O(N) re-evaluation of the entire collection.
+The parent's scope and the child's scope are independent. A spec change to one Namespace triggers
+reconciliation of that child only — O(1) per instance, not O(N) re-evaluation of the collection.
 
 ### Evaluation Boundary
 
@@ -286,16 +332,5 @@ status:
 
 The Graph's status contains only controller-managed conditions. There are no user-defined status
 fields on the Graph itself. User-defined status (e.g., `deploymentReady`, `address`) lives on custom
-resource types and is written via partial templates targeting the custom resource's status
+resource types and is written via contribute templates targeting the custom resource's status
 subresource.
-
-## Why Not
-
-**Manual dependency ordering.** CEL reference analysis derives the graph automatically. Explicit
-ordering adds maintenance burden without information the system cannot infer.
-
-**Re-scanning evaluated output.** An earlier model considered multi-pass string evaluation where
-output from one expression could be re-scanned for further expressions. This creates injection
-vectors, makes each level's behavior depend on all prior levels, and prevents independent debugging.
-The current model — one evaluation pass per controller, with the API server as the boundary — makes
-each level independently observable and testable.

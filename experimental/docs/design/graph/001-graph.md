@@ -47,9 +47,9 @@ spec:
             - port: 80
 ```
 
-Template fields can contain `${...}` CEL expressions that reference other resources by `id`. Each
-resource's `id` is a scope variable — after a resource is applied or read, its full Kubernetes
-object (including status) is available to downstream expressions. A standalone expression (`${expr}`
+Template fields can contain `${...}` CEL expressions that reference other nodes by `id`. Each
+node's `id` is a scope variable — after a node is processed, its full Kubernetes object
+(including status) is available to downstream expressions. A standalone expression (`${expr}`
 as the entire string) preserves the CEL return type. An embedded expression
 (`prefix-${expr}-suffix`) string-interpolates.
 
@@ -60,18 +60,14 @@ as the entire string) preserves the CEL return type. An embedded expression
 `spec.nodes` is a list of node entries. Each entry has an `id` and a `template`. Declaration
 order is not significant — execution order is determined by the dependency graph.
 
-`spec.nodes` can itself be a CEL expression that evaluates to an array of resource definitions.
-This enables dynamic resource list construction (e.g., CEL list concatenation to compose a resource
-list from parts).
-
 #### id
 
-A string that names the resource within the Graph's scope. Other resources reference it by this name
+A string that names the node within the Graph's scope. Other nodes reference it by this name
 in CEL expressions. Must be unique within the Graph. Must be camelCase — hyphens are parsed as
 subtraction by the CEL evaluator (e.g., `my-app` is interpreted as `my` minus `app`).
 
-After a resource is processed, its `id` enters scope as a variable available to CEL expressions in
-downstream resources. The value and type depend on the template shape — see below.
+After a node is processed, its `id` enters scope as a variable available to CEL expressions in
+downstream nodes. The value and type depend on the template shape — see below.
 
 #### template
 
@@ -156,9 +152,9 @@ within the template.
 
 #### includeWhen
 
-A list of CEL expressions. All must evaluate to `true` for the resource to be included. If any
-condition is false, the resource is skipped — it is not created and does not enter scope. Downstream
-resources that depend on it cannot evaluate (the data is not in scope) and are also absent.
+A list of CEL expressions. All must evaluate to `true` for the node to be included. If any
+condition is false, the node is skipped — nothing is applied and it does not enter scope. Downstream
+nodes that depend on it cannot evaluate (the data is not in scope) and are also absent.
 
 ```yaml
 - id: ingress
@@ -169,10 +165,10 @@ resources that depend on it cannot evaluate (the data is not in scope) and are a
 
 #### readyWhen
 
-A list of CEL expressions. All must evaluate to `true` for the resource to be considered ready.
+A list of CEL expressions. All must evaluate to `true` for the node to be considered ready.
 readyWhen is a health signal — it feeds the Graph's aggregated status and tells operators whether
 the system has converged. It does not gate downstream execution. Dependents proceed as soon as the
-resource is applied and its data is in scope, regardless of readyWhen. If a downstream CEL
+node is processed and its data is in scope, regardless of readyWhen. If a downstream CEL
 expression references a field that does not yet exist on the resource, the expression fails to
 evaluate and the dependent is not applied — data availability is an implicit gate. propagateWhen is
 for the case where the field exists but is not yet valid.
@@ -189,13 +185,13 @@ Kubernetes readiness conditions.
 
 #### propagateWhen
 
-A list of CEL expressions. All must evaluate to `true` for the resource's updated data to flow to
+A list of CEL expressions. All must evaluate to `true` for the node's updated data to flow to
 dependents. During transitions (e.g., a rolling update), dependents skip re-evaluation while
 propagateWhen is unsatisfied — they retain their last-applied state. When propagateWhen passes,
 dependents re-evaluate against the now-stable data.
 
 readyWhen and propagateWhen are complementary: readyWhen is a health signal (feeds Graph status),
-propagateWhen is a data flow gate (controls when dependents see new values). A resource without
+propagateWhen is a data flow gate (controls when dependents see new values). A node without
 propagateWhen propagates immediately — dependents re-evaluate on every reconcile.
 
 ```yaml
@@ -207,12 +203,34 @@ propagateWhen propagates immediately — dependents re-evaluate on every reconci
   template: ...
 ```
 
+#### finalizes
+
+A node `id`. The resource is created when the target becomes a prune candidate — it does not
+exist during normal operation. It must reach readyWhen before the target's removal completes.
+
+Finalizers fire regardless of why the target is being removed — Graph teardown, spec mutation,
+includeWhen toggle, or forEach scale-down.
+
+```yaml
+- id: snapshot
+  finalizes: pvc
+  template:
+    apiVersion: snapshot.storage.k8s.io/v1
+    kind: VolumeSnapshot
+    metadata:
+      name: ${pvc.metadata.name}-final
+    spec:
+      source:
+        persistentVolumeClaimName: ${pvc.metadata.name}
+  readyWhen:
+    - ${snapshot.status.readyToUse == true}
+```
+
 ## Dependencies
 
-Dependencies are inferred from CEL expression references. If resource B's template contains
+Dependencies are inferred from CEL expression references. If node B's template contains
 `${A.metadata.name}`, B depends on A. The dependency graph must be acyclic — cycles are rejected at
-compile time. Resources with no dependency relationship are independent and are processed in
-parallel.
+compile time. Nodes with no dependency relationship are independent and are processed in parallel.
 
 ## Nested Graphs
 
@@ -298,7 +316,7 @@ when the status value does not change between reconciles.
 The Graph defines two conditions on orthogonal axes:
 
 **`Accepted`** — the spec is valid. CEL expressions compiled, the dependency graph is acyclic, and
-resource definitions are structurally correct. Set once when the spec is processed. Permanent until
+node definitions are structurally correct. Set once when the spec is processed. Permanent until
 the spec changes. Alarm on `False` immediately — the Graph will never converge until the spec is
 fixed.
 

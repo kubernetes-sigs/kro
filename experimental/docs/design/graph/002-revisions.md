@@ -16,7 +16,7 @@ A GraphRevision is namespace-scoped, in the same namespace as its parent Graph. 
 materialized resources that will be applied to the cluster. The Graph spec is the authoring
 surface — terse, with CEL expressions and implicit dependencies. The revision is the operational
 form — internal labels injected, template hashes computed, resource set finalized. CEL expressions
-referencing other resources (`${...}`) remain unevaluated and are resolved at runtime against live
+referencing other nodes (`${...}`) remain unevaluated and are resolved at runtime against live
 cluster state.
 
 ```yaml
@@ -83,8 +83,9 @@ spec:
 The spec contains one field:
 
 - `nodes` — same structure as Graph nodes (`id`, `template`, `readyWhen`, `includeWhen`,
-  `forEach`) with internal metadata injected and template hashes computed. Dependencies between
-  resources are derived from CEL expression references and cached in memory, not persisted.
+  `propagateWhen`, `finalizes`, `forEach`) with internal metadata injected and template hashes
+  computed. Dependencies between
+  nodes are derived from CEL expression references and cached in memory, not persisted.
 
 The spec is immutable, enforced by CEL validation (`self == oldSelf`). A structural change to the
 Graph produces a new GraphRevision, never an update to an existing one.

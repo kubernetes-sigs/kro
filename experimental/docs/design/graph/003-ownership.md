@@ -54,10 +54,16 @@ Four shapes, determined by template content:
 - **Contribute** — specifies fields on a resource the Graph does not create. Applied via SSA.
   Tracked for cleanup. Releases fields on prune, never deletes. Pending if target absent.
 
-Identity-only templates are Watch — always. A template that specifies anything beyond identity
-(`apiVersion`, `kind`, `metadata.name`, `metadata.namespace`) is an Owns or Contribute. For
-resources with no spec (like Namespace), owning means specifying at least one field beyond
-identity — typically a label.
+Identity-only templates are Watch — always. Shape detection follows this order:
+
+1. **Collection Watch** — specifies `apiVersion` and `kind` with an optional `selector`. No
+   `metadata.name`.
+2. **Watch** — specifies only identity: `apiVersion`, `kind`, `metadata.name`, and optionally
+   `metadata.namespace`. No other fields.
+3. **Owns or Contribute** — specifies fields beyond identity. The controller analyzes the template
+   against the resource's type to distinguish: a template that provides a structurally complete
+   resource declaration is Owns. A template that underspecifies — omitting structural fields or
+   specifying only status and metadata — is Contribute.
 
 ### kro.run/apply
 
@@ -208,7 +214,9 @@ is a performance optimization — the controller converges on spec change, not c
 Releasing fields uses a skeleton apply — identity-only fields (`apiVersion`, `kind`,
 `metadata.name`, `metadata.namespace`). SSA interprets omitted fields as "no longer managed" and
 releases them from this manager. The skeleton apply only targets the subresources the template
-actually applied to: main resource, status subresource, or both.
+actually applied to: main resource, status subresource, or both. If the skeleton apply returns 404,
+the resource is already gone — release succeeds. If it fails for any other reason, the resource
+remains in the tracking index and the release is retried on the next reconcile.
 
 ### Teardown
 
@@ -236,9 +244,6 @@ instead of two.
 
 **Force SSA everywhere.** Silent field takeover is a misconfiguration in a multi-actor environment.
 Non-force SSA makes conflicts visible. `kro.run/apply: Force` is the opt-in.
-
-**OpenAPI schema comparison for shape detection.** Requires schema discovery. Many CRDs have no
-required fields. Per-field ownership via managedFields is more precise.
 
 **Runtime existence detection.** Makes ownership a function of timing.
 

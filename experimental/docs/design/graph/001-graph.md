@@ -172,7 +172,10 @@ resources that depend on it cannot evaluate (the data is not in scope) and are a
 A list of CEL expressions. All must evaluate to `true` for the resource to be considered ready.
 readyWhen is a health signal — it feeds the Graph's aggregated status and tells operators whether
 the system has converged. It does not gate downstream execution. Dependents proceed as soon as the
-resource is applied and its data is in scope, regardless of readyWhen.
+resource is applied and its data is in scope, regardless of readyWhen. If a downstream CEL
+expression references a field that does not yet exist on the resource, the expression fails to
+evaluate and the dependent is not applied — data availability is an implicit gate. propagateWhen is
+for the case where the field exists but is not yet valid.
 
 Any object in scope exposes a `.ready()` CEL function that evaluates the object's standard
 Kubernetes readiness conditions.
@@ -238,19 +241,19 @@ child Graph independently reconciles resources for its item.
       name: ${ns.metadata.name}-resources
     spec:
       resources:
-        - id: ns
+        - id: nsRef
           template:
             apiVersion: v1
             kind: Namespace
             metadata:
-              name: $${ns.metadata.name}
+              name: ${ns.metadata.name}
         - id: policy
           template:
             apiVersion: networking.k8s.io/v1
             kind: NetworkPolicy
             metadata:
               name: default-deny
-              namespace: $${ns.metadata.name}
+              namespace: $${nsRef.metadata.name}
             spec:
               podSelector: {}
               policyTypes:

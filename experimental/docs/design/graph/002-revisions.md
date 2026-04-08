@@ -97,9 +97,9 @@ what needs to be re-interpreted. This is the migration path.
 ### Status
 
 - **`Ready`** — all resources in this revision have been applied and are healthy. Starts `Unknown`,
-  converges to `True` when the controller has reconciled all resources to their desired state. Stays
-  `True` after superseded — it is a fact about this revision's resources, not about whether it's
-  current.
+  converges to `True` when the controller has reconciled all resources to their desired state. The
+  controller stops observing a superseded revision — its Ready condition reflects the last-known
+  state, not a live signal.
 
 ## Lifecycle
 
@@ -146,3 +146,8 @@ snapshot. A marker field does the work a separate Kind should do.
 
 **Two controllers.** GraphRevision has no independent lifecycle. Partial coupling carries the cost
 of coordination without the benefit of independence.
+
+**Labels and finalizers for revision ownership.** Graph and GraphRevision are always in the same
+namespace — cross-scope doesn't apply. OwnerReferences give cascading delete for free, eliminating
+revision cleanup code. Managed resources still use labels and finalizers because they can be
+cluster-scoped or in different namespaces.

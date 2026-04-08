@@ -62,6 +62,10 @@ In the common case (a leaf or mid-level node changed), the scope is a small subs
 the worst case (a root changed), it's the entire DAG. There is no scenario where scoped walks are
 more expensive than full walks.
 
+This model requires that every input to every CEL expression in the DAG corresponds to a watched
+resource. If an expression references something the controller doesn't watch, changes to it are
+invisible and the DAG doesn't reconverge.
+
 ### Plan States
 
 Each node in the walk scope lands in exactly one state per reconcile:
@@ -99,7 +103,7 @@ Forward topological walk through the scoped nodes. For each node:
    data flow gate.
 3. **Change check** — hash the node's inputs and compare against the previous reconcile's hash. If
    the hash matches, the node's inputs haven't changed — evaluation would produce the same result.
-   The node retains its previous state, data in scope, and tracked set entries. Skip to the next
+   The node retains its previous state, data in scope, and applied set entries. Skip to the next
    node.
 
    The hash is scoped to the sections of each dependency that the node's CEL expressions actually
@@ -112,6 +116,8 @@ Forward topological walk through the scoped nodes. For each node:
    the referenced sections. For all other nodes, the inputs are the dependency data already in scope.
    For Owns and Contribute nodes, the inputs also include sections of the node's own observed resource
    that readyWhen and propagateWhen reference — these change independently of upstream dependencies.
+   When only self inputs changed (e.g., a Deployment's status updated but config didn't), the template
+   is unchanged — skip template evaluation and apply, re-evaluate only the gate conditions.
 
 4. **includeWhen** — evaluate. If false, mark Excluded.
 5. **Dispatch by shape:**
@@ -119,8 +125,8 @@ Forward topological walk through the scoped nodes. For each node:
    - Collection Watch: array enters scope.
    - forEach parent: evaluate collection, diff items, process changed children (see
      [forEach](#foreach)).
-   - Owns: evaluate template, hash the output, compare against previous. Match → skip write.
-     Differs → SSA apply.
+   - Owns: evaluate template, hash the evaluated template, compare against previous. Match → skip
+     write. Differs → SSA apply.
    - Contribute: same as Owns but force-apply. Auto-splits status subresource.
 6. **readyWhen** — evaluate. Sets Ready or NotReady. Data is in scope regardless.
 
@@ -133,8 +139,8 @@ skip the write. One mechanism at each level — skip when the input hasn't chang
 
 ### Prune
 
-After wind, the controller diffs the current key set against the tracked set. Resources tracked but
-absent from the current set are prune candidates.
+After wind, the controller diffs the current key set against the applied set. Resources in the
+applied set but absent from the current set are prune candidates.
 
 Not all absent resources should be pruned:
 
@@ -151,40 +157,43 @@ deletion.
 forEach scale-down, includeWhen toggles, and revision transitions all produce the same kind of diff.
 The pruning mechanism is uniform.
 
-### Tracked Set
+### Applied Set
 
-The tracked set is the set of resource keys (GVK + namespace + name) that a revision has applied. It
-lives on the GraphRevision — the revision is the single source of truth for both what was applied
-(tracked set) and in what dependency structure (DAG topology). The Graph object carries no tracking
-state.
+The applied set is the set of resource keys (GVK + namespace + name) a revision has written to the
+cluster. It lives on the GraphRevision — the revision is the single source of truth for both what
+was applied (applied set) and in what dependency structure (DAG topology). The Graph object carries
+no tracking state.
 
-Each revision starts with an empty tracked set and populates it during wind. The tracked set is
-committed atomically after wind completes successfully. If wind fails partway, the tracked set is
+Each revision starts with an empty applied set and populates it during wind. The applied set is
+committed atomically after wind completes successfully. If wind fails partway, the applied set is
 unchanged — next reconcile retries from scratch. Writing per-resource during wind would mean a
-partial failure leaves the tracked set reflecting an incomplete state, and the next reconcile's prune
+partial failure leaves the applied set reflecting an incomplete state, and the next reconcile's prune
 diff would be based on corrupt data.
 
-The tracked set is only written when the key set actually changes, preventing spurious
+The applied set is only written when the key set actually changes, preventing spurious
 resourceVersion bumps and re-reconcile loops in steady state. A forEach that stamps 100 resources
-produces 100 expanded keys.
+produces 100 expanded keys. The applied set is stored as an annotation on the GraphRevision, which
+is practical for Graphs managing up to thousands of resources. Larger fan-outs may require a
+different storage mechanism without changing the semantics.
 
-**Scoped walks and the tracked set.** A scoped walk evaluates a subset of nodes, but the tracked set
+**Scoped walks and the applied set.** A scoped walk evaluates a subset of nodes, but the applied set
 must be complete. The update is a merge: for visited nodes, replace their previous entries with the
 walk's output. For unvisited nodes, retain previous entries. Three cases for visited nodes:
 
-- **Node produced a key** (Ready, NotReady) — the key enters the tracked set.
+- **Node produced a key** (Ready, NotReady) — the key enters the applied set.
 - **Node produced no key** (Excluded, or forEach with zero items) — the node's previous keys are
-  **removed**. Excluded means "this node's contribution to the tracked set is the empty set," not
-  "this node is invisible to the tracked set."
+  **removed**. Excluded is a visit outcome, not a skip — the walk reached the node, evaluated
+  includeWhen, and determined it should not exist. Its contribution to the applied set is the empty
+  set.
 - **Node was skipped** (change check match, propagateWhen gate) — previous keys retained.
 
 This merge is correct within a stable revision — the DAG structure hasn't changed, so unvisited
 nodes' entries are still valid. **Revision transitions trigger full walks** because the DAG structure
 changed and stale entries would never be cleaned up by a scoped walk.
 
-**Prune formula:** the prune candidate set is the union of all superseded revisions' tracked sets
-minus the active revision's tracked set. Each superseded revision's DAG topology provides reverse
-dependency ordering for its tracked resources.
+**Prune formula:** the prune candidate set is the union of all superseded revisions' applied sets
+minus the active revision's applied set. Each superseded revision's DAG topology provides reverse
+dependency ordering for its resources.
 
 ## forEach
 
@@ -462,8 +471,8 @@ Full walk (DAG structure changed).
 | policies   | Change check → match → skip               | Ready  |
 | pol/ns-*   | Change check → match → skip               | Ready  |
 
-Active revision's tracked set: {deploy, monitoring, pol/ns-a, pol/ns-b, pol/ns-c, pol/ns-d}.
-Previous revision's tracked set included `service`. Prune: delete service.
+Active revision's applied set: {deploy, monitoring, pol/ns-a, pol/ns-b, pol/ns-c, pol/ns-d}.
+Previous revision's applied set included `service`. Prune: delete service.
 
 1 apply + 1 delete. Everything else skipped.
 
@@ -490,7 +499,7 @@ sections trigger evaluation.
 **forEach as a monolithic node.** Re-evaluating all children when one item changes is wasted work
 proportional to the collection size. Parent-with-children evaluates only changed items.
 
-**Incremental tracked set updates.** Per-resource writes during wind mean partial failure corrupts
+**Incremental applied set updates.** Per-resource writes during wind mean partial failure corrupts
 the set. Atomic commit after complete wind is safe.
 
 Also rejected: index-based forEach identity (reordering causes churn), forEach as a subgraph stamper

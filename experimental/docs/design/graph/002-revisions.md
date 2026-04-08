@@ -126,8 +126,8 @@ reverse dependency order. Once the finalizer clears and the Graph is removed, th
 cascading-deletes any remaining revisions.
 
 Revisions are derived artifacts. If manually deleted, the controller regenerates the active revision
-from the current Graph spec on the next reconcile. The resource tracking index on the Graph — not
-the revision — is the authoritative record of applied resources.
+from the current Graph spec on the next reconcile. The applied set on the revision — not the Graph —
+is the authoritative record of what was written to the cluster.
 
 ## Why Not
 

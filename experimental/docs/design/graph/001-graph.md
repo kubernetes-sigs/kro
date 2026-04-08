@@ -209,9 +209,10 @@ propagateWhen propagates immediately — dependents re-evaluate on every reconci
 
 ## Dependencies
 
-Dependencies are inferred from CEL expression references. If resource B contains
-`${A.metadata.name}`, B depends on A. The dependency graph is a DAG — cycles are not permitted.
-Resources with no dependency relationship are independent and are processed in parallel.
+Dependencies are inferred from CEL expression references. If resource B's template contains
+`${A.metadata.name}`, B depends on A. The dependency graph must be acyclic — cycles are rejected at
+compile time. Resources with no dependency relationship are independent and are processed in
+parallel.
 
 ## Nested Graphs
 

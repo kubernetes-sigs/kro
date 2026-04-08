@@ -163,7 +163,7 @@ Watch are read-only — only the Resource absent and Apply rows apply to them.
 | **Template change** | Clear conflict, re-apply | Clear conflict, re-apply | — | — |
 | **Hash match** | Skip apply | Skip apply | — | — |
 | **Prune** | Delete resource | Release fields (skeleton apply) | No action | No action |
-| **Prune — conflict** | Clear tracking, no delete | Clear tracking, no release | — | — |
+| **Prune — conflict** | Clear from applied set, no delete | Clear from applied set, no release | — | — |
 | **Teardown** | Delete resource | Release fields (skeleton apply) | No action | No action |
 | **Teardown — conflict** | Skip | Skip | — | — |
 
@@ -201,10 +201,10 @@ second Graph must use Force.
 
 ### Tracking
 
-The controller tracks every resource it has applied to — the cleanup index. On prune or teardown,
+The controller tracks every resource it has applied to — the applied set. On prune or teardown,
 the controller iterates this set to know which resources need cleanup and how (delete for Owns,
-release for Contribute). The tracking index records per resource: the template shape, conflict state,
-and which subresources were applied to.
+release for Contribute). The applied set records resource keys. Template shape and subresource
+information are derived from the revision spec.
 
 Template hash annotations on resources provide change detection. Hash match → skip the apply. This
 is a performance optimization — the controller converges on spec change, not continuously.
@@ -216,24 +216,24 @@ Releasing fields uses a skeleton apply — identity-only fields (`apiVersion`, `
 releases them from this manager. The skeleton apply only targets the subresources the template
 actually applied to: main resource, status subresource, or both. If the skeleton apply returns 404,
 the resource is already gone — release succeeds. If it fails for any other reason, the resource
-remains in the tracking index and the release is retried on the next reconcile.
+remains in the applied set and the release is retried on the next reconcile.
 
 ### Teardown
 
 Teardown unwinds in reverse dependency order. Dependents are cleaned up before the resources they
 depend on. Resources in conflict state are skipped — the Graph no longer holds the fields. If the
-active revision is unavailable during teardown (e.g., manually deleted), the controller falls back
-to unordered cleanup using the tracking index.
+active revision is unavailable during teardown (e.g., manually deleted), the controller regenerates
+it from the current spec. Teardown is blocked until ordering is available — never degrade to
+unordered deletion.
 
 ### Finalizer and Recovery
 
 The Graph carries a finalizer that prevents API server removal until teardown completes. State
-needed for teardown is persisted: the resource tracking index (including template shape, conflict
-state, and subresource set per resource) and template hashes on each resource for idempotent
-re-entry.
+needed for teardown is persisted: the applied set on the revision and template hashes on each
+resource for idempotent re-entry.
 
 Controller crash mid-teardown: the finalizer prevents Graph removal. Next reconcile re-enters
-teardown. Deleting an already-deleted resource returns 404 — remove from tracking and move on.
+teardown. Deleting an already-deleted resource returns 404 — remove from applied set and move on.
 
 ## Why Not
 

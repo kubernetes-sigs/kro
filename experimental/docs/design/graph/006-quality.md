@@ -65,6 +65,7 @@ don't.
 The code's textual surface does not require invisible context to interpret correctly.
 
 - [ ] Names are accurate and concise — no stuttering, no misleading verbs
+- [ ] Each concept has exactly one name, used consistently across every surface — designs, code, APIs, and artifacts. Different names for the same concept, or the same name for different concepts, are bugs
 - [ ] Code is well structured — clear abstractions, appropriate boundaries
 - [ ] Validation is as far forward as possible — reject invalid state at the boundary
 - [ ] No dead code or unreachable branches

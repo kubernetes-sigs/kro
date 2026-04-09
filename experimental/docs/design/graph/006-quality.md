@@ -10,6 +10,9 @@ hasn't been explored enough. When the conflict is genuine and irreducible:
 
 **Correctness > Performance > Observability > Testing > Simplicity**
 
+Work through every item in every section. The last item in each section is intentionally open-ended —
+use it to surface opportunities the other items don't cover.
+
 ## Correctness
 
 The system converges to the state described by the designs from any starting point.
@@ -19,6 +22,7 @@ The system converges to the state described by the designs from any starting poi
 - [ ] Every error path is handled, propagated, and logged at the top
 - [ ] System can crash at any line and recover without corrupting state
 - [ ] Concurrent code is analyzed for race conditions
+- [ ] Think deeply about other correctness opportunities we might have missed
 
 ## Performance
 
@@ -29,6 +33,7 @@ invisible costs compound.
 - [ ] The system is profiled end-to-end; hot-path allocations and complexity are justified
 - [ ] End-to-end benchmarks are committed and don't meaningfully regress
 - [ ] Memory footprint is justified — only store and copy what's needed
+- [ ] Think deeply about other performance opportunities we might have missed
 
 ## Observability
 
@@ -38,6 +43,7 @@ The system's runtime behavior is understandable from its outputs.
 - [ ] Logs are readable in plain English with structured context
 - [ ] Errors compose into readable narratives
 - [ ] Metrics exist for key operational signals
+- [ ] Think deeply about other observability opportunities we might have missed
 
 ## Testing
 
@@ -50,6 +56,7 @@ don't.
 - [ ] Correctness tests cover happy paths and edge cases
 - [ ] Fault injection tests exercise error paths
 - [ ] Regression tests accompany bug fixes and prevent recurrence
+- [ ] Think deeply about other testing opportunities we might have missed
 
 ## Simplicity
 
@@ -62,3 +69,4 @@ The code's textual surface does not require invisible context to interpret corre
 - [ ] Duplicated code is collapsed — look for small conceptual tweaks that unify
 - [ ] Types encode constraints — enums for closed sets, no unimplemented API fields
 - [ ] Initialization is pulled to program start — no lazy setup buried in the call stack
+- [ ] Think deeply about other simplicity opportunities we might have missed

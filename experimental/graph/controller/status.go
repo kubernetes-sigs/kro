@@ -11,25 +11,33 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// GraphState describes the high-level state of a Graph object.
+type GraphState string
+
 // Graph states
 const (
-	StateActive     = "Active"
-	StateInProgress = "InProgress"
-	StateError      = "Error"
-	StateDeleting   = "Deleting"
+	StateActive     GraphState = "Active"
+	StateInProgress GraphState = "InProgress"
+	StateError      GraphState = "Error"
 )
+
+// ConditionType identifies a condition on a Graph or GraphRevision.
+type ConditionType string
 
 // Condition types
 const (
-	ConditionAccepted = "Accepted"
-	ConditionReady    = "Ready"
+	ConditionAccepted ConditionType = "Accepted"
+	ConditionReady    ConditionType = "Ready"
 )
+
+// ConditionStatus is the boolean-ish status of a condition (True/False/Unknown).
+type ConditionStatus string
 
 // Condition statuses
 const (
-	ConditionTrue    = "True"
-	ConditionFalse   = "False"
-	ConditionUnknown = "Unknown"
+	ConditionTrue    ConditionStatus = "True"
+	ConditionFalse   ConditionStatus = "False"
+	ConditionUnknown ConditionStatus = "Unknown"
 )
 
 // reconcileState captures the outcome of a reconcile cycle for status derivation.
@@ -50,7 +58,7 @@ type reconcileState struct {
 }
 
 // deriveState computes the Graph state from the reconcile outcome.
-func (s *reconcileState) deriveState() string {
+func (s *reconcileState) deriveState() GraphState {
 	if !s.accepted {
 		return StateError
 	}
@@ -63,7 +71,7 @@ func (s *reconcileState) deriveState() string {
 // deriveAcceptedCondition computes the Accepted condition.
 // Accepted is set once when the spec is parsed/compiled. It's permanent until
 // the spec changes. False means the Graph will never converge until the spec is fixed.
-func (s *reconcileState) deriveAcceptedCondition() (status string, reason string, message string) {
+func (s *reconcileState) deriveAcceptedCondition() (status ConditionStatus, reason string, message string) {
 	if s.accepted {
 		return ConditionTrue, "Accepted", "Spec is valid"
 	}
@@ -83,7 +91,7 @@ func (s *reconcileState) deriveAcceptedCondition() (status string, reason string
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.
 // When the spec is not accepted, Ready is False — resources can't converge
 // until the spec is fixed.
-func (s *reconcileState) deriveReadyCondition() (status string, reason string, message string) {
+func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason string, message string) {
 	if !s.accepted {
 		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
 	}
@@ -113,13 +121,7 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(graph), latest); err != nil {
 		return fmt.Errorf("reading latest for status update: %w", err)
 	}
-	return r.updateStatusOnLatest(ctx, latest, state)
-}
 
-// updateStatusOnLatest writes status using a pre-fetched latest object.
-// This avoids a redundant GET when the caller already has a fresh copy
-// (e.g., from pruneAndUpdateStatus).
-func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unstructured.Unstructured, state *reconcileState) error {
 	derivedState := state.deriveState()
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -127,8 +129,8 @@ func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unst
 	// Build both conditions
 	acceptedStatus, acceptedReason, acceptedMessage := state.deriveAcceptedCondition()
 	acceptedCondition := map[string]any{
-		"type":               ConditionAccepted,
-		"status":             acceptedStatus,
+		"type":               string(ConditionAccepted),
+		"status":             string(acceptedStatus),
 		"reason":             acceptedReason,
 		"message":            acceptedMessage,
 		"lastTransitionTime": now,
@@ -136,8 +138,8 @@ func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unst
 
 	readyStatus, readyReason, readyMessage := state.deriveReadyCondition()
 	readyCondition := map[string]any{
-		"type":               ConditionReady,
-		"status":             readyStatus,
+		"type":               string(ConditionReady),
+		"status":             string(readyStatus),
 		"reason":             readyReason,
 		"message":            readyMessage,
 		"lastTransitionTime": now,
@@ -151,14 +153,14 @@ func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unst
 			continue
 		}
 		switch ecMap["type"] {
-		case ConditionAccepted:
-			if ecMap["status"] == acceptedStatus {
+		case string(ConditionAccepted):
+			if ecMap["status"] == string(acceptedStatus) {
 				if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
 					acceptedCondition["lastTransitionTime"] = ltt
 				}
 			}
-		case ConditionReady:
-			if ecMap["status"] == readyStatus {
+		case string(ConditionReady):
+			if ecMap["status"] == string(readyStatus) {
 				if ltt, ok := ecMap["lastTransitionTime"].(string); ok {
 					readyCondition["lastTransitionTime"] = ltt
 				}
@@ -168,7 +170,7 @@ func (r *GraphReconciler) updateStatusOnLatest(ctx context.Context, latest *unst
 
 	// Start with controller-managed status fields
 	status := map[string]any{
-		"state": derivedState,
+		"state": string(derivedState),
 		"conditions": []any{
 			acceptedCondition,
 			readyCondition,

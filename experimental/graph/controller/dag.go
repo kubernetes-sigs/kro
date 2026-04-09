@@ -15,8 +15,6 @@ type DAG struct {
 	// TopologicalOrder is the apply order (respects dependencies).
 	// Computed via Kahn's algorithm — declaration order is not significant.
 	TopologicalOrder []int
-	// ReverseOrder is the delete order (reverse of TopologicalOrder).
-	ReverseOrder []int
 	// Shapes maps node ID to its detected template shape.
 	Shapes map[string]TemplateShape
 	// Levels groups node indices by topological level. Nodes within
@@ -108,10 +106,6 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 	}
 
 	dag.TopologicalOrder = order
-	dag.ReverseOrder = make([]int, n)
-	for i, idx := range order {
-		dag.ReverseOrder[n-1-i] = idx
-	}
 
 	// Compute topological levels. Level[i] = max(Level[dep] for dep in dependencies) + 1.
 	// Nodes with no dependencies are level 0.
@@ -221,8 +215,6 @@ func (ps *PlanState) propagateExclusion(dag *DAG, excludedID string) {
 type PlanSummary struct {
 	HasDataPending bool
 	HasNotReady    bool
-	HasExcluded    bool
-	HasError       bool
 	HasConflict    bool
 	ReadyCount     int
 }
@@ -238,10 +230,10 @@ func (ps *PlanState) Summary() PlanSummary {
 			s.HasNotReady = true
 		case NodeDataPending:
 			s.HasDataPending = true
-		case NodeExcluded:
-			s.HasExcluded = true
-		case NodeError:
-			s.HasError = true
+		case NodeExcluded, NodeError:
+			// Counted but not surfaced — these states propagate through
+			// the DAG via contagious exclusion and are observable in
+			// per-node status, not the aggregate summary.
 		case NodeConflict:
 			s.HasConflict = true
 		}

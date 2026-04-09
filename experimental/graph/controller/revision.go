@@ -53,11 +53,14 @@ const (
 	AnnotationAppliedSet = "internal.kro.run/applied-set"
 )
 
+// RevisionConditionType identifies a condition on a GraphRevision.
+type RevisionConditionType string
+
 // Revision condition types.
 const (
-	RevisionConditionReady      = "Ready"
-	RevisionConditionPropagated = "Propagated"
-	RevisionConditionActive     = "Active"
+	RevisionConditionReady      RevisionConditionType = "Ready"
+	RevisionConditionPropagated RevisionConditionType = "Propagated"
+	RevisionConditionActive     RevisionConditionType = "Active"
 )
 
 // ---------------------------------------------------------------------------
@@ -314,7 +317,7 @@ func deleteRevision(ctx context.Context, c client.Client, revision *unstructured
 // ---------------------------------------------------------------------------
 
 // setRevisionCondition sets a condition on a GraphRevision's status.
-func setRevisionCondition(ctx context.Context, c client.Client, revision *unstructured.Unstructured, condType, status, reason, message string) error {
+func setRevisionCondition(ctx context.Context, c client.Client, revision *unstructured.Unstructured, condType RevisionConditionType, status ConditionStatus, reason, message string) error {
 	// Get fresh copy to avoid conflicts
 	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
 	if err != nil {
@@ -328,8 +331,8 @@ func setRevisionCondition(ctx context.Context, c client.Client, revision *unstru
 
 	conditions, _ := existingStatus["conditions"].([]any)
 	newCondition := map[string]any{
-		"type":    condType,
-		"status":  status,
+		"type":    string(condType),
+		"status":  string(status),
 		"reason":  reason,
 		"message": message,
 	}
@@ -341,7 +344,7 @@ func setRevisionCondition(ctx context.Context, c client.Client, revision *unstru
 		if !ok {
 			continue
 		}
-		if cMap["type"] == condType {
+		if cMap["type"] == string(condType) {
 			conditions[i] = newCondition
 			found = true
 			break
@@ -359,7 +362,7 @@ func setRevisionCondition(ctx context.Context, c client.Client, revision *unstru
 
 // revisionConditionStatus reads a condition's status from a revision.
 // Returns empty string if the condition is not found.
-func revisionConditionStatus(revision *unstructured.Unstructured, condType string) string {
+func revisionConditionStatus(revision *unstructured.Unstructured, condType RevisionConditionType) ConditionStatus {
 	status, _ := revision.Object["status"].(map[string]any)
 	if status == nil {
 		return ""
@@ -370,9 +373,9 @@ func revisionConditionStatus(revision *unstructured.Unstructured, condType strin
 		if !ok {
 			continue
 		}
-		if cMap["type"] == condType {
+		if cMap["type"] == string(condType) {
 			s, _ := cMap["status"].(string)
-			return s
+			return ConditionStatus(s)
 		}
 	}
 	return ""

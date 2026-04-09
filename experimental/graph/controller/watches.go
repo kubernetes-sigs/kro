@@ -50,8 +50,17 @@ type gvrWatch struct {
 	cancel     context.CancelFunc
 }
 
+// WatchEventType classifies the Kubernetes event that triggered a watch callback.
+type WatchEventType string
+
+const (
+	WatchEventAdd    WatchEventType = "add"
+	WatchEventUpdate WatchEventType = "update"
+	WatchEventDelete WatchEventType = "delete"
+)
+
 type watchEvent struct {
-	eventType string // "add", "update", "delete"
+	eventType WatchEventType
 	gvr       schema.GroupVersionResource
 	name      string
 	namespace string
@@ -191,7 +200,7 @@ func (m *WatchManager) defaultCreateInformer(gvr schema.GroupVersionResource) ca
 }
 
 func (m *WatchManager) eventHandlers(gvr schema.GroupVersionResource) cache.ResourceEventHandlerFuncs {
-	toEvent := func(obj interface{}, et string) *watchEvent {
+	toEvent := func(obj interface{}, et WatchEventType) *watchEvent {
 		mobj, err := meta.Accessor(obj)
 		if err != nil {
 			return nil
@@ -207,12 +216,12 @@ func (m *WatchManager) eventHandlers(gvr schema.GroupVersionResource) cache.Reso
 
 	return cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			if e := toEvent(obj, "add"); e != nil {
+			if e := toEvent(obj, WatchEventAdd); e != nil {
 				m.onEvent(*e)
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			e := toEvent(newObj, "update")
+			e := toEvent(newObj, WatchEventUpdate)
 			if e == nil {
 				return
 			}
@@ -225,7 +234,7 @@ func (m *WatchManager) eventHandlers(gvr schema.GroupVersionResource) cache.Reso
 			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 				obj = d.Obj
 			}
-			if e := toEvent(obj, "delete"); e != nil {
+			if e := toEvent(obj, WatchEventDelete); e != nil {
 				m.onEvent(*e)
 			}
 		},

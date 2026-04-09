@@ -97,6 +97,25 @@ func (e *evaluator) withScope(scope map[string]any) *evaluator {
 	return &evaluator{cache: e.cache, scope: scope}
 }
 
+// evalBoolCondition evaluates a CEL expression and coerces the result to bool.
+// Returns (true, nil) if the value is boolean true or string "true".
+// Returns (false, nil) if the value is boolean false or string != "true".
+// Returns (false, error) for non-boolean/string types or evaluation errors.
+func (e *evaluator) evalBoolCondition(expr string) (bool, error) {
+	val, err := e.evalString(expr)
+	if err != nil {
+		return false, err
+	}
+	switch v := val.(type) {
+	case bool:
+		return v, nil
+	case string:
+		return v == "true", nil
+	default:
+		return false, fmt.Errorf("expression %q evaluated to %T, want bool", expr, val)
+	}
+}
+
 // checkReadiness evaluates readyWhen conditions against an observed resource.
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
 // or data-pending.
@@ -109,24 +128,15 @@ func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID str
 	readyEval := e.withScope(map[string]any{nodeID: observed})
 
 	for _, cond := range conditions {
-		val, err := readyEval.evalString(cond)
+		ok, err := readyEval.evalBoolCondition(cond)
 		if err != nil {
 			if isDataPending(err) {
 				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)
 			}
 			return fmt.Errorf("node %q: readyWhen %q: %w", nodeID, cond, err)
 		}
-		switch v := val.(type) {
-		case bool:
-			if !v {
-				return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, ErrWaitingForReadiness)
-			}
-		case string:
-			if v != "true" {
-				return fmt.Errorf("node %q: readyWhen %q evaluated to %q: %w", nodeID, cond, v, ErrWaitingForReadiness)
-			}
-		default:
-			return fmt.Errorf("node %q: readyWhen %q evaluated to %T, want bool", nodeID, cond, val)
+		if !ok {
+			return fmt.Errorf("node %q: readyWhen %q evaluated to false: %w", nodeID, cond, ErrWaitingForReadiness)
 		}
 	}
 	return nil
@@ -143,20 +153,8 @@ func (e *evaluator) checkPropagateWhen(conditions []string, observed any, nodeID
 	propEval := e.withScope(map[string]any{nodeID: observed})
 
 	for _, cond := range conditions {
-		val, err := propEval.evalString(cond)
-		if err != nil {
-			return false // data pending or error → don't propagate
-		}
-		switch v := val.(type) {
-		case bool:
-			if !v {
-				return false
-			}
-		case string:
-			if v != "true" {
-				return false
-			}
-		default:
+		ok, err := propEval.evalBoolCondition(cond)
+		if err != nil || !ok {
 			return false
 		}
 	}
@@ -250,24 +248,15 @@ func (e *evaluator) evalString(s string) (any, error) {
 // includeWhen evaluates all includeWhen conditions for a node.
 func (e *evaluator) includeWhen(conditions []string) (bool, error) {
 	for _, cond := range conditions {
-		val, err := e.evalString(cond)
+		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
 			if isDataPending(err) {
 				return false, fmt.Errorf("includeWhen data pending: %w", ErrDataPending)
 			}
 			return false, err
 		}
-		switch v := val.(type) {
-		case bool:
-			if !v {
-				return false, nil
-			}
-		case string:
-			if v != "true" {
-				return false, nil
-			}
-		default:
-			return false, fmt.Errorf("includeWhen condition %q evaluated to %T, want bool", cond, val)
+		if !ok {
+			return false, nil
 		}
 	}
 	return true, nil

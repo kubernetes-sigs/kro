@@ -186,11 +186,17 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 	}
 
 	return &graphCache{
-		generation: generation,
-		env:        env,
-		programs:   programs,
-		spec:       spec,
-		dag:        dag,
+		generation:         generation,
+		env:                env,
+		programs:           programs,
+		spec:               spec,
+		dag:                dag,
+		previousScope:      map[string]any{},
+		previousKeys:       map[string][]string{},
+		previousPlanStates: map[string]NodeState{},
+		forEachItems:       map[string][]any{},
+		forEachItemScope:   map[string]map[string]any{},
+		forEachItemKeys:    map[string]map[string][]string{},
 	}, nil
 }
 

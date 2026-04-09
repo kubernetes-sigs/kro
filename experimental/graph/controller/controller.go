@@ -56,8 +56,18 @@ const (
 )
 
 // applyAnnotation controls the SSA strategy per resource.
-// Absent (default) → non-force SSA. "Force" → force SSA.
+// Absent (default) → non-force SSA. applyAnnotationForce → force SSA.
 const applyAnnotation = "kro.run/apply"
+
+// applyAnnotationForce is the annotation value that enables force SSA.
+const applyAnnotationForce = "Force"
+
+// isForceApply checks whether a resource opts into force SSA via the
+// kro.run/apply annotation.
+func isForceApply(obj *unstructured.Unstructured) bool {
+	ann := obj.GetAnnotations()
+	return ann != nil && ann[applyAnnotation] == applyAnnotationForce
+}
 
 // graphFieldOwner returns the SSA field manager identity for a Graph.
 // Per the design (003-ownership): kro.run/<namespace>/<name>
@@ -155,23 +165,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	dag := cache.dag
 	plan := NewPlanState(dag)
 	var appliedKeys []string
-
-	// previousScope holds per-node scope data from the last reconcile.
-	// Used by propagateWhen to retain previous data when a dependency
-	// is mid-transition. Stored on the graphCache across reconciles.
-	if cache.previousScope == nil {
-		cache.previousScope = map[string]any{}
-	}
-	// previousKeys holds per-node applied keys from the last reconcile.
-	if cache.previousKeys == nil {
-		cache.previousKeys = map[string][]string{}
-	}
-	if cache.previousPlanStates == nil {
-		cache.previousPlanStates = map[string]NodeState{}
-	}
-	if cache.forEachItems == nil {
-		cache.forEachItems = map[string][]any{}
-	}
 
 	// Walk DAG with eager scheduling: nodes are dispatched as soon as their
 	// dependencies are satisfied. Workers are pure functions — they receive
@@ -322,12 +315,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Merge forEach state updates into the shared cache.
 		for k, v := range res.forEachItems {
 			cache.forEachItems[k] = v
-		}
-		if cache.forEachItemScope == nil {
-			cache.forEachItemScope = map[string]map[string]any{}
-		}
-		if cache.forEachItemKeys == nil {
-			cache.forEachItemKeys = map[string]map[string][]string{}
 		}
 		for nodeID, itemScopes := range res.forEachScopes {
 			cache.forEachItemScope[nodeID] = itemScopes
@@ -1047,22 +1034,21 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 		readBack := &unstructured.Unstructured{}
 		readBack.SetGroupVersionKind(obj.GroupVersionKind())
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-			// Object might not exist yet (race), fall through to apply
-			if client.IgnoreNotFound(err) == nil {
-				goto apply
+			if !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 			}
-			return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
+			// Object might not exist yet (race), fall through to apply
+		} else {
+			// Update the cache with fresh data
+			r.Resources.set(cacheKey, &cachedObject{
+				resourceVersion: readBack.GetResourceVersion(),
+				templateHash:    templateHash,
+				object:          readBack.Object,
+			})
+			return readBack, nil
 		}
-		// Update the cache with fresh data
-		r.Resources.set(cacheKey, &cachedObject{
-			resourceVersion: readBack.GetResourceVersion(),
-			templateHash:    templateHash,
-			object:          readBack.Object,
-		})
-		return readBack, nil
 	}
 
-apply:
 	// Set the template hash annotation for future comparisons.
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
@@ -1081,11 +1067,7 @@ apply:
 	applied.SetName(obj.GetName())
 	applied.SetNamespace(obj.GetNamespace())
 
-	// Check kro.run/apply annotation for force SSA.
-	forceApply := false
-	if ann := obj.GetAnnotations(); ann != nil && ann[applyAnnotation] == "Force" {
-		forceApply = true
-	}
+	forceApply := isForceApply(obj)
 
 	// kro label check: if the existing resource has a different Graph's label,
 	// require Force to proceed. Prevents accidental cross-Graph ownership.
@@ -1177,20 +1159,20 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 		readBack := &unstructured.Unstructured{}
 		readBack.SetGroupVersionKind(obj.GroupVersionKind())
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, readBack); err != nil {
-			if client.IgnoreNotFound(err) == nil {
-				goto apply
+			if !apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
 			}
-			return nil, fmt.Errorf("reading %s: %w", obj.GetName(), err)
+			// Object might not exist yet (race), fall through to apply
+		} else {
+			r.Resources.set(cacheKey, &cachedObject{
+				resourceVersion: readBack.GetResourceVersion(),
+				templateHash:    templateHash,
+				object:          readBack.Object,
+			})
+			return readBack, nil
 		}
-		r.Resources.set(cacheKey, &cachedObject{
-			resourceVersion: readBack.GetResourceVersion(),
-			templateHash:    templateHash,
-			object:          readBack.Object,
-		})
-		return readBack, nil
 	}
 
-apply:
 	// Target must exist — contributions patch into existing resources.
 	targetCheck := &unstructured.Unstructured{}
 	targetCheck.SetGroupVersionKind(obj.GroupVersionKind())
@@ -1201,11 +1183,7 @@ apply:
 		return nil, fmt.Errorf("checking contribute target %s: %w", obj.GetName(), err)
 	}
 
-	// Check kro.run/apply annotation for force SSA.
-	forceApply := false
-	if ann := obj.GetAnnotations(); ann != nil && ann[applyAnnotation] == "Force" {
-		forceApply = true
-	}
+	forceApply := isForceApply(obj)
 
 	var patchOpts []client.PatchOption
 	patchOpts = append(patchOpts, fieldOwner)

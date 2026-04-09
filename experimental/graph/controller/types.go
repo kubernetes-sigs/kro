@@ -26,6 +26,22 @@ const (
 	ShapeContribute
 )
 
+// String returns the human-readable name of the TemplateShape.
+func (s TemplateShape) String() string {
+	switch s {
+	case ShapeOwns:
+		return "Owns"
+	case ShapeWatch:
+		return "Watch"
+	case ShapeCollectionWatch:
+		return "CollectionWatch"
+	case ShapeContribute:
+		return "Contribute"
+	default:
+		return fmt.Sprintf("TemplateShape(%d)", int(s))
+	}
+}
+
 // DetectShape returns the TemplateShape of a node's template map.
 //
 // Detection order (from 003-ownership.md):

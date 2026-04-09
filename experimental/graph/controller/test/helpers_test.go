@@ -3,8 +3,6 @@ package graphcontroller_test
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -173,22 +171,6 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 			},
 		},
 	}
-}
-
-var ensureRGDCRDOnce sync.Once
-
-// ensureRGDCRD installs the RGD CRD idempotently. Multiple parallel tests
-// that need the RGD CRD can all call this; only the first creates it.
-func ensureRGDCRD(t *testing.T) {
-	t.Helper()
-	ensureRGDCRDOnce.Do(func() {
-		rgdCRD := buildRGDCRD()
-		err := k8sClient.Create(ctx, rgdCRD)
-		if err != nil && !strings.Contains(err.Error(), "already exists") {
-			t.Fatalf("creating RGD CRD: %v", err)
-		}
-	})
-	require.NoError(t, waitForCRD(ctx, k8sClient, "resourcegraphdefinitions.test.kro.run"))
 }
 
 func buildRGDCRD() *apiextensionsv1.CustomResourceDefinition {

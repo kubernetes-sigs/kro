@@ -353,16 +353,20 @@ fixed.
 | `CycleDetected`     | Dependency graph contains a cycle |
 | `InvalidSpec`       | Structural spec error             |
 
-**`Ready`** — resources are reconciled and healthy. Convergent — may be `False` during normal
-operation while resources are being created or becoming ready. Alarm on `False` or `Unknown` for too
-long.
+**`Ready`** — a rollup of node plan states. Each reason maps to the node state blocking convergence.
+`True` means converged. `Unknown` means converging — the controller is making progress and no
+intervention is needed. `False` means stuck — something requires operator action. Alarm on `False`
+or `Unknown` for too long.
 
-| Reason              | Meaning                                            |
-| ------------------- | -------------------------------------------------- |
-| `Ready`             | All resources reconciled                           |
-| `Pending`           | CEL expressions cannot resolve; waiting for data   |
-| `ResourcesNotReady` | Resources applied but readyWhen conditions not met |
-| `ReconcileError`    | Fatal error during reconciliation                  |
+| Reason        | Status    | Node State  | Meaning                                        |
+| ------------- | --------- | ----------- | ---------------------------------------------- |
+| `Ready`       | `True`    | Ready       | All resources reconciled                       |
+| `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
+| `NotReady`    | `Unknown` | NotReady    | Applied but readyWhen conditions not met       |
+| `NotAccepted` | `False`   | —           | Spec invalid; rollup of Accepted=False         |
+| `Error`       | `False`   | Error       | Client request failed (4xx)                    |
+| `SystemError` | `False`   | SystemError | Server or infrastructure failure (5xx)         |
+| `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 
 ```yaml
 status:

@@ -2,161 +2,193 @@
 
 ## Problem statement
 
-Resource lifecycles and ownership have a wide potential scope. Here are some user stories grouped by broad use case.
+Resource lifecycles and ownership have a wide potential scope. A further discussion on other potential items is listed in the not-in-scope section.
 
-CRUD policies
-- I want to run resources on deletion because I may want to snapshot a database before deleting it.
-- I want to be able to update immutable fields in Kro because I want to change a job spec.
-- I want to create a resource and never update it because some resources like PVC might be expensive or difficult to update.
-- I want to only read a resource because I don't want to use external refs and want to reference the resource.
+This document addresses the following user stories:
 - I want to avoid deleting resources because some resources like databases are too risky to be deleted through Kro.
-- I want to control deletion order because I may have implicit dependencies or a more complicated teardown workflow needed for resource cleanup.
-
-Migration into Kro and between Kro resources
 - I want to safely do migrations into Kro from existing resources because I want to manage my cluster in Kro and want to avoid downtime and risk of updating resources poorly.
 - I want to safely do migrations between Kro RGDs or instances because I want to be able to refactor and evolve my Kro definitions over time and avoid downtime.
 
-Singletons
-- I want to define applications with resources that are defined only once across all Kro instances because resources like PrivateEndpoint are one per cluster.
-
-Resource contribution
-- I want to create a controller that updates a subset of fields on a resource because it is a useful pattern to control a small number of fields in Kubernetes.
-
 ## Proposal
 
-The proposal is to add a new mode of operating resources
-through an annotation called `kro.run/ownership=shared`.
+The proposal is to let adoption be handled by the current behaviour.
+The current behaviour applies over other resources as long as they
+are not being managed by a Kro instance.
 
-Shared mode will be a new primitive that solves migrating
-between Kro resources, Singletons, and resource contribution.
+To avoid deleting resources we will add a new CRD field.
+```
+apiVersion: kro.run/v1alpha1
+  kind: ResourceGraphDefinition
+  spec:
+    resources:
+      - id: database
+        lifecycle:
+          deletePolicy: Retain
+```
+
+The `deletePolicy` field accepts two values:
+- `Delete` (default): Remove the resource from the cluster
+- `Retain`: Remove Kro labels indicating it is Kro-managed instead of deleting it
+
+For migration or refactoring use cases, you would add the delete policy field,
+then delete or update the RGD to orphan the resources, and finally adopt them
+into another RGD or instance. 
 
 #### Overview
 
-##### Exclusive
+##### Adoption
 
-The default mode is exclusive. A Kro resource applied with exclusive
-will cause errors for any other Kro instance trying to use it. Otherwise,
-exclusive will work the same as it does today. Exclusive resources will
-adopt resources from other systems but raise errors if they have Kro
-applyset labels.
+While adopting resources and migrating them safely is a major concern, 
+this is a subset of the more general problem of trying to understand
+what updates to Kro resources will update your cluster state. We will 
+recommend using future CLI commands 
+like `kro preview` to help customers understand the actions that will be taken on their cluster.
 
-##### Shared
+The general workflow will be to design your RGD and run the CLI command `kro preview` to
+go through an interactive diff of the resources the RGD will expect to create.
+The user will be responsible for understanding and confirming this diff is correct.
 
-On create shared mode will error if the resource is exclusively owned. If it is not,
-we will apply and start sharing ownership of the fields. In shared mode we will always
-SSA with force=false. If we do not conflict we will just add ourselves as managing the field.
+There will be some RGDs that will be non-deterministic (a job that fails if rand() > 0.5), 
+but these will be the minority of RGDs, especially in migration use cases. There is also 
+the potential that you run a dry-run and the cluster state changes when you go to apply the resource.
+This is not a unique problem to Kro adoption. In system migrations it is typical to avoid making
+updates to resources that are in the process of undergoing a migration.
 
-If we do conflict we will check if this is a terminal conflict that needs to be
-surfaced to users. We consider conflicts terminal if we do not own the field and
-another Kro field manager does. Otherwise, we consider these conflicts overridable.
+The goal here is to leverage an already planned feature of the CLI 
+and enable safer adoption in the majority of cases. 
 
-| We own field | Another Kro owns field | Conflict Type |
-|--------------|------------------------|---------------|
-| true | false | No conflict |
-| true | true | Overridable |
-| false | false | Overridable |
-| false | true | **Terminal** |
+We will update documentation to clarify this as a stated feature of Kro.
 
-Terminal conflicts will be surfaced in the instance status condition until the conflict is resolved.
+##### Orphan
 
-Our mechanism for overriding conflict will be a merge-patch editing the field
-managers directly with a precondition checking that the resource version of
-the object has not changed to avoid race conditions.
+For the purpose of orphaning, we consider both deleting an RGD or instance and 
+pruning (where a resource is deleted because the instance or RGD definition no longer requires it) 
+to apply the same mechanism. 
 
-This mechanism ensures we can make updates to fields without leading into
-deadlock. For example, if we have instance A and B apply the same object
-with replicas=3, any attempt to update either A or B will run into a conflict.
-If we just forced over the conflict then we would run into the two objects
-fighting each other. When we update A with replicas=5, we will kick B out of
-field ownership. When B tries to apply again it will see a conflict, realize
-that it is no longer an owner of replicas and then report a terminal
-conflict. Users would be expected to see this conflict and resolve it
-on a case by case basis.
+When orphaning, we will check if the lifecycle.deletePolicy field is set to Retain and remove Kro-applied labels
+instead of deleting the object.
 
-On instance delete or pruning if the rgd no longer requires the resource, if there 
-are no other owners we just delete the object as is. If there are other owners we do
-an empty SSA releasing ownership of all of our fields.
+We will leave the Kro field manager for simplicity. Parsing and patching out the managed field
+is extra complexity. Leaving the field manager also gives clarity about what Kro contributed to
+the object. It will require other systems to run with force=true but this is pretty common, Kro 
+does it.
 
-These semantics allow partial objects. With this you can define a Kro resource
-that just changes a single field or a few fields.
+CEL expressions that reference the schema will be allowed. This will allow creating 
+non-prod vs production RGDs that may have different requirements on retaining resources.
+We will avoid allowing dependencies to other resources for simplicity initially.
 
-These also allow singletons and shared dependencies between Kro installations.
-Using these shared dependencies can accomplish migrating a resource safely
-between Kro instances and RGDs.
+Example with CEL expression:
+```yaml
+resources:
+  - id: database
+    lifecycle:
+      deletePolicy: '${schema.spec.environment == "production" ? "Retain" : "Delete"}'
+    template:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      # ...
+``` 
 
-#### Design details
+##### Migration
 
-There are two main complexities with this design
+An example migration use case is refactoring your RGDs. You may have 
+initially bundled a webserver and a backend API into one RGD but now want to organize
+them separately so different teams can own their own infrastructure.
 
-##### Label updates
+You may have more complicated migrations. You may have an application that was an instance
+per namespace and want to refactor it to be a single instance utilizing collections. 
 
-We have a large amount of labels that only support a single Kro instance managing
-the resource like `applyset.kubernetes.io/part-of={applySetID}`.
+Example migration steps
+```
+  # Step 1: Add retain to old RGD
+  apiVersion: kro.run/v1alpha1
+    kind: ResourceGraphDefinition
+    spec:
+      resources:
+        - id: database
+          lifecycle:
+            deletePolicy: Retain # Set deletePolicy to Retain
 
-We need to keep the old labels around for compatibility but start adding additional
-labels to be of the form `applyset-{applySetID}` to support multiple owners.
+  # Step 2: Delete old RGD (resources get orphaned)
+  kubectl delete rgd monolith
 
-We will track an annotation called `internal.kro.run/migrated-to-new-labels` that we will look
-at to know if we should use the new or old labels in label selectors.
+  # Step 3: Create new RGDs that reference the same resources
+  # Kro will adopt them since they're no longer managed
+```
 
-##### Field manager
+## Other solutions considered
 
-The actual parsing and updating of field managers is non-trivial. We will need to be very careful to
-correctly parse the error message and be able to successfully update field managers.
+### Adoption safety policies
+
+There are various levels of safety we could build into Kro for adoption. We could add policies like `AdoptOrCreate`,
+`AdoptOnly`, `CreateOnly` to give finer control over adopt behaviour. 
+
+The issue with these policies is that while they do provide some safety, they are drastically less safe than 
+a preview command like `kro preview`. The preview command would let you understand not just if resources will be
+created but also if any updates are potentially disruptive. If you successfully adopt a database resource, but during 
+that adoption set memory to 10 bytes, you just caused an outage.
+
+### Adoption matching
+
+We could guarantee that adopted resources will not change initially. We could do a Kubernetes server side 
+dry run for resources with an `Adopt` policy and try to validate that there will be no differences.
+
+Performing the diff will be non-trivial since we will intend to make some updates like adding labels.
+This approach is also not perfect, admission webhooks with side effects could be skipped. We would also run into
+an issue if any updates happen between our dry run and applying the object.
+
+This idea has merit and could be a potentially valuable feature. However, this would be 
+prematurely solving the problem of adoption safety. We should see gaps from the CLI preview
+command before adding this complexity.
+
+### CRD field vs annotation
+
+We could choose an annotation `alpha.kro.run/delete-policy: retain` instead of a CRD field.
+
+Choosing an annotation over a field has the following benefits:
+1. A CRD field is harder to make breaking changes to. An alpha annotation will allow us to evolve the project quicker and easier than committing to an RGD CRD field now.
+2. Annotations are more easily understood by the Kubernetes ecosystem. It would be very easy for a platform team to automatically add annotations or require all database CRs have this annotation present.
+3. Easier to inspect and have confidence a resource will not be deleted.
+4. Allows templating mechanisms to transfer over.
+
+The reason to use a CRD field instead of an annotation is type safety. It would be too easy for a customer to accidentally 
+typo the annotation then delete their production database. We could partially type check the annotation
+but nothing could stop a user from accidentally specifying something like `rko.run`. 
+
+### Top level
+
+A potential enhancement would be to orphan all resources in an RGD. We could add a top level policy field then allow overriding
+at the lower level. This is reasonable but not initially necessary. It is very possible the idea of defaulting CRD fields
+per RGD will be solved more generally (users already want to default a list of labels to apply to everything).
 
 ## Scoping
 
 #### What is in scope for this proposal?
 
-This proposal addresses resource contribution, singletons, and migrating resources between Kro installations safely.
+The scope of this proposal is minimal; all this document proposes is adding the lifecycle.deletePolicy field.
 
 #### What is not in scope?
 
-CRUD policies are not in scope. One could imagine modeling `delete: retain` as setting a dummy
-owner like `applyset-retain: true`. This would not work however since our semantics for delete
-include doing an empty SSA. This empty SSA would fail if there is a dummy owner that does not
-own any fields.
+##### kro CLI
 
-Migrating into Kro is not in scope. To handle migration into Kro, a robust dry run would be ideal
-to preview what would happen.
+While the kro CLI preview is referenced, exact details will be left to the CLI KREP.
 
-## Other solutions considered
+##### Other CRUD policies
 
-The most controversial part of the solution will be handling conflicts.
+- I want to run resources on deletion because I may want to snapshot a database before deleting it.
+- I want to be able to update immutable fields in Kro because I want to change a job spec.
+- I want to create a resource and never update it because some resources like PVC might be expensive or difficult to update.
+- I want to only read a resource because I don't want to use external refs and want to reference the resource.
+- I want to control deletion order because I may have implicit dependencies or a more complicated teardown workflow needed for resource cleanup.
 
-There are a couple of alternatives that we could take to avoid fiddling with field managers manually.
+These use cases will need to be tackled separately. 
 
-The fundamental issue that makes this hard is SSA operates on a binary force=true or force=false. We really
-want to force=true for fields we can overwrite and force=false for fields we don't own but another Kro instance owns.
+##### Singletons and resource contribution
 
-### Accept some race conditions
+- I want to define applications with resources that are defined only once across all Kro instances because resources like PrivateEndpoint are one per cluster.
+- I want to create a controller that updates a subset of fields on a resource because it is a useful pattern to control a small number of fields in Kubernetes.
 
-Simplest idea could be
-
-1. apply with force=false
-2. if we run into conflicts check if they are all on fields we own, then apply with force=true
-
-Issue is if object state is
-```
-replicas (owned by A, owned by B): 4
-```
-
-1. A attempts to apply replicas=5, image=aNewImage, fails with conflict over replicas
-2. B successfully applies image=bNewImage
-3. A only sees replicas conflict, then thinks it's good to force apply
-
-With this we just overwrote another Kro's image field that we don't own. We only thought it was safe to
-force because we saw the single conflict but there was another one that we would not have decided to override.
-We don't thrash from here, A would own both fields and B would report a conflict
-but, we don't have any strong guarantees in the system
-
-### Apply twice
-
-We could try and split the patch into overridable fields and apply with force=true while we
-apply non overridable fields with force=false.
-
-This is mainly listed to be exhaustive for possibilities but this solution feels like it adds complexity
-with no strong guarantees.
+A separate KREP will address these. 
 
 ## Testing strategy
 
@@ -169,6 +201,6 @@ Testing will follow existing patterns using chainsaw for e2e tests. No special i
 Unit tests will be added to cover changed code.
 
 End-to-end tests will validate
-- resource contribution example
-- shared ownership with conflict cases
-- shared ownership failing to use exclusive resource 
+- orphaning resources with deletePolicy: Retain
+- validating we can adopt a resource that has been orphaned
+- pruning behavior respects deletePolicy field

@@ -129,7 +129,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// -----------------------------------------------------------------------
 
 	// Parse and compile the active revision's spec (cached by revision name).
-	revisionSpec, cache, err := r.compileRevision(activeRevision)
+	revisionSpec, state, err := r.compileRevision(activeRevision)
 	if err != nil {
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
 			logger.Error(statusErr, "updating status after compilation error")
@@ -137,8 +137,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
 	}
 
-	eval := newEvaluator(cache)
-	dag := cache.dag
+	eval := newEvaluator(state)
+	dag := state.compiled.dag
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
@@ -177,7 +177,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		scopeKey   string // node ID to set in scope
 		scopeValue any    // value to set (the full K8s object or collection)
 		// forEach state updates — returned by forEach workers for the
-		// coordinator to merge back into the cache.
+		// coordinator to merge back into the instance state.
 		forEachUpdates map[string]map[string][]string // nodeID → itemID → keys
 		forEachScopes  map[string]map[string]any      // nodeID → itemID → scope
 		forEachItems   map[string][]any               // cache key → collection items
@@ -204,19 +204,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// the node is untouched because the triggering event doesn't
 		// affect it. See 004-graph-execution.md § Scoped Walks.
 		if walkScope != nil && !walkScope[node.ID] {
-			if prev, ok := cache.previousScope[node.ID]; ok {
+			if prev, ok := state.previousScope[node.ID]; ok {
 				eval.scope[node.ID] = prev
 			}
-			if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
 				appliedKeys = append(appliedKeys, prevKeys...)
 			}
-			if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+			if prevState, ok := state.previousPlanStates[node.ID]; ok {
 				plan.States[node.ID] = prevState
 				// Restore propagateWhen from previous cycle.
 				if (prevState == NodeReady || prevState == NodeNotReady) &&
-					len(node.PropagateWhen) > 0 && cache.previousScope[node.ID] != nil {
+					len(node.PropagateWhen) > 0 && state.previousScope[node.ID] != nil {
 					plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
-						node.PropagateWhen, cache.previousScope[node.ID], node.ID)
+						node.PropagateWhen, state.previousScope[node.ID], node.ID)
 				}
 			}
 			// Dispatch dependents — this node is "done" (retained previous state)
@@ -249,13 +249,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if blockedBy := plan.DependencyPropagateBlocked(node); blockedBy != "" {
 			logger.V(1).Info("propagateWhen gate — retaining previous state",
 				"node", node.ID, "blockedBy", blockedBy)
-			if prev, ok := cache.previousScope[node.ID]; ok {
+			if prev, ok := state.previousScope[node.ID]; ok {
 				eval.scope[node.ID] = prev
 			}
-			if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
 				appliedKeys = append(appliedKeys, prevKeys...)
 			}
-			if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+			if prevState, ok := state.previousPlanStates[node.ID]; ok {
 				plan.States[node.ID] = prevState
 			}
 			// Dispatch dependents — this node retained previous state but
@@ -282,15 +282,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		nodeShape := node.Shape()
 		canHashSkip := nodeShape != ShapeWatch && nodeShape != ShapeCollectionWatch
 		if canHashSkip {
-			if _, hasPrevHash := cache.previousInputHashes[node.ID]; hasPrevHash {
+			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
 				inputHash, hashErr := hashNodeInputs(node, eval.scope)
-				if hashErr == nil && inputHash != "" && inputHash == cache.previousInputHashes[node.ID] {
+				if hashErr == nil && inputHash != "" && inputHash == state.previousInputHashes[node.ID] {
 					// Dependency inputs unchanged. Check self-state.
-					prevScope := cache.previousScope[node.ID]
+					prevScope := state.previousScope[node.ID]
 					selfHash, selfErr := hashSelfSections(node, prevScope)
 					selfChanged := false
 					if selfErr == nil && selfHash != "" {
-						prevSelfHash := cache.previousSelfHashes[node.ID]
+						prevSelfHash := state.previousSelfHashes[node.ID]
 						selfChanged = selfHash != prevSelfHash
 					}
 
@@ -298,13 +298,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						// Path 1: dependency hash match + self unchanged → skip everything.
 						logger.V(1).Info("input hash match — skipping evaluation",
 							"node", node.ID)
-						if prev, ok := cache.previousScope[node.ID]; ok {
+						if prev, ok := state.previousScope[node.ID]; ok {
 							eval.scope[node.ID] = prev
 						}
-						if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+						if prevKeys, ok := state.previousKeys[node.ID]; ok {
 							appliedKeys = append(appliedKeys, prevKeys...)
 						}
-						if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+						if prevState, ok := state.previousPlanStates[node.ID]; ok {
 							plan.States[node.ID] = prevState
 							// Propagate readyWhen result from previous cycle.
 							if prevState == NodeReady || prevState == NodeNotReady {
@@ -326,30 +326,30 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					// skip template evaluation and apply.
 					logger.V(1).Info("self-state changed — re-evaluating gates only",
 						"node", node.ID)
-					if prev, ok := cache.previousScope[node.ID]; ok {
+					if prev, ok := state.previousScope[node.ID]; ok {
 						eval.scope[node.ID] = prev
 					}
-					if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+					if prevKeys, ok := state.previousKeys[node.ID]; ok {
 						appliedKeys = append(appliedKeys, prevKeys...)
 					}
-					state := NodeReady
+					nodeState := NodeReady
 					observed := eval.scope[node.ID]
 					if len(node.ReadyWhen) > 0 && observed != nil {
 						if err := eval.checkReadiness(node.ReadyWhen, observed, node.ID); err != nil {
-							state = NodeNotReady
+							nodeState = NodeNotReady
 						}
 					}
-					plan.States[node.ID] = state
-					if (state == NodeReady || state == NodeNotReady) &&
+					plan.States[node.ID] = nodeState
+					if (nodeState == NodeReady || nodeState == NodeNotReady) &&
 						len(node.PropagateWhen) > 0 && observed != nil {
 						plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
 							node.PropagateWhen, observed, node.ID)
 					}
 					// Update self hash for next reconcile.
 					if newSelfHash, err := hashSelfSections(node, observed); err == nil {
-						cache.previousSelfHashes[node.ID] = newSelfHash
+						state.previousSelfHashes[node.ID] = newSelfHash
 					}
-					cache.previousPlanStates[node.ID] = state
+					state.previousPlanStates[node.ID] = nodeState
 					// Dispatch dependents — this node is done with gate re-evaluation.
 					for _, depIdx := range dag.Dependents[node.ID] {
 						tryDispatch(depIdx)
@@ -381,7 +381,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Build a snapshot evaluator for the worker. Contains the node's
 		// dependency data and forEach previous state — the worker can't
 		// see or mutate any shared state.
-		workerEval := eval.snapshotFor(node, cache)
+		workerEval := eval.snapshotFor(node, state)
 
 		// Dispatch to worker goroutine.
 		go func(n Node, we *evaluator) {
@@ -440,15 +440,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			eval.scope[res.scopeKey] = res.scopeValue
 		}
 
-		// Merge forEach state updates into the shared cache.
+		// Merge forEach state updates into the shared instance state.
 		for k, v := range res.forEachItems {
-			cache.forEachItems[k] = v
+			state.forEachItems[k] = v
 		}
 		for nodeID, itemScopes := range res.forEachScopes {
-			cache.forEachItemScope[nodeID] = itemScopes
+			state.forEachItemScope[nodeID] = itemScopes
 		}
 		for nodeID, itemKeys := range res.forEachUpdates {
-			cache.forEachItemKeys[nodeID] = itemKeys
+			state.forEachItemKeys[nodeID] = itemKeys
 		}
 
 		// Update plan state.
@@ -465,18 +465,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		// Save per-node state for next reconcile.
-		cache.previousScope[node.ID] = eval.scope[node.ID]
-		cache.previousKeys[node.ID] = res.keys
-		cache.previousPlanStates[node.ID] = res.state
+		state.previousScope[node.ID] = eval.scope[node.ID]
+		state.previousKeys[node.ID] = res.keys
+		state.previousPlanStates[node.ID] = res.state
 
 		// Store input hash for next reconcile's change check.
 		if inputHash, err := hashNodeInputs(node, eval.scope); err == nil && inputHash != "" {
-			cache.previousInputHashes[node.ID] = inputHash
+			state.previousInputHashes[node.ID] = inputHash
 		}
 		// Store self hash for gate re-evaluation detection.
 		if observed := eval.scope[node.ID]; observed != nil {
 			if selfHash, err := hashSelfSections(node, observed); err == nil {
-				cache.previousSelfHashes[node.ID] = selfHash
+				state.previousSelfHashes[node.ID] = selfHash
 			}
 		}
 
@@ -636,7 +636,7 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	}
 
 	// Compile to verify validity before creating the revision.
-	_, err = compileGraph(graphSpec, generation)
+	_, err = compileGraph(graphSpec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -692,30 +692,41 @@ func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName
 	return result
 }
 
-// compileRevision parses and compiles a revision's spec, using the cache
-// keyed by namespace/revision-name. The namespace prefix prevents collisions
-// when two Graphs in different namespaces share the same name (and thus
-// produce identically-named revisions).
-func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *graphCache, error) {
-	cacheKey := revision.GetNamespace() + "/" + revision.GetName()
-	cache := r.Caches.get(cacheKey)
-	if cache != nil {
-		return cache.spec, cache, nil
+// compileRevision parses and compiles a revision's spec, using two cache layers:
+//   - Instance state: keyed by namespace/revision-name (per-Graph mutable state)
+//   - Compiled graph: keyed by spec content hash (shared across identical specs)
+//
+// For N identical child graphs (common in nested graph patterns with forEach),
+// this means 1 compilation + N-1 hash lookups instead of N compilations.
+func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
+	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
+
+	// Fast path: instance state already exists (steady-state reconcile).
+	if existing := r.Caches.get(instanceKey); existing != nil {
+		return existing.compiled.spec, existing, nil
 	}
 
+	// Parse the spec.
 	spec, err := extractRevisionSpec(revision)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	generation := revisionGeneration(revision)
-	cache, err = compileGraph(spec, generation)
-	if err != nil {
-		return nil, nil, err
+	// Check for a shared compiled graph by spec hash.
+	specHash := spec.Hash()
+	compiled := r.Caches.getCompiled(specHash)
+	if compiled == nil {
+		// No shared compiled graph — compile from scratch.
+		compiled, err = compileGraphSpec(spec)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
-	r.Caches.set(cacheKey, cache)
-	return spec, cache, nil
+	// Create per-instance mutable state pointing to the shared compiled graph.
+	state := newInstanceState(compiled)
+	r.Caches.set(instanceKey, state)
+	return spec, state, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -3,8 +3,8 @@
 // and includeWhen conditions, and extracts dependency references for DAG building.
 //
 // All CEL evaluation goes through the evaluator struct, which holds a reference
-// to the pre-compiled graphCache. No CEL compilation happens in this file —
-// programs are looked up from the cache and evaluated against the current scope.
+// to the pre-compiled compiledGraph. No CEL compilation happens in this file —
+// programs are looked up from the compiled graph and evaluated against the current scope.
 package graphcontroller
 
 import (
@@ -17,8 +17,8 @@ import (
 // workers receive read-only snapshots and return results for the coordinator
 // to merge. No locking needed.
 type evaluator struct {
-	cache *graphCache
-	scope map[string]any
+	compiled *compiledGraph
+	scope    map[string]any
 
 	// forEach state — populated by the coordinator before dispatching a
 	// forEach worker, and read by reconcileForEach. Workers write to these
@@ -33,18 +33,18 @@ type evaluator struct {
 }
 
 // newEvaluator creates an evaluator for a reconcile cycle.
-func newEvaluator(cache *graphCache) *evaluator {
+func newEvaluator(state *instanceState) *evaluator {
 	return &evaluator{
-		cache: cache,
-		scope: map[string]any{},
+		compiled: state.compiled,
+		scope:    map[string]any{},
 	}
 }
 
 // snapshotFor builds a worker evaluator for a specific node. The snapshot
 // contains the node's dependency data (read-only) and, for forEach nodes,
-// the previous forEach state from the cache. The worker writes to its own
+// the previous forEach state from the instance. The worker writes to its own
 // maps — the coordinator merges them back after the worker returns.
-func (e *evaluator) snapshotFor(node *Node, cache *graphCache) *evaluator {
+func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
 	snap := make(map[string]any, len(node.Dependencies))
 	for depID := range node.Dependencies {
 		if v, ok := e.scope[depID]; ok {
@@ -53,7 +53,7 @@ func (e *evaluator) snapshotFor(node *Node, cache *graphCache) *evaluator {
 	}
 
 	worker := &evaluator{
-		cache:            e.cache,
+		compiled:         e.compiled,
 		scope:            snap,
 		forEachNewScope:  map[string]map[string]any{},
 		forEachNewKeys:   map[string]map[string][]string{},
@@ -63,23 +63,23 @@ func (e *evaluator) snapshotFor(node *Node, cache *graphCache) *evaluator {
 		forEachPrevKeys:  map[string]map[string][]string{},
 	}
 
-	// Copy forEach previous state from the shared cache for this node.
-	if node.ForEach != nil && cache != nil {
+	// Copy forEach previous state from the shared instance for this node.
+	if node.ForEach != nil && state != nil {
 		for varName := range node.ForEach {
 			cacheKey := node.ID + "/" + varName
-			if items, ok := cache.forEachItems[cacheKey]; ok {
+			if items, ok := state.forEachItems[cacheKey]; ok {
 				worker.forEachPrevItems[cacheKey] = items
 			}
 		}
 		// Copy per-item state — keyed by node ID in outer map.
-		if itemScope, ok := cache.forEachItemScope[node.ID]; ok {
+		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
 			copied := make(map[string]any, len(itemScope))
 			for k, v := range itemScope {
 				copied[k] = v
 			}
 			worker.forEachPrevScope[node.ID] = copied
 		}
-		if itemKeys, ok := cache.forEachItemKeys[node.ID]; ok {
+		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
 			copied := make(map[string][]string, len(itemKeys))
 			for k, v := range itemKeys {
 				copied[k] = v
@@ -91,10 +91,10 @@ func (e *evaluator) snapshotFor(node *Node, cache *graphCache) *evaluator {
 	return worker
 }
 
-// withScope returns a new evaluator that shares the cache but has its own scope.
+// withScope returns a new evaluator that shares the compiled graph but has its own scope.
 // Used for forEach inner scopes and worker snapshots.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {
-	return &evaluator{cache: e.cache, scope: scope}
+	return &evaluator{compiled: e.compiled, scope: scope}
 }
 
 // evalBoolCondition evaluates a CEL expression and coerces the result to bool.
@@ -220,7 +220,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 	// Check if the entire string is a single expression (standalone)
 	dollars, expr, start, end := findExpr(s, 0)
 	if start == 0 && end == len(s) && len(dollars) == 1 {
-		result, err := e.cache.eval(expr, e.scope)
+		result, err := e.compiled.eval(expr, e.scope)
 		if err != nil {
 			return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 		}
@@ -239,7 +239,7 @@ func (e *evaluator) evalString(s string) (any, error) {
 		result.WriteString(s[pos:start])
 
 		if len(dollars) == 1 {
-			val, err := e.cache.eval(expr, e.scope)
+			val, err := e.compiled.eval(expr, e.scope)
 			if err != nil {
 				return nil, fmt.Errorf("evaluating %q: %w", expr, err)
 			}

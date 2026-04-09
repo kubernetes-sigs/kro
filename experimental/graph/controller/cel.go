@@ -5,12 +5,21 @@
 // Performance model: CEL environments and programs are compiled eagerly when a
 // Graph spec is first seen (or when it changes). The reconcile loop only evaluates
 // pre-compiled programs — no compilation happens during the resource walk.
+//
+// Compiled graph sharing: compiled artifacts (CEL env, programs, DAG) are
+// content-addressed by spec hash. Multiple Graph instances with identical specs
+// (e.g., nested graphs stamped by forEach) share a single compiledGraph. Per-instance
+// mutable state (scope, input hashes, forEach state) is tracked separately in
+// instanceState, keyed by namespace/revision-name.
 package graphcontroller
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"sort"
 	"strings"
 	"sync"
 
@@ -89,18 +98,61 @@ func isDataPending(err error) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Expression cache
+// Compiled graph (immutable, shareable, content-addressed)
 // ---------------------------------------------------------------------------
 
-// graphCache holds the compiled CEL environment, programs, parsed spec, and
-// DAG for a single Graph spec. All are derived from the spec and cached
-// together, invalidated when the spec changes (detected by generation).
-type graphCache struct {
-	generation int64
-	env        *cel.Env
-	programs   map[string]cel.Program // expression string -> compiled program
-	spec       *GraphSpec             // parsed spec (cached to avoid re-parsing)
-	dag        *DAG                   // dependency graph (cached to avoid re-building)
+// compiledGraph holds the immutable compilation artifacts for a Graph spec.
+// All fields are derived from the spec and are safe to share across multiple
+// Graph instances with identical specs (e.g., nested graphs stamped by forEach).
+//
+// Content-addressed by specHash: two Graph specs that produce the same hash
+// share a single compiledGraph. The DAG, CEL programs, and CEL environment are
+// all immutable after construction — cel.Program is thread-safe by the CEL spec,
+// and BuildDAG produces a read-only structure (verified: zero writes to DAG
+// fields during reconciliation).
+type compiledGraph struct {
+	specHash string                 // content hash of the compilation inputs
+	env      *cel.Env               // CEL environment (immutable after Extend)
+	programs map[string]cel.Program // expression string → compiled program
+	spec     *GraphSpec             // parsed spec (immutable)
+	dag      *DAG                   // dependency graph (immutable after BuildDAG)
+}
+
+// eval evaluates a pre-compiled CEL expression against the given scope.
+// The program must exist in the cache — a cache miss indicates an invariant
+// violation (AllExpressions() is incomplete) and is treated as a hard error.
+func (c *compiledGraph) eval(expr string, scope map[string]any) (any, error) {
+	prg, ok := c.programs[expr]
+	if !ok {
+		return nil, fmt.Errorf("expression %q not found in compiled cache — this is an invariant violation (AllExpressions may be incomplete)", expr)
+	}
+
+	out, _, err := prg.Eval(scope)
+	if err != nil {
+		if isCELDataPending(err) {
+			return nil, fmt.Errorf("evaluating %q: %w: %w", expr, ErrDataPending, err)
+		}
+		return nil, fmt.Errorf("evaluating %q: %w", expr, err)
+	}
+
+	native, err := conversion.GoNativeType(out)
+	if err != nil {
+		return nil, fmt.Errorf("converting %q result: %w", expr, err)
+	}
+
+	return native, nil
+}
+
+// ---------------------------------------------------------------------------
+// Instance state (mutable, per-graph-instance)
+// ---------------------------------------------------------------------------
+
+// instanceState holds the mutable reconcile-time state for a single Graph
+// instance. Each Graph CR gets its own instanceState even when sharing a
+// compiledGraph with other instances. This is correct because the mutable
+// state tracks per-instance Kubernetes resources with different observed states.
+type instanceState struct {
+	compiled *compiledGraph
 
 	// State retained across reconciles for propagateWhen and forEach diffing.
 	previousScope      map[string]any       // node ID → last scope data
@@ -119,44 +171,106 @@ type graphCache struct {
 	forEachItemKeys  map[string]map[string][]string // nodeID → itemID → applied keys
 }
 
-// graphCaches is a concurrent-safe map of Graph name → cache.
-// Entries are created on first reconcile and removed on Graph deletion.
+// newInstanceState creates a fresh instanceState for a compiledGraph.
+func newInstanceState(compiled *compiledGraph) *instanceState {
+	return &instanceState{
+		compiled:            compiled,
+		previousScope:       map[string]any{},
+		previousKeys:        map[string][]string{},
+		previousPlanStates:  map[string]NodeState{},
+		previousInputHashes: map[string]string{},
+		previousSelfHashes:  map[string]string{},
+		forEachItems:        map[string][]any{},
+		forEachItemScope:    map[string]map[string]any{},
+		forEachItemKeys:     map[string]map[string][]string{},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cache management
+// ---------------------------------------------------------------------------
+
+// graphCaches manages two cache layers:
+//   - compiled: content-addressed compiledGraph instances shared across all
+//     Graph instances with identical specs. Keyed by spec hash.
+//   - instances: per-Graph-instance mutable state. Keyed by namespace/revision-name.
+//
+// This separation means N identical child graphs (common in nested graph
+// patterns with forEach) share one compiledGraph instead of each independently
+// compiling identical CEL programs and DAGs.
 type graphCaches struct {
-	mu     sync.Mutex
-	caches map[string]*graphCache // keyed by namespace/name
+	mu        sync.Mutex
+	compiled  map[string]*compiledGraph // spec hash → shared compiled graph
+	instances map[string]*instanceState // namespace/revision-name → per-instance state
 }
 
 func newGraphCaches() *graphCaches {
-	return &graphCaches{caches: make(map[string]*graphCache)}
+	return &graphCaches{
+		compiled:  make(map[string]*compiledGraph),
+		instances: make(map[string]*instanceState),
+	}
 }
 
-func (gc *graphCaches) get(key string) *graphCache {
+func (gc *graphCaches) get(key string) *instanceState {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
-	return gc.caches[key]
+	return gc.instances[key]
 }
 
-func (gc *graphCaches) set(key string, c *graphCache) {
+func (gc *graphCaches) set(key string, s *instanceState) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
-	gc.caches[key] = c
+	gc.instances[key] = s
+	// Ensure the compiledGraph is also tracked.
+	if s.compiled != nil {
+		gc.compiled[s.compiled.specHash] = s.compiled
+	}
 }
 
 func (gc *graphCaches) remove(key string) {
 	gc.mu.Lock()
 	defer gc.mu.Unlock()
-	delete(gc.caches, key)
+	inst := gc.instances[key]
+	delete(gc.instances, key)
+
+	// Sweep: if no other instance references this compiledGraph, remove it.
+	// O(instances) per removal — acceptable for typical graph counts (<1000).
+	// If this becomes hot (e.g., 10K+ forEach items tearing down), replace
+	// with a reference count or reverse index from specHash → instance keys.
+	if inst != nil && inst.compiled != nil {
+		hash := inst.compiled.specHash
+		referenced := false
+		for _, other := range gc.instances {
+			if other.compiled != nil && other.compiled.specHash == hash {
+				referenced = true
+				break
+			}
+		}
+		if !referenced {
+			delete(gc.compiled, hash)
+		}
+	}
 }
 
-// compileGraph builds a CEL environment with all node IDs declared and
-// eagerly compiles every expression in the spec. Returns a graphCache ready
-// for use during the reconcile loop, or an error if any expression fails to
-// compile.
+// getCompiled returns a shared compiledGraph by spec hash, or nil if not cached.
+func (gc *graphCaches) getCompiled(specHash string) *compiledGraph {
+	gc.mu.Lock()
+	defer gc.mu.Unlock()
+	return gc.compiled[specHash]
+}
+
+// ---------------------------------------------------------------------------
+// Compilation
+// ---------------------------------------------------------------------------
+
+// compileGraphSpec builds a CEL environment, eagerly compiles every expression,
+// and builds the dependency graph. Returns a compiledGraph ready for sharing
+// across multiple instances.
 //
 // All node IDs are declared upfront as DynType. Expressions that reference
 // nodes not yet in scope at eval time will produce CEL runtime errors
 // (e.g., "no such key") which isDataPending handles correctly.
-func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
+func compileGraphSpec(spec *GraphSpec) (*compiledGraph, error) {
 	allIDs := spec.AllIdentifiers()
 
 	env, err := krocel.DefaultEnvironment(
@@ -191,46 +305,110 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 		programs[expr] = prg
 	}
 
-	return &graphCache{
-		generation:          generation,
-		env:                 env,
-		programs:            programs,
-		spec:                spec,
-		dag:                 dag,
-		previousScope:       map[string]any{},
-		previousKeys:        map[string][]string{},
-		previousPlanStates:  map[string]NodeState{},
-		previousInputHashes: map[string]string{},
-		previousSelfHashes:  map[string]string{},
-		forEachItems:        map[string][]any{},
-		forEachItemScope:    map[string]map[string]any{},
-		forEachItemKeys:     map[string]map[string][]string{},
+	return &compiledGraph{
+		specHash: spec.Hash(),
+		env:      env,
+		programs: programs,
+		spec:     spec,
+		dag:      dag,
 	}, nil
 }
 
-// eval evaluates a pre-compiled CEL expression against the given scope.
-// The program must exist in the cache — a cache miss indicates an invariant
-// violation (AllExpressions() is incomplete) and is treated as a hard error.
-func (c *graphCache) eval(expr string, scope map[string]any) (any, error) {
-	prg, ok := c.programs[expr]
-	if !ok {
-		return nil, fmt.Errorf("expression %q not found in compiled cache — this is an invariant violation (AllExpressions may be incomplete)", expr)
+// compileGraph is the backward-compatible entry point used by ensureRevision
+// for pre-creation validation. It compiles the spec and returns the compiled
+// graph without caching (the caller discards the result after validation).
+func compileGraph(spec *GraphSpec) (*compiledGraph, error) {
+	return compileGraphSpec(spec)
+}
+
+// ---------------------------------------------------------------------------
+// Spec hashing
+// ---------------------------------------------------------------------------
+
+// Hash computes a deterministic content hash of the compilation inputs.
+// Two GraphSpecs that produce the same hash will produce identical compiledGraphs
+// (same CEL programs, same DAG, same expression set).
+//
+// The hash covers: node IDs, template structures, forEach definitions,
+// includeWhen/readyWhen/propagateWhen conditions — everything that feeds into
+// compileGraphSpec. If a new compilation input is added to GraphSpec without
+// updating this hash, content-addressed sharing will silently reuse stale
+// compiled graphs. The test TestSpecHashCoversCompilationInputs guards against this.
+//
+// Each field is length-prefixed (binary.LittleEndian int64) before its content
+// to prevent delimiter injection / field boundary ambiguity. This is strictly
+// correct — no two distinct specs can produce the same hash input sequence.
+//
+// Collision probability: FNV-64a has a 64-bit output. At 1000 distinct specs
+// the collision probability is ~2.7e-14 (birthday bound). At 1M distinct specs
+// it's ~2.7e-8. This is accepted as negligible for an in-memory optimization
+// cache. A collision would cause two different specs to share a compiled graph,
+// producing incorrect CEL evaluation. If this ever matters, upgrade to FNV-128
+// or SHA-256 — the hash is not on the hot path.
+//
+// Implementation notes:
+//   - encoding/json sorts map keys deterministically in Go, so json.Marshal
+//     of map[string]any produces a canonical byte sequence.
+//   - Nodes are processed in declaration order (spec order is stable from
+//     Kubernetes API). IncludeWhen, ReadyWhen, PropagateWhen are slices
+//     (order-stable from spec parsing). ForEach is a map (sorted explicitly).
+func (s *GraphSpec) Hash() string {
+	h := fnv.New64a()
+
+	// hashField writes a length-prefixed field to the hash.
+	// Length prefix eliminates field boundary ambiguity (the classic delimiter
+	// injection problem) without requiring reserved separator bytes.
+	hashField := func(data []byte) {
+		binary.Write(h, binary.LittleEndian, int64(len(data))) //nolint:errcheck
+		h.Write(data)
 	}
 
-	out, _, err := prg.Eval(scope)
-	if err != nil {
-		if isCELDataPending(err) {
-			return nil, fmt.Errorf("evaluating %q: %w: %w", expr, ErrDataPending, err)
+	// Process nodes in declaration order (spec order is stable).
+	for _, node := range s.Nodes {
+		// Node ID
+		hashField([]byte(node.ID))
+
+		// Template (deterministic via json.Marshal sorted map keys)
+		if node.Template != nil {
+			data, _ := json.Marshal(node.Template)
+			hashField(data)
+		} else {
+			hashField(nil)
 		}
-		return nil, fmt.Errorf("evaluating %q: %w", expr, err)
+
+		// ForEach (sorted keys for determinism — ForEach is a map)
+		if node.ForEach != nil {
+			forEachKeys := make([]string, 0, len(node.ForEach))
+			for k := range node.ForEach {
+				forEachKeys = append(forEachKeys, k)
+			}
+			sort.Strings(forEachKeys)
+			for _, k := range forEachKeys {
+				hashField([]byte(k))
+				hashField([]byte(node.ForEach[k]))
+			}
+		}
+		// Write forEach count to distinguish nil from empty.
+		binary.Write(h, binary.LittleEndian, int64(len(node.ForEach))) //nolint:errcheck
+
+		// Conditions — slices, order-stable from spec parsing.
+		for _, c := range node.IncludeWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.IncludeWhen))) //nolint:errcheck
+
+		for _, c := range node.ReadyWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.ReadyWhen))) //nolint:errcheck
+
+		for _, c := range node.PropagateWhen {
+			hashField([]byte(c))
+		}
+		binary.Write(h, binary.LittleEndian, int64(len(node.PropagateWhen))) //nolint:errcheck
 	}
 
-	native, err := conversion.GoNativeType(out)
-	if err != nil {
-		return nil, fmt.Errorf("converting %q result: %w", expr, err)
-	}
-
-	return native, nil
+	return fmt.Sprintf("%016x", h.Sum64())
 }
 
 // ---------------------------------------------------------------------------

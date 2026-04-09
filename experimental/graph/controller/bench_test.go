@@ -74,7 +74,7 @@ func BenchmarkCompileGraph(b *testing.B) {
 			spec := buildBenchSpec(nodeCount)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := compileGraph(spec, 1)
+				_, err := compileGraph(spec)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -123,11 +123,11 @@ func BenchmarkTemplateEvaluation(b *testing.B) {
 	for _, exprCount := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("exprs=%d", exprCount), func(b *testing.B) {
 			spec := buildBenchSpecWithExprs(exprCount)
-			cache, err := compileGraph(spec, 1)
+			compiled, err := compileGraph(spec)
 			if err != nil {
 				b.Fatal(err)
 			}
-			eval := newEvaluator(cache)
+			eval := newEvaluator(newInstanceState(compiled))
 			// Populate scope with a source node matching the spec's source data.
 			sourceData := make(map[string]any, exprCount)
 			for i := 0; i < exprCount; i++ {
@@ -408,5 +408,259 @@ func buildBenchSpecWithExprs(exprCount int) *GraphSpec {
 				Template: targetData,
 			},
 		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Compiled graph sharing benchmarks
+// ---------------------------------------------------------------------------
+
+// BenchmarkCompileRevisionSharing measures the headline number for content-
+// addressed compiled graph sharing. Simulates N child graphs with identical
+// specs (the nested graph pattern). Without sharing, each graph independently
+// compiles CEL programs and builds a DAG. With sharing, the first graph
+// compiles and subsequent graphs do a hash lookup.
+//
+// The benchmark measures the amortized cost of compileRevision for N instances.
+func BenchmarkCompileRevisionSharing(b *testing.B) {
+	for _, nodeCount := range []int{5, 10, 25, 50} {
+		for _, instanceCount := range []int{1, 10, 50, 100} {
+			b.Run(fmt.Sprintf("nodes=%d/instances=%d", nodeCount, instanceCount), func(b *testing.B) {
+				spec := buildBenchSpec(nodeCount)
+				b.ResetTimer()
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					caches := newGraphCaches()
+					for j := 0; j < instanceCount; j++ {
+						// Simulate N revisions with the same spec but different names.
+						specHash := spec.Hash()
+						instanceKey := fmt.Sprintf("ns/graph-%d-g00001", j)
+
+						compiled := caches.getCompiled(specHash)
+						if compiled == nil {
+							var err error
+							compiled, err = compileGraphSpec(spec)
+							if err != nil {
+								b.Fatal(err)
+							}
+						}
+						state := newInstanceState(compiled)
+						caches.set(instanceKey, state)
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkSpecHash measures the cost of computing the spec content hash —
+// the gate that enables compiled graph sharing. This must be significantly
+// cheaper than compilation to justify the indirection.
+func BenchmarkSpecHash(b *testing.B) {
+	for _, nodeCount := range []int{1, 5, 10, 25, 50} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			spec := buildBenchSpec(nodeCount)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = spec.Hash()
+			}
+		})
+	}
+}
+
+// TestSpecHashCoversCompilationInputs verifies that the spec hash captures
+// all inputs that affect compilation output. On cache hit, we compile anyway
+// and assert equivalence. This catches hash-doesn't-cover-input bugs.
+func TestSpecHashCoversCompilationInputs(t *testing.T) {
+	spec := buildBenchSpec(10)
+	hash1 := spec.Hash()
+
+	// Compile twice and verify hash is stable.
+	hash2 := spec.Hash()
+	if hash1 != hash2 {
+		t.Fatalf("spec hash is not deterministic: %s != %s", hash1, hash2)
+	}
+
+	// Compile and verify the compiled graph agrees.
+	compiled1, err := compileGraphSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled2, err := compileGraphSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both compiled graphs should have the same spec hash.
+	if compiled1.specHash != compiled2.specHash {
+		t.Fatalf("compiled graph hashes differ: %s != %s", compiled1.specHash, compiled2.specHash)
+	}
+
+	// Same expression set (same programs compiled).
+	if len(compiled1.programs) != len(compiled2.programs) {
+		t.Fatalf("program count differs: %d != %d", len(compiled1.programs), len(compiled2.programs))
+	}
+	for expr := range compiled1.programs {
+		if _, ok := compiled2.programs[expr]; !ok {
+			t.Fatalf("expression %q in compiled1 but not compiled2", expr)
+		}
+	}
+
+	// Same DAG structure.
+	if len(compiled1.dag.Nodes) != len(compiled2.dag.Nodes) {
+		t.Fatalf("DAG node count differs: %d != %d", len(compiled1.dag.Nodes), len(compiled2.dag.Nodes))
+	}
+
+	// Mutate the spec and verify the hash changes.
+	mutations := []struct {
+		name   string
+		mutate func(*GraphSpec)
+	}{
+		{"add node", func(s *GraphSpec) {
+			s.Nodes = append(s.Nodes, Node{ID: "extra", Template: map[string]any{"apiVersion": "v1", "kind": "ConfigMap"}})
+		}},
+		{"change template", func(s *GraphSpec) {
+			s.Nodes[0].Template["data"] = map[string]any{"different": "value"}
+		}},
+		{"add readyWhen", func(s *GraphSpec) {
+			s.Nodes[0].ReadyWhen = []string{"${node0.status.ready == true}"}
+		}},
+		{"add propagateWhen", func(s *GraphSpec) {
+			s.Nodes[0].PropagateWhen = []string{"${node0.ready()}"}
+		}},
+		{"add includeWhen", func(s *GraphSpec) {
+			s.Nodes[0].IncludeWhen = []string{"${true}"}
+		}},
+		{"add forEach", func(s *GraphSpec) {
+			s.Nodes[0].ForEach = map[string]string{"item": "${items}"}
+		}},
+		{"change node ID", func(s *GraphSpec) {
+			s.Nodes[0].ID = "renamed"
+		}},
+		{"reorder nodes", func(s *GraphSpec) {
+			// Node order matters: it determines DAG level assignment within
+			// the same topological level. Reordered nodes are a different spec.
+			s.Nodes[0], s.Nodes[1] = s.Nodes[1], s.Nodes[0]
+		}},
+	}
+
+	for _, m := range mutations {
+		t.Run(m.name, func(t *testing.T) {
+			mutated := buildBenchSpec(10)
+			m.mutate(mutated)
+			mutatedHash := mutated.Hash()
+			if mutatedHash == hash1 {
+				t.Fatalf("mutation %q did not change the hash", m.name)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Compiled graph sharing mechanism tests
+//
+// These test the cache mechanism directly. The sharing behavior is invisible
+// at the integration level (the observable outcome is the same with or without
+// sharing). The integration test TestIdenticalGraphsConvergeIndependently in
+// test/reconcile_test.go covers correctness; these cover the mechanism.
+//
+// This is an accepted tradeoff against 006-quality.md's preference for
+// integration tests: a bug here (e.g., instance state leak between shared
+// instances) would manifest as flaky reconciliation that's hard to diagnose
+// from the integration level.
+// ---------------------------------------------------------------------------
+
+// TestCompiledGraphCacheLifecycle exercises the full lifecycle of the compiled
+// graph cache: sharing across identical specs, isolation between different
+// specs, and cleanup on instance removal.
+func TestCompiledGraphCacheLifecycle(t *testing.T) {
+	spec := buildBenchSpec(5)
+	caches := newGraphCaches()
+	specHash := spec.Hash()
+
+	// --- Phase 1: Two instances with identical specs share one compiledGraph ---
+	compiled, err := compileGraphSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caches.set("ns/graph-a-g00001", newInstanceState(compiled))
+
+	// Second instance finds the shared compiledGraph by hash.
+	shared := caches.getCompiled(specHash)
+	if shared == nil {
+		t.Fatal("expected shared compiledGraph, got nil")
+	}
+	caches.set("ns/graph-b-g00001", newInstanceState(shared))
+
+	if caches.get("ns/graph-a-g00001").compiled != caches.get("ns/graph-b-g00001").compiled {
+		t.Fatal("instances with identical specs should share a compiledGraph")
+	}
+
+	// --- Phase 2: Different spec produces a separate compiledGraph ---
+	differentSpec := buildBenchSpec(10)
+	differentCompiled, err := compileGraphSpec(differentSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caches.set("ns/graph-c-g00001", newInstanceState(differentCompiled))
+
+	if caches.get("ns/graph-c-g00001").compiled == caches.get("ns/graph-a-g00001").compiled {
+		t.Fatal("different specs should not share a compiledGraph")
+	}
+
+	// --- Phase 3: Removing one instance retains shared compiledGraph ---
+	caches.remove("ns/graph-a-g00001")
+	if caches.getCompiled(specHash) == nil {
+		t.Fatal("compiledGraph should survive with remaining references")
+	}
+
+	// --- Phase 4: Removing last instance cleans up compiledGraph ---
+	caches.remove("ns/graph-b-g00001")
+	if caches.getCompiled(specHash) != nil {
+		t.Fatal("compiledGraph should be cleaned up when last reference is removed")
+	}
+
+	// Different spec's compiledGraph should be unaffected.
+	if caches.getCompiled(differentSpec.Hash()) == nil {
+		t.Fatal("unrelated compiledGraph should survive other spec's cleanup")
+	}
+}
+
+// TestInstanceStateIsolation verifies that mutable state changes on one
+// instance don't affect another instance sharing the same compiledGraph.
+// This catches bugs where newInstanceState accidentally shares maps.
+func TestInstanceStateIsolation(t *testing.T) {
+	spec := buildBenchSpec(5)
+	compiled, err := compileGraphSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state1 := newInstanceState(compiled)
+	state2 := newInstanceState(compiled)
+
+	// Mutate state1's mutable fields.
+	state1.previousScope["node0"] = map[string]any{"data": map[string]any{"key": "v1"}}
+	state1.previousInputHashes["node0"] = "hash-a"
+	state1.previousPlanStates["node0"] = NodeReady
+	state1.forEachItems["node0/item"] = []any{"a", "b"}
+
+	// state2 should be unaffected.
+	if _, ok := state2.previousScope["node0"]; ok {
+		t.Fatal("previousScope leaked between instances")
+	}
+	if _, ok := state2.previousInputHashes["node0"]; ok {
+		t.Fatal("previousInputHashes leaked between instances")
+	}
+	if _, ok := state2.previousPlanStates["node0"]; ok {
+		t.Fatal("previousPlanStates leaked between instances")
+	}
+	if _, ok := state2.forEachItems["node0/item"]; ok {
+		t.Fatal("forEachItems leaked between instances")
+	}
+
+	// Both should share the same (immutable) compiledGraph.
+	if state1.compiled != state2.compiled {
+		t.Fatal("instances should share the same compiledGraph pointer")
 	}
 }

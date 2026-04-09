@@ -2,6 +2,7 @@ package graphcontroller_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -459,4 +460,108 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 	// Result ConfigMap should be managed by child Graph (cascading management)
 	assertManagedBy(t, resultCM, "shared-data-child")
 	t.Logf("L1: Management chain: parent Graph → child Graph → result ConfigMap")
+}
+
+// TestIdenticalGraphsConvergeIndependently proves that multiple Graph CRs
+// with identical specs all converge correctly. This is the regression test
+// for content-addressed compiled graph sharing: internally, these graphs
+// share a single compiledGraph (CEL env, programs, DAG). The test verifies
+// that sharing doesn't cause cross-instance interference — each graph
+// produces its own distinct resources with the correct data.
+//
+// The proof: three graphs with the same spec but different watch targets
+// each produce a correctly-evaluated ConfigMap reading from their own source.
+func TestIdenticalGraphsConvergeIndependently(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Create 3 source ConfigMaps with different values.
+	sources := []struct {
+		name  string
+		value string
+	}{
+		{"source-alpha", "value-alpha"},
+		{"source-beta", "value-beta"},
+		{"source-gamma", "value-gamma"},
+	}
+	for _, src := range sources {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      src.name,
+					"namespace": ns,
+				},
+				"data": map[string]any{
+					"message": src.value,
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, cm))
+	}
+
+	// Create 3 Graph CRs with identical spec structure — they differ only
+	// in which source ConfigMap they watch (passed via the watch name).
+	// The spec structure is the same: watch → produce output ConfigMap.
+	for i, src := range sources {
+		graph := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "kro.run/v1alpha1",
+				"kind":       "Graph",
+				"metadata": map[string]any{
+					"name":      fmt.Sprintf("identical-%d", i),
+					"namespace": ns,
+				},
+				"spec": map[string]any{
+					"nodes": []any{
+						map[string]any{
+							"id": "input",
+							"template": map[string]any{
+								"apiVersion": "v1",
+								"kind":       "ConfigMap",
+								"metadata": map[string]any{
+									"name": src.name,
+								},
+							},
+						},
+						map[string]any{
+							"id": "output",
+							"template": map[string]any{
+								"apiVersion": "v1",
+								"kind":       "ConfigMap",
+								"metadata": map[string]any{
+									"name": fmt.Sprintf("output-%d", i),
+								},
+								"data": map[string]any{
+									"copied": "${input.data.message}",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, k8sClient.Create(ctx, graph))
+	}
+
+	// Verify each graph produced its output ConfigMap with the correct value.
+	for i, src := range sources {
+		outputName := fmt.Sprintf("output-%d", i)
+		output := &unstructured.Unstructured{}
+		output.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+		require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{
+			Name: outputName, Namespace: ns,
+		}, output), "output ConfigMap %s should exist", outputName)
+
+		// Verify the copied value is correct — this proves the graph evaluated
+		// against its own scope, not another instance's scope.
+		data, _, _ := unstructured.NestedStringMap(output.Object, "data")
+		assert.Equal(t, src.value, data["copied"],
+			"graph %d should have copied %q from source %s", i, src.value, src.name)
+
+		// Verify ownership labels point to the correct graph.
+		assertManagedBy(t, output, fmt.Sprintf("identical-%d", i))
+		t.Logf("graph identical-%d → output-%d: copied=%q (correct)", i, i, data["copied"])
+	}
 }

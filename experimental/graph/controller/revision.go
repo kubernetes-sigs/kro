@@ -245,13 +245,8 @@ func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error
 // ---------------------------------------------------------------------------
 
 // createRevision creates a GraphRevision in the cluster with a finalizer.
-//
-// TODO: The design specifies immutability via CEL validation (self == oldSelf)
-// on the spec. This isn't enforced yet because the CRD uses
-// XPreserveUnknownFields without validation rules. The controller is the only
-// writer, so immutability is de facto enforced, but a kubectl edit could
-// mutate a revision. Add CEL validation when switching to a typed CRD.
-// See: experimental/docs/design/graph/002-revisions.md § Spec
+// The spec is immutable — enforced by CEL validation (self == oldSelf) on
+// the GraphRevision CRD. See: experimental/docs/design/graph/002-revisions.md
 func createRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
 	controllerutil.AddFinalizer(revision, finalizer)
 	return c.Create(ctx, revision)

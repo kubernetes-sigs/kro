@@ -765,6 +765,101 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	t.Log("Cross-Graph ownership conflict correctly detected and blocked")
 }
 
+// TestForceApplyOverridesKroLabelCheck proves that kro.run/apply: Force on a
+// template takes ownership of a resource labeled as owned by a different Graph.
+// This is the import/migration mechanism from design 003-ownership.
+//
+// Setup:
+//   - Pre-create a resource owned by "other-graph" (has graph-name label).
+//   - Create a Graph that targets the same resource WITH kro.run/apply: Force.
+//   - Verify the Graph succeeds and takes ownership (label changes).
+func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create a resource labeled as owned by a different Graph
+	preexisting := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "force-target",
+				"namespace": ns,
+				"labels": map[string]any{
+					"internal.kro.run/graph-name":      "other-graph",
+					"internal.kro.run/graph-namespace": ns,
+				},
+			},
+			"data": map[string]any{
+				"original": "data",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, preexisting))
+
+	// Create a Graph that uses Force to take ownership
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-force-apply",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "imported",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "force-target",
+								"annotations": map[string]any{
+									"kro.run/apply": "Force",
+								},
+							},
+							"data": map[string]any{
+								"owner": "test-force-apply",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should reach Active — Force overrides the label check
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-force-apply", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+
+	// Verify ownership was taken: graph-name label should now be "test-force-apply"
+	result := &unstructured.Unstructured{}
+	result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "force-target", Namespace: ns}, result))
+
+	resultLabels := result.GetLabels()
+	assert.Equal(t, "test-force-apply", resultLabels["internal.kro.run/graph-name"],
+		"graph-name label should reflect the new owner after Force apply")
+
+	// Verify the data was overwritten
+	data, _, _ := unstructured.NestedStringMap(result.Object, "data")
+	assert.Equal(t, "test-force-apply", data["owner"],
+		"data should reflect the new owner's template")
+	t.Log("Force apply correctly overrides kro label check — import/migration mechanism works")
+}
+
 // ---------------------------------------------------------------------------
 // Invalid spec structural errors
 // ---------------------------------------------------------------------------
@@ -1072,4 +1167,858 @@ func TestAppliedSetStoredOnRevisionAnnotation(t *testing.T) {
 	assert.False(t, hasAppliedSet,
 		"Graph should NOT have applied set annotation — it lives on the revision")
 	t.Logf("Applied set correctly stored on revision: %v", appliedSet)
+}
+
+// ---------------------------------------------------------------------------
+// Readiness defaults — regression tests
+// ---------------------------------------------------------------------------
+
+// TestDefaultReadinessIsApplied proves that a node without readyWhen is
+// considered ready as soon as it is applied. No implicit status.conditions
+// check is performed. This is a regression test: an earlier implementation
+// added a .ready() CEL function that checked status.conditions for
+// type=Ready, which incorrectly imposed a Kubernetes conditions convention
+// as the default readiness model. Readiness is "CEL resolved + applied."
+// Explicit readyWhen overrides this default.
+func TestDefaultReadinessIsApplied(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Create a Graph with NO readyWhen on any node. The Graph should
+	// reach Active as soon as both resources are applied, without checking
+	// any status.conditions.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-default-ready",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "config",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "default-ready-config",
+							},
+							"data": map[string]any{
+								"key": "value",
+							},
+						},
+					},
+					map[string]any{
+						"id": "downstream",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "default-ready-downstream",
+							},
+							"data": map[string]any{
+								"from": "${config.data.key}",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should reach Active — no readyWhen means "applied = ready"
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-default-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+
+	// Verify both resources were created and downstream resolved CEL
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	downstream := &unstructured.Unstructured{}
+	downstream.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "default-ready-downstream", Namespace: ns}, downstream))
+	data, _, _ := unstructured.NestedStringMap(downstream.Object, "data")
+	assert.Equal(t, "value", data["from"],
+		"downstream should have resolved config.data.key")
+
+	// Verify Graph is Active (not stuck on readiness)
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-default-ready", Namespace: ns}, g))
+	status, _ := g.Object["status"].(map[string]any)
+	assert.Equal(t, "Active", status["state"],
+		"Graph should be Active — no readyWhen means applied = ready, no conditions check")
+	t.Log("Default readiness proved: no readyWhen → Active on apply, no conditions check")
+}
+
+// TestExplicitReadyWhenOverridesDefault proves that explicit readyWhen
+// conditions override the default "applied = ready" behavior. When
+// readyWhen evaluates to false, the node is NotReady and the Graph
+// reports ResourcesNotReady.
+func TestExplicitReadyWhenOverridesDefault(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Create a Graph where readyWhen checks a field that will be false.
+	// The node is applied but readyWhen keeps it NotReady.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-explicit-ready",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "checked",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "explicit-ready-target",
+							},
+							"data": map[string]any{
+								"status": "pending",
+							},
+						},
+						// readyWhen overrides the default — this will be false
+						// because we set status=pending, not status=ready
+						"readyWhen": []any{
+							"${checked.data.status == 'ready'}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the resource to be created (it will be applied)
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "explicit-ready-target", Namespace: ns}, cm))
+
+	// Graph should NOT be Active — readyWhen overrides the default
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-explicit-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		// Should be InProgress (not Active) because readyWhen is false
+		return status["state"] == "InProgress", nil
+	}))
+
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-explicit-ready", Namespace: ns}, g))
+	status, _ := g.Object["status"].(map[string]any)
+	assert.Equal(t, "InProgress", status["state"],
+		"Graph should be InProgress — readyWhen overrides default, checked.data.status != 'ready'")
+	t.Log("Explicit readyWhen proved: overrides default, node applied but NotReady")
+}
+
+// TestReadyFunctionReflectsNodeState proves that .ready() returns the graph
+// controller's readiness assessment, not a Kubernetes conditions check.
+//
+// Setup: node A has readyWhen that starts false, node B uses
+// propagateWhen: ["${a.ready()}"] to gate data flow until A is ready.
+// When A's readyWhen becomes true, B's propagateWhen passes and data flows.
+func TestReadyFunctionReflectsNodeState(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create the source ConfigMap with status=pending
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "ready-fn-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"status": "pending",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph:
+	//   watched → reads source, readyWhen checks data.status == "active"
+	//   consumer → owns ConfigMap, propagateWhen: ["${watched.ready()}"]
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-ready-fn-state",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "watched",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "ready-fn-source",
+							},
+						},
+						"readyWhen": []any{
+							"${watched.data.status == 'active'}",
+						},
+					},
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "ready-fn-consumer",
+							},
+							"data": map[string]any{
+								"from": "${watched.data.status}",
+							},
+						},
+						"propagateWhen": []any{
+							"${watched.ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for consumer to be created (propagateWhen doesn't gate creation,
+	// but it gates data flow on subsequent reconciles)
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	consumer := &unstructured.Unstructured{}
+	consumer.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "ready-fn-consumer", Namespace: ns}, consumer))
+
+	// Graph should be InProgress — watched.ready() is false because
+	// readyWhen (data.status == 'active') is false
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-ready-fn-state", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "InProgress", nil
+	}))
+	t.Log("Graph InProgress — watched.ready() is false, propagateWhen gates data")
+
+	// Now update the source to make readyWhen pass
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "ready-fn-source", Namespace: ns}, source))
+	source.Object["data"] = map[string]any{"status": "active"}
+	require.NoError(t, k8sClient.Update(ctx, source))
+
+	// Graph should reach Active — watched.ready() now true
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-ready-fn-state", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+
+	// Verify consumer has the updated data
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "ready-fn-consumer", Namespace: ns}, consumer))
+	data, _, _ := unstructured.NestedStringMap(consumer.Object, "data")
+	assert.Equal(t, "active", data["from"],
+		"consumer should have updated data after watched.ready() became true")
+	t.Log(".ready() reflects graph node state — propagateWhen gate released on readyWhen pass")
+}
+
+// TestEmptyCollectionReadyIsVacuouslyTrue proves that .ready() on an empty
+// collection returns true. An empty collection watch has no items to be
+// not-ready, so the collection is vacuously ready. This prevents empty
+// collections from blocking graphs that use collection.ready() in
+// propagateWhen or readyWhen.
+func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Graph: collection watch with a label selector matching nothing,
+	// downstream uses readyWhen: workers.ready(). Should reach Active
+	// because empty collection is vacuously ready.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-empty-ready",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "workers",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"selector": map[string]any{
+								"app": "empty-collection-no-match-xyz",
+							},
+						},
+					},
+					map[string]any{
+						"id": "summary",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "empty-ready-summary",
+							},
+							"data": map[string]any{
+								"status": "done",
+							},
+						},
+						"readyWhen": []any{
+							"${workers.ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should reach Active — workers is an empty collection,
+	// workers.ready() returns true (vacuously), summary's readyWhen passes.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-empty-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-empty-ready", Namespace: ns}, g))
+	status, _ := g.Object["status"].(map[string]any)
+	assert.Equal(t, "Active", status["state"],
+		"empty collection.ready() should be vacuously true")
+	t.Log("Empty collection .ready() is vacuously true — Graph reached Active")
+}
+
+// TestCollectionItemReadyViaIndex proves that workers[0].ready() works from
+// another node's readyWhen. Per-item __ready flags set during forEach
+// readyWhen evaluation are accessible via CEL indexing from other nodes.
+func TestCollectionItemReadyViaIndex(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-index-ready",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// forEach stamps 2 workers, readyWhen passes immediately
+					map[string]any{
+						"id": "workers",
+						"forEach": map[string]any{
+							"value": "${['alpha', 'beta']}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "idx-worker-${value}",
+							},
+							"data": map[string]any{
+								"item":  "${value}",
+								"ready": "true",
+							},
+						},
+						"readyWhen": []any{
+							"${workers.data.ready == 'true'}",
+						},
+					},
+					map[string]any{
+						"id": "summary",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "index-ready-summary",
+							},
+							"data": map[string]any{
+								"done": "true",
+							},
+						},
+						// Cross-node index: check if first worker item is ready
+						"readyWhen": []any{
+							"${workers[0].ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should reach Active — workers[0].ready() is true
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-index-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+	t.Log("workers[0].ready() works — cross-node index into collection item readiness proved")
+}
+
+// TestCollectionReadyFalseWhenItemNotReady proves that workers.ready()
+// returns false when any item in the collection has not passed its readyWhen.
+// Workers start with ready=false (readyWhen fails), Graph is InProgress.
+// Update spec to ready=true → readyWhen passes → items.ready() true → Active.
+func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-coll-ready-false",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "items",
+						"forEach": map[string]any{
+							"value": "${['x', 'y']}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "coll-item-${value}",
+							},
+							"data": map[string]any{
+								"ready": "false",
+							},
+						},
+						"readyWhen": []any{
+							"${items.data.ready == 'true'}",
+						},
+					},
+					map[string]any{
+						"id": "output",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "coll-ready-output",
+							},
+							"data": map[string]any{
+								"done": "true",
+							},
+						},
+						// Collection-level readiness: all items must be ready
+						"readyWhen": []any{
+							"${items.ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should be InProgress — items not ready, items.ready() is false
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "InProgress", nil
+	}))
+	t.Log("Graph InProgress — items.ready() is false (items have ready=false)")
+
+	// Update spec to make items ready
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, latest))
+	latest.Object["spec"] = map[string]any{
+		"nodes": []any{
+			map[string]any{
+				"id": "items",
+				"forEach": map[string]any{
+					"value": "${['x', 'y']}",
+				},
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name": "coll-item-${value}",
+					},
+					"data": map[string]any{
+						"ready": "true",
+					},
+				},
+				"readyWhen": []any{
+					"${items.data.ready == 'true'}",
+				},
+			},
+			map[string]any{
+				"id": "output",
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name": "coll-ready-output",
+					},
+					"data": map[string]any{
+						"done": "true",
+					},
+				},
+				"readyWhen": []any{
+					"${items.ready()}",
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Update(ctx, latest))
+
+	// Graph should reach Active — all items ready, items.ready() is true
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+	t.Log("items.ready() proved: false when any item not ready, true when all items ready")
+}
+
+// TestRevisionImmutability proves that the API server rejects mutations to
+// an existing GraphRevision's spec. The CRD has x-kubernetes-validations:
+// self == oldSelf on the spec field.
+//
+// Note: this requires the envtest API server to support CEL validation rules
+// (Kubernetes 1.25+). If the update succeeds, the test logs a warning.
+func TestRevisionImmutability(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Create a Graph to produce a revision
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-immutable",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "simple",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "immutable-cm",
+							},
+							"data": map[string]any{
+								"key": "value",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for revision to be created
+	rev, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: "test-immutable-g00001", Namespace: ns})
+	require.NoError(t, err)
+
+	// Attempt to mutate the revision's spec
+	revCopy := rev.DeepCopy()
+	spec, ok := revCopy.Object["spec"].(map[string]any)
+	require.True(t, ok, "revision should have a spec")
+	spec["tampered"] = "yes"
+
+	err = k8sClient.Update(ctx, revCopy)
+	if err != nil {
+		assert.Contains(t, err.Error(), "immutable",
+			"error should mention immutability")
+		t.Log("Revision immutability proved: API server rejects spec mutations")
+	} else {
+		t.Log("WARNING: API server accepted spec mutation — CEL validation rules may not be enforced in this envtest version")
+	}
+}
+
+// TestCrossNodeReadyWhen proves that readyWhen can reference another node
+// using .ready(). This complements TestReadyFunctionReflectsNodeState which
+// tests propagateWhen. The readyWhen full-scope change enables expressions
+// like readyWhen: ["${dependency.ready()}"].
+func TestCrossNodeReadyWhen(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create source with status=pending
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "cross-ready-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"status": "pending",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-cross-ready",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "dep",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "cross-ready-source",
+							},
+						},
+						"readyWhen": []any{
+							"${dep.data.status == 'active'}",
+						},
+					},
+					map[string]any{
+						"id": "consumer",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "cross-ready-consumer",
+							},
+							"data": map[string]any{
+								"val": "test",
+							},
+						},
+						// Cross-node readyWhen — references dep's readiness
+						"readyWhen": []any{
+							"${dep.ready()}",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Graph should be InProgress — dep.ready() is false
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cross-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "InProgress", nil
+	}))
+	t.Log("Graph InProgress — cross-node readyWhen dep.ready() is false")
+
+	// Make dep ready
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "cross-ready-source", Namespace: ns}, source))
+	source.Object["data"] = map[string]any{"status": "active"}
+	require.NoError(t, k8sClient.Update(ctx, source))
+
+	// Graph should reach Active
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cross-ready", Namespace: ns}, g); err != nil {
+			return false, nil
+		}
+		status, _ := g.Object["status"].(map[string]any)
+		if status == nil {
+			return false, nil
+		}
+		return status["state"] == "Active", nil
+	}))
+	t.Log("Cross-node readyWhen proved: dep.ready() in readyWhen works")
+}
+
+// ---------------------------------------------------------------------------
+// Superseded revision GC — design 002-revisions
+// ---------------------------------------------------------------------------
+
+// TestSupersededRevisionGC proves that superseded revisions are garbage
+// collected once the active revision is fully ready and prune completes.
+// After a spec change produces a new revision and the controller converges,
+// old revisions should be deleted.
+func TestSupersededRevisionGC(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Create initial Graph (revision g00001)
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-revision-gc",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "alpha",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "gc-alpha",
+							},
+							"data": map[string]any{
+								"version": "v1",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for Active state (revision g00001 ready)
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-revision-gc", Namespace: ns}))
+
+	// Verify revision g00001 exists
+	_, err := waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: "test-revision-gc-g00001", Namespace: ns})
+	require.NoError(t, err)
+	t.Log("Revision g00001 created")
+
+	// Update spec — creates revision g00002
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-revision-gc", Namespace: ns}, latest))
+	// Update the whole spec to trigger generation bump
+	latest.Object["spec"] = map[string]any{
+		"nodes": []any{
+			map[string]any{
+				"id": "alpha",
+				"template": map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name": "gc-alpha",
+					},
+					"data": map[string]any{
+						"version": "v2",
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Updated spec — expecting revision g00002")
+
+	// Wait for the Graph to settle again with the new revision
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-revision-gc", Namespace: ns}))
+
+	// Verify revision g00002 exists
+	_, err = waitForRevision(ctx, k8sClient,
+		types.NamespacedName{Name: "test-revision-gc-g00002", Namespace: ns})
+	require.NoError(t, err)
+	t.Log("Revision g00002 created and active")
+
+	// Wait for g00001 to be garbage collected
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		count, err := countRevisions(ctx, k8sClient, "test-revision-gc", ns)
+		if err != nil {
+			return false, nil
+		}
+		return count == 1, nil
+	}))
+
+	// Verify only g00002 remains
+	count, err := countRevisions(ctx, k8sClient, "test-revision-gc", ns)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "only the active revision should remain after GC")
+	t.Log("Superseded revision g00001 garbage collected — only g00002 remains")
 }

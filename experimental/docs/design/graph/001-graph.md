@@ -165,21 +165,47 @@ nodes that depend on it cannot evaluate (the data is not in scope) and are also 
 
 #### readyWhen
 
-A list of CEL expressions. All must evaluate to `true` for the node to be considered ready.
-readyWhen is a health signal — it feeds the Graph's aggregated status and tells operators whether
-the system has converged. It does not gate downstream execution. Dependents proceed as soon as the
-node is processed and its data is in scope, regardless of readyWhen. If a downstream CEL
-expression references a field that does not yet exist on the resource, the expression fails to
-evaluate and the dependent is not applied — data availability is an implicit gate. propagateWhen is
-for the case where the field exists but is not yet valid.
+A node is ready when its CEL expressions resolve and its apply or read succeeds — no implicit
+status conditions check is performed. This is the default behavior when readyWhen is absent.
 
-Any object in scope exposes a `.ready()` CEL function that evaluates the object's standard
-Kubernetes readiness conditions.
+readyWhen overrides this default with explicit CEL conditions. All expressions must evaluate to
+`true` for the node to be considered ready. readyWhen is a health signal — it feeds the Graph's
+aggregated status and tells operators whether the system has converged. It does not gate downstream
+execution. Dependents proceed as soon as the node is processed and its data is in scope, regardless
+of readyWhen. If a downstream CEL expression references a field that does not yet exist on the
+resource, the expression fails to evaluate and the dependent is not applied — data availability is
+an implicit gate. propagateWhen is for the case where the field exists but is not yet valid.
+
+Any object in scope exposes a `.ready()` CEL function that returns the graph controller's readiness
+assessment for that node. `.ready()` returns true when the node is applied and its readyWhen
+conditions pass (or the node has no readyWhen). This is the graph's own readiness model, not a
+Kubernetes conditions check.
+
+For collection nodes (forEach, collection watch), `.ready()` returns true when all items in the
+collection are ready. A collection's readiness is a function of its children's readiness.
+
+`.ready()` is not transitive across the DAG — it reflects only the node's own readiness, not its
+dependencies'. Most dependencies are partial (you depend on `dep.spec.something`, not full
+convergence of the dependency subgraph). If you want to assert transitive readiness, do so
+explicitly:
 
 ```yaml
 - id: deployment
   readyWhen:
     - ${deployment.status.availableReplicas > 0}
+  template: ...
+
+# .ready() in propagateWhen — gate data flow until dependency converges
+- id: consumer
+  propagateWhen:
+    - ${deployment.ready()}
+  template: ...
+
+# Explicit transitive readiness — assert each dependency
+- id: output
+  propagateWhen:
+    - ${deployment.ready()}
+    - ${database.ready()}
   template: ...
 ```
 

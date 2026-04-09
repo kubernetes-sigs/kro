@@ -18,5 +18,12 @@ spec:
         openAPIV3Schema:
           type: object
           x-kubernetes-preserve-unknown-fields: true
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              x-kubernetes-validations:
+                - rule: "self == oldSelf"
+                  message: "GraphRevision spec is immutable"
       subresources:
         status: {}

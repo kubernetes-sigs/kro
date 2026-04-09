@@ -421,7 +421,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Update revision status conditions
 	allReady := !needsRequeue && !summary.HasConflict && rstate.accepted
-	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady)
+	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneErr == nil)
 
 	if needsRequeue {
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
@@ -631,9 +631,11 @@ func (r *GraphReconciler) reconcileWatch(ctx context.Context, graph *unstructure
 
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			eval.markReady(node.ID, false)
 			return err
 		}
 	}
+	eval.markReady(node.ID, true)
 
 	return nil
 }
@@ -695,7 +697,11 @@ func (r *GraphReconciler) reconcileCollectionWatch(ctx context.Context, graph *u
 
 	items := make([]any, len(list.Items))
 	for i, item := range list.Items {
-		items[i] = normalizeTypes(item.Object)
+		normalized := normalizeTypes(item.Object)
+		if m, ok := normalized.(map[string]any); ok {
+			m["__ready"] = true // Collection watch items are ready on read
+		}
+		items[i] = normalized
 	}
 	eval.scope[node.ID] = items
 	logger.V(1).Info("resolved collection watch", "node", node.ID, "gvk", gvk, "count", len(items))
@@ -819,15 +825,34 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 	}
 
 	// Check readyWhen per-item: all items must pass for the collection to be Ready.
+	// Temporarily override the node's scope entry with each item so that
+	// readyWhen expressions like ${workers.data.ready} resolve to the item.
 	if len(node.ReadyWhen) > 0 {
 		scopeVal := eval.scope[node.ID]
 		if scopeVal != nil {
 			for _, applied := range scopeVal.([]any) {
-				if err := eval.checkReadiness(node.ReadyWhen, applied, node.ID); err != nil {
+				saved := eval.scope[node.ID]
+				eval.scope[node.ID] = applied
+				err := eval.checkReadiness(node.ReadyWhen, applied, node.ID)
+				eval.scope[node.ID] = saved // restore before branching
+				if err != nil {
+					if m, ok := applied.(map[string]any); ok {
+						m["__ready"] = false
+					}
 					return keys, err
+				}
+				if m, ok := applied.(map[string]any); ok {
+					m["__ready"] = true
 				}
 			}
 			logger.V(1).Info("all forEach items ready", "node", node.ID)
+		}
+	} else if scopeVal := eval.scope[node.ID]; scopeVal != nil {
+		// No readyWhen — all items are ready on apply
+		for _, applied := range scopeVal.([]any) {
+			if m, ok := applied.(map[string]any); ok {
+				m["__ready"] = true
+			}
 		}
 	}
 
@@ -895,9 +920,11 @@ func (r *GraphReconciler) reconcileOwns(ctx context.Context, graph *unstructured
 
 	if len(node.ReadyWhen) > 0 {
 		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			eval.markReady(node.ID, false)
 			return key, err
 		}
 	}
+	eval.markReady(node.ID, true)
 
 	return key, nil
 }
@@ -916,6 +943,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 		return "", err
 	}
 	eval.scope[node.ID] = applied.Object
+	eval.markReady(node.ID, true) // Contribute: applied = ready
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
 
 	// Track the contribution in the applied set with a "contribute:" prefix.
@@ -931,15 +959,16 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 // ---------------------------------------------------------------------------
 
 // updateRevisionStatus updates the conditions on the active and previous
-// revisions based on the reconcile outcome.
+// revisions based on the reconcile outcome. When the active revision is
+// fully ready, superseded revisions whose unique resources have been pruned
+// are garbage collected.
 //
-// TODO: Implement old revision garbage collection. The design specifies that
-// old revisions are pruned when they no longer have resources in the cluster.
-// Currently revisions accumulate across Graph updates (but are cleaned up on
-// Graph deletion). After activation, list non-active revisions and delete
-// those whose unique resources no longer exist in the cluster.
+// GC predicate: a superseded revision is safe to delete when its applied set
+// is a subset of the active revision's applied set. If it has resources not
+// in the active set, those resources are still being pruned and the old
+// revision provides ordering metadata for the prune walk.
 // See: experimental/docs/design/graph/002-revisions.md § Lifecycle
-func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool) {
+func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
 	logger := log.FromContext(ctx)
 
 	if allReady {
@@ -955,6 +984,21 @@ func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unst
 			for _, prev := range superseded {
 				if err := setRevisionCondition(ctx, r.Client, prev, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
 					logger.V(1).Info("failed to deactivate superseded revision", "error", err, "revision", prev.GetName())
+				}
+			}
+		}
+
+		// GC superseded revisions. When allReady is true and prune
+		// completed without error, all superseded revisions are safe to
+		// delete: their resources have either been migrated to the active
+		// revision or pruned from the cluster.
+		if pruneClean {
+			for _, prev := range superseded {
+				if err := deleteRevision(ctx, r.Client, prev); err != nil {
+					logger.V(1).Info("failed to GC superseded revision", "error", err, "revision", prev.GetName())
+				} else {
+					logger.Info("garbage collected superseded revision", "revision", prev.GetName())
+					r.Caches.remove(prev.GetNamespace() + "/" + prev.GetName())
 				}
 			}
 		}

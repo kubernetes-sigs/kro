@@ -116,19 +116,26 @@ func (e *evaluator) evalBoolCondition(expr string) (bool, error) {
 	}
 }
 
-// checkReadiness evaluates readyWhen conditions against an observed resource.
+// markReady injects the __ready flag into a node's scope data. This is
+// read by the .ready() CEL member function to expose the graph controller's
+// readiness assessment to CEL expressions like propagateWhen and readyWhen.
+func (e *evaluator) markReady(nodeID string, ready bool) {
+	if m, ok := e.scope[nodeID].(map[string]any); ok {
+		m["__ready"] = ready
+	}
+}
+
+// checkReadiness evaluates readyWhen conditions against the full scope.
 // Returns nil if all conditions pass, ErrWaitingForReadiness if any are false
-// or data-pending.
+// or data-pending. Evaluates against the full scope so readyWhen can reference
+// other nodes (e.g., readyWhen: ["${workers.ready()}"]).
 func (e *evaluator) checkReadiness(conditions []string, observed any, nodeID string) error {
 	if len(conditions) == 0 {
 		return nil
 	}
 
-	// Build a scoped evaluator with just this node's observed state
-	readyEval := e.withScope(map[string]any{nodeID: observed})
-
 	for _, cond := range conditions {
-		ok, err := readyEval.evalBoolCondition(cond)
+		ok, err := e.evalBoolCondition(cond)
 		if err != nil {
 			if isDataPending(err) {
 				return fmt.Errorf("node %q: readyWhen %q: data not yet available: %w", nodeID, cond, ErrWaitingForReadiness)

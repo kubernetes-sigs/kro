@@ -158,6 +158,7 @@ func compileGraph(spec *GraphSpec, generation int64) (*graphCache, error) {
 		krocel.WithResourceIDs(allIDs),
 		krocel.WithCustomDeclarations(celPluralFunction()),
 		krocel.WithCustomDeclarations(celSimpleSchemaFunction()),
+		krocel.WithCustomDeclarations(celReadyFunction()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating CEL env: %w", err)
@@ -240,6 +241,65 @@ func celPluralFunction() []cel.EnvOption {
 					s := val.Value().(string)
 					return types.String(flect.Pluralize(s))
 				}),
+			),
+		),
+	}
+}
+
+// celReadyFunction returns CEL env options for the .ready() member function.
+//
+// .ready() returns whether the graph controller considers a node ready.
+// The readiness state is injected into the scope data as "__ready" after
+// each node is processed during the DAG walk:
+//   - No readyWhen: __ready = true (applied = ready)
+//   - With readyWhen: __ready = (all conditions passed)
+//
+// For scalar nodes (Watch, Owns, Contribute), .ready() reads __ready from
+// the object map. For collection nodes (forEach, collection watch), .ready()
+// returns true when ALL items have __ready == true — the collection's
+// readiness is a function of its children's readiness.
+//
+// This enables expressions like:
+//
+//	propagateWhen: ["${dependency.ready()}"]
+//	readyWhen: ["${workers.ready()}"]  // true when all forEach items ready
+func celReadyFunction() []cel.EnvOption {
+	impl := func(val ref.Val) ref.Val {
+		native, err := conversion.GoNativeType(val)
+		if err != nil {
+			return types.Bool(false)
+		}
+		switch obj := native.(type) {
+		case map[string]any:
+			// Scalar node — read __ready directly
+			ready, _ := obj["__ready"].(bool)
+			return types.Bool(ready)
+		case []any:
+			// Collection node — all items must be ready
+			if len(obj) == 0 {
+				return types.Bool(true) // empty collection is vacuously ready
+			}
+			for _, item := range obj {
+				m, ok := item.(map[string]any)
+				if !ok {
+					return types.Bool(false)
+				}
+				ready, _ := m["__ready"].(bool)
+				if !ready {
+					return types.Bool(false)
+				}
+			}
+			return types.Bool(true)
+		default:
+			return types.Bool(false)
+		}
+	}
+	return []cel.EnvOption{
+		cel.Function("ready",
+			cel.MemberOverload("dyn_ready",
+				[]*cel.Type{cel.DynType},
+				cel.BoolType,
+				cel.UnaryBinding(impl),
 			),
 		),
 	}

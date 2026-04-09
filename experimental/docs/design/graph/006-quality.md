@@ -1,17 +1,18 @@
 # Quality
 
-Code is cheap to produce. Quality is cheap to improve. Every reconciliation pass pushes each
-dimension closer to its asymptotic limit — bugs are squashed, performance improves, coverage
-increases, duplicated code collapses. 100% on any dimension may be cost ineffective; the direction
-matters more than arrival.
-
-The default is no tradeoffs. When a conflict appears between quality dimensions, the design space
-hasn't been explored enough. When the conflict is genuine and irreducible:
+The designs are the desired state. The code is the current state. Every judgment below is relative to
+what the designs say, not what the code currently does.
 
 **Correctness > Performance > Observability > Testing > Simplicity**
 
-Work through every item in every section. The last item in each section is intentionally open-ended —
-use it to surface opportunities the other items don't cover.
+This is the priority order — for attention, for findings, for time spent. The default is no
+tradeoffs; when the conflict is genuine and irreducible, this ordering decides.
+
+Code is cheap to produce. Quality is cheap to improve. Don't cut scope — work through every item.
+The last item in each section is intentionally open-ended.
+
+Structural before aesthetic — but aesthetics matter. Beautiful code tends to be correct; if it won't
+read clean, the structure isn't right yet.
 
 ## Correctness
 
@@ -56,6 +57,7 @@ don't.
 - [ ] Correctness tests cover happy paths and edge cases
 - [ ] Fault injection tests exercise error paths
 - [ ] Regression tests accompany bug fixes and prevent recurrence
+- [ ] Tests do not flake — assertions observe completion, never guess timing
 - [ ] Think deeply about other testing opportunities we might have missed
 
 ## Simplicity

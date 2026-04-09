@@ -627,3 +627,107 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 	}
 	return result, nil
 }
+
+// ---------------------------------------------------------------------------
+// Applied set — annotation-based tracking of what keys a revision wrote
+// ---------------------------------------------------------------------------
+
+// setAppliedSet writes the applied key set as a JSON annotation on the revision.
+func setAppliedSet(ctx context.Context, c client.Client, revision *unstructured.Unstructured, keys []string) error {
+	sorted := make([]string, len(keys))
+	copy(sorted, keys)
+	sort.Strings(sorted)
+
+	data, err := json.Marshal(sorted)
+	if err != nil {
+		return fmt.Errorf("marshaling applied set: %w", err)
+	}
+
+	newValue := string(data)
+
+	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
+	if err != nil {
+		return fmt.Errorf("re-fetching revision for applied set: %w", err)
+	}
+
+	annotations := latest.GetAnnotations()
+	if annotations != nil && annotations[AnnotationAppliedSet] == newValue {
+		return nil
+	}
+
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[AnnotationAppliedSet] = newValue
+	latest.SetAnnotations(annotations)
+	return c.Update(ctx, latest)
+}
+
+func getAppliedSet(revision *unstructured.Unstructured) []string {
+	annotations := revision.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	raw, ok := annotations[AnnotationAppliedSet]
+	if !ok || raw == "" {
+		return nil
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return nil
+	}
+	return keys
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton apply — release field ownership without deleting the object
+// ---------------------------------------------------------------------------
+
+func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
+	apiVersion := gvk.Group + "/" + gvk.Version
+	if gvk.Group == "" {
+		apiVersion = gvk.Version
+	}
+	skeleton := map[string]any{
+		"apiVersion": apiVersion,
+		"kind":       gvk.Kind,
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": namespace,
+		},
+	}
+
+	data, err := json.Marshal(skeleton)
+	if err != nil {
+		return fmt.Errorf("marshaling skeleton: %w", err)
+	}
+
+	target := &unstructured.Unstructured{}
+	target.SetGroupVersionKind(gvk)
+	target.SetName(name)
+	target.SetNamespace(namespace)
+	if err := c.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.ForceOwnership); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("skeleton apply for %s/%s: %w", namespace, name, err)
+	}
+
+	if hasStatus {
+		statusData, err := json.Marshal(skeleton)
+		if err != nil {
+			return fmt.Errorf("marshaling status skeleton: %w", err)
+		}
+		statusTarget := &unstructured.Unstructured{}
+		statusTarget.SetGroupVersionKind(gvk)
+		statusTarget.SetName(name)
+		statusTarget.SetNamespace(namespace)
+		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("skeleton status apply for %s/%s: %w", namespace, name, err)
+			}
+		}
+	}
+
+	return nil
+}

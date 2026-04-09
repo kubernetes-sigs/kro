@@ -18,7 +18,6 @@ package graphcontroller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -28,9 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // GraphRevisionGVK is the GVK for the GraphRevision custom resource.
@@ -432,105 +431,197 @@ func deepCopyValue(v any) any {
 }
 
 // ---------------------------------------------------------------------------
-// Applied set — annotation-based tracking of what keys a revision wrote
+// Phase 1: Revision management
 // ---------------------------------------------------------------------------
 
-// setAppliedSet writes the applied key set as a JSON annotation on the revision.
-func setAppliedSet(ctx context.Context, c client.Client, revision *unstructured.Unstructured, keys []string) error {
-	sorted := make([]string, len(keys))
-	copy(sorted, keys)
-	sort.Strings(sorted)
+// ensureRevision guarantees that a GraphRevision exists for the current Graph
+// generation. Returns the active revision to reconcile from, and all
+// superseded revisions for prune diffing.
+//
+// Per the design (004-graph-execution): the prune candidate set is the union
+// of all superseded revisions' applied sets minus the active revision's
+// applied set. Returning all superseded revisions (not just the most recent)
+// prevents multi-hop transitions from orphaning resources.
+//
+// On first reconcile (no revisions exist): creates revision, returns it as active.
+// On spec change (new generation): creates new revision, returns it as active
+// and all older revisions as superseded.
+// On steady state: returns existing active revision, nil superseded.
+func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructured.Unstructured) (active *unstructured.Unstructured, superseded []*unstructured.Unstructured, err error) {
+	logger := log.FromContext(ctx)
+	graphName := graph.GetName()
+	namespace := graph.GetNamespace()
+	generation := graph.GetGeneration()
 
-	data, err := json.Marshal(sorted)
+	// Check if a revision already exists for this generation
+	revName := revisionName(graphName, generation)
+	existing, err := getRevision(ctx, r.Client, revName, namespace)
+	if err == nil {
+		// Revision exists for this generation. Collect superseded revisions.
+		superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
+		return existing, superseded, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, nil, fmt.Errorf("checking revision %s: %w", revName, err)
+	}
+
+	// No revision for this generation. Parse, compile, and create one.
+	// If compilation fails, no revision is created — the failure is reported
+	// on the Graph. A revision can only exist if processing succeeded.
+	graphSpec, err := extractGraphSpec(graph.Object)
 	if err != nil {
-		return fmt.Errorf("marshaling applied set: %w", err)
+		return nil, nil, fmt.Errorf("extracting graph spec: %w", err)
 	}
 
-	newValue := string(data)
-
-	latest, err := getRevision(ctx, c, revision.GetName(), revision.GetNamespace())
+	// Compile to verify validity before creating the revision.
+	_, err = compileGraph(graphSpec)
 	if err != nil {
-		return fmt.Errorf("re-fetching revision for applied set: %w", err)
+		return nil, nil, err
 	}
 
-	annotations := latest.GetAnnotations()
-	if annotations != nil && annotations[AnnotationAppliedSet] == newValue {
-		return nil
-	}
-
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-	annotations[AnnotationAppliedSet] = newValue
-	latest.SetAnnotations(annotations)
-	return c.Update(ctx, latest)
-}
-
-func getAppliedSet(revision *unstructured.Unstructured) []string {
-	annotations := revision.GetAnnotations()
-	if annotations == nil {
-		return nil
-	}
-	raw, ok := annotations[AnnotationAppliedSet]
-	if !ok || raw == "" {
-		return nil
-	}
-	var keys []string
-	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
-		return nil
-	}
-	return keys
-}
-
-// ---------------------------------------------------------------------------
-// Skeleton apply — release field ownership without deleting the object
-// ---------------------------------------------------------------------------
-
-func skeletonApply(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, namespace, name string, fieldOwner client.FieldOwner, hasStatus bool) error {
-	apiVersion := gvk.Group + "/" + gvk.Version
-	if gvk.Group == "" {
-		apiVersion = gvk.Version
-	}
-	skeleton := map[string]any{
-		"apiVersion": apiVersion,
-		"kind":       gvk.Kind,
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": namespace,
-		},
-	}
-
-	data, err := json.Marshal(skeleton)
-	if err != nil {
-		return fmt.Errorf("marshaling skeleton: %w", err)
-	}
-
-	target := &unstructured.Unstructured{}
-	target.SetGroupVersionKind(gvk)
-	target.SetName(name)
-	target.SetNamespace(namespace)
-	if err := c.Patch(ctx, target, client.RawPatch(types.ApplyPatchType, data), fieldOwner, client.ForceOwnership); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+	// Materialize the revision
+	revision := materialize(graph, graphSpec)
+	if err := createRevision(ctx, r.Client, revision); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Race: another reconcile created it. Fetch and use it.
+			existing, getErr := getRevision(ctx, r.Client, revName, namespace)
+			if getErr != nil {
+				return nil, nil, fmt.Errorf("fetching existing revision after race: %w", getErr)
+			}
+			superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
+			return existing, superseded, nil
 		}
-		return fmt.Errorf("skeleton apply for %s/%s: %w", namespace, name, err)
+		return nil, nil, fmt.Errorf("creating revision %s: %w", revName, err)
+	}
+	logger.Info("created revision", "revision", revName, "generation", generation)
+
+	// Set initial conditions on the new revision
+	if err := setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision"); err != nil {
+		logger.V(1).Info("failed to set initial Propagated condition", "revision", revName, "error", err)
 	}
 
-	if hasStatus {
-		statusData, err := json.Marshal(skeleton)
+	// Collect superseded revisions for prune diffing
+	superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
+
+	// Re-fetch the revision to get the server-assigned metadata
+	active, err = getRevision(ctx, r.Client, revName, namespace)
+	if err != nil {
+		return nil, nil, fmt.Errorf("re-fetching revision %s: %w", revName, err)
+	}
+
+	return active, superseded, nil
+}
+
+// findSupersededRevisions returns all revisions for a Graph with generation
+// less than the current generation. These are the revisions whose applied
+// sets must be unioned to compute the prune candidate set.
+func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName, namespace string, currentGen int64) []*unstructured.Unstructured {
+	revisions, err := listRevisions(ctx, r.Client, graphName, namespace)
+	if err != nil {
+		return nil
+	}
+
+	var result []*unstructured.Unstructured
+	for _, rev := range revisions {
+		if revisionGeneration(rev) < currentGen {
+			result = append(result, rev)
+		}
+	}
+	return result
+}
+
+// compileRevision parses and compiles a revision's spec, using two cache layers:
+//   - Instance state: keyed by namespace/revision-name (per-Graph mutable state)
+//   - Compiled graph: keyed by spec content hash (shared across identical specs)
+//
+// For N identical child graphs (common in nested graph patterns with forEach),
+// this means 1 compilation + N-1 hash lookups instead of N compilations.
+func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (*GraphSpec, *instanceState, error) {
+	instanceKey := revision.GetNamespace() + "/" + revision.GetName()
+
+	// Fast path: instance state already exists (steady-state reconcile).
+	if existing := r.Caches.get(instanceKey); existing != nil {
+		return existing.compiled.spec, existing, nil
+	}
+
+	// Parse the spec.
+	spec, err := extractRevisionSpec(revision)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Check for a shared compiled graph by spec hash.
+	specHash := spec.Hash()
+	compiled := r.Caches.getCompiled(specHash)
+	if compiled == nil {
+		// No shared compiled graph — compile from scratch.
+		compiled, err = compileGraphSpec(spec)
 		if err != nil {
-			return fmt.Errorf("marshaling status skeleton: %w", err)
+			return nil, nil, err
 		}
-		statusTarget := &unstructured.Unstructured{}
-		statusTarget.SetGroupVersionKind(gvk)
-		statusTarget.SetName(name)
-		statusTarget.SetNamespace(namespace)
-		if err := c.Status().Patch(ctx, statusTarget, client.RawPatch(types.ApplyPatchType, statusData), fieldOwner, client.ForceOwnership); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("skeleton status apply for %s/%s: %w", namespace, name, err)
+	}
+
+	// Create per-instance mutable state pointing to the shared compiled graph.
+	state := newInstanceState(compiled)
+	r.Caches.set(instanceKey, state)
+	return spec, state, nil
+}
+
+// ---------------------------------------------------------------------------
+// Revision status
+// ---------------------------------------------------------------------------
+
+// updateRevisionStatus updates the conditions on the active and previous
+// revisions based on the reconcile outcome. When the active revision is
+// fully ready, superseded revisions whose unique resources have been pruned
+// are garbage collected.
+//
+// GC predicate: a superseded revision is safe to delete when its applied set
+// is a subset of the active revision's applied set. If it has resources not
+// in the active set, those resources are still being pruned and the old
+// revision provides ordering metadata for the prune walk.
+// See: experimental/docs/design/graph/002-revisions.md § Lifecycle
+func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
+	logger := log.FromContext(ctx)
+
+	if allReady {
+		// All resources are ready — activate this revision
+		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionTrue, "Ready", "All resources reconciled"); err != nil {
+			logger.V(1).Info("failed to set revision Ready", "error", err)
+		}
+		if revisionConditionStatus(active, RevisionConditionActive) != ConditionTrue {
+			if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionActive, ConditionTrue, "Active", "This is the current revision"); err != nil {
+				logger.V(1).Info("failed to set revision Active", "error", err)
+			}
+			// Deactivate all superseded revisions
+			for _, prev := range superseded {
+				if err := setRevisionCondition(ctx, r.Client, prev, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
+					logger.V(1).Info("failed to deactivate superseded revision", "error", err, "revision", prev.GetName())
+				}
 			}
 		}
-	}
 
-	return nil
+		// GC superseded revisions. When allReady is true and prune
+		// completed without error, all superseded revisions are safe to
+		// delete: their resources have either been migrated to the active
+		// revision or pruned from the cluster.
+		if pruneClean {
+			for _, prev := range superseded {
+				if err := deleteRevision(ctx, r.Client, prev); err != nil {
+					logger.V(1).Info("failed to GC superseded revision", "error", err, "revision", prev.GetName())
+				} else {
+					logger.Info("garbage collected superseded revision", "revision", prev.GetName())
+					r.Caches.remove(prev.GetNamespace() + "/" + prev.GetName())
+				}
+			}
+		}
+	} else {
+		// Resources still converging — mark as not yet ready.
+		// Use Unknown (not False) to distinguish "not yet evaluated" from
+		// "evaluated and failed." Per the design: Ready starts Unknown,
+		// converges to True when fully propagated.
+		if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionReady, ConditionUnknown, "Progressing", "Resources not yet fully reconciled"); err != nil {
+			logger.V(1).Info("failed to set revision Ready=Unknown", "error", err)
+		}
+	}
 }

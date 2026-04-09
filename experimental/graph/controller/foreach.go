@@ -1,0 +1,256 @@
+// foreach.go implements forEach node expansion — stamping a template once per
+// item in a collection. Includes item diffing (identity comparison, unchanged
+// detection) and the snapshot/merge plumbing for passing forEach state between
+// the coordinator and workers.
+package graphcontroller
+
+import (
+	"context"
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+// snapshotFor builds a worker evaluator for a specific node. The snapshot
+// contains the node's dependency data (read-only) and, for forEach nodes,
+// the previous forEach state from the instance. The worker writes to its own
+// maps — the coordinator merges them back after the worker returns.
+func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
+	snap := make(map[string]any, len(node.Dependencies))
+	for depID := range node.Dependencies {
+		if v, ok := e.scope[depID]; ok {
+			snap[depID] = v
+		}
+	}
+
+	worker := &evaluator{
+		compiled:         e.compiled,
+		scope:            snap,
+		forEachNewScope:  map[string]map[string]any{},
+		forEachNewKeys:   map[string]map[string][]string{},
+		forEachNewItems:  map[string][]any{},
+		forEachPrevItems: map[string][]any{},
+		forEachPrevScope: map[string]map[string]any{},
+		forEachPrevKeys:  map[string]map[string][]string{},
+	}
+
+	// Copy forEach previous state from the shared instance for this node.
+	if node.ForEach != nil && state != nil {
+		for varName := range node.ForEach {
+			cacheKey := node.ID + "/" + varName
+			if items, ok := state.forEachItems[cacheKey]; ok {
+				worker.forEachPrevItems[cacheKey] = items
+			}
+		}
+		// Copy per-item state — keyed by node ID in outer map.
+		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
+			copied := make(map[string]any, len(itemScope))
+			for k, v := range itemScope {
+				copied[k] = v
+			}
+			worker.forEachPrevScope[node.ID] = copied
+		}
+		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
+			copied := make(map[string][]string, len(itemKeys))
+			for k, v := range itemKeys {
+				copied[k] = v
+			}
+			worker.forEachPrevKeys[node.ID] = copied
+		}
+	}
+
+	return worker
+}
+
+// reconcileForEach iterates a collection and stamps the template per item.
+// Implements forEach item diffing from design 004: the parent diffs the
+// current collection against cached state and only re-evaluates changed items.
+//
+// forEach state is passed in via the evaluator's forEachPrev* fields and
+// returned via forEachNew* fields. The coordinator merges the output back
+// into the shared cache — workers never touch shared state directly.
+func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+	logger := log.FromContext(ctx)
+	var keys []string
+
+	for varName, collectionExpr := range node.ForEach {
+		collection, err := eval.evalString(collectionExpr)
+		if err != nil {
+			if isDataPending(err) {
+				return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, ErrDataPending)
+			}
+			return nil, fmt.Errorf("evaluating collection %q: %w", collectionExpr, err)
+		}
+
+		items, ok := collection.([]any)
+		if !ok {
+			items = []any{collection}
+		}
+		logger.V(1).Info("forEach expanding", "node", node.ID, "var", varName, "count", len(items))
+
+		// Build identity → item map for the current collection.
+		currentItems := make(map[string]any, len(items))
+		var currentOrder []string
+		for _, item := range items {
+			id := forEachItemIdentity(item)
+			currentItems[id] = item
+			currentOrder = append(currentOrder, id)
+		}
+
+		// Build previous identity → item map from the worker's snapshot.
+		cacheKey := node.ID + "/" + varName
+		prevItems := make(map[string]any)
+		if prev, ok := eval.forEachPrevItems[cacheKey]; ok {
+			for _, item := range prev {
+				id := forEachItemIdentity(item)
+				prevItems[id] = item
+			}
+		}
+
+		// Load per-item previous state from nested maps (keyed by node ID, then item ID).
+		prevItemScope := eval.forEachPrevScope[node.ID]
+		if prevItemScope == nil {
+			prevItemScope = map[string]any{}
+		}
+		prevItemKeys := eval.forEachPrevKeys[node.ID]
+		if prevItemKeys == nil {
+			prevItemKeys = map[string][]string{}
+		}
+
+		// Prepare output maps for this node.
+		newItemScope := make(map[string]any)
+		newItemKeys := make(map[string][]string)
+
+		// Diff: identify changed, unchanged, and removed items.
+		var allApplied []any
+		for _, id := range currentOrder {
+			item := currentItems[id]
+			prevItem, existed := prevItems[id]
+
+			// Skip unchanged items: retain previous applied state.
+			if existed && forEachItemUnchanged(prevItem, item) {
+				if prevKeys, ok := prevItemKeys[id]; ok {
+					keys = append(keys, prevKeys...)
+				}
+				if prevScope, ok := prevItemScope[id]; ok {
+					allApplied = append(allApplied, prevScope)
+					// Carry forward to new state.
+					newItemScope[id] = prevScope
+					newItemKeys[id] = prevItemKeys[id]
+					logger.V(2).Info("forEach item unchanged, skipping", "node", node.ID, "item", id)
+					continue
+				}
+				// No previous scope — fall through to evaluate.
+			}
+
+			if node.Template == nil {
+				continue
+			}
+			innerScope := copyScope(eval.scope)
+			innerScope[varName] = item
+			innerEval := eval.withScope(innerScope)
+
+			evalMap, err := innerEval.toMap(node.Template)
+			if err != nil {
+				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
+			}
+
+			applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID)
+			if err != nil {
+				return keys, fmt.Errorf("applying %s item: %w", node.ID, err)
+			}
+			allApplied = append(allApplied, applied.Object)
+			itemKeys := []string{resourceKey(applied)}
+			keys = append(keys, itemKeys...)
+
+			// Record per-item state.
+			newItemScope[id] = applied.Object
+			newItemKeys[id] = itemKeys
+		}
+
+		// Record updated state for coordinator to merge back.
+		eval.forEachNewScope[node.ID] = newItemScope
+		eval.forEachNewKeys[node.ID] = newItemKeys
+
+		// Record updated collection for next reconcile's diff.
+		eval.forEachNewItems[cacheKey] = items
+
+		eval.scope[node.ID] = allApplied
+	}
+
+	// Check readyWhen per-item: all items must pass for the collection to be Ready.
+	// Temporarily override the node's scope entry with each item so that
+	// readyWhen expressions like ${workers.data.ready} resolve to the item.
+	if len(node.ReadyWhen) > 0 {
+		scopeVal := eval.scope[node.ID]
+		if scopeVal != nil {
+			for _, applied := range scopeVal.([]any) {
+				saved := eval.scope[node.ID]
+				eval.scope[node.ID] = applied
+				err := eval.checkReadiness(node.ReadyWhen, applied, node.ID)
+				eval.scope[node.ID] = saved // restore before branching
+				if err != nil {
+					if m, ok := applied.(map[string]any); ok {
+						m["__ready"] = false
+					}
+					return keys, err
+				}
+				if m, ok := applied.(map[string]any); ok {
+					m["__ready"] = true
+				}
+			}
+			logger.V(1).Info("all forEach items ready", "node", node.ID)
+		}
+	} else if scopeVal := eval.scope[node.ID]; scopeVal != nil {
+		// No readyWhen — all items are ready on apply
+		for _, applied := range scopeVal.([]any) {
+			if m, ok := applied.(map[string]any); ok {
+				m["__ready"] = true
+			}
+		}
+	}
+
+	return keys, nil
+}
+
+// forEachItemIdentity extracts a stable identity from a forEach collection item.
+// Uses metadata.name if the item is a Kubernetes object, otherwise falls back
+// to a content hash. This ensures collection reordering doesn't cause churn.
+func forEachItemIdentity(item any) string {
+	if m, ok := item.(map[string]any); ok {
+		if md, ok := m["metadata"].(map[string]any); ok {
+			if name, ok := md["name"].(string); ok {
+				return name
+			}
+			if uid, ok := md["uid"].(string); ok {
+				return uid
+			}
+		}
+		// No metadata — use content hash
+		h, err := hashDesiredState(m)
+		if err != nil {
+			log.Log.V(1).Info("forEach item hash failed, using empty identity", "error", err)
+		}
+		return h
+	}
+	// Scalar item — use string representation
+	return fmt.Sprintf("%v", item)
+}
+
+// forEachItemUnchanged returns true if two forEach items have the same content.
+// Uses a content hash comparison to avoid deep equality checks.
+func forEachItemUnchanged(prev, current any) bool {
+	prevMap, prevOk := prev.(map[string]any)
+	currMap, currOk := current.(map[string]any)
+	if prevOk && currOk {
+		prevHash, err1 := hashDesiredState(prevMap)
+		currHash, err2 := hashDesiredState(currMap)
+		if err1 != nil || err2 != nil {
+			log.Log.V(1).Info("forEach item comparison hash failed, treating as changed", "prevErr", err1, "currErr", err2)
+			return false // fail-safe: treat as changed
+		}
+		return prevHash == currHash
+	}
+	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
+}

@@ -40,57 +40,6 @@ func newEvaluator(state *instanceState) *evaluator {
 	}
 }
 
-// snapshotFor builds a worker evaluator for a specific node. The snapshot
-// contains the node's dependency data (read-only) and, for forEach nodes,
-// the previous forEach state from the instance. The worker writes to its own
-// maps — the coordinator merges them back after the worker returns.
-func (e *evaluator) snapshotFor(node *Node, state *instanceState) *evaluator {
-	snap := make(map[string]any, len(node.Dependencies))
-	for depID := range node.Dependencies {
-		if v, ok := e.scope[depID]; ok {
-			snap[depID] = v
-		}
-	}
-
-	worker := &evaluator{
-		compiled:         e.compiled,
-		scope:            snap,
-		forEachNewScope:  map[string]map[string]any{},
-		forEachNewKeys:   map[string]map[string][]string{},
-		forEachNewItems:  map[string][]any{},
-		forEachPrevItems: map[string][]any{},
-		forEachPrevScope: map[string]map[string]any{},
-		forEachPrevKeys:  map[string]map[string][]string{},
-	}
-
-	// Copy forEach previous state from the shared instance for this node.
-	if node.ForEach != nil && state != nil {
-		for varName := range node.ForEach {
-			cacheKey := node.ID + "/" + varName
-			if items, ok := state.forEachItems[cacheKey]; ok {
-				worker.forEachPrevItems[cacheKey] = items
-			}
-		}
-		// Copy per-item state — keyed by node ID in outer map.
-		if itemScope, ok := state.forEachItemScope[node.ID]; ok {
-			copied := make(map[string]any, len(itemScope))
-			for k, v := range itemScope {
-				copied[k] = v
-			}
-			worker.forEachPrevScope[node.ID] = copied
-		}
-		if itemKeys, ok := state.forEachItemKeys[node.ID]; ok {
-			copied := make(map[string][]string, len(itemKeys))
-			for k, v := range itemKeys {
-				copied[k] = v
-			}
-			worker.forEachPrevKeys[node.ID] = copied
-		}
-	}
-
-	return worker
-}
-
 // withScope returns a new evaluator that shares the compiled graph but has its own scope.
 // Used for forEach inner scopes and worker snapshots.
 func (e *evaluator) withScope(scope map[string]any) *evaluator {

@@ -127,7 +127,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// changed (generation bumped), materialize a new revision. A revision can
 	// only be created if compilation succeeds — its existence proves validity.
 
-	activeRevision, previousRevision, err := r.ensureRevision(ctx, graph)
+	activeRevision, supersededRevisions, err := r.ensureRevision(ctx, graph)
 	if err != nil {
 		// Compilation or materialization failure — no revision created.
 		// Report the error on the Graph and return.
@@ -378,6 +378,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Persist the applied set on the revision for prune diffing and teardown.
+	//
+	// ORDERING INVARIANT: read the previous applied set BEFORE writing the
+	// new one. Intra-revision prune (forEach scale-down, includeWhen toggle)
+	// depends on comparing the previous cycle's keys to the current cycle's
+	// keys. If setAppliedSet runs first, the previous state is lost and
+	// intra-revision prune silently stops working.
+	// Protected by: TestForEachCollectionScaleUpDown, TestIncludeWhenToggle.
+	previousAppliedSet := getAppliedSet(activeRevision)
 	if len(appliedKeys) > 0 {
 		if err := setAppliedSet(ctx, r.Client, activeRevision, appliedKeys); err != nil {
 			logger.V(1).Info("failed to persist applied set", "error", err)
@@ -385,11 +393,43 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// -----------------------------------------------------------------------
-	// Prune resources removed between revisions
+	// Prune resources no longer in the applied set
 	// -----------------------------------------------------------------------
-	if !hasDataPending && previousRevision != nil {
-		if err := r.pruneRemovedResources(ctx, graph, previousRevision, appliedKeys); err != nil {
-			logger.Error(err, "pruning removed resources")
+	//
+	// Two prune sources, unioned into a single previous key set:
+	// 1. Superseded revisions' applied sets — handles cross-revision prune
+	//    (spec changes that remove/rename resources).
+	// 2. Active revision's PREVIOUS applied set — handles intra-revision
+	//    prune (forEach scale-down, includeWhen toggle, data-driven changes
+	//    within the same generation).
+	//
+	// The prune candidate set is: union(all previous keys) - current keys.
+	if !hasDataPending {
+		allPreviousKeys := map[string]bool{}
+		for _, rev := range supersededRevisions {
+			revAppliedSet := getAppliedSet(rev)
+			if len(revAppliedSet) > 0 {
+				for _, k := range revAppliedSet {
+					allPreviousKeys[k] = true
+				}
+			} else {
+				// Fall back to spec-based extraction for revisions without annotations.
+				if revSpec, err := extractRevisionSpec(rev); err == nil {
+					for _, node := range revSpec.Nodes {
+						if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
+							allPreviousKeys[key] = true
+						}
+					}
+				}
+			}
+		}
+		for _, k := range previousAppliedSet {
+			allPreviousKeys[k] = true
+		}
+		if len(allPreviousKeys) > 0 {
+			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys); err != nil {
+				logger.Error(err, "pruning removed resources")
+			}
 		}
 	}
 
@@ -412,7 +452,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	// Update revision status conditions
 	allReady := !needsRequeue && !hasConflict && rstate.accepted
-	r.updateRevisionStatus(ctx, activeRevision, previousRevision, allReady)
+	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady)
 
 	if needsRequeue {
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
@@ -425,14 +465,19 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 // ---------------------------------------------------------------------------
 
 // ensureRevision guarantees that a GraphRevision exists for the current Graph
-// generation. Returns the active revision to reconcile from, and the previous
-// revision (if any) for prune diffing.
+// generation. Returns the active revision to reconcile from, and all
+// superseded revisions for prune diffing.
+//
+// Per the design (004-graph-execution): the prune candidate set is the union
+// of all superseded revisions' applied sets minus the active revision's
+// applied set. Returning all superseded revisions (not just the most recent)
+// prevents multi-hop transitions from orphaning resources.
 //
 // On first reconcile (no revisions exist): creates revision, returns it as active.
 // On spec change (new generation): creates new revision, returns it as active
-// and the old active revision as previous.
-// On steady state: returns existing active revision, nil previous.
-func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructured.Unstructured) (active *unstructured.Unstructured, previous *unstructured.Unstructured, err error) {
+// and all older revisions as superseded.
+// On steady state: returns existing active revision, nil superseded.
+func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructured.Unstructured) (active *unstructured.Unstructured, superseded []*unstructured.Unstructured, err error) {
 	logger := log.FromContext(ctx)
 	graphName := graph.GetName()
 	namespace := graph.GetNamespace()
@@ -442,9 +487,9 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	revName := revisionName(graphName, generation)
 	existing, err := getRevision(ctx, r.Client, revName, namespace)
 	if err == nil {
-		// Revision exists for this generation. Find previous (if any).
-		prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
-		return existing, prev, nil
+		// Revision exists for this generation. Collect superseded revisions.
+		superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
+		return existing, superseded, nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, nil, fmt.Errorf("checking revision %s: %w", revName, err)
@@ -473,8 +518,8 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 			if getErr != nil {
 				return nil, nil, fmt.Errorf("fetching existing revision after race: %w", getErr)
 			}
-			prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
-			return existing, prev, nil
+			superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
+			return existing, superseded, nil
 		}
 		return nil, nil, fmt.Errorf("creating revision %s: %w", revName, err)
 	}
@@ -483,8 +528,8 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	// Set initial conditions on the new revision
 	_ = setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision")
 
-	// Find previous active revision for prune diffing
-	prev, _ := r.findPreviousRevision(ctx, graphName, namespace, generation)
+	// Collect superseded revisions for prune diffing
+	superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
 
 	// Re-fetch the revision to get the server-assigned metadata
 	active, err = getRevision(ctx, r.Client, revName, namespace)
@@ -492,26 +537,25 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 		return nil, nil, fmt.Errorf("re-fetching revision %s: %w", revName, err)
 	}
 
-	return active, prev, nil
+	return active, superseded, nil
 }
 
-// findPreviousRevision finds the most recent revision before the given
-// generation that was active.
-func (r *GraphReconciler) findPreviousRevision(ctx context.Context, graphName, namespace string, currentGen int64) (*unstructured.Unstructured, error) {
+// findSupersededRevisions returns all revisions for a Graph with generation
+// less than the current generation. These are the revisions whose applied
+// sets must be unioned to compute the prune candidate set.
+func (r *GraphReconciler) findSupersededRevisions(ctx context.Context, graphName, namespace string, currentGen int64) []*unstructured.Unstructured {
 	revisions, err := listRevisions(ctx, r.Client, graphName, namespace)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
-	// Walk backwards through sorted revisions (ascending by generation)
-	for i := len(revisions) - 1; i >= 0; i-- {
-		rev := revisions[i]
-		gen := revisionGeneration(rev)
-		if gen < currentGen {
-			return rev, nil
+	var result []*unstructured.Unstructured
+	for _, rev := range revisions {
+		if revisionGeneration(rev) < currentGen {
+			result = append(result, rev)
 		}
 	}
-	return nil, nil
+	return result
 }
 
 // compileRevision parses and compiles a revision's spec, using the cache
@@ -892,7 +936,44 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 	}
 	eval.scope[node.ID] = applied.Object
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
-	return "", nil
+
+	// Track the contribution in the applied set with a "contribute:" prefix.
+	// This lets prune and teardown distinguish Contribute keys (skeleton apply
+	// to release fields) from Owns keys (delete).
+	hasStatus := evalMap["status"] != nil
+	key := contributeKey(applied, hasStatus)
+	return key, nil
+}
+
+// contributeKeyPrefix distinguishes Contribute keys from Owns keys.
+// See "Applied set key format" above for the full grammar.
+const contributeKeyPrefix = "contribute:"
+
+// contributeStatusSuffix marks that the contribution included status fields.
+// See "Applied set key format" above for the full grammar.
+const contributeStatusSuffix = "+status"
+
+// contributeKey builds a Contribute applied set key.
+// See "Applied set key format" above for the full grammar.
+func contributeKey(obj *unstructured.Unstructured, hasStatus bool) string {
+	key := contributeKeyPrefix + resourceKey(obj)
+	if hasStatus {
+		key += contributeStatusSuffix
+	}
+	return key
+}
+
+// parseContributeKey extracts the resource key and status flag from a
+// contribute applied set key. Returns ("", false) if not a contribute key.
+func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
+	if !strings.HasPrefix(key, contributeKeyPrefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(key, contributeKeyPrefix)
+	if strings.HasSuffix(rest, contributeStatusSuffix) {
+		return strings.TrimSuffix(rest, contributeStatusSuffix), true
+	}
+	return rest, false
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,9 +1260,47 @@ apply:
 	return readBack, nil
 }
 
+// ---------------------------------------------------------------------------
+// Applied set key format
+// ---------------------------------------------------------------------------
+//
+// Keys in the applied set identify resources the controller has written to.
+// Two formats:
+//
+//   Owns:       group/version/Kind/namespace/name
+//   Contribute: contribute:group/version/Kind/namespace/name[+status]
+//
+// The "contribute:" prefix distinguishes resources where cleanup means
+// skeleton apply (release field ownership) from resources where cleanup
+// means delete. The "+status" suffix marks contributions that included
+// status subresource fields, so skeleton apply must release both the
+// main resource and the status subresource.
+//
+// resourceKey, contributeKey, and parseContributeKey are the sole
+// constructors and parsers for these formats.
+
 func resourceKey(obj *unstructured.Unstructured) string {
 	gvk := obj.GroupVersionKind()
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
+}
+
+// resourceKeyFromTemplate builds an Owns key from template metadata fields.
+// This is the static-name equivalent of resourceKey — used when the resource
+// hasn't been applied yet (e.g., during spec-based prune diffing).
+func resourceKeyFromTemplate(tmpl map[string]any, fallbackNamespace string) string {
+	apiVersion, _ := tmpl["apiVersion"].(string)
+	kind, _ := tmpl["kind"].(string)
+	md, _ := tmpl["metadata"].(map[string]any)
+	if md == nil {
+		return ""
+	}
+	name, _ := md["name"].(string)
+	if name == "" || strings.Contains(name, "${") {
+		return "" // dynamic name — can't determine key statically
+	}
+	gv, _ := schema.ParseGroupVersion(apiVersion)
+	gvk := gv.WithKind(kind)
+	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, fallbackNamespace, name}, "/")
 }
 
 func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName) {
@@ -1193,17 +1312,18 @@ func parseResourceKey(key string) (schema.GroupVersionKind, types.NamespacedName
 		types.NamespacedName{Namespace: parts[3], Name: parts[4]}
 }
 
-// pruneRemovedResources deletes managed resources that exist in the previous
-// revision but not in the current applied set. This replaces the old
-// annotation-based prune tracking — the revision IS the record.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousRevision *unstructured.Unstructured, currentKeys []string) error {
+// pruneRemovedResources deletes managed resources that were previously applied
+// but are no longer in the current applied set.
+//
+// previousKeys: union of all superseded revisions' applied sets + the active
+// revision's prior applied set. currentKeys: the keys applied this cycle.
+// The prune candidate set is: previousKeys - currentKeys.
+//
+// For Owns resources, this issues a Delete. For Contribute resources
+// (prefixed with "contribute:"), this issues a skeleton apply to release
+// field ownership without deleting the target.
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string) error {
 	logger := log.FromContext(ctx)
-
-	// Parse the previous revision's spec to get its resource templates
-	prevSpec, err := extractRevisionSpec(previousRevision)
-	if err != nil {
-		return fmt.Errorf("parsing previous revision spec: %w", err)
-	}
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
@@ -1211,42 +1331,38 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		currentSet[k] = true
 	}
 
-	// Check the concrete resource keys from the previous revision's spec.
-	// For each node with a static name, verify it should still exist.
-	prevGenStr := fmt.Sprintf("%d", revisionGeneration(previousRevision))
-	for _, node := range prevSpec.Nodes {
-		if node.Template == nil {
-			continue
-		}
-		// Extract static name from template metadata
-		md, _ := node.Template["metadata"].(map[string]any)
-		if md == nil {
-			continue
-		}
-		name, _ := md["name"].(string)
-		if name == "" || strings.Contains(name, "${") {
-			// Dynamic name — can't determine prune target from spec alone.
-			// These are handled by the current key set comparison below.
-			continue
-		}
+	fieldOwner := graphFieldOwner(graph)
 
-		apiVersion, _ := node.Template["apiVersion"].(string)
-		kind, _ := node.Template["kind"].(string)
-
-		// Build the resource key as would be produced during reconciliation
-		gv, _ := schema.ParseGroupVersion(apiVersion)
-		gvk := gv.WithKind(kind)
-		key := strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, graph.GetNamespace(), name}, "/")
-
+	for key := range previousKeys {
 		if currentSet[key] {
-			continue // still exists in current revision
+			continue // still exists in current cycle
 		}
 
-		// Resource was in previous revision but not applied in current cycle.
+		// Contribute keys use skeleton apply (release fields), not delete.
+		if resKey, hasStatus := parseContributeKey(key); resKey != "" {
+			gvk, nn := parseResourceKey(resKey)
+			if gvk.Kind == "" {
+				continue
+			}
+			if err := skeletonApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+				logger.Error(err, "releasing contribution fields", "key", resKey)
+			} else {
+				logger.Info("released contribution fields", "key", resKey)
+				r.Resources.remove(resKey)
+			}
+			continue
+		}
+
+		// Owns keys: delete the resource.
+		gvk, nn := parseResourceKey(key)
+		if gvk.Kind == "" {
+			continue
+		}
+
 		// Check if it exists and is ours before deleting.
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
-		if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: graph.GetNamespace()}, obj); err != nil {
+		if err := r.Client.Get(ctx, nn, obj); err != nil {
 			continue // already gone
 		}
 
@@ -1260,17 +1376,12 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // never successfully applied by us
 		}
 
-		// Verify it's from the previous generation (not updated by current revision)
-		if genLabel, ok := objLabels[LabelGraphGeneration]; ok && genLabel != prevGenStr {
-			continue // already updated to a different generation
-		}
-
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
-			logger.Info("pruned resource from previous revision", "key", key)
+			logger.Info("pruned resource", "key", key)
 			r.Resources.remove(key)
 		}
 	}
@@ -1287,7 +1398,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 // Graph deletion). After activation, list non-active revisions and delete
 // those whose unique resources no longer exist in the cluster.
 // See: experimental/docs/design/graph/002-revisions.md § Lifecycle
-func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active, previous *unstructured.Unstructured, allReady bool) {
+func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool) {
 	logger := log.FromContext(ctx)
 
 	if allReady {
@@ -1299,10 +1410,10 @@ func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active, prev
 			if err := setRevisionCondition(ctx, r.Client, active, RevisionConditionActive, ConditionTrue, "Active", "This is the current revision"); err != nil {
 				logger.V(1).Info("failed to set revision Active", "error", err)
 			}
-			// Deactivate the previous revision
-			if previous != nil {
-				if err := setRevisionCondition(ctx, r.Client, previous, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
-					logger.V(1).Info("failed to deactivate previous revision", "error", err)
+			// Deactivate all superseded revisions
+			for _, prev := range superseded {
+				if err := setRevisionCondition(ctx, r.Client, prev, RevisionConditionActive, ConditionFalse, "Superseded", "Superseded by newer revision"); err != nil {
+					logger.V(1).Info("failed to deactivate superseded revision", "error", err, "revision", prev.GetName())
 				}
 			}
 		}
@@ -1338,9 +1449,25 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	r.Resources.removeAll()
 
 	// Collect all managed resource keys from all revisions for this Graph.
-	// This ensures we clean up resources from any revision, not just the latest.
-	allKeys := map[string]bool{}
+	// Keys come from two sources:
+	// 1. Applied set annotations (accurate for dynamic names, forEach, contribute)
+	// 2. Static spec extraction (fallback for revisions without annotations)
+	ownsKeys := map[string]bool{}
+	contributeKeys := map[string]bool{} // key → hasStatus encoded in the key
 	for _, rev := range revisions {
+		// Try applied set annotation first — includes both Owns and Contribute keys.
+		if keys := getAppliedSet(rev); len(keys) > 0 {
+			for _, k := range keys {
+				if strings.HasPrefix(k, contributeKeyPrefix) {
+					contributeKeys[k] = true
+				} else {
+					ownsKeys[k] = true
+				}
+			}
+			continue
+		}
+
+		// Fall back: extract static Owns keys from the revision's spec.
 		spec, err := extractRevisionSpec(rev)
 		if err != nil {
 			continue
@@ -1349,33 +1476,46 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			if node.Template == nil {
 				continue
 			}
-			// Skip Watch, CollectionWatch, and Contribute templates on teardown.
-			// Watch/CollectionWatch are read-only. Contribute writes to objects
-			// owned by someone else — the Graph must not delete them.
+			// Skip Watch and CollectionWatch (read-only).
 			shape := DetectShape(node.Template)
-			if shape == ShapeWatch || shape == ShapeCollectionWatch || shape == ShapeContribute {
+			if shape == ShapeWatch || shape == ShapeCollectionWatch {
 				continue
 			}
-			md, _ := node.Template["metadata"].(map[string]any)
-			if md == nil {
+			// Contribute shapes from spec fallback: we can't reliably
+			// detect status presence, so skip — they'll only be tracked
+			// via applied set annotations from future reconciles.
+			if shape == ShapeContribute {
 				continue
 			}
-			name, _ := md["name"].(string)
-			if name == "" || strings.Contains(name, "${") {
-				continue // dynamic names — need label-based lookup
+			if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {
+				ownsKeys[key] = true
 			}
-			apiVersion, _ := node.Template["apiVersion"].(string)
-			kind, _ := node.Template["kind"].(string)
-			gv, _ := schema.ParseGroupVersion(apiVersion)
-			gvk := gv.WithKind(kind)
-			key := strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, graph.GetNamespace(), name}, "/")
-			allKeys[key] = true
 		}
 	}
 
-	// Convert to slice for ordered deletion
+	// Release Contribute fields first via skeleton apply.
+	// Per the design (003-ownership): Contribute never deletes — it releases
+	// field ownership so the actual owner retains the resource.
+	fieldOwner := graphFieldOwner(graph)
+	for key := range contributeKeys {
+		resKey, hasStatus := parseContributeKey(key)
+		if resKey == "" {
+			continue
+		}
+		gvk, nn := parseResourceKey(resKey)
+		if gvk.Kind == "" {
+			continue
+		}
+		if err := skeletonApply(ctx, r.Client, gvk, nn.Namespace, nn.Name, fieldOwner, hasStatus); err != nil {
+			logger.Error(err, "releasing contribution fields during teardown", "key", resKey)
+		} else {
+			logger.V(1).Info("released contribution fields during teardown", "key", resKey)
+		}
+	}
+
+	// Convert Owns keys to slice for ordered deletion.
 	var keys []string
-	for k := range allKeys {
+	for k := range ownsKeys {
 		keys = append(keys, k)
 	}
 
@@ -1383,7 +1523,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// This catches forEach-stamped resources that aren't in the static spec.
 	dynamicKeys, _ := r.findManagedResourceKeys(ctx, graph)
 	for _, k := range dynamicKeys {
-		if !allKeys[k] {
+		if !ownsKeys[k] {
 			keys = append(keys, k)
 		}
 	}
@@ -1391,7 +1531,13 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	// Pass 1: Issue deletes in reverse topological order.
 	// Track which keys we actually attempted to delete (had our hash).
 	deletedKeys := map[string]bool{}
-	deleteOrder := r.deletionOrder(graph, keys)
+	deleteOrder, err := r.deletionOrder(graph, keys)
+	if err != nil {
+		// Per the design (004-graph-execution): teardown is blocked until
+		// ordering is available — never degrade to unordered deletion.
+		logger.Error(err, "cannot determine deletion order, requeueing")
+		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	}
 	for _, key := range deleteOrder {
 		if key == "" {
 			continue
@@ -1522,21 +1668,35 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 	return keys, nil
 }
 
-// deletionOrder returns resource keys ordered for deletion: reverse dependency
-// order from the DAG. Rebuilds the DAG from the Graph spec. Maps resource keys
-// to DAG positions by matching kind/name. Unmatched keys are deleted first.
-func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) []string {
+// deletionOrder returns resource keys ordered for deletion: reverse
+// topological order from the DAG. Rebuilds the DAG from the Graph spec.
+// Maps resource keys to topological positions by matching kind/name.
+// Unmatched keys (dynamic names, forEach) are deleted first (highest
+// position) since their dependencies are unknown.
+//
+// Returns an error if the Graph spec cannot be parsed or the DAG cannot
+// be built. Per the design (004-graph-execution): "Teardown is blocked
+// until ordering is available — never degrade to unordered deletion."
+func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys []string) ([]string, error) {
 	graphSpec, err := extractGraphSpec(graph.Object)
 	if err != nil {
-		return keys
+		return nil, fmt.Errorf("extracting graph spec for deletion order: %w", err)
 	}
 	dag, err := BuildDAG(graphSpec.Nodes)
 	if err != nil {
-		return keys
+		return nil, fmt.Errorf("building DAG for deletion order: %w", err)
 	}
 
-	// Map kind/name to DAG index from static template metadata.
-	kindNameToIndex := map[string]int{}
+	// Build a map from node index → topological position. Position 0 is
+	// the first node in apply order (no dependencies); higher positions
+	// depend on lower ones. Reverse topological = delete highest first.
+	topoPosition := make(map[int]int, len(dag.TopologicalOrder))
+	for pos, nodeIdx := range dag.TopologicalOrder {
+		topoPosition[nodeIdx] = pos
+	}
+
+	// Map kind/name to topological position from static template metadata.
+	kindNameToPosition := map[string]int{}
 	for i, node := range dag.Nodes {
 		tmpl := node.Template
 		if tmpl == nil {
@@ -1551,35 +1711,36 @@ func (r *GraphReconciler) deletionOrder(graph *unstructured.Unstructured, keys [
 		if kind == "" || name == "" || strings.Contains(name, "${") {
 			continue
 		}
-		kindNameToIndex[kind+"/"+name] = i
+		kindNameToPosition[kind+"/"+name] = topoPosition[i]
 	}
 
 	type scored struct {
-		key   string
-		index int
+		key      string
+		position int
 	}
-	scored_keys := make([]scored, 0, len(keys))
+	scoredKeys := make([]scored, 0, len(keys))
 	for _, key := range keys {
 		if key == "" {
 			continue
 		}
 		gvk, nn := parseResourceKey(key)
-		idx, ok := kindNameToIndex[gvk.Kind+"/"+nn.Name]
+		pos, ok := kindNameToPosition[gvk.Kind+"/"+nn.Name]
 		if !ok {
-			idx = len(dag.Nodes) // unmatched → deleted first
+			pos = len(dag.Nodes) // unmatched → deleted first
 		}
-		scored_keys = append(scored_keys, scored{key: key, index: idx})
+		scoredKeys = append(scoredKeys, scored{key: key, position: pos})
 	}
 
-	sort.Slice(scored_keys, func(i, j int) bool {
-		return scored_keys[i].index > scored_keys[j].index
+	// Reverse topological: highest position first.
+	sort.Slice(scoredKeys, func(i, j int) bool {
+		return scoredKeys[i].position > scoredKeys[j].position
 	})
 
-	result := make([]string, len(scored_keys))
-	for i, s := range scored_keys {
+	result := make([]string, len(scoredKeys))
+	for i, s := range scoredKeys {
 		result[i] = s.key
 	}
-	return result
+	return result, nil
 }
 
 // SetupWithManager registers the Graph controller with a controller-runtime

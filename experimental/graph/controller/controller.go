@@ -130,12 +130,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	activeRevision, supersededRevisions, err := r.ensureRevision(ctx, graph)
 	if err != nil {
 		// Compilation or materialization failure — no revision created.
-		// Report the error on the Graph and return.
-		logger.Error(err, "ensuring revision")
+		// Report the error on the Graph and return. The returned error is
+		// logged once by controller-runtime; no logger.Error here.
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
-			logger.Error(statusErr, "failed to update status after revision error")
+			logger.Error(statusErr, "updating status after revision error")
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("ensuring revision: %w", err)
 	}
 
 	// -----------------------------------------------------------------------
@@ -145,11 +145,10 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Parse and compile the active revision's spec (cached by revision name).
 	revisionSpec, cache, err := r.compileRevision(activeRevision)
 	if err != nil {
-		logger.Error(err, "compiling revision spec")
 		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
-			logger.Error(statusErr, "failed to update status after compilation error")
+			logger.Error(statusErr, "updating status after compilation error")
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("compiling revision: %w", err)
 	}
 
 	eval := newEvaluator(cache)

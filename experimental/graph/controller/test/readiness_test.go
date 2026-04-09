@@ -13,13 +13,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// TestReadyWhenExternalRefGatesDownstream proves that readyWhen on an externalRef
+// TestReadyWhenExternalRefGatesDownstream proves that readyWhen on a watch
 // prevents downstream resources from being created until the condition is met.
 //
 // Setup:
 //   - Pre-create ConfigMap "source" with data.status = "pending"
-//   - Create Graph: externalRef reads "source" with readyWhen checking data.status == "ready",
-//     then a template creates "output" using data from the externalRef
+//   - Create Graph: watch reads "source" with readyWhen checking data.status == "ready",
+//     then a template creates "output" using data from the watch
 //   - Verify "output" is NOT created (source not ready)
 //   - Update "source" to data.status = "ready" and add data.value = "hello"
 //   - Verify "output" IS created with the correct value
@@ -44,7 +44,7 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, source))
 
-	// Graph: externalRef with readyWhen, then template referencing the externalRef
+	// Graph: watch with readyWhen, then template referencing the watch
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -226,7 +226,7 @@ func TestReadyWhenTemplateGatesDownstream(t *testing.T) {
 // instead of failing permanently.
 //
 // Setup:
-//   - Create an externalRef ConfigMap "data-source" without the field the template needs
+//   - Create a watch ConfigMap "data-source" without the field the template needs
 //   - Template references ${source.data.missing} which doesn't exist
 //   - Verify the controller doesn't crash and the Graph still reconciles
 //   - Add the missing field to the source
@@ -251,7 +251,7 @@ func TestDataPendingRequeues(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, source))
 
-	// Graph: externalRef reads source, template references a field that doesn't exist yet
+	// Graph: watch reads source, template references a field that doesn't exist yet
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -333,7 +333,7 @@ func TestDataPendingRequeues(t *testing.T) {
 }
 
 // TestReadyWhenNotReadyThenReady proves the full readyWhen lifecycle:
-// an externalRef that starts not-ready, then transitions to ready,
+// a watch that starts not-ready, then transitions to ready,
 // unblocking downstream resource creation.
 //
 // This is the most realistic test: it simulates a Deployment-like pattern
@@ -444,6 +444,3 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	t.Logf("Full readyWhen lifecycle proved: Pending → blocked; Running → app-config created with infraPhase=%s",
 		data["infraPhase"])
 }
-
-// TestStatusActiveOnSuccess proves that a Graph with all resources applied
-// and ready gets state=Active and Ready=True.

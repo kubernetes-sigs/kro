@@ -191,39 +191,6 @@ func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
 	return ""
 }
 
-// CanProcess returns true if the node's dependencies are all in a state
-// that allows this node to proceed. A node can proceed if all its
-// dependencies are Ready or not referenced at all.
-//
-// Returns (canProcess, blockingNodeID).
-func (ps *PlanState) CanProcess(node *Node) (bool, string) {
-	for depID := range node.Dependencies {
-		state, exists := ps.States[depID]
-		if !exists {
-			continue // not a scope variable (could be a CEL builtin)
-		}
-		switch state {
-		case NodeReady, NodeNotReady:
-			// Both are "applied and in scope" — dependents proceed.
-			// readyWhen is a health signal, not a gate.
-			continue
-		case NodePending:
-			// Dependency hasn't been processed yet — shouldn't happen
-			// in topological order, but be safe
-			return false, depID
-		case NodeExcluded:
-			return false, depID
-		case NodeDataPending:
-			return false, depID
-		case NodeError:
-			return false, depID
-		case NodeConflict:
-			return false, depID
-		}
-	}
-	return true, ""
-}
-
 // SetState updates a node's state and propagates contagious exclusion.
 // When a node is excluded, all nodes that depend on it are also excluded.
 // NotReady does NOT propagate exclusion — data is in scope regardless.
@@ -250,23 +217,34 @@ func (ps *PlanState) propagateExclusion(dag *DAG, excludedID string) {
 	}
 }
 
+// PlanSummary holds aggregate state from a completed DAG walk.
+type PlanSummary struct {
+	HasDataPending bool
+	HasNotReady    bool
+	HasExcluded    bool
+	HasError       bool
+	HasConflict    bool
+	ReadyCount     int
+}
+
 // Summary returns aggregate state for status reporting.
-func (ps *PlanState) Summary() (hasDataPending, hasNotReady, hasExcluded, hasError, hasConflict bool, readyCount int) {
+func (ps *PlanState) Summary() PlanSummary {
+	var s PlanSummary
 	for _, state := range ps.States {
 		switch state {
 		case NodeReady:
-			readyCount++
+			s.ReadyCount++
 		case NodeNotReady:
-			hasNotReady = true
+			s.HasNotReady = true
 		case NodeDataPending:
-			hasDataPending = true
+			s.HasDataPending = true
 		case NodeExcluded:
-			hasExcluded = true
+			s.HasExcluded = true
 		case NodeError:
-			hasError = true
+			s.HasError = true
 		case NodeConflict:
-			hasConflict = true
+			s.HasConflict = true
 		}
 	}
-	return
+	return s
 }

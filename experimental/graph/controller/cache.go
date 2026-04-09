@@ -17,17 +17,17 @@ import (
 const templateHashAnnotation = "internal.kro.run/template-hash"
 
 // hashDesiredState computes a content hash of an evaluated template map.
-// Uses FNV-64a over Go's json.Marshal output, which produces deterministic
-// canonical JSON (keys sorted at every level for map[string]any).
-func hashDesiredState(evalMap map[string]any) string {
+// Uses FNV-64a over Go's json.Marshal output. json.Marshal produces
+// deterministic output for map[string]any (keys sorted at every level),
+// so the hash is stable within the same Go runtime.
+func hashDesiredState(evalMap map[string]any) (string, error) {
 	data, err := json.Marshal(evalMap)
 	if err != nil {
-		// Fallback: if marshaling fails, return empty hash to force apply
-		return ""
+		return "", fmt.Errorf("hashing desired state: %w", err)
 	}
 	h := fnv.New64a()
 	h.Write(data)
-	return fmt.Sprintf("%016x", h.Sum64())
+	return fmt.Sprintf("%016x", h.Sum64()), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +75,32 @@ func (rc *resourceCache) remove(key string) {
 	delete(rc.objects, key)
 }
 
-// removeAll removes all cached objects (used on Graph deletion).
-func (rc *resourceCache) removeAll() {
+// removeForGraph removes cached objects that belong to the specified Graph.
+// Checks the graph-name and graph-namespace labels on each cached object.
+// Scoped to a single Graph — does not affect cache entries from other Graphs.
+//
+// This is safe because only applyResource and applyContribution call set(),
+// and both stamp LabelGraphName/LabelGraphNamespace on every applied object.
+// Watch-read objects are stored in the evaluator scope, not in this cache.
+func (rc *resourceCache) removeForGraph(graphName, graphNamespace string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.objects = make(map[string]*cachedObject)
+	for key, obj := range rc.objects {
+		if obj.object == nil {
+			continue
+		}
+		md, _ := obj.object["metadata"].(map[string]any)
+		if md == nil {
+			continue
+		}
+		labels, _ := md["labels"].(map[string]any)
+		if labels == nil {
+			continue
+		}
+		if labels[LabelGraphName] == graphName && labels[LabelGraphNamespace] == graphNamespace {
+			delete(rc.objects, key)
+		}
+	}
 }
 
 // resourceCacheKey builds a cache key for a resource from its identifying fields.

@@ -132,7 +132,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Compilation or materialization failure — no revision created.
 		// Report the error on the Graph and return.
 		logger.Error(err, "ensuring revision")
-		_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
+		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
+			logger.Error(statusErr, "failed to update status after revision error")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -144,7 +146,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	revisionSpec, cache, err := r.compileRevision(activeRevision)
 	if err != nil {
 		logger.Error(err, "compiling revision spec")
-		_ = r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err})
+		if statusErr := r.updateStatus(ctx, graph, &reconcileState{accepted: false, acceptedErr: err}); statusErr != nil {
+			logger.Error(statusErr, "failed to update status after compilation error")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -237,7 +241,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			return
 		}
 
-		// Step 4: includeWhen (evaluated in coordinator — reads shared scope)
+		// Step 3: includeWhen (evaluated in coordinator — reads shared scope)
 		if len(node.IncludeWhen) > 0 {
 			included, err := eval.includeWhen(node.IncludeWhen)
 			if err != nil {
@@ -366,8 +370,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Derive aggregate state from the DAG plan
-	hasDataPending, hasNotReady, _, _, hasConflict, readyCount := plan.Summary()
-	needsRequeue := hasDataPending || hasNotReady
+	summary := plan.Summary()
+	needsRequeue := summary.HasDataPending || summary.HasNotReady
 
 	// Collect detected contributions for status reporting.
 	var contributions []string
@@ -404,7 +408,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//    within the same generation).
 	//
 	// The prune candidate set is: union(all previous keys) - current keys.
-	if !hasDataPending {
+	var pruneErr error
+	if !summary.HasDataPending {
 		allPreviousKeys := map[string]bool{}
 		for _, rev := range supersededRevisions {
 			revAppliedSet := getAppliedSet(rev)
@@ -429,6 +434,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if len(allPreviousKeys) > 0 {
 			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys); err != nil {
 				logger.Error(err, "pruning removed resources")
+				pruneErr = err
 			}
 		}
 	}
@@ -439,11 +445,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	rstate := &reconcileState{
 		accepted:       true,
 		nodeCount:      len(revisionSpec.Nodes),
-		appliedCount:   readyCount,
+		appliedCount:   summary.ReadyCount,
 		needsRequeue:   needsRequeue,
-		hasDataPending: hasDataPending,
-		hasNotReady:    hasNotReady,
-		hasConflict:    hasConflict,
+		hasDataPending: summary.HasDataPending,
+		hasNotReady:    summary.HasNotReady,
+		hasConflict:    summary.HasConflict,
+		pruneErr:       pruneErr,
 		contributions:  contributions,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
@@ -451,7 +458,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Update revision status conditions
-	allReady := !needsRequeue && !hasConflict && rstate.accepted
+	allReady := !needsRequeue && !summary.HasConflict && rstate.accepted
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady)
 
 	if needsRequeue {
@@ -526,7 +533,9 @@ func (r *GraphReconciler) ensureRevision(ctx context.Context, graph *unstructure
 	logger.Info("created revision", "revision", revName, "generation", generation)
 
 	// Set initial conditions on the new revision
-	_ = setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision")
+	if err := setRevisionCondition(ctx, r.Client, revision, RevisionConditionPropagated, ConditionTrue, "Propagated", "Controller is reconciling from this revision"); err != nil {
+		logger.V(1).Info("failed to set initial Propagated condition", "revision", revName, "error", err)
+	}
 
 	// Collect superseded revisions for prune diffing
 	superseded = r.findSupersededRevisions(ctx, graphName, namespace, generation)
@@ -877,7 +886,11 @@ func forEachItemIdentity(item any) string {
 			}
 		}
 		// No metadata — use content hash
-		return hashDesiredState(m)
+		h, err := hashDesiredState(m)
+		if err != nil {
+			log.Log.V(1).Info("forEach item hash failed, using empty identity", "error", err)
+		}
+		return h
 	}
 	// Scalar item — use string representation
 	return fmt.Sprintf("%v", item)
@@ -889,7 +902,13 @@ func forEachItemUnchanged(prev, current any) bool {
 	prevMap, prevOk := prev.(map[string]any)
 	currMap, currOk := current.(map[string]any)
 	if prevOk && currOk {
-		return hashDesiredState(prevMap) == hashDesiredState(currMap)
+		prevHash, err1 := hashDesiredState(prevMap)
+		currHash, err2 := hashDesiredState(currMap)
+		if err1 != nil || err2 != nil {
+			log.Log.V(1).Info("forEach item comparison hash failed, treating as changed", "prevErr", err1, "currErr", err2)
+			return false // fail-safe: treat as changed
+		}
+		return prevHash == currHash
 	}
 	return fmt.Sprintf("%v", prev) == fmt.Sprintf("%v", current)
 }
@@ -946,15 +965,15 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 }
 
 // contributeKeyPrefix distinguishes Contribute keys from Owns keys.
-// See "Applied set key format" above for the full grammar.
+// See "Applied set key format" below for the full grammar.
 const contributeKeyPrefix = "contribute:"
 
 // contributeStatusSuffix marks that the contribution included status fields.
-// See "Applied set key format" above for the full grammar.
+// See "Applied set key format" below for the full grammar.
 const contributeStatusSuffix = "+status"
 
 // contributeKey builds a Contribute applied set key.
-// See "Applied set key format" above for the full grammar.
+// See "Applied set key format" below for the full grammar.
 func contributeKey(obj *unstructured.Unstructured, hasStatus bool) string {
 	key := contributeKeyPrefix + resourceKey(obj)
 	if hasStatus {
@@ -1007,7 +1026,10 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 
 	// Content-addressed apply: hash the desired state to detect changes.
 	// The hash is computed before adding the hash annotation itself.
-	templateHash := hashDesiredState(obj.Object)
+	templateHash, err := hashDesiredState(obj.Object)
+	if err != nil {
+		return nil, fmt.Errorf("hashing template for %s: %w", obj.GetName(), err)
+	}
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
 	// Check the resource cache + metadata informer for change detection.
@@ -1138,7 +1160,10 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
-	templateHash := hashDesiredState(evalMap)
+	templateHash, err := hashDesiredState(evalMap)
+	if err != nil {
+		return nil, fmt.Errorf("hashing contribution for %s: %w", obj.GetName(), err)
+	}
 	cacheKey := resourceCacheKey(obj.GetAPIVersion(), obj.GetKind(), obj.GetNamespace(), obj.GetName())
 
 	// Check cache for hash match — skip Patch if contribution output unchanged.
@@ -1445,8 +1470,8 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		r.Caches.remove(rev.GetNamespace() + "/" + rev.GetName())
 	}
 
-	// Clean up the resource cache.
-	r.Resources.removeAll()
+	// Clean up the resource cache for this Graph only.
+	r.Resources.removeForGraph(graph.GetName(), graph.GetNamespace())
 
 	// Collect all managed resource keys from all revisions for this Graph.
 	// Keys come from two sources:

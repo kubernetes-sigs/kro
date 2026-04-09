@@ -86,7 +86,7 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 }
 
 // TestStatusInProgressOnReadyWhen proves that a Graph with a not-ready
-// externalRef gets state=InProgress and Ready=False, then transitions
+// watch gets state=InProgress and Ready=False, then transitions
 // to Active when the resource becomes ready.
 func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	t.Parallel()
@@ -201,8 +201,3 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	t.Logf("After: state=%s Ready=%s reason=%s", state, cond["status"], cond["reason"])
 	t.Log("Status lifecycle proved: InProgress → Active on readyWhen satisfied")
 }
-
-// TestForEachCollectionScaleUpDown proves that changing the size of a forEach
-// input collection adds/removes stamped resources accordingly.
-// Scale up: add a source item → new stamped resource appears (via dynamic watch).
-// Scale down: remove a source item → stale stamped resource is pruned.

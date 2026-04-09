@@ -96,7 +96,11 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 	}
 
 	// Compute content hash over the materialized nodes
-	contentHash := hashDesiredState(map[string]any{"nodes": nodes})
+	contentHash, err := hashDesiredState(map[string]any{"nodes": nodes})
+	if err != nil {
+		// Non-fatal: empty hash means the first reconcile won't elide the apply.
+		contentHash = ""
+	}
 
 	revision := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -196,7 +200,11 @@ func injectNodeLabels(tmpl map[string]any, graphName, generation, nodeID string)
 
 	// Compute template hash from the template content (before adding the
 	// hash itself — same pattern as cache.go's hashDesiredState).
-	hash := hashDesiredState(tmpl)
+	hash, err := hashDesiredState(tmpl)
+	if err != nil {
+		// Non-fatal: empty hash means the first reconcile won't elide the apply.
+		hash = ""
+	}
 
 	anns, _ := md["annotations"].(map[string]any)
 	if anns == nil {
@@ -387,7 +395,9 @@ func revisionGeneration(revision *unstructured.Unstructured) int64 {
 	return gen
 }
 
-// ListRevisionsForTest is a test-facing export of listRevisions.
+// ListRevisionsForTest exports listRevisions for the test package
+// (package graphcontroller_test). Necessary because the tests are in
+// a separate package for black-box testing.
 func ListRevisionsForTest(ctx context.Context, c client.Client, graphName, namespace string) ([]*unstructured.Unstructured, error) {
 	return listRevisions(ctx, c, graphName, namespace)
 }

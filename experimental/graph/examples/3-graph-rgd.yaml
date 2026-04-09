@@ -9,11 +9,11 @@
 #      └─ <instance>-<kind> (L2)     — owns resources, contributes status
 #
 # Wrapper Graph pattern is applied at both forEach levels:
-#   - L1 reads its specific RGD via externalRef(name) — O(1) reactive
-#   - L2 reads its specific instance via externalRef(name) — O(1) reactive
+#   - L1 reads its specific RGD via watch(name) — O(1) reactive
+#   - L2 reads its specific instance via watch(name) — O(1) reactive
 #
 # L1 constructs L2's resource list via CEL list concatenation:
-#   [schema externalRef] + rgd.spec.resources + [status contribution]
+#   [schema watch] + rgd.spec.resources + [status contribution]
 # The expressions inside rgd.spec.resources (like ${schema.spec.image})
 # survive as data through L1's CEL evaluation and are evaluated by L2.
 # This works because the evaluation model never re-scans CEL output —
@@ -68,17 +68,13 @@ spec:
                         "validation": "[]validation",
                         "additionalPrinterColumns": "[]printerColumn"
                       },
-                      "externalRef": {
-                        "apiVersion": "string",
-                        "kind": "string",
-                        "metadata": {"name": "string", "namespace": "string"}
-                      },
                       "resource": {
                         "id": "string",
                         "template": "object",
-                        "externalRef": "externalRef",
                         "readyWhen": "[]string",
-                        "includeWhen": "[]string"
+                        "includeWhen": "[]string",
+                        "forEach": "map[string]string",
+                        "propagateWhen": "[]string"
                       },
                       "condition": {
                         "type": "string", "status": "string", "reason": "string",
@@ -103,7 +99,7 @@ spec:
 
     # Watch all RGDs
     - id: watchRgds
-      externalRef:
+      template:
         apiVersion: kro.run/v1alpha1
         kind: ResourceGraphDefinition
         metadata:
@@ -123,7 +119,7 @@ spec:
             # Read the specific RGD fresh. L0 bakes in the name;
             # L1 reads it fresh to stay reactive to spec changes.
             - id: rgd
-              externalRef:
+              template:
                 apiVersion: kro.run/v1alpha1
                 kind: ResourceGraphDefinition
                 metadata:
@@ -154,16 +150,16 @@ spec:
 
             # Watch all instances of the kind
             - id: watchInstances
-              externalRef:
+              template:
                 apiVersion: $${rgd.spec.schema.group}/$${rgd.spec.schema.apiVersion}
                 kind: $${rgd.spec.schema.kind}
                 metadata:
                   selector: {}
 
             # One Graph per instance — wrapper Graph pattern.
-            # L1 has "rgd" (externalRef) and "instance" (forEach var)
+            # L1 has "rgd" (watch) and "instance" (forEach var)
             # in scope, so it constructs L2's full resource list via CEL:
-            #   [schema externalRef] + rgd.spec.resources + [status entry]
+            #   [schema watch] + rgd.spec.resources + [status entry]
             # The ${...} expressions inside rgd.spec.resources survive as
             # string data through CEL and are evaluated by L2's controller.
             - id: instances
@@ -177,7 +173,7 @@ spec:
                 spec:
                   nodes: >-
                     $${
-                      [{"id": "schema", "externalRef": {
+                      [{"id": "schema", "template": {
                         "apiVersion": rgd.spec.schema.group + "/" + rgd.spec.schema.apiVersion,
                         "kind": rgd.spec.schema.kind,
                         "metadata": {

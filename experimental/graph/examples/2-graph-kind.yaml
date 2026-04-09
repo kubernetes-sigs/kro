@@ -12,7 +12,7 @@ metadata:
 spec:
   nodes:
     - id: watchWebapps
-      externalRef:
+      template:
         apiVersion: kro.run/v1alpha1
         kind: WebApp
         metadata:
@@ -33,7 +33,7 @@ spec:
             # Read the specific instance. L0 bakes in the name;
             # L1 reads it fresh to stay reactive to spec changes.
             - id: schema
-              externalRef:
+              template:
                 apiVersion: kro.run/v1alpha1
                 kind: WebApp
                 metadata:

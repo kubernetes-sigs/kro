@@ -241,7 +241,3 @@ func TestResourcePruning(t *testing.T) {
 	assert.Equal(t, "permanent", data["state"])
 	t.Log("Kept ConfigMap still exists with correct data")
 }
-
-// TestDynamicWatchExternalRefChange proves O(1) reactivity:
-// changing an externalRef target triggers the Graph's reconciliation
-// WITHOUT touching the Graph object itself.

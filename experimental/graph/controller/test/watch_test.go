@@ -14,13 +14,13 @@ import (
 )
 
 // TestDynamicWatchExternalRefChange proves O(1) reactivity:
-// changing an externalRef target triggers the Graph's reconciliation
+// changing a watch target triggers the Graph's reconciliation
 // WITHOUT touching the Graph object itself.
 func TestDynamicWatchExternalRefChange(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Create the config that the Graph reads via externalRef
+	// Create the config that the Graph reads via watch
 	config := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -36,7 +36,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, config))
 
-	// Graph reads the config via externalRef and creates a resource referencing it
+	// Graph reads the config via watch and creates a resource referencing it
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -81,7 +81,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 	assert.Equal(t, "v1", data["version"])
 	t.Log("Initial output created with version=v1")
 
-	// Now update the externalRef target — do NOT touch the Graph object
+	// Now update the watch target — do NOT touch the Graph object
 	latestConfig := &unstructured.Unstructured{}
 	latestConfig.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "watched-config", Namespace: ns}, latestConfig))
@@ -90,7 +90,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 	t.Log("Updated watched-config version to v2 (Graph object NOT touched)")
 
 	// THE PROOF: the output should update to v2, triggered by the dynamic watch
-	// on the externalRef target — not by a Graph spec change.
+	// on the watch target — not by a Graph spec change.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
@@ -198,14 +198,3 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 	assert.Equal(t, "item-c", data["source"])
 	t.Log("item-c-copy created — dynamic collection watch triggered reconciliation")
 }
-
-// TestReadyWhenExternalRefGatesDownstream proves that readyWhen on an externalRef
-// prevents downstream resources from being created until the condition is met.
-//
-// Setup:
-//   - Pre-create ConfigMap "source" with data.status = "pending"
-//   - Create Graph: externalRef reads "source" with readyWhen checking data.status == "ready",
-//     then a template creates "output" using data from the externalRef
-//   - Verify "output" is NOT created (source not ready)
-//   - Update "source" to data.status = "ready" and add data.value = "hello"
-//   - Verify "output" IS created with the correct value

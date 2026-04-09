@@ -310,7 +310,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 //   - Creates child Graph where $${...} is stripped to ${...} before persistence
 //
 // Child Graph (L1) — reconciled independently by the same controller:
-//   - externalRef reads ConfigMap "shared-data" from API server into scope
+//   - watch reads ConfigMap "shared-data" from API server into scope
 //   - Evaluates ${...} expressions (which were $${...} at L0) against its own scope
 //   - Creates ConfigMap "shared-data-result" with data.output = "hello-from-parent"
 //
@@ -358,7 +358,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 							},
 							"spec": map[string]any{
 								"nodes": []any{
-									// Child resource 1: externalRef reads the ConfigMap into child scope
+									// Child resource 1: watch reads the ConfigMap into child scope
 									map[string]any{
 										"id": "input",
 										"template": map[string]any{
@@ -417,7 +417,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 
 	// Verify the child Graph's spec contains ${...} (was $${...} in parent, stripped by one $)
 	childNodes, _, _ := unstructured.NestedSlice(childGraph.Object, "spec", "nodes")
-	require.Len(t, childNodes, 2, "child Graph should have 2 nodes (externalRef + template)")
+	require.Len(t, childNodes, 2, "child Graph should have 2 nodes (watch + template)")
 
 	// The result template should have ${input.metadata.name}-result (not $${...})
 	resultRes := childNodes[1].(map[string]any)
@@ -437,7 +437,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 
 	// --- L1 assertions: child Graph reconciled independently, creates result ConfigMap ---
 
-	// The child controller reads "shared-data" via externalRef, evaluates ${input.data.message}
+	// The child controller reads "shared-data" via watch, evaluates ${input.data.message}
 	// → "hello-from-parent", and creates ConfigMap "shared-data-result".
 	resultCM := &unstructured.Unstructured{}
 	resultCM.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
@@ -446,11 +446,11 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 	t.Logf("L1: ConfigMap shared-data-result created (uid=%s)", resultCM.GetUID())
 
 	// THE PROOF: data.output = "hello-from-parent"
-	// This value traversed: parent template → ConfigMap → API server → externalRef read by
+	// This value traversed: parent template → ConfigMap → API server → watch read by
 	// child → CEL evaluation of ${input.data.message} → child template → API server
 	resultCMData, _, _ := unstructured.NestedStringMap(resultCM.Object, "data")
 	assert.Equal(t, "hello-from-parent", resultCMData["output"],
-		"child Graph should evaluate ${input.data.message} → value from externalRef-read ConfigMap")
+		"child Graph should evaluate ${input.data.message} → value from watch-read ConfigMap")
 	assert.Equal(t, "shared-data", resultCMData["parentName"],
 		"L0-evaluated value should survive as concrete string in child spec")
 	t.Logf("L1: data.output=%q data.parentName=%q — values traversed the evaluation boundary",
@@ -460,6 +460,3 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 	assertManagedBy(t, resultCM, "shared-data-child")
 	t.Logf("L1: Management chain: parent Graph → child Graph → result ConfigMap")
 }
-
-// TestForEachBasic proves that forEach stamps one resource per item in a collection.
-// A Graph with a base ConfigMap and a forEach that creates one ConfigMap per value.

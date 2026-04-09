@@ -140,7 +140,7 @@ func (m *WatchManager) stopLocked(gvr schema.GroupVersionResource, force bool) {
 	if !force && len(m.owners[gvr]) > 0 {
 		return
 	}
-	_ = w.informer.RemoveEventHandler(w.handlerReg)
+	_ = w.informer.RemoveEventHandler(w.handlerReg) // best-effort; informer is being cancelled anyway
 	w.cancel()
 	delete(m.watches, gvr)
 	m.log.V(1).Info("informer stopped", "gvr", gvr)
@@ -234,7 +234,8 @@ func (m *WatchManager) eventHandlers(gvr schema.GroupVersionResource) cache.Reso
 
 // ---------- WatchCoordinator ----------
 
-// graphKey identifies a Graph object.
+// graphKey identifies a Graph object. Type alias keeps call sites clean;
+// a distinct type would add conversion noise for marginal safety.
 type graphKey = types.NamespacedName
 
 // watchRequest describes a resource a Graph wants to watch.

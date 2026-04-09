@@ -264,7 +264,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 //
 // The parent has a list of resource definitions in a ConfigMap. Its forEach stamps
 // a child Graph whose spec.nodes is ${...} — a CEL expression that concatenates
-// a base externalRef with the dynamic resource list. The parent evaluates this
+// a base watch with the dynamic resource list. The parent evaluates this
 // expression against its own scope, so the child Graph arrives at the API server
 // with spec.nodes as a concrete []any. The child reconciles normally.
 //
@@ -293,7 +293,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 	// Parent Graph: forEach over a literal list, stamps child Graphs with
 	// spec.nodes constructed from a CEL expression.
 	// The child's nodes are:
-	//   [externalRef for the source CM] + [template CM that uses the source data]
+	//   [watch for the source CM] + [template CM that uses the source data]
 	// This is the example 3 pattern — spec.nodes is a ${} expression.
 	parent := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -345,7 +345,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 	childSpec, _, _ := unstructured.NestedFieldNoCopy(childGraph.Object, "spec", "nodes")
 	childNodes, ok := childSpec.([]any)
 	require.True(t, ok, "child spec.nodes should be []any, got %T", childSpec)
-	assert.Len(t, childNodes, 2, "child should have 2 nodes (externalRef + template)")
+	assert.Len(t, childNodes, 2, "child should have 2 nodes (watch + template)")
 	t.Logf("Child Graph spec.nodes is concrete []any with %d nodes", len(childNodes))
 
 	// The child Graph should reconcile and create the result ConfigMap
@@ -355,7 +355,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 
 	data, _, _ := unstructured.NestedStringMap(resultCM.Object, "data")
 	assert.Equal(t, "hello-from-dynamic", data["value"],
-		"child should resolve externalRef and use its data in the template")
+		"child should resolve watch and use its data in the template")
 	t.Logf("Child result ConfigMap: value=%s", data["value"])
 
 	t.Log("Dynamic resource list proved: parent CEL expression → child concrete []any → child reconciles normally")

@@ -226,12 +226,14 @@ func extractGraphSpec(graphObj map[string]any) (*GraphSpec, error) {
 }
 
 // parseNodeList converts a raw node list into Nodes.
+// Returns an error if any node is missing an ID or has a duplicate ID.
 func parseNodeList(raw any) ([]Node, error) {
 	list, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("spec.nodes is %T, want []any", raw)
 	}
 
+	seen := make(map[string]bool, len(list))
 	var nodes []Node
 	for i, item := range list {
 		m, ok := item.(map[string]any)
@@ -240,9 +242,15 @@ func parseNodeList(raw any) ([]Node, error) {
 		}
 
 		node := Node{}
-		if id, ok := m["id"].(string); ok {
-			node.ID = id
+		id, ok := m["id"].(string)
+		if !ok || id == "" {
+			return nil, fmt.Errorf("node[%d]: missing or empty id", i)
 		}
+		if seen[id] {
+			return nil, fmt.Errorf("node[%d]: duplicate id %q", i, id)
+		}
+		seen[id] = true
+		node.ID = id
 		if tmpl, ok := m["template"].(map[string]any); ok {
 			node.Template = tmpl
 		}

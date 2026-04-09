@@ -355,8 +355,6 @@ func normalizeTypes(v any) any {
 		return val
 	case int:
 		return int64(val)
-	case float32:
-		return float64(val)
 	default:
 		return v
 	}

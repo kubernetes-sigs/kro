@@ -25,8 +25,8 @@
 #   of node definitions (see CEL list concatenation in example 3).
 #
 # Resource model:
-#   - externalRef: reads an object from the cluster into scope.
-#     With a name → single object. With a selector → collection.
+#   - Watch (identity-only template): reads an object from the cluster into scope.
+#     With a name → single object (ShapeWatch). Without a name → collection (ShapeCollectionWatch).
 #   - forEach: stamps the template once per item in a collection.
 #     When forEach stamps a Graph, each item gets its own scope — independent
 #     reconciliation, lifecycle, and error isolation.
@@ -40,11 +40,12 @@
 #     a dependency: the Graph waits for the target to be ready before writing.
 #
 #   New Graph scope inside ForEach:
-#     A parent Graph watches a collection via externalRef(selector) and stamps
+#     A parent Graph watches a collection via selector template and stamps
 #     one child Graph per item via forEach. Each child reads its specific item
-#     via externalRef(name). The collection watch only fires on create/delete.
-#     The per-item watch fires on spec changes — O(1) reactivity per instance,
-#     not O(N) re-evaluation of the entire collection. See examples 2 and 3.
+#     via a watch template (name only). The collection watch only fires on
+#     create/delete. The per-item watch fires on spec changes — O(1) reactivity
+#     per instance, not O(N) re-evaluation of the entire collection.
+#     See examples 2 and 3.
 #
 #   Cleanup:
 #     Graphs are namespace-scoped and can own cluster-scoped objects. Owner

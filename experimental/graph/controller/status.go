@@ -43,7 +43,7 @@ type reconcileState struct {
 	hasDataPending bool
 	hasNotReady    bool
 	hasConflict    bool
-	reconcileErr   error
+	pruneErr       error // non-nil if resource pruning failed
 	nodeCount      int
 	appliedCount   int
 	contributions  []string // node IDs detected as contributions
@@ -51,7 +51,7 @@ type reconcileState struct {
 
 // deriveState computes the Graph state from the reconcile outcome.
 func (s *reconcileState) deriveState() string {
-	if !s.accepted || s.reconcileErr != nil {
+	if !s.accepted {
 		return StateError
 	}
 	if s.needsRequeue || s.hasDataPending || s.hasNotReady {
@@ -87,8 +87,8 @@ func (s *reconcileState) deriveReadyCondition() (status string, reason string, m
 	if !s.accepted {
 		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
 	}
-	if s.reconcileErr != nil {
-		return ConditionFalse, "ReconcileError", s.reconcileErr.Error()
+	if s.pruneErr != nil {
+		return ConditionFalse, "PruneError", fmt.Sprintf("Failed to prune removed resources: %v", s.pruneErr)
 	}
 	if s.hasConflict {
 		return ConditionFalse, "FieldConflict", "One or more resources have SSA field ownership conflicts"

@@ -93,7 +93,7 @@ func TestForEachBasic(t *testing.T) {
 }
 
 // TestForEachWithExternalRefSelector proves the full pattern:
-// externalRef with selector reads a collection from the cluster,
+// collection watch reads a collection from the cluster,
 // forEach iterates it and stamps one resource per item.
 // This is the core mechanism for "one child Graph per instance" in the RGD model.
 func TestForEachWithExternalRefSelector(t *testing.T) {
@@ -121,7 +121,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 		require.NoError(t, k8sClient.Create(ctx, cm))
 	}
 
-	// Graph: read collection via externalRef selector, forEach stamps per item
+	// Graph: read collection via watch with selector, forEach stamps per item
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -132,7 +132,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 			},
 			"spec": map[string]any{
 				"nodes": []any{
-					// externalRef with selector: reads all ConfigMaps with label app=my-kind
+					// watch with selector: reads all ConfigMaps with label app=my-kind
 					map[string]any{
 						"id": "instances",
 						"template": map[string]any{
@@ -191,8 +191,8 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 }
 
 // TestForEachStampsChildGraphs proves the RGD-like pattern:
-// externalRef selector reads instances, forEach stamps one child Graph per instance,
-// each child Graph independently reconciles with its own scope via externalRef.
+// watch with selector reads instances, forEach stamps one child Graph per instance,
+// each child Graph independently reconciles with its own scope via watch.
 // This is the three-level nesting that makes the RGD system work.
 func TestForEachStampsChildGraphs(t *testing.T) {
 	t.Parallel()
@@ -224,7 +224,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 	}
 
 	// Parent Graph: reads all WebApp instances, stamps one child Graph per instance.
-	// Each child Graph reads its specific instance via externalRef and creates resources.
+	// Each child Graph reads its specific instance via watch and creates resources.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
@@ -590,9 +590,3 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 	}))
 	t.Log("Graph is Active — forEach readyWhen happy path proved")
 }
-
-// TestContribution proves that a Graph can write fields to an object it doesn't own.
-// This is partial SSA — the Graph writes specific fields (like status) without
-// taking ownership. No ownerReference is set on the target.
-//
-// This is how child Graphs write status back to the WebApp instance in the RGD model.

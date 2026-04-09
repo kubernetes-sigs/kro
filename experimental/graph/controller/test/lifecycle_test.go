@@ -266,13 +266,13 @@ func TestCascadeDeletion(t *testing.T) {
 }
 
 // TestParallelIndependence proves that independent resource chains make
-// progress independently. When chain A is blocked (externalRef not ready),
+// progress independently. When chain A is blocked (watch not ready),
 // chain B (no dependency on A) proceeds normally.
 func TestParallelIndependence(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Create the externalRef source for chain A — starts not ready
+	// Create the watch source for chain A — starts not ready
 	sourceA := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -290,7 +290,7 @@ func TestParallelIndependence(t *testing.T) {
 			"metadata":   map[string]any{"name": "test-parallel", "namespace": ns},
 			"spec": map[string]any{
 				"nodes": []any{
-					// Chain A: externalRef (not ready) → dependent-a
+					// Chain A: watch (not ready) → dependent-a
 					map[string]any{
 						"id": "extA",
 						"template": map[string]any{
@@ -823,17 +823,3 @@ func TestDriftNotRestored(t *testing.T) {
 	}))
 	t.Log("Spec change applied: desired=new-value — content-addressed apply proved")
 }
-
-// TestRGDPatternEndToEnd proves the full L1→L2 pattern that the RGD system uses:
-//
-//	L1 Graph (controller):
-//	  - Watches all SimpleApp instances via externalRef selector
-//	  - Stamps one child Graph (L2) per instance via forEach
-//
-//	L2 Graph (per-instance):
-//	  - Reads its specific SimpleApp via externalRef (name baked in by L1)
-//	  - Creates a Deployment and a ConfigMap from the instance spec
-//	  - Contributes annotations back to the SimpleApp instance
-//
-// This is the example-2 pattern from the design docs — the core mechanism that
-// makes RGD integration tests work at the Graph layer.

@@ -183,6 +183,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	results := make(chan nodeResult, len(dag.Nodes))
 	inflight := 0
+	var nodeErrors []string // "nodeID: reason" for status reporting
 
 	// tryDispatch checks if a node can be dispatched. Three outcomes:
 	// 1. All dependencies resolved → dispatch to worker
@@ -237,7 +238,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			case NodePending:
 				return // dependency still inflight — don't dispatch yet, don't exclude
 			default:
-				// Excluded, DataPending, Error, Conflict — permanent block
+				// Excluded, DataPending, Error, SystemError, Conflict — blocked
 				plan.SetState(dag, node.ID, NodeExcluded)
 				return
 			}
@@ -419,17 +420,29 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	}
 
 	// Coordinator loop: receive completions, merge into scope, dispatch dependents.
-	var fatalErr error
 	for inflight > 0 {
 		res := <-results
 		inflight--
 
 		node := &dag.Nodes[res.idx]
 
-		// Handle fatal errors — let in-flight finish but stop dispatching.
+		// Error handling: block dependents, continue independent branches.
+		// Classify the API error to determine the plan state — NodeError
+		// for client errors (4xx), NodeSystemError for server/infra
+		// failures (5xx/timeout/network). Both retry; the distinction
+		// flows into the status condition for operator triage.
 		if res.state == NodeError {
-			fatalErr = fmt.Errorf("node %s: %w", node.ID, res.err)
-			plan.SetState(dag, node.ID, NodeError)
+			info := classifyAPIError(res.err)
+			plan.SetState(dag, node.ID, info.state)
+			state.previousPlanStates[node.ID] = info.state
+			nodeErrors = append(nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
+			logger.V(0).Info("error on node", "node", node.ID,
+				"state", info.state, "reason", info.reason, "error", res.err)
+			// Dispatch dependents — tryDispatch will see NodeError
+			// and exclude them via the dependency check.
+			for _, depIdx := range dag.Dependents[node.ID] {
+				tryDispatch(depIdx)
+			}
 			continue
 		}
 
@@ -478,23 +491,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			}
 		}
 
-		if fatalErr != nil {
-			continue // draining in-flight workers
-		}
-
 		// Check dependents: dispatch any whose dependencies are now satisfied.
 		for _, depIdx := range dag.Dependents[node.ID] {
 			tryDispatch(depIdx)
 		}
 	}
 
-	if fatalErr != nil {
-		return ctrl.Result{}, fatalErr
-	}
-
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
-	needsRequeue := summary.HasDataPending || summary.HasNotReady
 
 	// Collect detected contributions for status reporting.
 	var contributions []string
@@ -569,10 +573,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		accepted:       true,
 		nodeCount:      len(revisionSpec.Nodes),
 		appliedCount:   summary.ReadyCount,
-		needsRequeue:   needsRequeue,
 		hasDataPending: summary.HasDataPending,
 		hasNotReady:    summary.HasNotReady,
 		hasConflict:    summary.HasConflict,
+		hasError:       summary.HasError,
+		hasSystemError: summary.HasSystemError,
+		nodeErrors:     nodeErrors,
 		pruneErr:       pruneErr,
 		contributions:  contributions,
 	}
@@ -580,11 +586,15 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		logger.Error(err, "status update")
 	}
 
-	// Update revision status conditions
-	allReady := !needsRequeue && !summary.HasConflict && rstate.accepted
+	// The graph is fully converged when every node is Ready and the spec is
+	// accepted. Everything else — errors, conflicts, pending data, not-ready
+	// — retries. The environment can change independently of the controller's
+	// inputs, so we always retry.
+	allReady := rstate.accepted && !summary.HasDataPending && !summary.HasNotReady &&
+		!summary.HasConflict && !summary.HasError && !summary.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneErr == nil)
 
-	if needsRequeue {
+	if !allReady {
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
 	return ctrl.Result{}, nil

@@ -179,8 +179,9 @@ const (
 	NodeNotReady                     // Applied but readyWhen not satisfied
 	NodeExcluded                     // Excluded by includeWhen or contagious exclusion
 	NodeDataPending                  // CEL expression couldn't resolve (retryable)
-	NodeError                        // Fatal error
+	NodeError                        // Client request failed (4xx)
 	NodeConflict                     // SSA 409 — field ownership taken by another actor
+	NodeSystemError                  // Server/infrastructure failure (5xx, timeout, network)
 )
 
 // PlanState tracks the state of all nodes during a reconcile cycle.
@@ -229,7 +230,7 @@ func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 	ps.States[id] = state
 
 	// Propagate contagious exclusion
-	if state == NodeExcluded || state == NodeDataPending || state == NodeError || state == NodeConflict {
+	if state == NodeExcluded || state == NodeDataPending || state == NodeError || state == NodeConflict || state == NodeSystemError {
 		ps.propagateExclusion(dag, id)
 	}
 }
@@ -253,6 +254,8 @@ type PlanSummary struct {
 	HasDataPending bool
 	HasNotReady    bool
 	HasConflict    bool
+	HasError       bool
+	HasSystemError bool
 	ReadyCount     int
 }
 
@@ -267,10 +270,14 @@ func (ps *PlanState) Summary() PlanSummary {
 			s.HasNotReady = true
 		case NodeDataPending:
 			s.HasDataPending = true
-		case NodeExcluded, NodeError:
-			// Counted but not surfaced — these states propagate through
+		case NodeExcluded:
+			// Counted but not surfaced — excluded nodes propagate through
 			// the DAG via contagious exclusion and are observable in
 			// per-node status, not the aggregate summary.
+		case NodeError:
+			s.HasError = true
+		case NodeSystemError:
+			s.HasSystemError = true
 		case NodeConflict:
 			s.HasConflict = true
 		}

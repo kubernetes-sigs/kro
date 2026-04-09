@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -47,11 +48,13 @@ type reconcileState struct {
 	accepted    bool
 	acceptedErr error // non-nil when accepted=false
 
-	needsRequeue   bool
 	hasDataPending bool
 	hasNotReady    bool
 	hasConflict    bool
-	pruneErr       error // non-nil if resource pruning failed
+	hasError       bool     // any node in NodeError (4xx)
+	hasSystemError bool     // any node in NodeSystemError (5xx)
+	nodeErrors     []string // "nodeID: reason" for status message
+	pruneErr       error    // non-nil if resource pruning failed
 	nodeCount      int
 	appliedCount   int
 	contributions  []string // node IDs detected as contributions
@@ -62,7 +65,7 @@ func (s *reconcileState) deriveState() GraphState {
 	if !s.accepted {
 		return StateError
 	}
-	if s.needsRequeue || s.hasDataPending || s.hasNotReady {
+	if s.hasDataPending || s.hasNotReady || s.hasConflict || s.hasError || s.hasSystemError {
 		return StateInProgress
 	}
 	return StateActive
@@ -95,6 +98,16 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	if !s.accepted {
 		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
 	}
+	if s.hasSystemError {
+		return ConditionFalse, "SystemError",
+			fmt.Sprintf("Nodes with server/infrastructure errors (retrying): %s",
+				strings.Join(s.nodeErrors, "; "))
+	}
+	if s.hasError {
+		return ConditionFalse, "NodeError",
+			fmt.Sprintf("Nodes with errors (retrying): %s",
+				strings.Join(s.nodeErrors, "; "))
+	}
 	if s.pruneErr != nil {
 		return ConditionFalse, "PruneError", fmt.Sprintf("Failed to prune removed resources: %v", s.pruneErr)
 	}
@@ -106,9 +119,6 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	}
 	if s.hasNotReady {
 		return ConditionFalse, "ResourcesNotReady", "One or more resources have not satisfied their readyWhen conditions"
-	}
-	if s.needsRequeue {
-		return ConditionFalse, "Progressing", "Reconciliation in progress"
 	}
 	return ConditionTrue, "Ready", fmt.Sprintf("All %d nodes reconciled", s.appliedCount)
 }

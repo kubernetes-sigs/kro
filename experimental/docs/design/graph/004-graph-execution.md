@@ -70,14 +70,15 @@ invisible and the DAG doesn't reconverge.
 
 Each node in the walk scope lands in exactly one state per reconcile:
 
-| State    | Meaning                        | Dependents | Resolution                          |
-|----------|--------------------------------|------------|-------------------------------------|
-| Ready    | Applied, readyWhen satisfied   | Proceed    | —                                   |
-| NotReady | Applied, readyWhen unsatisfied | Proceed    | Converges via watch                 |
-| Pending  | Data not yet available         | Blocked    | Upstream resolves                   |
-| Excluded | includeWhen false              | Blocked    | includeWhen inputs change           |
-| Conflict | Field ownership contested      | Blocked    | Template change or external release |
-| Error    | Transient failure              | Blocked    | Retries next reconcile              |
+| State       | Meaning                        | Dependents | Resolution                          |
+|-------------|--------------------------------|------------|-------------------------------------|
+| Ready       | Applied, readyWhen satisfied   | Proceed    | —                                   |
+| NotReady    | Applied, readyWhen unsatisfied | Proceed    | Converges via watch                 |
+| Pending     | Data not yet available         | Blocked    | Upstream resolves                   |
+| Excluded    | includeWhen false              | Blocked    | includeWhen inputs change           |
+| Conflict    | Field ownership contested      | Blocked    | Retries next reconcile              |
+| Error       | Client request failed (4xx)    | Blocked    | Retries next reconcile              |
+| SystemError | Server/infra failure (5xx)     | Blocked    | Retries next reconcile              |
 
 Ready and NotReady are both "applied and in scope." readyWhen is a health signal that feeds the
 Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the node's
@@ -86,9 +87,6 @@ data is in scope.
 Blocked states propagate through the DAG. If A is Pending, B depends on A, B's CEL expressions
 cannot resolve — B is also Pending. No explicit propagation mechanism is needed; CEL evaluation
 failure IS the propagation. Independent branches are unaffected.
-
-Conflict is distinct from Error. Error retries automatically. Conflict persists until resolved:
-change the template to remove contested fields, or wait for the external actor to release them.
 
 ### Wind
 

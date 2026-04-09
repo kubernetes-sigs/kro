@@ -3,7 +3,55 @@ package graphcontroller
 import (
 	"fmt"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+// TestGVKToGVR documents the pluralization contract: these are the GVK→GVR
+// mappings the controller depends on being correct. If the pluralization
+// library changes or is swapped, this test catches regressions.
+func TestGVKToGVR(t *testing.T) {
+	tests := []struct {
+		kind       string
+		wantPlural string
+	}{
+		// Regular +s
+		{"Deployment", "deployments"},
+		{"Service", "services"},
+		{"ConfigMap", "configmaps"},
+		{"Secret", "secrets"},
+		{"Namespace", "namespaces"},
+		{"Node", "nodes"},
+		{"EndpointSlice", "endpointslices"},
+
+		// -y → -ies
+		{"NetworkPolicy", "networkpolicies"},
+
+		// -ss → -sses (double-s)
+		{"IngressClass", "ingressclasses"},
+		{"StorageClass", "storageclasses"},
+
+		// -s → -ses / -ss → -sses
+		{"Ingress", "ingresses"},
+
+		// Already plural-looking
+		{"Endpoints", "endpoints"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			gvk := schema.GroupVersionKind{Group: "test", Version: "v1", Kind: tt.kind}
+			gvr := gvkToGVR(gvk)
+			if gvr.Resource != tt.wantPlural {
+				t.Errorf("gvkToGVR(%s): got %q, want %q", tt.kind, gvr.Resource, tt.wantPlural)
+			}
+		})
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Benchmarks — baseline measurements for the hot-path operations.

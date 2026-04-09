@@ -1,15 +1,18 @@
 // Binary entrypoint for the experimental Graph controller.
 //
-// Prerequisites:
+// Run with --bootstrap to automatically install CRDs:
+//
+//	go run ./experimental/graph/cmd/ --bootstrap
+//
+// Or install CRDs manually first:
 //
 //	kubectl apply -f experimental/graph/crds/
-//
-// Run:
-//
 //	go run ./experimental/graph/cmd/
 package main
 
 import (
+	"context"
+	"flag"
 	"os"
 
 	"k8s.io/client-go/kubernetes/scheme"
@@ -20,10 +23,20 @@ import (
 )
 
 func main() {
+	bootstrapFlag := flag.Bool("bootstrap", false, "Install CRDs before starting the controller")
+	flag.Parse()
+
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	log := ctrl.Log.WithName("main")
 
 	cfg := ctrl.GetConfigOrDie()
+
+	if *bootstrapFlag {
+		if err := bootstrap(context.Background(), cfg); err != nil {
+			log.Error(err, "bootstrap failed")
+			os.Exit(1)
+		}
+	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme.Scheme,

@@ -44,26 +44,27 @@ omit the field. Initial value and ongoing ownership are the same declaration.
 
 ### Template Shapes
 
-Four shapes, determined by template content:
+Four shapes:
 
 - **Owns** — specifies fields beyond identity. Creates the resource if absent. Applied via SSA.
   Tracked for cleanup. Deletes the resource on prune.
 - **Watch** — specifies only identity. Read-only GET. Not tracked. Pending if absent.
 - **Collection Watch** — specifies a kind with optional selector, no name. Read-only list. Not
   tracked.
-- **Contribute** — specifies fields on a resource the Graph does not create. Applied via SSA.
-  Tracked for cleanup. Releases fields on prune, never deletes. Pending if target absent.
+- **Contribute** — writes fields on a resource the Graph does not create. Applied via SSA. Tracked
+  for cleanup. Releases fields on prune, never deletes. Pending if target absent.
 
-Identity-only templates are Watch — always. Shape detection follows this order:
+Shape detection has two phases. Template structure determines Watch and Collection Watch at compile
+time. Resource existence determines Owns vs Contribute at first reconcile.
 
-1. **Collection Watch** — specifies `apiVersion` and `kind` with an optional `selector`. No
-   `metadata.name`.
-2. **Watch** — specifies only identity: `apiVersion`, `kind`, `metadata.name`, and optionally
-   `metadata.namespace`. No other fields.
-3. **Owns or Contribute** — specifies fields beyond identity. The controller analyzes the template
-   against the resource's type to distinguish: a template that provides a structurally complete
-   resource declaration is Owns. A template that underspecifies — omitting structural fields or
-   specifying only status and metadata — is Contribute.
+1. **Collection Watch** — no `metadata.name`.
+2. **Watch** — identity-only fields (`apiVersion`, `kind`, `metadata.name`, optionally
+   `metadata.namespace`). No other fields.
+3. **Owns** — resource absent. The Graph creates it.
+4. **Contribute** — resource exists. The Graph did not create it.
+
+A new revision re-evaluates shape. A Contribute template with `kro.run/apply: Force` takes ownership
+and promotes to Owns — the previous owner detects the takeover and relinquishes.
 
 ### kro.run/apply
 
@@ -164,8 +165,10 @@ Watch are read-only — only the Resource absent and Apply rows apply to them.
 | **Hash match** | Skip apply | Skip apply | — | — |
 | **Prune** | Delete resource | Release fields (skeleton apply) | No action | No action |
 | **Prune — conflict** | Clear from applied set, no delete | Clear from applied set, no release | — | — |
+| **Prune — managed** | Blocked | — | — | — |
 | **Teardown** | Delete resource | Release fields (skeleton apply) | No action | No action |
 | **Teardown — conflict** | Skip | Skip | — | — |
+| **Teardown — managed** | Blocked | — | — | — |
 
 ## What Falls Out
 
@@ -183,7 +186,9 @@ return to cooperative non-force SSA.
 on the exporting Graph's next reconcile catches the ownership change immediately. For non-kro
 export, the Graph's next reconcile gets a 409 when the applied values differ. If the new owner
 applies identical values, shared ownership persists — the export requires value differences to
-trigger the 409. The user removes the template. Conflict state prevents deletion.
+trigger the 409. The user removes the template. If another field manager is present on the resource,
+deletion is blocked until the other manager releases — the resource is never deleted out from under
+an active manager.
 
 **Migration.** One mechanism for all cases: the importing side adds `kro.run/apply: Force` and takes
 the fields. The exporting side detects the change (label check for kro-to-kro, 409 for non-kro) and
@@ -225,6 +230,14 @@ depend on. Resources in conflict state are skipped — the Graph no longer holds
 active revision is unavailable during teardown (e.g., manually deleted), the controller regenerates
 it from the current spec. Teardown is blocked until ordering is available — never degrade to
 unordered deletion.
+
+Before deleting an Owns resource during prune or teardown, the controller checks managedFields for
+other field managers (excluding the API server's own field manager). If present, deletion is
+blocked — another actor is managing fields on this resource and depends on its existence. The
+condition message names the blocking field manager.
+
+During prune, the resource stays in the applied set. Deletion unblocks when the other manager
+releases. During teardown, the Graph's finalizer holds until the other manager releases.
 
 ### Finalizer and Recovery
 

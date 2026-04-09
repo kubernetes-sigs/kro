@@ -165,11 +165,10 @@ cluster. It lives on the GraphRevision — the revision is the single source of 
 was applied (applied set) and in what dependency structure (DAG topology). The Graph object carries
 no tracking state.
 
-Each revision starts with an empty applied set and populates it during wind. The applied set is
-committed atomically after wind completes successfully. If wind fails partway, the applied set is
-unchanged — next reconcile retries from scratch. Writing per-resource during wind would mean a
-partial failure leaves the applied set reflecting an incomplete state, and the next reconcile's prune
-diff would be based on corrupt data.
+Each revision starts with an empty applied set and populates it during wind. A node that is
+successfully applied contributes its key. A node that errors does not — the applied set reflects only
+what was actually written. The applied set is committed after wind completes, containing the keys
+from the successful subset. Nodes that errored are re-evaluated on the next reconcile.
 
 The applied set is only written when the key set actually changes, preventing spurious
 resourceVersion bumps and re-reconcile loops in steady state. A forEach that stamps 100 resources

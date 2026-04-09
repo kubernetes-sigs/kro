@@ -232,6 +232,87 @@ func BenchmarkExtractReferencedIDs(b *testing.B) {
 	}
 }
 
+// BenchmarkHashNodeInputs measures section-scoped input hashing — the
+// per-node cost of the change check (step 3 of Wind). This runs once per
+// node per reconcile to decide whether evaluation can be skipped.
+func BenchmarkHashNodeInputs(b *testing.B) {
+	for _, depCount := range []int{1, 3, 5, 10} {
+		b.Run(fmt.Sprintf("deps=%d", depCount), func(b *testing.B) {
+			// Build a node with depCount dependencies, each referencing .data and .metadata.
+			depSections := make(map[string]map[string]bool, depCount)
+			scope := make(map[string]any, depCount)
+			for i := 0; i < depCount; i++ {
+				depID := fmt.Sprintf("dep%d", i)
+				depSections[depID] = map[string]bool{"data": true, "metadata": true}
+				scope[depID] = map[string]any{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata": map[string]any{
+						"name":            fmt.Sprintf("cm-%d", i),
+						"namespace":       "default",
+						"resourceVersion": "12345",
+						"uid":             "abc-123",
+					},
+					"data": map[string]any{
+						"key1": "value1",
+						"key2": "value2",
+						"key3": "value3",
+					},
+				}
+			}
+			node := &Node{ID: "target", DepSections: depSections}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := hashNodeInputs(node, scope)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkScopeFromTriggers measures BFS scope computation for scoped walks.
+// This runs once per reconcile when a watch event triggers the walk.
+func BenchmarkScopeFromTriggers(b *testing.B) {
+	for _, nodeCount := range []int{5, 10, 25, 50, 100} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			nodes := buildBenchNodes(nodeCount)
+			dag, err := BuildDAG(nodes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			// Trigger from the first node (root) — worst case, walks entire DAG.
+			triggers := map[string]bool{"node0": true}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = ScopeFromTriggers(dag, triggers)
+			}
+		})
+	}
+}
+
+// BenchmarkScopeFromTriggersLeaf measures scoped walk from a leaf node —
+// best case, scope is just the leaf (no dependents).
+func BenchmarkScopeFromTriggersLeaf(b *testing.B) {
+	for _, nodeCount := range []int{5, 10, 25, 50, 100} {
+		b.Run(fmt.Sprintf("nodes=%d", nodeCount), func(b *testing.B) {
+			nodes := buildBenchNodes(nodeCount)
+			dag, err := BuildDAG(nodes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			// Trigger from the last node (leaf) — best case.
+			lastNode := fmt.Sprintf("node%d", nodeCount-1)
+			triggers := map[string]bool{lastNode: true}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = ScopeFromTriggers(dag, triggers)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark data builders
 // ---------------------------------------------------------------------------

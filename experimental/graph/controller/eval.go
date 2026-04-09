@@ -413,6 +413,122 @@ func extractReferencedIDs(node Node) map[string]bool {
 	return refs
 }
 
+// extractReferencedSections scans a Node for all ${...} expressions and returns
+// two maps:
+//   - depSections: for each dependency, which top-level sections are referenced
+//     (e.g., "deploy" → {"spec": true, "metadata": true})
+//   - selfSections: which top-level sections of the node's own observed resource
+//     are referenced by readyWhen and propagateWhen
+//
+// Section scoping is the correct mechanism for input hashing — metadata.resourceVersion
+// changes on every update, so full-object hashing would always differ. By hashing only
+// the sections a node's expressions actually reference, the input hash is stable when
+// unrelated fields change.
+func extractReferencedSections(node Node) (depSections map[string]map[string]bool, selfSections map[string]bool) {
+	depSections = map[string]map[string]bool{}
+	selfSections = map[string]bool{}
+
+	// Helper: extract (identifier, section) from a CEL expression.
+	// For "deploy.spec.replicas" → ("deploy", "spec")
+	// For "deploy.metadata.name" → ("deploy", "metadata")
+	// For "size(items)" → ("", "") — builtins filtered out
+	extractIDAndSection := func(expr string) (string, string) {
+		id := extractFirstIdentifier(expr)
+		if id == "" {
+			return "", ""
+		}
+		// Find the section: skip past the ID and the dot
+		rest := strings.TrimSpace(expr)[len(id):]
+		if len(rest) == 0 || rest[0] != '.' {
+			return id, "" // no section (e.g., bare reference or function call)
+		}
+		rest = rest[1:] // skip the dot
+		end := 0
+		for end < len(rest) && isIdentContinue(rest[end]) {
+			end++
+		}
+		if end == 0 {
+			return id, ""
+		}
+		return id, rest[:end]
+	}
+
+	// Process template + includeWhen + forEach expressions → depSections
+	var templateStrs []string
+	collectStrings(node.Template, &templateStrs)
+	for _, s := range node.IncludeWhen {
+		templateStrs = append(templateStrs, s)
+	}
+	if node.ForEach != nil {
+		for _, v := range node.ForEach {
+			templateStrs = append(templateStrs, v)
+		}
+	}
+
+	for _, s := range templateStrs {
+		pos := 0
+		for {
+			dollars, expr, start, _ := findExpr(s, pos)
+			if start < 0 {
+				break
+			}
+			pos = start + len(dollars) + len(expr) + 2
+			if len(dollars) != 1 {
+				continue
+			}
+			id, section := extractIDAndSection(expr)
+			if id == "" || id == node.ID {
+				continue // skip self-references and builtins
+			}
+			if section == "" {
+				continue // bare reference without section
+			}
+			if depSections[id] == nil {
+				depSections[id] = map[string]bool{}
+			}
+			depSections[id][section] = true
+		}
+	}
+
+	// Process readyWhen + propagateWhen → both depSections (for upstream refs)
+	// and selfSections (for self-refs)
+	var gateStrs []string
+	for _, s := range node.ReadyWhen {
+		gateStrs = append(gateStrs, s)
+	}
+	for _, s := range node.PropagateWhen {
+		gateStrs = append(gateStrs, s)
+	}
+
+	for _, s := range gateStrs {
+		pos := 0
+		for {
+			dollars, expr, start, _ := findExpr(s, pos)
+			if start < 0 {
+				break
+			}
+			pos = start + len(dollars) + len(expr) + 2
+			if len(dollars) != 1 {
+				continue
+			}
+			id, section := extractIDAndSection(expr)
+			if id == "" || section == "" {
+				continue
+			}
+			if id == node.ID {
+				selfSections[section] = true
+			} else {
+				if depSections[id] == nil {
+					depSections[id] = map[string]bool{}
+				}
+				depSections[id][section] = true
+			}
+		}
+	}
+
+	return depSections, selfSections
+}
+
 // collectStrings recursively collects all string values from a value tree.
 func collectStrings(v any, out *[]string) {
 	switch val := v.(type) {

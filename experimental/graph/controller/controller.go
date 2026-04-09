@@ -142,6 +142,29 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
+	// Scoped walk: determine which nodes to visit this reconcile.
+	// nil walkScope = full walk (resync, error retry, first reconcile, revision transition).
+	// non-nil walkScope = only visit nodes in the scope.
+	var walkScope map[string]bool
+	isRevisionTransition := len(supersededRevisions) > 0
+	if watcher != nil && !isRevisionTransition {
+		triggers := watcher.drainTriggers()
+		if len(triggers) > 0 {
+			walkScope = ScopeFromTriggers(dag, triggers)
+			// If no triggers mapped to DAG nodes, the scope is empty but
+			// there were real events (e.g., owned resource status updates).
+			// Fall back to full walk — empty scope would skip all nodes.
+			if len(walkScope) == 0 {
+				walkScope = nil
+			} else {
+				logger.V(1).Info("scoped walk", "triggers", len(triggers), "scope", len(walkScope), "dagSize", len(dag.Nodes))
+			}
+		}
+	}
+	// Revision transitions force full walks — the DAG structure changed
+	// and stale entries would never be cleaned up by a scoped walk.
+	// See 004-graph-execution.md § Revision Transitions.
+
 	// Walk DAG with eager scheduling: nodes are dispatched as soon as their
 	// dependencies are satisfied. Workers are pure functions — they receive
 	// a read-only scope snapshot and return results. The coordinator is the
@@ -168,11 +191,40 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// 2. Some dependency still inflight (Pending) → skip, it'll be retried
 	//    when that dependency completes
 	// 3. Some dependency permanently blocked → mark Excluded
-	tryDispatch := func(idx int) {
+	var tryDispatch func(idx int)
+	tryDispatch = func(idx int) {
 		node := &dag.Nodes[idx]
 
 		if plan.States[node.ID] != NodePending {
 			return // already processed or excluded
+		}
+
+		// Scoped walk: if the node is outside the walk scope, retain
+		// previous state. This is equivalent to a change check match —
+		// the node is untouched because the triggering event doesn't
+		// affect it. See 004-graph-execution.md § Scoped Walks.
+		if walkScope != nil && !walkScope[node.ID] {
+			if prev, ok := cache.previousScope[node.ID]; ok {
+				eval.scope[node.ID] = prev
+			}
+			if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+				plan.States[node.ID] = prevState
+				// Restore propagateWhen from previous cycle.
+				if (prevState == NodeReady || prevState == NodeNotReady) &&
+					len(node.PropagateWhen) > 0 && cache.previousScope[node.ID] != nil {
+					plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
+						node.PropagateWhen, cache.previousScope[node.ID], node.ID)
+				}
+			}
+			// Dispatch dependents — this node is "done" (retained previous state)
+			// and its dependents may be in scope and waiting.
+			for _, depIdx := range dag.Dependents[node.ID] {
+				tryDispatch(depIdx)
+			}
+			return
 		}
 
 		// Check dependencies. Distinguish "still running" from "permanently blocked."
@@ -206,8 +258,108 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if prevState, ok := cache.previousPlanStates[node.ID]; ok {
 				plan.States[node.ID] = prevState
 			}
+			// Dispatch dependents — this node retained previous state but
+			// dependents still need to be evaluated.
+			for _, depIdx := range dag.Dependents[node.ID] {
+				tryDispatch(depIdx)
+			}
 			return
 		}
+
+		// Step 3: Change check — section-scoped input hashing.
+		// Hash the node's dependency inputs (only referenced sections) and
+		// compare against the previous reconcile's hash. Three outcomes:
+		//
+		// 1. Dependency hash match + self-state unchanged → skip everything
+		// 2. Dependency hash match + self-state changed   → skip template/apply,
+		//    re-evaluate readyWhen/propagateWhen only
+		// 3. Dependency hash mismatch → full evaluation (dispatch to worker)
+		//
+		// Watch and CollectionWatch nodes are excluded from input hashing
+		// because their output is determined by cluster state (GET/List),
+		// not by scope data. A Watch node's dependency inputs can be unchanged
+		// while a new resource was created in the cluster.
+		nodeShape := node.Shape()
+		canHashSkip := nodeShape != ShapeWatch && nodeShape != ShapeCollectionWatch
+		if canHashSkip {
+			if _, hasPrevHash := cache.previousInputHashes[node.ID]; hasPrevHash {
+				inputHash, hashErr := hashNodeInputs(node, eval.scope)
+				if hashErr == nil && inputHash != "" && inputHash == cache.previousInputHashes[node.ID] {
+					// Dependency inputs unchanged. Check self-state.
+					prevScope := cache.previousScope[node.ID]
+					selfHash, selfErr := hashSelfSections(node, prevScope)
+					selfChanged := false
+					if selfErr == nil && selfHash != "" {
+						prevSelfHash := cache.previousSelfHashes[node.ID]
+						selfChanged = selfHash != prevSelfHash
+					}
+
+					if !selfChanged {
+						// Path 1: dependency hash match + self unchanged → skip everything.
+						logger.V(1).Info("input hash match — skipping evaluation",
+							"node", node.ID)
+						if prev, ok := cache.previousScope[node.ID]; ok {
+							eval.scope[node.ID] = prev
+						}
+						if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+							appliedKeys = append(appliedKeys, prevKeys...)
+						}
+						if prevState, ok := cache.previousPlanStates[node.ID]; ok {
+							plan.States[node.ID] = prevState
+							// Propagate readyWhen result from previous cycle.
+							if prevState == NodeReady || prevState == NodeNotReady {
+								if len(node.PropagateWhen) > 0 && prevScope != nil {
+									plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
+										node.PropagateWhen, prevScope, node.ID)
+								}
+							}
+						}
+						// Dispatch dependents — this node is done with retained state.
+						for _, depIdx := range dag.Dependents[node.ID] {
+							tryDispatch(depIdx)
+						}
+						return
+					}
+
+					// Path 2: dependency hash match + self-state changed → re-evaluate
+					// gates only (readyWhen/propagateWhen). Template hasn't changed so
+					// skip template evaluation and apply.
+					logger.V(1).Info("self-state changed — re-evaluating gates only",
+						"node", node.ID)
+					if prev, ok := cache.previousScope[node.ID]; ok {
+						eval.scope[node.ID] = prev
+					}
+					if prevKeys, ok := cache.previousKeys[node.ID]; ok {
+						appliedKeys = append(appliedKeys, prevKeys...)
+					}
+					state := NodeReady
+					observed := eval.scope[node.ID]
+					if len(node.ReadyWhen) > 0 && observed != nil {
+						if err := eval.checkReadiness(node.ReadyWhen, observed, node.ID); err != nil {
+							state = NodeNotReady
+						}
+					}
+					plan.States[node.ID] = state
+					if (state == NodeReady || state == NodeNotReady) &&
+						len(node.PropagateWhen) > 0 && observed != nil {
+						plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
+							node.PropagateWhen, observed, node.ID)
+					}
+					// Update self hash for next reconcile.
+					if newSelfHash, err := hashSelfSections(node, observed); err == nil {
+						cache.previousSelfHashes[node.ID] = newSelfHash
+					}
+					cache.previousPlanStates[node.ID] = state
+					// Dispatch dependents — this node is done with gate re-evaluation.
+					for _, depIdx := range dag.Dependents[node.ID] {
+						tryDispatch(depIdx)
+					}
+					return
+				}
+				// Path 3: dependency hash mismatch or hash error → full evaluation.
+				// Fall through to dispatch.
+			}
+		} // canHashSkip
 
 		// Step 3: includeWhen (evaluated in coordinator — reads shared scope)
 		if len(node.IncludeWhen) > 0 {
@@ -316,6 +468,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		cache.previousScope[node.ID] = eval.scope[node.ID]
 		cache.previousKeys[node.ID] = res.keys
 		cache.previousPlanStates[node.ID] = res.state
+
+		// Store input hash for next reconcile's change check.
+		if inputHash, err := hashNodeInputs(node, eval.scope); err == nil && inputHash != "" {
+			cache.previousInputHashes[node.ID] = inputHash
+		}
+		// Store self hash for gate re-evaluation detection.
+		if observed := eval.scope[node.ID]; observed != nil {
+			if selfHash, err := hashSelfSections(node, observed); err == nil {
+				cache.previousSelfHashes[node.ID] = selfHash
+			}
+		}
 
 		if fatalErr != nil {
 			continue // draining in-flight workers
@@ -801,7 +964,7 @@ func (r *GraphReconciler) reconcileForEach(ctx context.Context, graph *unstructu
 				return nil, fmt.Errorf("forEach %s item: %w", node.ID, err)
 			}
 
-			applied, err := r.applyResource(ctx, graph, evalMap, watcher)
+			applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID)
 			if err != nil {
 				return keys, fmt.Errorf("applying %s item: %w", node.ID, err)
 			}
@@ -909,7 +1072,7 @@ func (r *GraphReconciler) reconcileOwns(ctx context.Context, graph *unstructured
 		return "", fmt.Errorf("template %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyResource(ctx, graph, evalMap, watcher)
+	applied, err := r.applyResource(ctx, graph, evalMap, watcher, node.ID)
 	if err != nil {
 		return "", err
 	}
@@ -938,7 +1101,7 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 		return "", fmt.Errorf("contribute %s: %w", node.ID, err)
 	}
 
-	applied, err := r.applyContribution(ctx, graph, evalMap, watcher)
+	applied, err := r.applyContribution(ctx, graph, evalMap, watcher, node.ID)
 	if err != nil {
 		return "", err
 	}

@@ -42,6 +42,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 
 	for i, node := range nodes {
 		node.Dependencies = extractReferencedIDs(node)
+		node.DepSections, node.SelfSections = extractReferencedSections(node)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
 		dag.Shapes[node.ID] = node.Shape()
@@ -131,6 +132,42 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 	}
 
 	return dag, nil
+}
+
+// ScopeFromTriggers computes the set of node IDs affected by a set of trigger
+// nodes. BFS forward through the Dependents adjacency list from each trigger.
+// Returns the set of node IDs in scope for a scoped walk.
+//
+// Per 004-graph-execution.md: "A watch event fires for a resource. The node
+// that corresponds to the changed resource is the starting point. Walking
+// downstream — to nodes that depend on the starting point — produces the
+// walk scope."
+func ScopeFromTriggers(dag *DAG, triggerNodes map[string]bool) map[string]bool {
+	scope := make(map[string]bool, len(triggerNodes))
+
+	// BFS queue: start with all trigger nodes that exist in the DAG.
+	var queue []string
+	for nodeID := range triggerNodes {
+		if _, ok := dag.Index[nodeID]; ok {
+			scope[nodeID] = true
+			queue = append(queue, nodeID)
+		}
+	}
+
+	// BFS forward through dependents.
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, depIdx := range dag.Dependents[current] {
+			depID := dag.Nodes[depIdx].ID
+			if !scope[depID] {
+				scope[depID] = true
+				queue = append(queue, depID)
+			}
+		}
+	}
+
+	return scope
 }
 
 // NodeState tracks the reconcile-time state of a single node.

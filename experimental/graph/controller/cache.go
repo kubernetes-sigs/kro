@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"sync"
 )
 
@@ -106,4 +107,151 @@ func (rc *resourceCache) removeForGraph(graphName, graphNamespace string) {
 // resourceCacheKey builds a cache key for a resource from its identifying fields.
 func resourceCacheKey(apiVersion, kind, namespace, name string) string {
 	return apiVersion + "/" + kind + "/" + namespace + "/" + name
+}
+
+// ---------------------------------------------------------------------------
+// Section-scoped input hashing
+// ---------------------------------------------------------------------------
+
+// volatileMetadataFields are metadata keys excluded from section-scoped hashing.
+// These change on every write without conveying semantic meaning — including them
+// would defeat the input hash (same problem as full-object hashing).
+var volatileMetadataFields = map[string]bool{
+	"resourceVersion":            true,
+	"managedFields":              true,
+	"creationTimestamp":          true,
+	"uid":                        true,
+	"selfLink":                   true,
+	"generation":                 true,
+	"deletionGracePeriodSeconds": true,
+}
+
+// hashNodeInputs computes a section-scoped hash of a node's dependency inputs.
+// Only the top-level sections that the node's CEL expressions reference are
+// included. For metadata, volatile fields (resourceVersion, managedFields, etc.)
+// are excluded.
+//
+// Returns "" if the node has no dependency sections to hash (e.g., Watch nodes
+// with no upstream dependencies).
+func hashNodeInputs(node *Node, scope map[string]any) (string, error) {
+	if len(node.DepSections) == 0 {
+		return "", nil
+	}
+
+	h := fnv.New64a()
+	// Process dependencies in sorted order for deterministic hashing.
+	depIDs := sortedKeys(node.DepSections)
+	for _, depID := range depIDs {
+		sections := node.DepSections[depID]
+		depData, ok := scope[depID]
+		if !ok {
+			// Dependency not in scope — this node can't be evaluated yet.
+			// Return a sentinel that won't match any previous hash.
+			return "", fmt.Errorf("dependency %q not in scope", depID)
+		}
+		depMap, ok := depData.(map[string]any)
+		if !ok {
+			// Non-map dependency (e.g., collection watch array) — hash the whole thing.
+			data, err := json.Marshal(depData)
+			if err != nil {
+				return "", fmt.Errorf("hashing dependency %q: %w", depID, err)
+			}
+			h.Write([]byte(depID))
+			h.Write(data)
+			continue
+		}
+
+		sectionNames := sortedBoolKeys(sections)
+		for _, section := range sectionNames {
+			sectionData, ok := depMap[section]
+			if !ok {
+				continue
+			}
+			// For metadata, exclude volatile fields.
+			if section == "metadata" {
+				sectionData = filterVolatileMetadata(sectionData)
+			}
+			data, err := json.Marshal(sectionData)
+			if err != nil {
+				return "", fmt.Errorf("hashing %s.%s: %w", depID, section, err)
+			}
+			h.Write([]byte(depID))
+			h.Write([]byte(section))
+			h.Write(data)
+		}
+	}
+
+	return fmt.Sprintf("%016x", h.Sum64()), nil
+}
+
+// hashSelfSections computes a hash of the referenced sections of a node's own
+// observed resource. Used to detect self-state changes (e.g., status updated by
+// another controller) that require gate re-evaluation without template re-evaluation.
+//
+// Returns "" if the node has no self-sections (no readyWhen/propagateWhen
+// referencing self fields).
+func hashSelfSections(node *Node, observed any) (string, error) {
+	if len(node.SelfSections) == 0 {
+		return "", nil
+	}
+
+	observedMap, ok := observed.(map[string]any)
+	if !ok {
+		return "", nil
+	}
+
+	h := fnv.New64a()
+	sectionNames := sortedBoolKeys(node.SelfSections)
+	for _, section := range sectionNames {
+		sectionData, ok := observedMap[section]
+		if !ok {
+			continue
+		}
+		if section == "metadata" {
+			sectionData = filterVolatileMetadata(sectionData)
+		}
+		data, err := json.Marshal(sectionData)
+		if err != nil {
+			return "", fmt.Errorf("hashing self.%s: %w", section, err)
+		}
+		h.Write([]byte(section))
+		h.Write(data)
+	}
+
+	return fmt.Sprintf("%016x", h.Sum64()), nil
+}
+
+// filterVolatileMetadata returns a copy of metadata with volatile fields removed.
+func filterVolatileMetadata(metadata any) any {
+	md, ok := metadata.(map[string]any)
+	if !ok {
+		return metadata
+	}
+	filtered := make(map[string]any, len(md))
+	for k, v := range md {
+		if !volatileMetadataFields[k] {
+			filtered[k] = v
+		}
+	}
+	return filtered
+}
+
+// sortedKeys returns the keys of a map[string]map[string]bool in sorted order.
+func sortedKeys(m map[string]map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedBoolKeys returns the keys of a map[string]bool in sorted order.
+func sortedBoolKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

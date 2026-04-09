@@ -286,6 +286,12 @@ type WatchCoordinator struct {
 	graphs          map[graphKey]*graphState
 	scalarIndex     map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry
 	collectionIndex map[schema.GroupVersionResource][]collectionEntry
+
+	// pendingTriggers records which node IDs triggered each Graph's enqueue.
+	// Populated by routeEvent, drained by drainTriggers at reconcile start.
+	// Uses a separate mutex for clean atomic drain without blocking event routing.
+	triggerMu       sync.Mutex
+	pendingTriggers map[graphKey]map[string]bool // graph → set of triggering node IDs
 }
 
 func newWatchCoordinator(watches *WatchManager, enqueue func(graphKey), log logr.Logger) *WatchCoordinator {
@@ -296,6 +302,7 @@ func newWatchCoordinator(watches *WatchManager, enqueue func(graphKey), log logr
 		graphs:          make(map[graphKey]*graphState),
 		scalarIndex:     make(map[schema.GroupVersionResource]map[types.NamespacedName][]scalarEntry),
 		collectionIndex: make(map[schema.GroupVersionResource][]collectionEntry),
+		pendingTriggers: make(map[graphKey]map[string]bool),
 	}
 }
 
@@ -333,6 +340,19 @@ func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionRe
 // cache for a specific object. Returns "" if not found or no watch exists.
 func (gw *graphWatcher) getResourceVersion(gvr schema.GroupVersionResource, namespace, name string) string {
 	return gw.coord.watches.getResourceVersion(gvr, namespace, name)
+}
+
+// drainTriggers atomically drains and returns the set of node IDs that
+// triggered this Graph's enqueue. An empty set means the reconcile was
+// triggered by a resync, error retry, or manual trigger — the reconciler
+// should do a full walk. Triggers deposited after drain belong to the
+// next reconcile.
+func (gw *graphWatcher) drainTriggers() map[string]bool {
+	gw.coord.triggerMu.Lock()
+	defer gw.coord.triggerMu.Unlock()
+	triggers := gw.coord.pendingTriggers[gw.graph]
+	delete(gw.coord.pendingTriggers, gw.graph)
+	return triggers
 }
 
 // done finalizes the watch set for this reconcile cycle.
@@ -470,16 +490,21 @@ func (c *WatchCoordinator) removeGraph(graph graphKey) {
 	}
 }
 
-// routeEvent routes an informer event to all matching Graphs.
+// routeEvent routes an informer event to all matching Graphs and records
+// the triggering node IDs for scoped walks.
 func (c *WatchCoordinator) routeEvent(event watchEvent) {
 	c.mu.RLock()
-	matched := make(map[graphKey]struct{})
+	// matched maps graph → set of triggering node IDs
+	matched := make(map[graphKey]map[string]bool)
 
 	// Scalar matches: O(1) per GVR+name
 	if byName, ok := c.scalarIndex[event.gvr]; ok {
 		key := types.NamespacedName{Name: event.name, Namespace: event.namespace}
 		for _, entry := range byName[key] {
-			matched[entry.graph] = struct{}{}
+			if matched[entry.graph] == nil {
+				matched[entry.graph] = map[string]bool{}
+			}
+			matched[entry.graph][entry.nodeID] = true
 		}
 	}
 
@@ -489,18 +514,37 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 			continue
 		}
 		if entry.selector.Matches(labels.Set(event.labels)) {
-			matched[entry.graph] = struct{}{}
+			if matched[entry.graph] == nil {
+				matched[entry.graph] = map[string]bool{}
+			}
+			matched[entry.graph][entry.nodeID] = true
 		} else if len(event.oldLabels) > 0 && entry.selector.Matches(labels.Set(event.oldLabels)) {
-			matched[entry.graph] = struct{}{}
+			if matched[entry.graph] == nil {
+				matched[entry.graph] = map[string]bool{}
+			}
+			matched[entry.graph][entry.nodeID] = true
 		}
 	}
 	c.mu.RUnlock()
 
-	for graph := range matched {
-		c.enqueue(graph)
-	}
-
+	// Deposit triggers and enqueue. Multiple events between reconciles
+	// naturally union into a larger trigger set.
 	if len(matched) > 0 {
+		c.triggerMu.Lock()
+		for graph, nodeIDs := range matched {
+			if c.pendingTriggers[graph] == nil {
+				c.pendingTriggers[graph] = map[string]bool{}
+			}
+			for nodeID := range nodeIDs {
+				c.pendingTriggers[graph][nodeID] = true
+			}
+		}
+		c.triggerMu.Unlock()
+
+		for graph := range matched {
+			c.enqueue(graph)
+		}
+
 		c.log.V(2).Info("routed event", "gvr", event.gvr, "name", event.name, "namespace", event.namespace, "type", event.eventType, "matchCount", len(matched))
 	}
 }

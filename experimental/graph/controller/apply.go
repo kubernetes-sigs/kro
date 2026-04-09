@@ -132,7 +132,7 @@ func parseContributeKey(key string) (resourceKey string, hasStatus bool) {
 // Apply
 // ---------------------------------------------------------------------------
 
-func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -152,9 +152,11 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	obj.SetLabels(lbls)
 
 	// Watch before apply — ensures the metadata informer is running.
+	// Use the DAG node ID for the watch registration so that scoped walks
+	// can map watch events back to DAG nodes.
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
-		watcher.watchScalar("owned/"+obj.GetName(), gvr, obj.GetName(), obj.GetNamespace())
+		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.
@@ -273,7 +275,7 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 // is skipped. When it does change, the new state is applied.
 // Uses non-force SSA by default; force only with kro.run/apply: Force.
 // Surfaces SSA conflicts as ErrFieldConflict.
-func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher) (*unstructured.Unstructured, error) {
+func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstructured.Unstructured, evalMap map[string]any, watcher *graphWatcher, nodeID string) (*unstructured.Unstructured, error) {
 	fieldOwner := graphFieldOwner(graph)
 	obj := &unstructured.Unstructured{Object: evalMap}
 
@@ -281,10 +283,11 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
-	// Watch the target resource for reactive updates
+	// Watch the target resource for reactive updates.
+	// Use the DAG node ID for scoped walk trigger resolution.
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
-		watcher.watchScalar("contrib/"+obj.GetName(), gvr, obj.GetName(), obj.GetNamespace())
+		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
 	}
 
 	// Content-addressed apply: hash the desired state to detect changes.

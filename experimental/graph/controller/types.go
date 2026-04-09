@@ -141,6 +141,23 @@ type Node struct {
 	// Dependencies are IDs of nodes this node references in its CEL expressions.
 	// Populated by BuildDAG; nil before that.
 	Dependencies map[string]bool
+
+	// DepSections maps each dependency to the set of top-level sections this
+	// node's template expressions reference. For example, if this node's
+	// template contains ${deploy.spec.replicas}, DepSections["deploy"] contains
+	// "spec". Used for section-scoped input hashing — only hash the sections
+	// the node actually reads, because metadata.resourceVersion changes on every
+	// update and full-object hashing would defeat the cache.
+	// Populated by BuildDAG; nil before that.
+	DepSections map[string]map[string]bool
+
+	// SelfSections is the set of top-level sections of this node's own observed
+	// resource that readyWhen and propagateWhen expressions reference. When only
+	// self sections changed (e.g., a Deployment's status updated but config
+	// didn't), the template is unchanged — skip template evaluation and apply,
+	// re-evaluate only the gate conditions.
+	// Populated by BuildDAG; nil before that.
+	SelfSections map[string]bool
 }
 
 // Shape returns the TemplateShape of this node's template.

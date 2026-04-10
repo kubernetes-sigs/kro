@@ -482,34 +482,35 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	t.Log("Watch absent → DataPending → resource appears → chain resolves")
 }
 
-// TestContributeTargetAbsentIsDataPending proves that a Contribute node
-// targeting a non-existent resource enters DataPending state. When the target
-// is created externally, the contribution is applied.
-func TestContributeTargetAbsentIsDataPending(t *testing.T) {
+// TestAbsentResourceIsOwnedByDefault proves that when a node's target resource
+// does not exist, the Graph creates it (Owns). With existence-based shape
+// detection, absent → Owns — the Graph always creates resources it doesn't find.
+func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
-	// Graph: contribute annotations to a non-existent ConfigMap.
+	// Graph: target a non-existent ConfigMap with only metadata fields.
+	// Under the old heuristic, this was Contribute (key subset check).
+	// Under existence-based detection, this is Owns (resource absent).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
-				"name":      "test-contribute-absent",
+				"name":      "test-absent-owned",
 				"namespace": ns,
 			},
 			"spec": map[string]any{
 				"nodes": []any{
-					// Contribute shape: apiVersion + kind + metadata only
 					map[string]any{
-						"id": "contrib",
+						"id": "target",
 						"template": map[string]any{
 							"apiVersion": "v1",
 							"kind":       "ConfigMap",
 							"metadata": map[string]any{
-								"name": "contrib-target",
+								"name": "absent-target",
 								"annotations": map[string]any{
-									"contributed-by": "graph-controller",
+									"created-by": "graph-controller",
 								},
 							},
 						},
@@ -520,52 +521,17 @@ func TestContributeTargetAbsentIsDataPending(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should show DataPending (contribute target doesn't exist)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contribute-absent", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReadyStatus(g) == "Unknown", nil
-	}))
-	t.Log("Graph shows InProgress when contribute target is absent")
+	// The Graph should create the resource (Owns) and reach Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-absent-owned", Namespace: ns}))
+	t.Log("Graph reached Ready — absent resource was created (Owns)")
 
-	// Now create the target externally
-	target := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "v1",
-			"kind":       "ConfigMap",
-			"metadata": map[string]any{
-				"name":      "contrib-target",
-				"namespace": ns,
-			},
-			"data": map[string]any{
-				"existing": "data",
-			},
-		},
-	}
-	require.NoError(t, k8sClient.Create(ctx, target))
-	t.Log("Created contrib-target externally")
-
-	// Graph should reach Ready — contribution applied
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
-		g := &unstructured.Unstructured{}
-		g.SetGroupVersionKind(GraphGVK)
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contribute-absent", Namespace: ns}, g); err != nil {
-			return false, nil
-		}
-		return graphReady(g), nil
-	}))
-
-	// Verify the contribution was applied (annotations added)
-	result := &unstructured.Unstructured{}
-	result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, result))
-	anns := result.GetAnnotations()
-	assert.Equal(t, "graph-controller", anns["contributed-by"],
-		"contribution should have been applied to the target")
-	t.Log("Contribute target absent → DataPending → target created → contribution applied")
+	// Verify the resource was created and has the kro label (Owns stamps it)
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "absent-target", Namespace: ns}, cm))
+	assertManagedBy(t, cm, "test-absent-owned")
+	t.Log("Resource created with kro label — Owns shape confirmed")
 }
 
 // ---------------------------------------------------------------------------

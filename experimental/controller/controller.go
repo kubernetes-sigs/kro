@@ -137,6 +137,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	eval := newEvaluator(state)
 	dag := state.compiled.dag
+	state.initResolvedShapes()
 	plan := NewPlanState(dag)
 	var appliedKeys []string
 
@@ -382,9 +383,30 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// see or mutate any shared state.
 		workerEval := eval.snapshotFor(node, state)
 
+		// Resolve Deferred shapes in the coordinator (single-threaded)
+		// before dispatching to workers. This ensures the resolvedShapes
+		// map is only written from the coordinator goroutine.
+		// ForEach nodes handle their own per-item shape detection — skip.
+		nodeShape = state.resolvedShapes[node.ID]
+		if nodeShape == ShapeDeferred && node.ForEach == nil {
+			resolved, err := r.resolveShape(ctx, graph, *node, workerEval)
+			if err != nil {
+				// Shape resolution failed — treat like a node error.
+				nodeState := NodeDataPending
+				if !errors.Is(err, ErrDataPending) {
+					info := classifyAPIError(err)
+					nodeState = info.state
+				}
+				plan.SetState(dag, node.ID, nodeState)
+				return
+			}
+			nodeShape = resolved
+			state.resolvedShapes[node.ID] = resolved
+		}
+
 		// Dispatch to worker goroutine.
-		go func(n Node, we *evaluator) {
-			keys, err := r.reconcileNode(ctx, graph, n, we, watcher)
+		go func(n Node, we *evaluator, shape TemplateShape) {
+			keys, err := r.reconcileNode(ctx, graph, n, shape, we, watcher)
 			state := NodeReady
 			if err != nil {
 				switch {
@@ -410,7 +432,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				forEachScopes:  we.forEachNewScope,
 				forEachItems:   we.forEachNewItems,
 			}
-		}(*node, workerEval)
+		}(*node, workerEval, nodeShape)
 		inflight++
 	}
 
@@ -652,12 +674,6 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			// Skip Watch and CollectionWatch (read-only).
 			shape := DetectShape(node.Template)
 			if shape == ShapeWatch || shape == ShapeCollectionWatch {
-				continue
-			}
-			// Contribute shapes from spec fallback: we can't reliably
-			// detect status presence, so skip — they'll only be tracked
-			// via applied set annotations from future reconciles.
-			if shape == ShapeContribute {
 				continue
 			}
 			if key := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); key != "" {

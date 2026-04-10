@@ -21,16 +21,18 @@ import (
 // ---------------------------------------------------------------------------
 
 // reconcileNode dispatches to the appropriate handler based on node shape.
+// The shape must be resolved before calling this function — Deferred shapes
+// are resolved by the coordinator before dispatching to workers.
+//
 // All paths return (keys, error) with a uniform error contract:
 //   - ErrDataPending: retryable, data not yet available
 //   - ErrWaitingForReadiness: applied but readyWhen not satisfied
 //   - other error: fatal
-func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured.Unstructured, node Node, shape TemplateShape, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	if node.ForEach != nil {
 		return r.reconcileForEach(ctx, graph, node, eval, watcher)
 	}
 
-	shape := node.Shape()
 	switch shape {
 	case ShapeCollectionWatch:
 		err := r.reconcileCollectionWatch(ctx, graph, node, eval, watcher)
@@ -51,6 +53,54 @@ func (r *GraphReconciler) reconcileNode(ctx context.Context, graph *unstructured
 		}
 		return nil, err
 	}
+}
+
+// resolveShape determines Owns vs Contribute for a Deferred node by checking
+// whether the target resource exists. Absent → Owns, exists → check the kro
+// label. If the resource has this Graph's label, it's Owns (we created it on
+// a previous revision). If it has no kro label or another Graph's label, it's
+// Contribute. Force annotation always resolves to Owns.
+func (r *GraphReconciler) resolveShape(ctx context.Context, graph *unstructured.Unstructured, node Node, eval *evaluator) (TemplateShape, error) {
+	logger := log.FromContext(ctx)
+
+	evalMap, err := eval.toMap(node.Template)
+	if err != nil {
+		// Template can't evaluate yet — expressions unresolvable.
+		// Return Deferred so it's retried next reconcile.
+		return ShapeDeferred, fmt.Errorf("resolving shape for %s: %w", node.ID, err)
+	}
+
+	// Force annotation is an explicit ownership claim — always Owns.
+	obj := &unstructured.Unstructured{Object: evalMap}
+	if isForceApply(obj) {
+		logger.V(1).Info("shape resolved: Owns (Force annotation)", "node", node.ID)
+		return ShapeOwns, nil
+	}
+
+	if obj.GetNamespace() == "" {
+		obj.SetNamespace(graph.GetNamespace())
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(obj.GroupVersionKind())
+	err = r.Client.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.V(1).Info("shape resolved: Owns (resource absent)", "node", node.ID)
+			return ShapeOwns, nil
+		}
+		return ShapeDeferred, fmt.Errorf("checking resource existence for shape detection %s: %w", node.ID, err)
+	}
+
+	// Resource exists. Check if this Graph created it (kro label match).
+	existingLabels := existing.GetLabels()
+	if existingLabels[LabelGraphName] == graph.GetName() {
+		logger.V(1).Info("shape resolved: Owns (resource has our kro label)", "node", node.ID)
+		return ShapeOwns, nil
+	}
+
+	logger.V(1).Info("shape resolved: Contribute (resource exists, not ours)", "node", node.ID)
+	return ShapeContribute, nil
 }
 
 // reconcileWatch reads a single existing object from the API server into scope.

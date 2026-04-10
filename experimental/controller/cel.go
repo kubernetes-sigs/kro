@@ -160,6 +160,12 @@ type instanceState struct {
 	previousPlanStates map[string]NodeState // node ID → last plan state
 	forEachItems       map[string][]any     // "nodeID/varName" → cached collection items
 
+	// Resolved shapes for Deferred nodes. Set on first reconcile when the
+	// existence check determines Owns vs Contribute. Persists across
+	// reconciles within the same revision. Reset on new revision (new
+	// instanceState).
+	resolvedShapes map[string]TemplateShape
+
 	// Input hashing state — retained across reconciles for change detection.
 	// See 004-graph-execution.md § Wind step 3.
 	previousInputHashes map[string]string // node ID → last dependency input hash
@@ -183,6 +189,18 @@ func newInstanceState(compiled *compiledGraph) *instanceState {
 		forEachItems:        map[string][]any{},
 		forEachItemScope:    map[string]map[string]any{},
 		forEachItemKeys:     map[string]map[string][]string{},
+		resolvedShapes:      make(map[string]TemplateShape, len(compiled.dag.Shapes)),
+	}
+}
+
+// initResolvedShapes seeds the resolved shapes map from the DAG's compile-time
+// shapes. Called once at the start of each reconcile to ensure all nodes have
+// an entry. Deferred entries will be resolved during the walk.
+func (s *instanceState) initResolvedShapes() {
+	for id, shape := range s.compiled.dag.Shapes {
+		if _, ok := s.resolvedShapes[id]; !ok {
+			s.resolvedShapes[id] = shape
+		}
 	}
 }
 

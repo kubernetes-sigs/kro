@@ -12,8 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
-
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
 
 // TestRevisionCreatedOnGraphCreate verifies that creating a Graph produces
@@ -84,13 +82,13 @@ func TestRevisionCreatedOnGraphCreate(t *testing.T) {
 	assert.Equal(t, "configmap", res["id"])
 	tmpl, ok := res["template"].(map[string]any)
 	require.True(t, ok)
+	// Verify the template has the expected structure (metadata with name).
+	// Labels are injected at apply time (not materialization time) for Deferred
+	// shapes since Owns vs Contribute isn't known until the first reconcile.
 	md, _ := tmpl["metadata"].(map[string]any)
 	require.NotNil(t, md)
-	lbls, _ := md["labels"].(map[string]any)
-	require.NotNil(t, lbls)
-	assert.Equal(t, "rev-create-test", lbls[graphcontroller.LabelGraphName])
-	assert.Equal(t, "configmap", lbls[graphcontroller.LabelNodeID])
-	t.Log("Revision has correct materialized labels")
+	assert.Equal(t, "rev-test-cm", md["name"])
+	t.Log("Revision has correct materialized template")
 }
 
 // TestRevisionCreatedOnSpecChange verifies that updating a Graph's spec

@@ -8,12 +8,14 @@ package graphcontroller
 import "fmt"
 
 // TemplateShape classifies the relationship between a Graph and a resource.
-// Determined by template content — see 003-ownership.md § Template Shapes.
+// Watch and CollectionWatch are determined by template structure at compile time.
+// Owns and Contribute are determined by resource existence at first reconcile.
+// See 003-ownership.md § Template Shapes.
 type TemplateShape int
 
 const (
-	// ShapeOwns — the template specifies fields beyond identity; the controller
-	// creates/owns the resource via SSA. Tracked for cleanup. Deleted on prune.
+	// ShapeOwns — the Graph creates the resource. Applied via SSA. Tracked for
+	// cleanup. Deleted on prune.
 	ShapeOwns TemplateShape = iota
 	// ShapeWatch — identity-only template (apiVersion, kind, metadata.name,
 	// optionally metadata.namespace). Read-only GET. Not tracked.
@@ -21,9 +23,15 @@ const (
 	// ShapeCollectionWatch — apiVersion + kind with optional selector, no
 	// metadata.name. Read-only List. Not tracked.
 	ShapeCollectionWatch
-	// ShapeContribute — specifies fields on a resource the Graph does not
-	// create. Applied via SSA. Tracked for cleanup. Releases fields on prune.
+	// ShapeContribute — writes fields on a resource the Graph does not create.
+	// Applied via SSA. Tracked for cleanup. Releases fields on prune.
 	ShapeContribute
+	// ShapeDeferred — template has fields beyond identity but Owns vs Contribute
+	// cannot be determined from the template alone. Resolved at first reconcile
+	// by checking whether the target resource exists (absent → Owns, exists →
+	// Contribute). Deferred should never appear in dag.Shapes after the first
+	// reconcile of a revision.
+	ShapeDeferred
 )
 
 // String returns the human-readable name of the TemplateShape.
@@ -37,6 +45,8 @@ func (s TemplateShape) String() string {
 		return "CollectionWatch"
 	case ShapeContribute:
 		return "Contribute"
+	case ShapeDeferred:
+		return "Deferred"
 	default:
 		return fmt.Sprintf("TemplateShape(%d)", int(s))
 	}
@@ -47,11 +57,11 @@ func (s TemplateShape) String() string {
 // Detection order (from 003-ownership.md):
 //  1. CollectionWatch — apiVersion + kind, no metadata.name
 //  2. Watch — only identity fields (apiVersion, kind, metadata.name/namespace)
-//  3. Contribute — keys subset of {apiVersion, kind, metadata, status}
-//  4. Owns — fields beyond identity
+//  3. Deferred — has fields beyond identity; Owns vs Contribute determined at
+//     reconcile time by resource existence
 func DetectShape(tmpl map[string]any) TemplateShape {
 	if len(tmpl) == 0 {
-		return ShapeOwns
+		return ShapeDeferred
 	}
 
 	md, _ := tmpl["metadata"].(map[string]any)
@@ -67,12 +77,9 @@ func DetectShape(tmpl map[string]any) TemplateShape {
 		return ShapeWatch
 	}
 
-	// 3. Contribute: keys subset of {apiVersion, kind, metadata, status}
-	if isContributeShape(tmpl) {
-		return ShapeContribute
-	}
-
-	return ShapeOwns
+	// 3. Deferred: has fields beyond identity. Owns vs Contribute resolved
+	//    at first reconcile by checking resource existence.
+	return ShapeDeferred
 }
 
 // isIdentityOnly returns true if the template contains only identity fields:
@@ -93,24 +100,6 @@ func isIdentityOnly(tmpl map[string]any) bool {
 	for key := range md {
 		switch key {
 		case "name", "namespace":
-			continue
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// isContributeShape returns true if the template's keys are a subset of
-// {apiVersion, kind, metadata, status} — it underspecifies the resource,
-// writing only metadata and/or status fields.
-func isContributeShape(tmpl map[string]any) bool {
-	if len(tmpl) == 0 {
-		return false
-	}
-	for key := range tmpl {
-		switch key {
-		case "apiVersion", "kind", "metadata", "status":
 			continue
 		default:
 			return false

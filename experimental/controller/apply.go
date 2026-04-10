@@ -514,8 +514,8 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 				continue
 			}
 			shape := DetectShape(node.Template)
-			if shape != ShapeOwns {
-				continue // only Owns templates create resources we own
+			if shape == ShapeWatch || shape == ShapeCollectionWatch {
+				continue // read-only shapes don't create resources
 			}
 			apiVersion, _ := node.Template["apiVersion"].(string)
 			kind, _ := node.Template["kind"].(string)

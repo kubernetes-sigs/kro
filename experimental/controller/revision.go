@@ -145,6 +145,9 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 	if node.Template != nil {
 		tmpl := deepCopyMap(node.Template)
 		shape := DetectShape(tmpl)
+		// Only inject ownership labels for structurally-known Owns shapes.
+		// Deferred shapes (Owns vs Contribute unknown until reconcile time)
+		// get labels injected at apply time if they resolve to Owns.
 		if shape == ShapeOwns {
 			injectNodeLabels(tmpl, graphName, generation, node.ID)
 		}

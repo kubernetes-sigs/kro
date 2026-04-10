@@ -21,7 +21,7 @@ func TestForEachBasic(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-foreach",
@@ -124,7 +124,7 @@ func TestForEachWithExternalRefSelector(t *testing.T) {
 	// Graph: read collection via watch with selector, forEach stamps per item
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-selector-foreach",
@@ -227,7 +227,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 	// Each child Graph reads its specific instance via watch and creates resources.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "webapp-controller",
@@ -253,7 +253,7 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 							"webapp": "${webapps}",
 						},
 						"template": map[string]any{
-							"apiVersion": "kro.run/v1alpha1",
+							"apiVersion": "experimental.kro.run/v1alpha1",
 							"kind":       "Graph",
 							"metadata": map[string]any{
 								// Evaluated at L0: each webapp's name
@@ -353,7 +353,7 @@ func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-foreach-readywhen",
@@ -511,7 +511,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-foreach-readywhen-pass",

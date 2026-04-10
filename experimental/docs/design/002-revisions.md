@@ -20,7 +20,7 @@ referencing other nodes (`${...}`) remain unevaluated and are resolved at runtim
 cluster state.
 
 ```yaml
-apiVersion: internal.kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: GraphRevision
 metadata:
   name: my-app-g00003
@@ -29,7 +29,7 @@ metadata:
     internal.kro.run/graph-name: my-app
     internal.kro.run/hash: a1b2c3d4e5f6
   ownerReferences:
-    - apiVersion: kro.run/v1alpha1
+    - apiVersion: experimental.kro.run/v1alpha1
       kind: Graph
       name: my-app
       uid: ...

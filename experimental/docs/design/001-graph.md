@@ -10,7 +10,7 @@ create nested scopes.
 A Graph is a namespace-scoped Kubernetes custom resource.
 
 ```yaml
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: Graph
 metadata:
   name: my-app
@@ -280,7 +280,7 @@ child Graph independently reconciles resources for its item.
   forEach:
     ns: ${namespaces}
   template:
-    apiVersion: kro.run/v1alpha1
+    apiVersion: experimental.kro.run/v1alpha1
     kind: Graph
     metadata:
       name: ${ns.metadata.name}-resources

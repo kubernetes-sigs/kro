@@ -39,7 +39,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 	// Graph reads the config via watch and creates a resource referencing it
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-dynamic-watch",
@@ -130,7 +130,7 @@ func TestDynamicWatchCollectionMembershipChange(t *testing.T) {
 	// Graph: reads collection, forEach stamps one copy per item
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-collection-watch",

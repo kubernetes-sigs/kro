@@ -10,10 +10,10 @@ metadata:
   name: graph-controller
 rules:
   # Graph and GraphRevision — full CRUD
-  - apiGroups: ["kro.run"]
+  - apiGroups: ["experimental.kro.run"]
     resources: ["graphs", "graphs/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["internal.kro.run"]
+  - apiGroups: ["experimental.kro.run"]
     resources: ["graphrevisions", "graphrevisions/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Managed resources — the controller applies arbitrary resource types

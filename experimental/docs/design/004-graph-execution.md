@@ -270,7 +270,7 @@ enough that you'd write a separate Graph for it by hand.
   forEach:
     ns: ${namespaces}
   template:
-    apiVersion: kro.run/v1alpha1
+    apiVersion: experimental.kro.run/v1alpha1
     kind: Graph
     metadata:
       name: ${ns.metadata.name}-resources

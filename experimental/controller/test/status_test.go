@@ -22,7 +22,7 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-status-active",
@@ -110,7 +110,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-status-inprogress",

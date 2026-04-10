@@ -25,7 +25,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 	// watches all SimpleApps, stamps one child Graph per instance
 	controllerGraph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "simpleapp-controller",
@@ -49,7 +49,7 @@ func TestRGDPatternEndToEnd(t *testing.T) {
 							"app": "${instances}",
 						},
 						"template": map[string]any{
-							"apiVersion": "kro.run/v1alpha1",
+							"apiVersion": "experimental.kro.run/v1alpha1",
 							"kind":       "Graph",
 							"metadata": map[string]any{
 								"name": "${app.metadata.name}-simpleapp",
@@ -297,7 +297,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 	// This is the example 3 pattern — spec.nodes is a ${} expression.
 	parent := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "dynamic-resources-parent",
@@ -311,7 +311,7 @@ func TestDynamicResourceListViaCEL(t *testing.T) {
 							"item": "${['child-a']}",
 						},
 						"template": map[string]any{
-							"apiVersion": "kro.run/v1alpha1",
+							"apiVersion": "experimental.kro.run/v1alpha1",
 							"kind":       "Graph",
 							"metadata": map[string]any{
 								"name": "${item}-graph",

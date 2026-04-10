@@ -5,7 +5,7 @@
 # It watches all WebApp instances and creates a scoped Graph per instance.
 # Each inner Graph owns its resources and contributes status back to the instance.
 # ---------------------------------------------------------------------------
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: Graph
 metadata:
   name: webapp-controller # (L0)
@@ -24,7 +24,7 @@ spec:
       forEach:
         webapp: ${watchWebapps}
       template:
-        apiVersion: kro.run/v1alpha1
+        apiVersion: experimental.kro.run/v1alpha1
         kind: Graph
         metadata:
           name: ${webapp.metadata.name}-webapp # (L1)

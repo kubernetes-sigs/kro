@@ -30,7 +30,7 @@ func TestFinalizesBasicSequence(t *testing.T) {
 	// during normal operation.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-finalize-basic",
@@ -147,7 +147,7 @@ func TestFinalizesTargetAbsentSkips(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-finalize-absent",
@@ -217,7 +217,7 @@ func TestFinalizesRejectsCELNames(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-finalize-cel-reject",
@@ -286,7 +286,7 @@ func TestFinalizesOnTeardown(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-finalize-teardown",

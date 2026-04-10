@@ -29,7 +29,7 @@ bookkeeping.
 Every Graph instance uses a dedicated SSA field manager:
 
 ```
-kro.run/<namespace>/<name>
+experimental.kro.run/<namespace>/<name>
 ```
 
 By default, kro applies use non-force SSA. A 409 means another manager owns a field the Graph is

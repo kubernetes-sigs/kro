@@ -23,7 +23,7 @@
 #   ${...}      — L0 evaluates (e.g. forEach variable, baked-in names)
 #   $${...}     — L1 evaluates (e.g. RGD schema fields, CEL list append)
 # ---------------------------------------------------------------------------
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: Graph
 metadata:
   name: rgd-implementation # (L0)
@@ -110,7 +110,7 @@ spec:
       forEach:
         rgd: ${watchRgds}
       template:
-        apiVersion: kro.run/v1alpha1
+        apiVersion: experimental.kro.run/v1alpha1
         kind: Graph
         metadata:
           name: ${rgd.metadata.name} # (L1)
@@ -166,7 +166,7 @@ spec:
               forEach:
                 instance: $${watchInstances}
               template:
-                apiVersion: kro.run/v1alpha1
+                apiVersion: experimental.kro.run/v1alpha1
                 kind: Graph
                 metadata:
                   name: $${instance.metadata.name}-$${rgd.spec.schema.kind.lowerAscii()} # (L2)

@@ -22,7 +22,7 @@ func TestRevisionCreatedOnGraphCreate(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rev-create-test",
@@ -99,7 +99,7 @@ func TestRevisionCreatedOnSpecChange(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rev-update-test",
@@ -210,7 +210,7 @@ func TestRevisionNotCreatedOnCompilationFailure(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rev-fail-test",
@@ -270,7 +270,7 @@ func TestRevisionCleanupOnDelete(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rev-delete-test",
@@ -350,7 +350,7 @@ func TestRevisionActivation(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rev-activate-test",

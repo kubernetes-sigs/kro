@@ -72,7 +72,7 @@ func TestFieldConflictBlocksDependents(t *testing.T) {
 	//    - "independent": creates a separate ConfigMap (no dep on conflicted)
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-conflict",
@@ -164,7 +164,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 	// 2. Create Graph targeting that ConfigMap → conflict.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-conflict-resolve",
@@ -248,7 +248,7 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-hash-skip",
@@ -328,7 +328,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-hash-change",
@@ -421,7 +421,7 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-steady-state",
@@ -508,7 +508,7 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 	// 2. Create a Graph that targets the external CM (conflict) and creates its own CM.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-delete-conflict",
@@ -617,7 +617,7 @@ func TestIdempotentReReconcileZeroWrites(t *testing.T) {
 	// Create a multi-resource Graph to verify across all managed objects.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-idempotent",

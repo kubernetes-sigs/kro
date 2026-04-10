@@ -25,7 +25,7 @@ func TestFullLifecycle(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-lifecycle",
@@ -188,7 +188,7 @@ func TestCascadeDeletion(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-cascade-delete",
@@ -289,7 +289,7 @@ func TestParallelIndependence(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-parallel", "namespace": ns},
 			"spec": map[string]any{
@@ -362,7 +362,7 @@ func TestContagiousExclusion(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-contagious", "namespace": ns},
 			"spec": map[string]any{
@@ -456,7 +456,7 @@ func TestDataPendingChain(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata":   map[string]any{"name": "test-chain", "namespace": ns},
 			"spec": map[string]any{
@@ -543,7 +543,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-scale",
@@ -656,7 +656,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-toggle",
@@ -741,7 +741,7 @@ func TestDriftNotRestored(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-drift",
@@ -797,7 +797,7 @@ func TestDriftNotRestored(t *testing.T) {
 
 	// Now update the Graph spec to change the desired value — this SHOULD apply
 	graphLatest := &unstructured.Unstructured{}
-	graphLatest.SetGroupVersionKind(schema.GroupVersionKind{Group: "kro.run", Version: "v1alpha1", Kind: "Graph"})
+	graphLatest.SetGroupVersionKind(schema.GroupVersionKind{Group: "experimental.kro.run", Version: "v1alpha1", Kind: "Graph"})
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-drift", Namespace: ns}, graphLatest))
 
 	nodes := []any{

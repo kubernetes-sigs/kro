@@ -54,7 +54,7 @@ func TestWatchedResourceDeletedMidReconcile(t *testing.T) {
 	// Graph watches the source, creates a dependent.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-fault-watch-delete",
@@ -163,7 +163,7 @@ func TestOwnedResourceDeletedExternally(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-fault-owned-delete",
@@ -241,7 +241,7 @@ func TestInvalidCELExpressionSurfacesError(t *testing.T) {
 	// Create Graph with invalid CEL syntax.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-fault-invalid-cel",
@@ -344,7 +344,7 @@ func TestConflictThenSpecChangeResolvesConflict(t *testing.T) {
 	// Graph tries to write a different value to the contested field.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-fault-spec-resolve",

@@ -61,7 +61,7 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 	// Graph: watch deploy-sim with propagateWhen, then template referencing it.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-propagate-when",
@@ -203,7 +203,7 @@ func TestPropagateWhenDoesNotBlockIndependentBranches(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-propagate-independent",
@@ -281,7 +281,7 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 	// Graph with A → B → A cycle
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-cycle",
@@ -387,7 +387,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	// Graph: watch a non-existent ConfigMap, then create a dependent resource.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-watch-absent",
@@ -501,7 +501,7 @@ func TestAbsentResourceIsOwnedByDefault(t *testing.T) {
 	// Under existence-based detection, this is Owns (resource absent).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-absent-owned",
@@ -570,7 +570,7 @@ func TestMultipleIncludeWhenConditionsAreANDed(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-include-and",
@@ -668,7 +668,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 	// Create a Graph that tries to own the same resource
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-label-check",
@@ -762,7 +762,7 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	// Create a Graph that uses Force to take ownership
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-force-apply",
@@ -830,7 +830,7 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-missing-id",
@@ -892,7 +892,7 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-dup-id",
@@ -963,7 +963,7 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-bad-cel",
@@ -1038,7 +1038,7 @@ func TestAppliedSetStoredOnRevisionAnnotation(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-applied-set",
@@ -1152,7 +1152,7 @@ func TestDefaultReadinessIsApplied(t *testing.T) {
 	// any status.conditions.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-default-ready",
@@ -1232,7 +1232,7 @@ func TestExplicitReadyWhenOverridesDefault(t *testing.T) {
 	// The node is applied but readyWhen keeps it NotReady.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-explicit-ready",
@@ -1321,7 +1321,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 	//   consumer → owns ConfigMap, propagateWhen: ["${watched.ready()}"]
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-ready-fn-state",
@@ -1421,7 +1421,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	// because empty collection is vacuously ready.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-empty-ready",
@@ -1489,7 +1489,7 @@ func TestCollectionItemReadyViaIndex(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-index-ready",
@@ -1563,7 +1563,7 @@ func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-coll-ready-false",
@@ -1694,7 +1694,7 @@ func TestRevisionImmutability(t *testing.T) {
 	// Create a Graph to produce a revision
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-immutable",
@@ -1768,7 +1768,7 @@ func TestCrossNodeReadyWhen(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-cross-ready",
@@ -1855,7 +1855,7 @@ func TestSupersededRevisionGC(t *testing.T) {
 	// Create initial Graph (revision g00001)
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-revision-gc",
@@ -1977,7 +1977,7 @@ func TestPropagateWhenOnForEach(t *testing.T) {
 	// ConfigMap with propagateWhen, and a consumer depends on the aggregator.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-propagate-foreach",

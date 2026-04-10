@@ -23,7 +23,7 @@ func TestGraphCreatesDeploymentAndService(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-app",
@@ -144,7 +144,7 @@ func TestGraphIncludeWhen(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-conditional",
@@ -230,7 +230,7 @@ func TestGraphReconcilesOnUpdate(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-update",
@@ -323,7 +323,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 
 	parentGraph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "parent",
@@ -351,7 +351,7 @@ func TestNestedGraphEvaluationBoundary(t *testing.T) {
 					map[string]any{
 						"id": "childGraph",
 						"template": map[string]any{
-							"apiVersion": "kro.run/v1alpha1",
+							"apiVersion": "experimental.kro.run/v1alpha1",
 							"kind":       "Graph",
 							"metadata": map[string]any{
 								// Evaluated at L0: ${sharedData.metadata.name} → "shared-data"
@@ -507,7 +507,7 @@ func TestIdenticalGraphsConvergeIndependently(t *testing.T) {
 	for i, src := range sources {
 		graph := &unstructured.Unstructured{
 			Object: map[string]any{
-				"apiVersion": "kro.run/v1alpha1",
+				"apiVersion": "experimental.kro.run/v1alpha1",
 				"kind":       "Graph",
 				"metadata": map[string]any{
 					"name":      fmt.Sprintf("identical-%d", i),

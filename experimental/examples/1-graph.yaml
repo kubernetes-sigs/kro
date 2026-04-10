@@ -4,7 +4,7 @@
 # and continuously reconciled. Delete it → cascade delete.
 # Equivalent to a Helm install or Argo Application.
 # ---------------------------------------------------------------------------
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: Graph
 metadata:
   name: my-app

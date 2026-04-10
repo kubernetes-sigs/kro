@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: graphrevisions.internal.kro.run
+  name: graphrevisions.experimental.kro.run
 spec:
-  group: internal.kro.run
+  group: experimental.kro.run
   names:
     plural: graphrevisions
     singular: graphrevision

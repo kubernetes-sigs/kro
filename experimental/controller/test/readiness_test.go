@@ -51,7 +51,7 @@ func TestReadyWhenDoesNotGateDownstream(t *testing.T) {
 	// Graph: watch with readyWhen, then template referencing the watch
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-readywhen-extref",
@@ -141,7 +141,7 @@ func TestReadyWhenTemplateDoesNotGateDownstream(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-readywhen-template",
@@ -257,7 +257,7 @@ func TestDataPendingRequeues(t *testing.T) {
 	// Graph: watch reads source, template references a field that doesn't exist yet
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-data-pending",
@@ -365,7 +365,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	// Graph watches infra, waits for it to be "Running", then creates app resources
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-readywhen-lifecycle",

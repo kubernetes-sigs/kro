@@ -101,8 +101,8 @@ func TestMain(m *testing.M) {
 		name    string
 		builder func() *apiextensionsv1.CustomResourceDefinition
 	}{
-		{"graphs.kro.run", buildGraphCRD},
-		{"graphrevisions.internal.kro.run", buildGraphRevisionCRD},
+		{"graphs.experimental.kro.run", buildGraphCRD},
+		{"graphrevisions.experimental.kro.run", buildGraphRevisionCRD},
 		{"resourcegraphdefinitions.test.kro.run", buildRGDCRD},
 		{"simpleapps.test.kro.run", buildSimpleAppCRD},
 	}

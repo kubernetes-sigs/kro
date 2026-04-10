@@ -34,7 +34,7 @@ import (
 
 // GraphRevisionGVK is the GVK for the GraphRevision custom resource.
 var GraphRevisionGVK = schema.GroupVersionKind{
-	Group:   "internal.kro.run",
+	Group:   "experimental.kro.run",
 	Version: "v1alpha1",
 	Kind:    "GraphRevision",
 }
@@ -106,7 +106,7 @@ func materialize(graph *unstructured.Unstructured, spec *GraphSpec) *unstructure
 
 	revision := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "internal.kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "GraphRevision",
 			"metadata": map[string]any{
 				"name":      revisionName(graphName, generation),

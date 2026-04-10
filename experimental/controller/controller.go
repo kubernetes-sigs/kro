@@ -39,13 +39,13 @@ import (
 )
 
 var GraphGVK = schema.GroupVersionKind{
-	Group:   "kro.run",
+	Group:   "experimental.kro.run",
 	Version: "v1alpha1",
 	Kind:    "Graph",
 }
 
 const (
-	finalizer = "kro.run/graph-controller"
+	finalizer = "experimental.kro.run/graph-controller"
 
 	// defaultRequeueAfter is used when a resource is not yet ready
 	// and we need to wait for the dynamic watch to trigger. This is

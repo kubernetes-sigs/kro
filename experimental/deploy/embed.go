@@ -7,5 +7,5 @@ import "embed"
 // CRDs contains the CRD YAML files for Graph and GraphRevision.
 // Only CRD files — bootstrap.go applies everything embedded here as CRDs.
 //
-//go:embed kro.run_graphs.yaml internal.kro.run_graphrevisions.yaml
+//go:embed experimental.kro.run_graphs.yaml experimental.kro.run_graphrevisions.yaml
 var CRDs embed.FS

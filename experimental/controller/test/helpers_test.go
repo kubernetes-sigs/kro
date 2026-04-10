@@ -29,9 +29,9 @@ var GraphRevisionGVK = graphcontroller.GraphRevisionGVK
 
 func buildGraphCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "graphs.kro.run"},
+		ObjectMeta: metav1.ObjectMeta{Name: "graphs.experimental.kro.run"},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "kro.run",
+			Group: "experimental.kro.run",
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Plural:   "graphs",
 				Singular: "graph",
@@ -78,7 +78,7 @@ func waitForCRD(ctx context.Context, c client.Client, name string) error {
 func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "rgd-controller",
@@ -100,7 +100,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 							"rgd": "${rgds}",
 						},
 						"template": map[string]any{
-							"apiVersion": "kro.run/v1alpha1",
+							"apiVersion": "experimental.kro.run/v1alpha1",
 							"kind":       "Graph",
 							"metadata": map[string]any{
 								"name": "${rgd.metadata.name}-controller",
@@ -143,7 +143,7 @@ func buildRGDControllerGraph(namespace string) *unstructured.Unstructured {
 									}},
 									{"id": "instanceGraphs", "forEach": {"instance": "${instances}"},
 									 "template": {
-										"apiVersion": "kro.run/v1alpha1",
+										"apiVersion": "experimental.kro.run/v1alpha1",
 										"kind": "Graph",
 										"metadata": {"name": "${instance.metadata.name}-${rgd.spec.schema.kind.lowerAscii()}"},
 										"spec": {
@@ -417,9 +417,9 @@ func findCondition(conditions []any, condType string) (map[string]any, bool) {
 
 func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
 	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "graphrevisions.internal.kro.run"},
+		ObjectMeta: metav1.ObjectMeta{Name: "graphrevisions.experimental.kro.run"},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "internal.kro.run",
+			Group: "experimental.kro.run",
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Plural:   "graphrevisions",
 				Singular: "graphrevision",

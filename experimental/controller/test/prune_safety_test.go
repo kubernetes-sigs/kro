@@ -60,7 +60,7 @@ func TestPruneSafetyPendingBlocksPrune(t *testing.T) {
 
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-prune-pending",
@@ -186,7 +186,7 @@ func TestPruneSafetyConflictBlocksPrune(t *testing.T) {
 	// Create Graph: conflicted upstream + independent resource.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-prune-conflict",

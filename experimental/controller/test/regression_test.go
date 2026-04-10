@@ -37,7 +37,7 @@ func TestDeletionOrderIsTopological(t *testing.T) {
 	// (wrong). If it uses topological order, the child is deleted first (correct).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-topo-delete",
@@ -121,7 +121,7 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 	// Rev 1: creates "hop-alpha"
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-multihop",
@@ -247,7 +247,7 @@ func TestContributeCleanupOnPrune(t *testing.T) {
 	// Graph with two nodes: a Watch (read target) and a Contribute (write annotations).
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-contrib-prune",
@@ -361,7 +361,7 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 	// Graph that contributes annotations to the target.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-contrib-teardown",
@@ -479,7 +479,7 @@ func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
 	// then contributes the owned resource's data back to the target.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-contrib-updates",
@@ -597,7 +597,7 @@ func TestCollectionWatchClusterScopedResource(t *testing.T) {
 	// Graph: watches Namespaces by label, forEach stamps a ConfigMap per NS.
 	graph := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "kro.run/v1alpha1",
+			"apiVersion": "experimental.kro.run/v1alpha1",
 			"kind":       "Graph",
 			"metadata": map[string]any{
 				"name":      "test-cluster-scope",

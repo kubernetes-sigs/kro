@@ -14,9 +14,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
+	"github.com/kubernetes-sigs/kro/experimental/deploy"
 )
 
 // GraphGVK is a local alias for the exported controller GVK.
@@ -27,34 +29,26 @@ var GraphRevisionGVK = graphcontroller.GraphRevisionGVK
 
 // --- Helpers ---
 
-func buildGraphCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "graphs.experimental.kro.run"},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "experimental.kro.run",
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "graphs",
-				Singular: "graph",
-				Kind:     "Graph",
-				ListKind: "GraphList",
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-				Name:    "v1alpha1",
-				Served:  true,
-				Storage: true,
-				Schema: &apiextensionsv1.CustomResourceValidation{
-					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-						Type:                   "object",
-						XPreserveUnknownFields: ptr(true),
-					},
-				},
-				Subresources: &apiextensionsv1.CustomResourceSubresources{
-					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
-				},
-			}},
-		},
+// loadEmbeddedCRD reads a CRD from the embedded deploy.CRDs filesystem.
+// Single source of truth: the same YAMLs used by bootstrap mode.
+func loadEmbeddedCRD(filename string) *apiextensionsv1.CustomResourceDefinition {
+	data, err := deploy.CRDs.ReadFile(filename)
+	if err != nil {
+		panic("reading embedded CRD " + filename + ": " + err.Error())
 	}
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	if err := yaml.UnmarshalStrict(data, crd); err != nil {
+		panic("unmarshalling embedded CRD " + filename + ": " + err.Error())
+	}
+	return crd
+}
+
+func buildGraphCRD() *apiextensionsv1.CustomResourceDefinition {
+	return loadEmbeddedCRD("experimental.kro.run_graphs.yaml")
+}
+
+func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
+	return loadEmbeddedCRD("experimental.kro.run_graphrevisions.yaml")
 }
 
 func waitForCRD(ctx context.Context, c client.Client, name string) error {
@@ -414,36 +408,6 @@ func findCondition(conditions []any, condType string) (map[string]any, bool) {
 // ---------------------------------------------------------------------------
 // GraphRevision CRD + helpers
 // ---------------------------------------------------------------------------
-
-func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
-	return &apiextensionsv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "graphrevisions.experimental.kro.run"},
-		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: "experimental.kro.run",
-			Names: apiextensionsv1.CustomResourceDefinitionNames{
-				Plural:   "graphrevisions",
-				Singular: "graphrevision",
-				Kind:     "GraphRevision",
-				ListKind: "GraphRevisionList",
-			},
-			Scope: apiextensionsv1.NamespaceScoped,
-			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{{
-				Name:    "v1alpha1",
-				Served:  true,
-				Storage: true,
-				Schema: &apiextensionsv1.CustomResourceValidation{
-					OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
-						Type:                   "object",
-						XPreserveUnknownFields: ptr(true),
-					},
-				},
-				Subresources: &apiextensionsv1.CustomResourceSubresources{
-					Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
-				},
-			}},
-		},
-	}
-}
 
 // waitForRevision polls until a GraphRevision with the given name exists.
 func waitForRevision(ctx context.Context, c client.Client, key types.NamespacedName) (*unstructured.Unstructured, error) {

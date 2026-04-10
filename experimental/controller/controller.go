@@ -53,9 +53,13 @@ const (
 	defaultRequeueAfter = 1 * time.Second
 
 	// DefaultMaxConcurrentReconciles is the number of reconcile workers.
-	// Multiple workers prevent watch event starvation — with a single
-	// worker, dynamic watch events can't be delivered while it's busy.
-	DefaultMaxConcurrentReconciles = 4
+	// Multiple workers keep the API server busy — each reconcile does
+	// SSA applies, GETs, and informer syncs that can block. Watch index
+	// updates are batched (one Lock per reconcile), so worker count does
+	// not amplify coordinator lock contention. 16 is a heuristic — high
+	// enough to keep a typical API server busy under normal graph
+	// workloads, tune if needed.
+	DefaultMaxConcurrentReconciles = 16
 )
 
 // gvkToGVR converts a GVK to a GVR using English pluralization rules.

@@ -58,17 +58,14 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-active", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
-	// Verify status
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-active", Namespace: ns}, g))
 
-	state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-	assert.Equal(t, "Active", state)
+	assert.True(t, graphReady(g))
 
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
 	require.Len(t, conditions, 2)
@@ -82,7 +79,7 @@ func TestStatusActiveOnSuccess(t *testing.T) {
 	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 	assert.Equal(t, "Ready", cond["reason"])
-	t.Logf("Status: state=%s, Accepted=%s, Ready=%s reason=%s message=%s", state, accepted["status"], cond["status"], cond["reason"], cond["message"])
+	t.Logf("Status: Accepted=%s, Ready=%s reason=%s message=%s", accepted["status"], cond["status"], cond["reason"], cond["message"])
 }
 
 // TestStatusInProgressOnReadyWhen proves that a Graph with a not-ready
@@ -144,8 +141,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 
 	// Verify InProgress status
@@ -153,8 +149,7 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g))
 
-	state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-	assert.Equal(t, "InProgress", state)
+	assert.Equal(t, "Unknown", graphReadyStatus(g))
 
 	conditions, _, _ := unstructured.NestedSlice(g.Object, "status", "conditions")
 	require.Len(t, conditions, 2)
@@ -165,9 +160,9 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 
 	cond, ok := findCondition(conditions, "Ready")
 	require.True(t, ok, "Ready condition should exist")
-	assert.Equal(t, "False", cond["status"])
-	assert.Equal(t, "ResourcesNotReady", cond["reason"])
-	t.Logf("Before: state=%s Accepted=%s Ready=%s reason=%s", state, accepted["status"], cond["status"], cond["reason"])
+	assert.Equal(t, "Unknown", cond["status"])
+	assert.Equal(t, "NotReady", cond["reason"])
+	t.Logf("Before: Accepted=%s Ready=%s reason=%s", accepted["status"], cond["status"], cond["reason"])
 
 	// Transition source to ready
 	latestSource := &unstructured.Unstructured{}
@@ -183,14 +178,12 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Verify Active status
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-status-inprogress", Namespace: ns}, g))
-	state, _, _ = unstructured.NestedString(g.Object, "status", "state")
-	assert.Equal(t, "Active", state)
+	assert.True(t, graphReady(g))
 
 	conditions, _, _ = unstructured.NestedSlice(g.Object, "status", "conditions")
 	require.Len(t, conditions, 2)
@@ -198,6 +191,6 @@ func TestStatusInProgressOnReadyWhen(t *testing.T) {
 	require.True(t, ok, "Ready condition should exist")
 	assert.Equal(t, "True", cond["status"])
 	assert.Equal(t, "Ready", cond["reason"])
-	t.Logf("After: state=%s Ready=%s reason=%s", state, cond["status"], cond["reason"])
-	t.Log("Status lifecycle proved: InProgress → Active on readyWhen satisfied")
+	t.Logf("After: Ready=%s reason=%s", cond["status"], cond["reason"])
+	t.Log("Status lifecycle proved: NotReady → Ready on readyWhen satisfied")
 }

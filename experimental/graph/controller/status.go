@@ -12,16 +12,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// GraphState describes the high-level state of a Graph object.
-type GraphState string
-
-// Graph states
-const (
-	StateActive     GraphState = "Active"
-	StateInProgress GraphState = "InProgress"
-	StateError      GraphState = "Error"
-)
-
 // ConditionType identifies a condition on a Graph or GraphRevision.
 type ConditionType string
 
@@ -51,24 +41,11 @@ type reconcileState struct {
 	hasDataPending bool
 	hasNotReady    bool
 	hasConflict    bool
-	hasError       bool     // any node in NodeError (4xx)
-	hasSystemError bool     // any node in NodeSystemError (5xx)
+	hasError       bool     // any node in NodeError (4xx) or prune 4xx
+	hasSystemError bool     // any node in NodeSystemError (5xx) or prune 5xx
 	nodeErrors     []string // "nodeID: reason" for status message
-	pruneErr       error    // non-nil if resource pruning failed
 	nodeCount      int
 	appliedCount   int
-	contributions  []string // node IDs detected as contributions
-}
-
-// deriveState computes the Graph state from the reconcile outcome.
-func (s *reconcileState) deriveState() GraphState {
-	if !s.accepted {
-		return StateError
-	}
-	if s.hasDataPending || s.hasNotReady || s.hasConflict || s.hasError || s.hasSystemError {
-		return StateInProgress
-	}
-	return StateActive
 }
 
 // deriveAcceptedCondition computes the Accepted condition.
@@ -92,35 +69,41 @@ func (s *reconcileState) deriveAcceptedCondition() (status ConditionStatus, reas
 }
 
 // deriveReadyCondition computes the Ready condition from the reconcile outcome.
-// When the spec is not accepted, Ready is False — resources can't converge
-// until the spec is fixed.
+//
+// Ready is a rollup of node plan states. Each reason maps to the node state
+// blocking convergence:
+//
+//	Ready       → True    — all resources reconciled
+//	Pending     → Unknown — waiting for upstream data
+//	NotReady    → Unknown — applied but readyWhen conditions not met
+//	NotAccepted → False   — spec invalid; rollup of Accepted=False
+//	Error       → False   — client request failed (4xx)
+//	SystemError → False   — server or infrastructure failure (5xx)
+//	Conflict    → False   — SSA field ownership contested
 func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason string, message string) {
 	if !s.accepted {
 		return ConditionFalse, "NotAccepted", "Spec is not valid; resources cannot be reconciled"
 	}
 	if s.hasSystemError {
 		return ConditionFalse, "SystemError",
-			fmt.Sprintf("Nodes with server/infrastructure errors (retrying): %s",
+			fmt.Sprintf("Resources with server/infrastructure errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
 	if s.hasError {
-		return ConditionFalse, "NodeError",
-			fmt.Sprintf("Nodes with errors (retrying): %s",
+		return ConditionFalse, "Error",
+			fmt.Sprintf("Resources with errors: %s",
 				strings.Join(s.nodeErrors, "; "))
 	}
-	if s.pruneErr != nil {
-		return ConditionFalse, "PruneError", fmt.Sprintf("Failed to prune removed resources: %v", s.pruneErr)
-	}
 	if s.hasConflict {
-		return ConditionFalse, "FieldConflict", "One or more resources have SSA field ownership conflicts"
+		return ConditionFalse, "Conflict", "One or more resources have SSA field ownership conflicts"
 	}
 	if s.hasDataPending {
-		return ConditionFalse, "DataPending", "One or more resources have unresolvable expressions; waiting for data"
+		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
 	}
 	if s.hasNotReady {
-		return ConditionFalse, "ResourcesNotReady", "One or more resources have not satisfied their readyWhen conditions"
+		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"
 	}
-	return ConditionTrue, "Ready", fmt.Sprintf("All %d nodes reconciled", s.appliedCount)
+	return ConditionTrue, "Ready", fmt.Sprintf("All %d resources reconciled", s.appliedCount)
 }
 
 // updateStatus writes the Graph's status subresource. Reads the latest version
@@ -131,8 +114,6 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(graph), latest); err != nil {
 		return fmt.Errorf("reading latest for status update: %w", err)
 	}
-
-	derivedState := state.deriveState()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -178,24 +159,11 @@ func (r *GraphReconciler) updateStatus(ctx context.Context, graph *unstructured.
 		}
 	}
 
-	// Start with controller-managed status fields
 	status := map[string]any{
-		"state": string(derivedState),
 		"conditions": []any{
 			acceptedCondition,
 			readyCondition,
 		},
-	}
-
-	// Surface detected contributions in status (design: "The Graph's status
-	// surfaces which resources were detected as contributions, making the
-	// inference observable.")
-	if len(state.contributions) > 0 {
-		contribs := make([]any, len(state.contributions))
-		for i, id := range state.contributions {
-			contribs[i] = id
-		}
-		status["contributions"] = contribs
 	}
 
 	// Skip the status write if nothing changed. Compare via JSON to avoid

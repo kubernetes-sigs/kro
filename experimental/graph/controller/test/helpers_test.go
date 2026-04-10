@@ -309,6 +309,86 @@ func buildSimpleAppCRD() *apiextensionsv1.CustomResourceDefinition {
 	}
 }
 
+// graphReady returns true if the Graph's Ready condition is True.
+func graphReady(g *unstructured.Unstructured) bool {
+	status, _ := g.Object["status"].(map[string]any)
+	if status == nil {
+		return false
+	}
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, "Ready")
+	if !found {
+		return false
+	}
+	return cond["status"] == "True"
+}
+
+// graphReadyReason returns the Ready condition's reason string, or "" if not found.
+func graphReadyReason(g *unstructured.Unstructured) string {
+	status, _ := g.Object["status"].(map[string]any)
+	if status == nil {
+		return ""
+	}
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, "Ready")
+	if !found {
+		return ""
+	}
+	reason, _ := cond["reason"].(string)
+	return reason
+}
+
+// graphReadyStatus returns the Ready condition's status string, or "" if not found.
+func graphReadyStatus(g *unstructured.Unstructured) string {
+	status, _ := g.Object["status"].(map[string]any)
+	if status == nil {
+		return ""
+	}
+	conditions, _ := status["conditions"].([]any)
+	cond, found := findCondition(conditions, "Ready")
+	if !found {
+		return ""
+	}
+	s, _ := cond["status"].(string)
+	return s
+}
+
+// waitForGraphReady polls until the Graph's Ready condition is True.
+func waitForGraphReady(ctx context.Context, c client.Client, key types.NamespacedName) error {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := c.Get(ctx, key, g); err != nil {
+			return false, nil
+		}
+		return graphReady(g), nil
+	})
+}
+
+// waitForGraphReadyReason polls until the Graph's Ready condition has the expected reason.
+func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.NamespacedName, reason string) error {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := c.Get(ctx, key, g); err != nil {
+			return false, nil
+		}
+		return graphReadyReason(g) == reason, nil
+	})
+}
+
+// waitForGraphReadyStatus polls until the Graph's Ready condition has the expected status (True/False/Unknown).
+func waitForGraphReadyStatus(ctx context.Context, c client.Client, key types.NamespacedName, status string) error {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		g := &unstructured.Unstructured{}
+		g.SetGroupVersionKind(GraphGVK)
+		if err := c.Get(ctx, key, g); err != nil {
+			return false, nil
+		}
+		return graphReadyStatus(g) == status, nil
+	})
+}
+
 // findCondition finds a condition by type from a conditions slice.
 // Returns the condition map and true if found, nil and false otherwise.
 func findCondition(conditions []any, condType string) (map[string]any, bool) {

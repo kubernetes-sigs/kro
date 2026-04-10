@@ -432,8 +432,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 	t.Log("Graph status is InProgress (workers not ready)")
 
@@ -498,8 +497,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Graph transitioned to Active — forEach readyWhen per-item proved")
 }
@@ -585,8 +583,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen-pass", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Graph is Active — forEach readyWhen happy path proved")
 }

@@ -130,13 +130,13 @@ func TestFieldConflictBlocksDependents(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if cm["type"] == "Ready" && cm["reason"] == "FieldConflict" {
+			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
 				return true, nil
 			}
 		}
 		return false, nil
 	}))
-	t.Log("Graph status shows FieldConflict")
+	t.Log("Graph status shows Conflict")
 
 	// 5. Verify the contested ConfigMap retains the external value (no force takeover).
 	contested := &unstructured.Unstructured{}
@@ -202,13 +202,13 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if cm["type"] == "Ready" && cm["reason"] == "FieldConflict" {
+			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
 				return true, nil
 			}
 		}
 		return false, nil
 	}))
-	t.Log("Graph shows FieldConflict — now releasing external ownership")
+	t.Log("Graph shows Conflict — now releasing external ownership")
 
 	// 4. Release the external manager's ownership by deleting the ConfigMap.
 	// The Graph controller will recreate it on the next reconcile.
@@ -222,8 +222,7 @@ func TestFieldConflictResolvesOnOwnershipRelease(t *testing.T) {
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-conflict-resolve", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Graph became Active after conflict resolution")
 
@@ -278,8 +277,7 @@ func TestHashSkipApplyOnUnchangedSpec(t *testing.T) {
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-hash-skip", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Read the ConfigMap and record its resourceVersion.
@@ -359,8 +357,7 @@ func TestHashAppliesOnSpecChange(t *testing.T) {
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-hash-change", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Record original hash.
@@ -451,8 +448,7 @@ func TestSteadyStateNoStatusWrite(t *testing.T) {
 		if err := k8sClient.Get(ctx2, types.NamespacedName{Name: "test-steady-state", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Let it settle — poll for RV stability rather than fixed sleep.
@@ -562,13 +558,13 @@ func TestDeletionSkipsConflictedResources(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if cm["type"] == "Ready" && cm["reason"] == "FieldConflict" {
+			if cm["type"] == "Ready" && cm["reason"] == "Conflict" {
 				return true, nil
 			}
 		}
 		return false, nil
 	}))
-	t.Log("Graph shows FieldConflict")
+	t.Log("Graph shows Conflict")
 
 	// 5. Delete the Graph.
 	graphLatest := &unstructured.Unstructured{}

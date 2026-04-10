@@ -500,14 +500,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
 
-	// Collect detected contributions for status reporting.
-	var contributions []string
-	for id, shape := range dag.Shapes {
-		if shape == ShapeContribute {
-			contributions = append(contributions, id)
-		}
-	}
-
 	// Persist the applied set on the revision for prune diffing and teardown.
 	//
 	// ORDERING INVARIANT: read the previous applied set BEFORE writing the
@@ -535,7 +527,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//    within the same generation).
 	//
 	// The prune candidate set is: union(all previous keys) - current keys.
-	var pruneErr error
+	pruneOK := true
 	if !summary.HasDataPending {
 		allPreviousKeys := map[string]bool{}
 		for _, rev := range supersededRevisions {
@@ -561,7 +553,18 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		if len(allPreviousKeys) > 0 {
 			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys); err != nil {
 				logger.Error(err, "pruning removed resources")
-				pruneErr = err
+				pruneOK = false
+				// Classify prune error through the same taxonomy as node errors.
+				info := classifyAPIError(err)
+				switch info.state {
+				case NodeSystemError:
+					summary.HasSystemError = true
+				case NodeConflict:
+					summary.HasConflict = true
+				default:
+					summary.HasError = true
+				}
+				nodeErrors = append(nodeErrors, fmt.Sprintf("prune: %s", info.reason))
 			}
 		}
 	}
@@ -579,8 +582,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		hasError:       summary.HasError,
 		hasSystemError: summary.HasSystemError,
 		nodeErrors:     nodeErrors,
-		pruneErr:       pruneErr,
-		contributions:  contributions,
 	}
 	if err := r.updateStatus(ctx, graph, rstate); err != nil {
 		logger.Error(err, "status update")
@@ -592,7 +593,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// inputs, so we always retry.
 	allReady := rstate.accepted && !summary.HasDataPending && !summary.HasNotReady &&
 		!summary.HasConflict && !summary.HasError && !summary.HasSystemError
-	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneErr == nil)
+	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK)
 
 	if !allReady {
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil

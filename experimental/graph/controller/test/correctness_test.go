@@ -347,8 +347,8 @@ func TestCycleDetectionRejectsSpec(t *testing.T) {
 		"reason should be CycleDetected")
 	t.Logf("Cycle correctly detected: reason=%s, message=%s", accepted["reason"], accepted["message"])
 
-	// Verify state is Error
-	assert.Equal(t, "Error", status["state"], "state should be Error when cycle detected")
+	// Verify Accepted condition is False (spec error — cycle detected)
+	assert.Equal(t, "False", accepted["status"], "Accepted should be False when cycle detected")
 
 	// No revision should be created
 	count, err := countRevisions(ctx, k8sClient, "test-cycle", ns)
@@ -433,8 +433,8 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 		if !found {
 			return false, nil
 		}
-		// Should be False with DataPending reason
-		return ready["status"] == "False" && ready["reason"] == "DataPending", nil
+		// Should be Unknown with Pending reason
+		return ready["status"] == "Unknown" && ready["reason"] == "Pending", nil
 	}))
 	t.Log("Graph correctly shows DataPending when watch target is absent")
 
@@ -527,13 +527,7 @@ func TestContributeTargetAbsentIsDataPending(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contribute-absent", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		// State should be InProgress while DataPending
-		state, _ := status["state"].(string)
-		return state == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 	t.Log("Graph shows InProgress when contribute target is absent")
 
@@ -554,19 +548,14 @@ func TestContributeTargetAbsentIsDataPending(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, target))
 	t.Log("Created contrib-target externally")
 
-	// Graph should reach Active — contribution applied
+	// Graph should reach Ready — contribution applied
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contribute-absent", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		state, _ := status["state"].(string)
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Verify the contribution was applied (annotations added)
@@ -749,7 +738,7 @@ func TestKroLabelCheckRejectsOwnedByOtherGraph(t *testing.T) {
 		if !found {
 			return false, nil
 		}
-		return ready["reason"] == "FieldConflict", nil
+		return ready["reason"] == "Conflict", nil
 	}))
 
 	// Verify the original resource is unchanged
@@ -830,18 +819,14 @@ func TestForceApplyOverridesKroLabelCheck(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Active — Force overrides the label check
+	// Graph should reach Ready — Force overrides the label check
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-force-apply", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Verify ownership was taken: graph-name label should now be "test-force-apply"
@@ -919,7 +904,10 @@ func TestInvalidSpecMissingNodeID(t *testing.T) {
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-missing-id", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "Error", status["state"])
+	conditions, _ := status["conditions"].([]any)
+	accepted, found := findCondition(conditions, "Accepted")
+	require.True(t, found, "Accepted condition should exist")
+	assert.Equal(t, "False", accepted["status"])
 	t.Log("Missing node ID correctly rejected with InvalidSpec")
 }
 
@@ -987,7 +975,10 @@ func TestInvalidSpecDuplicateNodeID(t *testing.T) {
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-dup-id", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "Error", status["state"])
+	conditions, _ := status["conditions"].([]any)
+	accepted, found := findCondition(conditions, "Accepted")
+	require.True(t, found, "Accepted condition should exist")
+	assert.Equal(t, "False", accepted["status"])
 	t.Log("Duplicate node ID correctly rejected with InvalidSpec")
 }
 
@@ -1049,7 +1040,10 @@ func TestInvalidSpecCompilationFailure(t *testing.T) {
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-bad-cel", Namespace: ns}, g))
 	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "Error", status["state"])
+	conditions, _ := status["conditions"].([]any)
+	accepted, found := findCondition(conditions, "Accepted")
+	require.True(t, found, "Accepted condition should exist")
+	assert.Equal(t, "False", accepted["status"])
 
 	// No revision should be created
 	count, err := countRevisions(ctx, k8sClient, "test-bad-cel", ns)
@@ -1120,18 +1114,14 @@ func TestAppliedSetStoredOnRevisionAnnotation(t *testing.T) {
 			types.NamespacedName{Name: name, Namespace: ns}, cm))
 	}
 
-	// Wait for the Graph to reach Active
+	// Wait for the Graph to reach Ready
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-applied-set", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Get the revision and check its applied set annotation
@@ -1229,18 +1219,14 @@ func TestDefaultReadinessIsApplied(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Active — no readyWhen means "applied = ready"
+	// Graph should reach Ready — no readyWhen means "applied = ready"
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-default-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Verify both resources were created and downstream resolved CEL
@@ -1252,14 +1238,13 @@ func TestDefaultReadinessIsApplied(t *testing.T) {
 	assert.Equal(t, "value", data["from"],
 		"downstream should have resolved config.data.key")
 
-	// Verify Graph is Active (not stuck on readiness)
+	// Verify Graph is Ready (not stuck on readiness)
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-default-ready", Namespace: ns}, g))
-	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "Active", status["state"],
-		"Graph should be Active — no readyWhen means applied = ready, no conditions check")
-	t.Log("Default readiness proved: no readyWhen → Active on apply, no conditions check")
+	assert.True(t, graphReady(g),
+		"Graph should be Ready — no readyWhen means applied = ready, no conditions check")
+	t.Log("Default readiness proved: no readyWhen → Ready on apply, no conditions check")
 }
 
 // TestExplicitReadyWhenOverridesDefault proves that explicit readyWhen
@@ -1313,27 +1298,22 @@ func TestExplicitReadyWhenOverridesDefault(t *testing.T) {
 	require.NoError(t, waitForResource(ctx, k8sClient,
 		types.NamespacedName{Name: "explicit-ready-target", Namespace: ns}, cm))
 
-	// Graph should NOT be Active — readyWhen overrides the default
+	// Graph should NOT be Ready — readyWhen overrides the default
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-explicit-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		// Should be InProgress (not Active) because readyWhen is false
-		return status["state"] == "InProgress", nil
+		// Should be Unknown (not True) because readyWhen is false
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-explicit-ready", Namespace: ns}, g))
-	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "InProgress", status["state"],
-		"Graph should be InProgress — readyWhen overrides default, checked.data.status != 'ready'")
+	assert.Equal(t, "Unknown", graphReadyStatus(g),
+		"Graph Ready should be Unknown — readyWhen overrides default, checked.data.status != 'ready'")
 	t.Log("Explicit readyWhen proved: overrides default, node applied but NotReady")
 }
 
@@ -1427,11 +1407,7 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-ready-fn-state", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 	t.Log("Graph InProgress — watched.ready() is false, propagateWhen gates data")
 
@@ -1440,18 +1416,14 @@ func TestReadyFunctionReflectsNodeState(t *testing.T) {
 	source.Object["data"] = map[string]any{"status": "active"}
 	require.NoError(t, k8sClient.Update(ctx, source))
 
-	// Graph should reach Active — watched.ready() now true
+	// Graph should reach Ready — watched.ready() now true
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-ready-fn-state", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	// Verify consumer has the updated data
@@ -1516,7 +1488,7 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Active — workers is an empty collection,
+	// Graph should reach Ready — workers is an empty collection,
 	// workers.ready() returns true (vacuously), summary's readyWhen passes.
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
@@ -1524,20 +1496,15 @@ func TestEmptyCollectionReadyIsVacuouslyTrue(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-empty-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-empty-ready", Namespace: ns}, g))
-	status, _ := g.Object["status"].(map[string]any)
-	assert.Equal(t, "Active", status["state"],
+	assert.True(t, graphReady(g),
 		"empty collection.ready() should be vacuously true")
-	t.Log("Empty collection .ready() is vacuously true — Graph reached Active")
+	t.Log("Empty collection .ready() is vacuously true — Graph reached Ready")
 }
 
 // TestCollectionItemReadyViaIndex proves that workers[0].ready() works from
@@ -1601,18 +1568,14 @@ func TestCollectionItemReadyViaIndex(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should reach Active — workers[0].ready() is true
+	// Graph should reach Ready — workers[0].ready() is true
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-index-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("workers[0].ready() works — cross-node index into collection item readiness proved")
 }
@@ -1677,18 +1640,14 @@ func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should be InProgress — items not ready, items.ready() is false
+	// Graph should have Ready=Unknown — items not ready, items.ready() is false
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 	t.Log("Graph InProgress — items.ready() is false (items have ready=false)")
 
@@ -1737,18 +1696,14 @@ func TestCollectionReadyFalseWhenItemNotReady(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
-	// Graph should reach Active — all items ready, items.ready() is true
+	// Graph should reach Ready — all items ready, items.ready() is true
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-coll-ready-false", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("items.ready() proved: false when any item not ready, true when all items ready")
 }
@@ -1884,18 +1839,14 @@ func TestCrossNodeReadyWhen(t *testing.T) {
 	}
 	require.NoError(t, k8sClient.Create(ctx, graph))
 
-	// Graph should be InProgress — dep.ready() is false
+	// Graph should have Ready=Unknown — dep.ready() is false
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cross-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "InProgress", nil
+		return graphReadyStatus(g) == "Unknown", nil
 	}))
 	t.Log("Graph InProgress — cross-node readyWhen dep.ready() is false")
 
@@ -1904,18 +1855,14 @@ func TestCrossNodeReadyWhen(t *testing.T) {
 	source.Object["data"] = map[string]any{"status": "active"}
 	require.NoError(t, k8sClient.Update(ctx, source))
 
-	// Graph should reach Active
+	// Graph should reach Ready
 	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cross-ready", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		status, _ := g.Object["status"].(map[string]any)
-		if status == nil {
-			return false, nil
-		}
-		return status["state"] == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Cross-node readyWhen proved: dep.ready() in readyWhen works")
 }

@@ -387,8 +387,7 @@ func TestRevisionActivation(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "rev-activate-test", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Graph is Active")
 

@@ -123,17 +123,15 @@ func TestFullLifecycle(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(GraphGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))
 
-	state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-	assert.Equal(t, "Active", state)
-	t.Logf("Status: state=%s", state)
+	assert.True(t, graphReady(g))
+	t.Log("Status: Ready=True")
 
 	// --- Phase 2: Update and verify ---
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g))
@@ -426,8 +424,7 @@ func TestContagiousExclusion(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contagious", Namespace: ns}, g); err != nil {
 			return false, nil
 		}
-		state, _, _ := unstructured.NestedString(g.Object, "status", "state")
-		return state == "Active", nil
+		return graphReady(g), nil
 	}))
 	t.Log("Graph is Active despite excluded resources")
 	t.Log("Contagious exclusion proved: feature excluded → dependent contagiously excluded → independent unaffected")

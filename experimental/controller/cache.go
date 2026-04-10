@@ -58,7 +58,18 @@ func (rc *resourceCache) get(key string) (*cachedObject, bool) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	obj, ok := rc.objects[key]
-	return obj, ok
+	if !ok {
+		return nil, false
+	}
+	// Return a shallow copy with a deep-copied object map. The caller
+	// may write to the map (markReady injects __ready), so the cache
+	// must not share map references with callers. Without this copy,
+	// removeForGraph's label iteration races with worker writes.
+	return &cachedObject{
+		resourceVersion: obj.resourceVersion,
+		templateHash:    obj.templateHash,
+		object:          deepCopyMap(obj.object),
+	}, true
 }
 
 func (rc *resourceCache) set(key string, obj *cachedObject) {

@@ -46,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg)
+	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, 0) // 0 = use default (4 workers)
 	if err != nil {
 		log.Error(err, "setting up controller")
 		os.Exit(1)

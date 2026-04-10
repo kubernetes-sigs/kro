@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -50,6 +51,11 @@ const (
 	// and we need to wait for the dynamic watch to trigger. This is
 	// a fallback — the watch should fire first in most cases.
 	defaultRequeueAfter = 1 * time.Second
+
+	// DefaultMaxConcurrentReconciles is the number of reconcile workers.
+	// Multiple workers prevent watch event starvation — with a single
+	// worker, dynamic watch events can't be delivered while it's busy.
+	DefaultMaxConcurrentReconciles = 4
 )
 
 // gvkToGVR converts a GVK to a GVR using English pluralization rules.
@@ -545,6 +551,20 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			appliedKeys = append(appliedKeys, res.keys...)
 		}
 
+		// Reset Contribute shape when a conflicted target disappears.
+		// When a Contribute node was in Conflict (external manager owns
+		// the same fields) and the target is deleted (DataPending), the
+		// cached Contribute shape prevents recovery. Resetting to Deferred
+		// lets the next reconcile re-resolve: target absent → Owns → create.
+		// Only fires for Conflict→DataPending to avoid false resets during
+		// normal startup when targets may not exist yet.
+		if res.state == NodeDataPending &&
+			state.resolvedShapes[node.ID] == ShapeContribute &&
+			state.previousPlanStates[node.ID] == NodeConflict {
+			state.resolvedShapes[node.ID] = ShapeDeferred
+			delete(state.previousInputHashes, node.ID)
+		}
+
 		// Evaluate propagateWhen (coordinator reads from now-merged scope).
 		if (res.state == NodeReady || res.state == NodeNotReady) &&
 			len(node.PropagateWhen) > 0 && eval.scope[node.ID] != nil {
@@ -968,9 +988,18 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 // It creates the watch infrastructure internally — callers provide the
 // manager and a rest.Config (needed for the metadata client).
 //
+// maxWorkers controls MaxConcurrentReconciles. Values ≤ 0 default to 4.
+// Multiple workers prevent watch event starvation under load — with a
+// single worker, dynamic watch events can't be delivered while it's busy
+// processing another Graph's reconcile.
+//
 // Returns a shutdown function that stops the watch manager. The caller
 // must invoke this on teardown.
-func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config) (shutdown func(), err error) {
+func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config, maxWorkers int) (shutdown func(), err error) {
+	if maxWorkers <= 0 {
+		maxWorkers = DefaultMaxConcurrentReconciles
+	}
+
 	metadataClient, err := metadata.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("creating metadata client: %w", err)
@@ -1000,6 +1029,7 @@ func SetupWithManager(mgr ctrl.Manager, restConfig *rest.Config) (shutdown func(
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(graphObj).
 		Named("graph").
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxWorkers}).
 		WatchesRawSource(source.Channel(watchChan, &handler.EnqueueRequestForObject{})).
 		Complete(reconciler); err != nil {
 		return nil, fmt.Errorf("building controller: %w", err)

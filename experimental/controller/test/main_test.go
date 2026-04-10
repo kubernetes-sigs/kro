@@ -76,7 +76,8 @@ func TestMain(m *testing.M) {
 	}
 
 	// Use the same SetupWithManager that production uses.
-	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg)
+	// Multiple workers prevent watch event starvation under parallel test load.
+	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, 4)
 	if err != nil {
 		panic("setting up controller: " + err.Error())
 	}

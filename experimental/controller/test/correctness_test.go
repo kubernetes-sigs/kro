@@ -37,12 +37,6 @@ import (
 //   - Complete the rollout: updatedReplicas=5 (propagateWhen satisfied).
 //   - Verify "service-output" is updated with the new data.
 func TestPropagateWhenGatesDataFlow(t *testing.T) {
-	// BUG: Dynamic watch event starvation under parallel load.
-	// With MaxConcurrentReconciles=1, ~80 parallel tests saturate the
-	// workqueue so dynamic watch events (external ConfigMap changes) never
-	// arrive. Passes in isolation, times out under full suite load.
-	// Increasing timeout doesn't help — the events are starved, not slow.
-	t.Skip("known bug: dynamic watch event starvation under parallel load")
 	t.Parallel()
 	ns := createNamespace(t)
 

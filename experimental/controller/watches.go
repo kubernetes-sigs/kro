@@ -399,8 +399,10 @@ func (c *WatchCoordinator) addWatch(graph graphKey, req watchRequest) {
 	gvr := req.gvr
 	c.mu.Unlock()
 
-	// Ensure informer running (outside lock)
-	if err := c.watches.ensureWatch(gvr, "coordinator"); err != nil {
+	// Ensure informer running (outside lock). Per-graph ownerID enables
+	// correct ref-counting: releaseWatch for one graph can't kill an
+	// informer another graph still needs.
+	if err := c.watches.ensureWatch(gvr, graphOwnerID(graph)); err != nil {
 		c.log.Error(err, "failed to ensure watch", "gvr", gvr)
 	}
 }
@@ -426,11 +428,15 @@ func (c *WatchCoordinator) doneGraph(graph graphKey) {
 	state.previous = state.current
 	state.current = make(map[string]*watchRequest)
 
-	orphaned := c.findOrphanedLocked(affectedGVRs)
+	// Compute GVRs this graph still actively watches (now in previous
+	// after the swap). Release per-graph ownership only for GVRs the
+	// graph no longer needs — the WatchManager ref-counts across graphs.
+	toRelease := c.gvrsToReleaseLocked(state.previous, affectedGVRs)
 	c.mu.Unlock()
 
-	for _, gvr := range orphaned {
-		c.watches.releaseWatch(gvr, "coordinator")
+	ownerID := graphOwnerID(graph)
+	for _, gvr := range toRelease {
+		c.watches.releaseWatch(gvr, ownerID)
 	}
 }
 
@@ -453,11 +459,13 @@ func (c *WatchCoordinator) abortGraph(graph graphKey) {
 	}
 	state.current = make(map[string]*watchRequest)
 
-	orphaned := c.findOrphanedLocked(affectedGVRs)
+	// After abort, active watches are in state.previous (unchanged).
+	toRelease := c.gvrsToReleaseLocked(state.previous, affectedGVRs)
 	c.mu.Unlock()
 
-	for _, gvr := range orphaned {
-		c.watches.releaseWatch(gvr, "coordinator")
+	ownerID := graphOwnerID(graph)
+	for _, gvr := range toRelease {
+		c.watches.releaseWatch(gvr, ownerID)
 	}
 }
 
@@ -471,22 +479,24 @@ func (c *WatchCoordinator) removeGraph(graph graphKey) {
 		return
 	}
 
-	var affectedGVRs []schema.GroupVersionResource
+	// Collect all GVRs this graph watches (from both buffers) and
+	// remove all index entries.
+	gvrSet := make(map[schema.GroupVersionResource]bool)
 	for _, req := range state.current {
 		c.removeFromIndexesLocked(graph, req)
-		affectedGVRs = append(affectedGVRs, req.gvr)
+		gvrSet[req.gvr] = true
 	}
 	for _, req := range state.previous {
 		c.removeFromIndexesLocked(graph, req)
-		affectedGVRs = append(affectedGVRs, req.gvr)
+		gvrSet[req.gvr] = true
 	}
 	delete(c.graphs, graph)
 
-	orphaned := c.findOrphanedLocked(affectedGVRs)
 	c.mu.Unlock()
 
-	for _, gvr := range orphaned {
-		c.watches.releaseWatch(gvr, "coordinator")
+	ownerID := graphOwnerID(graph)
+	for gvr := range gvrSet {
+		c.watches.releaseWatch(gvr, ownerID)
 	}
 }
 
@@ -631,14 +641,35 @@ func (c *WatchCoordinator) removeCollectionLocked(graph graphKey, req *watchRequ
 	}
 }
 
-func (c *WatchCoordinator) findOrphanedLocked(gvrs []schema.GroupVersionResource) []schema.GroupVersionResource {
-	var orphaned []schema.GroupVersionResource
-	for _, gvr := range gvrs {
-		if len(c.scalarIndex[gvr]) == 0 && len(c.collectionIndex[gvr]) == 0 {
-			orphaned = append(orphaned, gvr)
+// gvrsToReleaseLocked returns the subset of affectedGVRs that the graph no
+// longer actively watches. activeWatches is the graph's committed watch set
+// (state.previous after doneGraph's swap, or state.previous in abortGraph).
+// Must be called with c.mu held.
+func (c *WatchCoordinator) gvrsToReleaseLocked(activeWatches map[string]*watchRequest, affectedGVRs []schema.GroupVersionResource) []schema.GroupVersionResource {
+	activeGVRs := make(map[schema.GroupVersionResource]bool, len(activeWatches))
+	for _, req := range activeWatches {
+		activeGVRs[req.gvr] = true
+	}
+	var toRelease []schema.GroupVersionResource
+	seen := make(map[schema.GroupVersionResource]bool)
+	for _, gvr := range affectedGVRs {
+		if seen[gvr] {
+			continue
+		}
+		seen[gvr] = true
+		if !activeGVRs[gvr] {
+			toRelease = append(toRelease, gvr)
 		}
 	}
-	return orphaned
+	return toRelease
+}
+
+// graphOwnerID returns a stable owner identifier for a Graph in the
+// WatchManager. Using per-graph IDs (instead of a shared constant) enables
+// correct ref-counting: releasing one graph's ownership of a GVR cannot
+// kill an informer that another graph still needs.
+func graphOwnerID(graph graphKey) string {
+	return "graph/" + graph.Namespace + "/" + graph.Name
 }
 
 func sameTarget(a, b *watchRequest) bool {

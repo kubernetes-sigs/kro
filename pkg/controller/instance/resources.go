@@ -105,6 +105,9 @@ func (c *Controller) buildApplyInputs(rcx *ReconcileContext) (*reconcileResult, 
 
 	r.supersetPatch, err = r.applier.Project(resources)
 	if err != nil {
+		if errors.Is(err, applyset.ErrDuplicateResource) {
+			return nil, err
+		}
 		return nil, rcx.delayedRequeue(fmt.Errorf("project failed: %w", err))
 	}
 

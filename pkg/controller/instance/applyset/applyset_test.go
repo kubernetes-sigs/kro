@@ -1450,3 +1450,204 @@ func TestMetadata_Annotations(t *testing.T) {
 		t.Errorf("Annotations()[%s] = %q, want %q", ApplySetAdditionalNamespacesAnnotation, got, "default")
 	}
 }
+
+func TestProject_DuplicateResources(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources []Resource
+		wantErr   bool
+		errMatch  string
+	}{
+		{
+			name: "no duplicates - different names",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config-one",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config-two",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate detected - same GVK/namespace/name",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr:  true,
+			errMatch: "resourceID: configmap2 conflicts with resourceID: configmap1",
+		},
+		{
+			name: "multiple duplicates reported together",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "secret1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "Secret",
+							"metadata": map[string]interface{}{
+								"name":      "creds",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+				{
+					ID: "secret2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "Secret",
+							"metadata": map[string]interface{}{
+								"name":      "creds",
+								"namespace": "default",
+							},
+						},
+					},
+				},
+			},
+			wantErr:  true,
+			errMatch: "configmap2 conflicts with.*configmap1.*secret2 conflicts with.*secret1",
+		},
+		{
+			name: "skip resources marked as SkipApply",
+			resources: []Resource{
+				{
+					ID: "configmap1",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+					SkipApply: false,
+				},
+				{
+					ID: "configmap2",
+					Object: &unstructured.Unstructured{
+						Object: map[string]interface{}{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]interface{}{
+								"name":      "config",
+								"namespace": "default",
+							},
+						},
+					},
+					SkipApply: true,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := newTestParent(schema.GroupVersionKind{
+				Group:   "kro.run",
+				Version: "v1alpha1",
+				Kind:    "ResourceGroup",
+			})
+
+			a := New(Config{
+				Client:          fake.NewSimpleDynamicClient(runtime.NewScheme()),
+				RESTMapper:      newTestRESTMapper(),
+				Log:             logr.Discard(),
+				ParentNamespace: "default",
+			}, parent)
+
+			_, err := a.Project(tt.resources)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Project() expected error matching %q, got nil", tt.errMatch)
+					return
+				}
+				matched, _ := regexp.MatchString(tt.errMatch, err.Error())
+				if !matched {
+					t.Errorf("Project() error = %q, want match %q", err.Error(), tt.errMatch)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Project() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}

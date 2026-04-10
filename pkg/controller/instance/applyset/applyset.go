@@ -205,6 +205,8 @@ type ApplySet struct {
 func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 	gks := sets.New[schema.GroupKind]()
 	namespaces := sets.New[string]()
+	seen := make(map[string]string)
+	var conflicts []string
 
 	// Collect GKs and namespaces from current resources
 	for _, r := range resources {
@@ -212,6 +214,18 @@ func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 			continue
 		}
 		gvk := r.Object.GroupVersionKind()
+
+		// Duplicate check: prevent multiple resource IDs targeting the same K8s object
+		key := fmt.Sprintf("%s/%s/%s/%s/%s",
+			gvk.Group, gvk.Version, gvk.Kind,
+			r.Object.GetNamespace(), r.Object.GetName())
+		if existingID, ok := seen[key]; ok {
+			conflicts = append(conflicts, fmt.Sprintf(
+				"resourceID: %s conflicts with resourceID: %s", r.ID, existingID,
+			))
+		}
+		seen[key] = r.ID
+
 		gks.Insert(gvk.GroupKind())
 
 		mapping, err := a.restMapper.RESTMapping(gvk.GroupKind(), gvk.Version)
@@ -221,6 +235,10 @@ func (a *ApplySet) Project(resources []Resource) (Metadata, error) {
 		if ns, ok := a.resolvedNamespace(mapping, r.Object); ok && ns != a.parentNamespace {
 			namespaces.Insert(ns)
 		}
+	}
+
+	if len(conflicts) > 0 {
+		return Metadata{}, fmt.Errorf("%w: %s", ErrDuplicateResource, strings.Join(conflicts, ", "))
 	}
 
 	// Union with parent annotations (memory from previous reconciles)

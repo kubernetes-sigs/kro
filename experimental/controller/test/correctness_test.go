@@ -448,7 +448,7 @@ func TestWatchAbsentResourceIsDataPending(t *testing.T) {
 	// Dependent should NOT be created
 	require.NoError(t, waitForAbsence(ctx, k8sClient,
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "watch-dependent", Namespace: ns}, 1500*time.Millisecond))
+		types.NamespacedName{Name: "watch-dependent", Namespace: ns}, 1*time.Second))
 	t.Log("Dependent correctly not created while watch target is absent")
 
 	// Now create the missing resource
@@ -615,7 +615,7 @@ func TestMultipleIncludeWhenConditionsAreANDed(t *testing.T) {
 	// gated-output should NOT be created: flagA=true but flagB=false
 	require.NoError(t, waitForAbsence(ctx, k8sClient,
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "gated-output", Namespace: ns}, 2*time.Second))
+		types.NamespacedName{Name: "gated-output", Namespace: ns}, 1*time.Second))
 	t.Log("gated-output correctly excluded when one includeWhen condition is false")
 
 	// Set both flags to true

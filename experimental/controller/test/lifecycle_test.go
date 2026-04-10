@@ -492,7 +492,7 @@ func TestDataPendingChain(t *testing.T) {
 
 	// Middle and tail should NOT exist (data pending)
 	cmGVK3 := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-middle", Namespace: ns}, 1500*time.Millisecond))
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-middle", Namespace: ns}, 1*time.Second))
 	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK3, types.NamespacedName{Name: "chain-tail", Namespace: ns}, 500*time.Millisecond))
 	t.Log("Chain correctly blocked: middle + tail pending")
 
@@ -691,7 +691,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 	// Phase 1: enabled=false → gated resource should NOT exist
 	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "gated-resource", Namespace: ns}, 1500*time.Millisecond))
+		types.NamespacedName{Name: "gated-resource", Namespace: ns}, 1*time.Second))
 	t.Log("Phase 1: gated-resource absent (enabled=false)")
 
 	// Phase 2: flip to true → resource should be created

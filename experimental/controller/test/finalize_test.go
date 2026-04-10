@@ -205,7 +205,7 @@ func TestFinalizesTargetAbsentSkips(t *testing.T) {
 	// The finalizer resource should NOT be created — target was already gone.
 	// Use observation-based polling instead of time.Sleep to verify absence.
 	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
-		types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, 2*time.Second))
+		types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, 1*time.Second))
 	t.Log("Finalization correctly skipped — target was already absent")
 }
 

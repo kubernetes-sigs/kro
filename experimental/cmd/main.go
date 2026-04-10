@@ -78,11 +78,13 @@ func main() {
 		log.Error(err, "setting up controller")
 		os.Exit(1)
 	}
-	defer shutdown()
 
 	log.Info("starting graph controller")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "running manager")
-		os.Exit(1)
 	}
+	// Cancel dynamic watch informers after the manager has fully stopped.
+	// All controllers have drained by the time mgr.Start returns, so no
+	// reconcile can race with informer cancellation.
+	shutdown()
 }

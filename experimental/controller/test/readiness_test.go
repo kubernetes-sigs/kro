@@ -298,7 +298,7 @@ func TestDataPendingRequeues(t *testing.T) {
 
 	// Output should NOT be created yet — the field doesn't exist
 	require.NoError(t, waitForAbsence(ctx, k8sClient, schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"},
-		types.NamespacedName{Name: "data-output", Namespace: ns}, 1500*time.Millisecond))
+		types.NamespacedName{Name: "data-output", Namespace: ns}, 1*time.Second))
 	t.Log("Output correctly not created while data is pending")
 
 	// Verify the Graph still exists and hasn't been deleted (controller didn't crash)

@@ -47,9 +47,29 @@ func TestMain(m *testing.M) {
 	}
 
 	// -----------------------------------------------------------------------
-	// 2. Start envtest (kube-apiserver + etcd).
+	// 2. Create a shared log file for all subprocess output (envtest's
+	//    kube-apiserver + etcd, and the controller binary). Having everything
+	//    in one file, correlated by timestamp, makes debugging failures
+	//    straightforward. Each test creates a unique namespace
+	//    (graph-test-xxxxx), so: grep graph-test-xxxxx build/controller.log
 	// -----------------------------------------------------------------------
-	testEnv = &envtest.Environment{}
+	logPath := filepath.Join(filepath.Dir(binaryPath), "controller.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		panic("creating log file: " + err.Error())
+	}
+	defer logFile.Close()
+	fmt.Fprintf(os.Stderr, "controller logs: %s\n", logPath)
+
+	// -----------------------------------------------------------------------
+	// 3. Start envtest (kube-apiserver + etcd), logging to the shared file.
+	// -----------------------------------------------------------------------
+	testEnv = &envtest.Environment{
+		ControlPlane: envtest.ControlPlane{
+			APIServer: &envtest.APIServer{Out: logFile, Err: logFile},
+			Etcd:      &envtest.Etcd{Out: logFile, Err: logFile},
+		},
+	}
 
 	cfg, err := testEnv.Start()
 	if err != nil {
@@ -141,8 +161,9 @@ func TestMain(m *testing.M) {
 	// -----------------------------------------------------------------------
 	// 5. Start the kro binary as a subprocess. --bootstrap installs Graph
 	//    and GraphRevision CRDs and waits for them to become established.
+	//    Logs go to the same shared file as envtest.
 	// -----------------------------------------------------------------------
-	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath)
+	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath, logFile)
 	if err != nil {
 		panic("starting binary: " + err.Error())
 	}
@@ -268,7 +289,11 @@ func writeKubeconfig(cfg *rest.Config) (string, error) {
 // startBinary starts the kro binary as a subprocess and returns the health
 // probe address and the exec.Cmd. The binary bootstraps its own CRDs
 // (Graph, GraphRevision) before starting the controller.
-func startBinary(binaryPath, kubeconfigPath string) (healthAddr string, cmd *exec.Cmd, err error) {
+//
+// Controller logs are written to the shared log file (build/controller.log).
+// Each test creates a unique namespace (graph-test-xxxxx), so to debug a
+// specific test failure: grep graph-test-xxxxx build/controller.log
+func startBinary(binaryPath, kubeconfigPath string, logFile *os.File) (healthAddr string, cmd *exec.Cmd, err error) {
 	// Pick a random port for the health probe. We bind a listener, read back
 	// the port, then close it before passing to the binary. There's a small
 	// TOCTOU window, but envtest does the same thing and it's fine in practice.
@@ -285,8 +310,8 @@ func startBinary(binaryPath, kubeconfigPath string) (healthAddr string, cmd *exe
 		"--metrics-bind-address=0",
 	)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("starting binary: %w", err)

@@ -52,6 +52,11 @@ type WatchManager struct {
 	onEvent func(watchEvent)
 	log     logr.Logger
 
+	// parentCtx is the root context for all informer goroutines. Cancelling
+	// it stops every informer regardless of ref-count. shutdown() cancels it.
+	parentCtx    context.Context
+	parentCancel context.CancelFunc
+
 	// createInformer is overridable for tests.
 	createInformer func(schema.GroupVersionResource) cache.SharedIndexInformer
 }
@@ -81,13 +86,16 @@ type watchEvent struct {
 }
 
 func newWatchManager(client metadata.Interface, resync time.Duration, onEvent func(watchEvent), log logr.Logger) *WatchManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	wm := &WatchManager{
-		watches: make(map[schema.GroupVersionResource]*gvrWatch),
-		owners:  make(map[schema.GroupVersionResource]map[string]struct{}),
-		client:  client,
-		resync:  resync,
-		onEvent: onEvent,
-		log:     log.WithName("watch-manager"),
+		watches:      make(map[schema.GroupVersionResource]*gvrWatch),
+		owners:       make(map[schema.GroupVersionResource]map[string]struct{}),
+		client:       client,
+		resync:       resync,
+		onEvent:      onEvent,
+		log:          log.WithName("watch-manager"),
+		parentCtx:    ctx,
+		parentCancel: cancel,
 	}
 	wm.createInformer = wm.defaultCreateInformer
 	return wm
@@ -107,7 +115,7 @@ func (m *WatchManager) ensureWatch(gvr schema.GroupVersionResource, ownerID stri
 
 	// Create and start
 	inf := m.createInformer(gvr)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.parentCtx)
 	w := &gvrWatch{informer: inf, cancel: cancel}
 
 	reg, err := inf.AddEventHandler(m.eventHandlers(gvr))
@@ -168,6 +176,7 @@ func (m *WatchManager) stopLocked(gvr schema.GroupVersionResource, force bool) {
 }
 
 func (m *WatchManager) shutdown() {
+	m.parentCancel() // stop all informers via parent context
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for gvr := range m.watches {

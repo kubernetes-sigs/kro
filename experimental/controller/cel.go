@@ -394,6 +394,9 @@ func (s *GraphSpec) Hash() string {
 			hashField(nil)
 		}
 
+		// Finalizes
+		hashField([]byte(node.Finalizes))
+
 		// ForEach (sorted keys for determinism — ForEach is a map)
 		if node.ForEach != nil {
 			forEachKeys := make([]string, 0, len(node.ForEach))

@@ -2,7 +2,13 @@ package graphcontroller_test
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"testing"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -26,14 +32,61 @@ var (
 
 func TestMain(m *testing.M) {
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
+	// Parse flags before m.Run() so we can read test.timeout below.
+	flag.Parse()
 	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel()
 
 	testEnv = &envtest.Environment{}
 
 	cfg, err := testEnv.Start()
 	if err != nil {
 		panic("starting envtest: " + err.Error())
+	}
+
+	// envtest starts etcd and kube-apiserver as child processes. On macOS,
+	// if the parent exits without calling testEnv.Stop(), these children
+	// get reparented to PID 1 and run forever — there is no equivalent of
+	// Linux's PR_SET_PDEATHSIG. The three mechanisms below ensure Stop is
+	// called regardless of how the process exits:
+	//
+	//   1. defer     — panics during setup (the lines below can panic)
+	//   2. signal    — SIGINT/SIGTERM (Ctrl+C)
+	//   3. timeout   — fires just before Go's hard-kill test timeout
+	//
+	// On the normal path, Stop is called explicitly before os.Exit.
+	// Duplicate Stop calls are safe (envtest checks if already stopped).
+
+	// 1. Defer catches panics from the setup code below.
+	defer func() {
+		cancel()
+		testEnv.Stop() //nolint:errcheck
+	}()
+
+	// 2. Signal handler catches Ctrl+C before Go's default handler
+	//    (which calls os.Exit, skipping defers).
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		fmt.Fprintf(os.Stderr, "\nreceived %s, stopping envtest\n", sig)
+		cancel()
+		testEnv.Stop() //nolint:errcheck
+		os.Exit(1)
+	}()
+
+	// 3. Go's test timeout (default 10m, -timeout flag) fires a panic from
+	//    a background goroutine, which doesn't run TestMain's defers. We
+	//    race our own timer to fire 5s earlier, giving us time to call Stop
+	//    from a goroutine we control.
+	if f := flag.Lookup("test.timeout"); f != nil {
+		if d, err := time.ParseDuration(f.Value.String()); err == nil && d > 5*time.Second {
+			time.AfterFunc(d-5*time.Second, func() {
+				fmt.Fprintln(os.Stderr, "test timeout approaching, stopping envtest")
+				cancel()
+				testEnv.Stop() //nolint:errcheck
+				os.Exit(1)
+			})
+		}
 	}
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
@@ -96,13 +149,12 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	// Normal exit: clean up explicitly, then propagate the exit code.
+	// os.Exit skips defers, so we must stop envtest before calling it.
 	shutdown()
 	cancel()
 	if err := testEnv.Stop(); err != nil {
-		panic("stopping envtest: " + err.Error())
+		fmt.Fprintf(os.Stderr, "stopping envtest: %v\n", err)
 	}
-
-	if code != 0 {
-		panic("tests failed")
-	}
+	os.Exit(code)
 }

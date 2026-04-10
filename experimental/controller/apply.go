@@ -116,8 +116,9 @@ func (r *GraphReconciler) runFinalization(
 	dag *DAG,
 	eval *evaluator,
 	watcher *graphWatcher,
-) (bool, error) {
+) (bool, []string, error) {
 	logger := log.FromContext(ctx)
+	var createdKeys []string
 
 	// Put the target's data in scope so finalizer templates can reference it.
 	// The target is still alive (no deletionTimestamp).
@@ -132,14 +133,14 @@ func (r *GraphReconciler) runFinalization(
 	for _, finNodeID := range finalizerNodeIDs {
 		idx, ok := dag.Index[finNodeID]
 		if !ok {
-			return false, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
+			return false, createdKeys, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
 		}
 		finNode := &dag.Nodes[idx]
 
 		// Evaluate the finalizer template.
 		evalMap, err := eval.toMap(finNode.Template)
 		if err != nil {
-			return false, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
+			return false, createdKeys, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
 		}
 
 		// Check if the finalizer resource already exists.
@@ -156,15 +157,16 @@ func (r *GraphReconciler) runFinalization(
 
 		if err != nil {
 			if !apierrors.IsNotFound(err) {
-				return false, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
+				return false, createdKeys, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
 			}
 			// Step 1: Finalizer resource doesn't exist — create it.
 			logger.Info("creating finalizer resource", "finalizer", finNodeID,
 				"target", target.GetName())
 			applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNodeID)
 			if applyErr != nil {
-				return false, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
+				return false, createdKeys, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
 			}
+			createdKeys = append(createdKeys, resourceKey(applied))
 			eval.scope[finNodeID] = applied.Object
 			allReady = false
 			continue
@@ -185,7 +187,7 @@ func (r *GraphReconciler) runFinalization(
 		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
 	}
 
-	return allReady, nil
+	return allReady, createdKeys, nil
 }
 
 // resourceKeyFromObj builds a resource key from a template map, matching
@@ -592,8 +594,9 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 // If a prune candidate has finalizer nodes declared (via `finalizes`), the
 // finalization sequence runs before deletion: create the finalizer resource,
 // wait for readyWhen, then delete the target. See 004-graph-execution.md § Finalization.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, eval *evaluator, watcher *graphWatcher) error {
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	logger := log.FromContext(ctx)
+	var finalizerKeys []string
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
@@ -603,11 +606,46 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 	// Build resource-key-to-node-ID map from the DAG for finalizer lookup.
 	keyToNodeID := map[string]string{}
+	nodeIDToKey := map[string]string{}
 	if dag != nil {
 		for _, node := range dag.Nodes {
 			if node.Template != nil {
 				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
 					keyToNodeID[rk] = node.ID
+					nodeIDToKey[node.ID] = rk
+				}
+			}
+		}
+	}
+
+	// Build the set of keys that must be deferred because an in-flight
+	// finalizer references them. If a prune target has finalizer nodes,
+	// each finalizer node's direct dependencies (other than the target
+	// itself) are deferred — they must remain alive while the finalizer
+	// is running.
+	deferredKeys := map[string]bool{}
+	if dag != nil {
+		for key := range previousKeys {
+			if currentSet[key] {
+				continue
+			}
+			nodeID := keyToNodeID[key]
+			finalizerNodeIDs, ok := dag.Finalizers[nodeID]
+			if !ok || len(finalizerNodeIDs) == 0 {
+				continue
+			}
+			for _, finNodeID := range finalizerNodeIDs {
+				finIdx, exists := dag.Index[finNodeID]
+				if !exists {
+					continue
+				}
+				for depID := range dag.Nodes[finIdx].Dependencies {
+					if depID == nodeID {
+						continue // skip the target itself
+					}
+					if dk, ok := nodeIDToKey[depID]; ok {
+						deferredKeys[dk] = true
+					}
 				}
 			}
 		}
@@ -618,6 +656,14 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 	for key := range previousKeys {
 		if currentSet[key] {
 			continue // still exists in current cycle
+		}
+
+		// Defer deletion of resources that are dependencies of in-flight
+		// finalizer nodes — they must remain alive while the finalizer runs.
+		if deferredKeys[key] {
+			logger.Info("prune deferred: resource is a dependency of an in-flight finalizer",
+				"key", key)
+			continue
 		}
 
 		// Contribute keys use skeleton apply (release fields), not delete.
@@ -673,7 +719,8 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		if dag != nil && eval != nil {
 			nodeID := keyToNodeID[key]
 			if finalizerNodeIDs, ok := dag.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, dag, eval, watcher)
+				ready, fKeys, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, dag, eval, watcher)
+				finalizerKeys = append(finalizerKeys, fKeys...)
 				if err != nil {
 					logger.Error(err, "finalization failed", "key", key)
 					continue // block deletion — TeardownBlocked
@@ -689,7 +736,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 		if err := r.Client.Delete(ctx, obj); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("pruning %s: %w", key, err)
+				return finalizerKeys, fmt.Errorf("pruning %s: %w", key, err)
 			}
 		} else {
 			logger.Info("pruned resource", "key", key)
@@ -697,7 +744,7 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
-	return nil
+	return finalizerKeys, nil
 }
 
 // findManagedResourceKeys discovers dynamically-named resources (forEach, CEL

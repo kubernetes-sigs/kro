@@ -573,7 +573,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			allPreviousKeys[k] = true
 		}
 		if len(allPreviousKeys) > 0 {
-			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, eval, watcher); err != nil {
+			fKeys, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, eval, watcher)
+			if len(fKeys) > 0 {
+				if setErr := setAppliedSet(ctx, r.Client, activeRevision, append(appliedKeys, fKeys...)); setErr != nil {
+					logger.V(1).Info("failed to persist applied set after prune", "error", setErr)
+				}
+			}
+			if err != nil {
 				logger.Error(err, "pruning removed resources")
 				pruneOK = false
 				// Classify prune error through the same taxonomy as node errors.
@@ -791,7 +797,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if teardownDAG != nil && teardownEval != nil {
 			nodeID := keyToNodeID[key]
 			if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				ready, _, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
 				if finErr != nil {
 					logger.Error(finErr, "teardown finalization failed", "key", key)
 					teardownBlocked = true

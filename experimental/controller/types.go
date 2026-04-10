@@ -5,7 +5,10 @@
 // on anything else in the package.
 package graphcontroller
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // TemplateShape classifies the relationship between a Graph and a resource.
 // Watch and CollectionWatch are determined by template structure at compile time.
@@ -279,6 +282,18 @@ func parseNodeList(raw any) ([]Node, error) {
 		}
 		if fin, ok := m["finalizes"].(string); ok {
 			node.Finalizes = fin
+		}
+		// Validate: finalizes nodes must not have CEL-evaluated names.
+		// Finalizer resources are looked up by static key during prune;
+		// a dynamic name would make the key unpredictable.
+		// Note: ${...} is the only interpolation syntax (see findExpr in eval.go).
+		// If a second interpolation form is added, this check must be updated.
+		if node.Finalizes != "" && node.Template != nil {
+			if md, ok := node.Template["metadata"].(map[string]any); ok {
+				if name, ok := md["name"].(string); ok && strings.Contains(name, "${") {
+					return nil, fmt.Errorf("node[%d] %q: finalizes nodes must not have CEL-evaluated names (found expression in metadata.name)", i, id)
+				}
+			}
 		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
 			node.ForEach = make(map[string]string)

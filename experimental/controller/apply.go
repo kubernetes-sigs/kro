@@ -94,6 +94,126 @@ func isAPIServerManager(manager string) bool {
 }
 
 // ---------------------------------------------------------------------------
+// Finalization
+// ---------------------------------------------------------------------------
+
+// runFinalization executes the finalization sequence for a prune candidate.
+// Returns (true, nil) when all finalizer resources are ready and the target
+// can be deleted. Returns (false, nil) when finalizers are in progress.
+// Returns (false, err) when a finalizer can't be created.
+//
+// The sequence is recoverable — no state machine. Each call derives position
+// from cluster state:
+//  1. Finalizer resource doesn't exist → create it
+//  2. Finalizer resource exists, readyWhen false → in progress
+//  3. Finalizer resource exists, readyWhen true → this finalizer is done
+//  4. All finalizers done → target can be deleted
+func (r *GraphReconciler) runFinalization(
+	ctx context.Context,
+	graph *unstructured.Unstructured,
+	target *unstructured.Unstructured,
+	finalizerNodeIDs []string,
+	dag *DAG,
+	eval *evaluator,
+	watcher *graphWatcher,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	// Put the target's data in scope so finalizer templates can reference it.
+	// The target is still alive (no deletionTimestamp).
+	for _, node := range dag.Nodes {
+		if resourceKey(target) == resourceKeyFromObj(node.Template, graph.GetNamespace()) {
+			eval.scope[node.ID] = normalizeTypes(target.Object)
+			break
+		}
+	}
+
+	allReady := true
+	for _, finNodeID := range finalizerNodeIDs {
+		idx, ok := dag.Index[finNodeID]
+		if !ok {
+			return false, fmt.Errorf("finalizer node %q not found in DAG", finNodeID)
+		}
+		finNode := &dag.Nodes[idx]
+
+		// Evaluate the finalizer template.
+		evalMap, err := eval.toMap(finNode.Template)
+		if err != nil {
+			return false, fmt.Errorf("evaluating finalizer template %s: %w", finNodeID, err)
+		}
+
+		// Check if the finalizer resource already exists.
+		finObj := &unstructured.Unstructured{Object: evalMap}
+		if finObj.GetNamespace() == "" {
+			finObj.SetNamespace(graph.GetNamespace())
+		}
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(finObj.GroupVersionKind())
+		err = r.Client.Get(ctx, client.ObjectKey{
+			Namespace: finObj.GetNamespace(),
+			Name:      finObj.GetName(),
+		}, existing)
+
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false, fmt.Errorf("checking finalizer resource %s: %w", finNodeID, err)
+			}
+			// Step 1: Finalizer resource doesn't exist — create it.
+			logger.Info("creating finalizer resource", "finalizer", finNodeID,
+				"target", target.GetName())
+			applied, applyErr := r.applyResource(ctx, graph, evalMap, watcher, finNodeID)
+			if applyErr != nil {
+				return false, fmt.Errorf("creating finalizer resource %s: %w", finNodeID, applyErr)
+			}
+			eval.scope[finNodeID] = applied.Object
+			allReady = false
+			continue
+		}
+
+		// Finalizer resource exists — put it in scope and check readyWhen.
+		eval.scope[finNodeID] = normalizeTypes(existing.Object)
+
+		if len(finNode.ReadyWhen) > 0 {
+			if err := eval.checkReadiness(finNode.ReadyWhen, eval.scope[finNodeID], finNodeID); err != nil {
+				// Step 2: readyWhen not satisfied — in progress.
+				logger.V(1).Info("finalizer not ready", "finalizer", finNodeID)
+				allReady = false
+				continue
+			}
+		}
+		// Step 3: Finalizer is ready.
+		logger.V(1).Info("finalizer ready", "finalizer", finNodeID)
+	}
+
+	return allReady, nil
+}
+
+// resourceKeyFromObj builds a resource key from a template map, matching
+// the key format used by resourceKey(). Used to map template content to
+// resource keys for finalizer lookup.
+func resourceKeyFromObj(tmpl map[string]any, defaultNS string) string {
+	if tmpl == nil {
+		return ""
+	}
+	apiVersion, _ := tmpl["apiVersion"].(string)
+	kind, _ := tmpl["kind"].(string)
+	md, _ := tmpl["metadata"].(map[string]any)
+	if md == nil {
+		return ""
+	}
+	name, _ := md["name"].(string)
+	ns, _ := md["namespace"].(string)
+	if ns == "" {
+		ns = defaultNS
+	}
+	if apiVersion == "" || kind == "" || name == "" {
+		return ""
+	}
+	gvk := schema.FromAPIVersionAndKind(apiVersion, kind)
+	return fmt.Sprintf("%s/%s/%s/%s/%s", gvk.Group, gvk.Version, gvk.Kind, ns, name)
+}
+
+// ---------------------------------------------------------------------------
 // Applied set key format
 // ---------------------------------------------------------------------------
 //
@@ -468,13 +588,29 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 // For Owns resources, this issues a Delete. For Contribute resources
 // (prefixed with "contribute:"), this issues a skeleton apply to release
 // field ownership without deleting the target.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string) error {
+//
+// If a prune candidate has finalizer nodes declared (via `finalizes`), the
+// finalization sequence runs before deletion: create the finalizer resource,
+// wait for readyWhen, then delete the target. See 004-graph-execution.md § Finalization.
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, eval *evaluator, watcher *graphWatcher) error {
 	logger := log.FromContext(ctx)
 
 	// Build current key set for fast lookup
 	currentSet := map[string]bool{}
 	for _, k := range currentKeys {
 		currentSet[k] = true
+	}
+
+	// Build resource-key-to-node-ID map from the DAG for finalizer lookup.
+	keyToNodeID := map[string]string{}
+	if dag != nil {
+		for _, node := range dag.Nodes {
+			if node.Template != nil {
+				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
+					keyToNodeID[rk] = node.ID
+				}
+			}
+		}
 	}
 
 	fieldOwner := graphFieldOwner(graph)
@@ -530,6 +666,25 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			logger.Info("prune blocked: resource has other field managers",
 				"key", key, "blockers", blockers)
 			continue // resource stays in applied set — retry next reconcile
+		}
+
+		// Finalization: if this target has finalizer nodes, run the
+		// finalization sequence before deleting.
+		if dag != nil && eval != nil {
+			nodeID := keyToNodeID[key]
+			if finalizerNodeIDs, ok := dag.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
+				ready, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, dag, eval, watcher)
+				if err != nil {
+					logger.Error(err, "finalization failed", "key", key)
+					continue // block deletion — TeardownBlocked
+				}
+				if !ready {
+					logger.Info("finalization in progress — deletion deferred",
+						"key", key, "finalizers", finalizerNodeIDs)
+					continue // block deletion until all finalizers ready
+				}
+				logger.Info("finalization complete", "key", key)
+			}
 		}
 
 		if err := r.Client.Delete(ctx, obj); err != nil {

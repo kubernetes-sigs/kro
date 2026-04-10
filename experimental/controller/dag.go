@@ -25,6 +25,11 @@ type DAG struct {
 	// Reverse adjacency list for eager scheduling — when a node completes,
 	// check its dependents to see if they can be dispatched.
 	Dependents map[string][]int
+	// Finalizers maps a target node ID to the IDs of nodes that declare
+	// `finalizes` pointing at it. These nodes are created only when the
+	// target becomes a prune candidate. The DAG records the relationship
+	// but finalization logic lives in the prune phase, not the walk.
+	Finalizers map[string][]string
 }
 
 // BuildDAG constructs a dependency graph from a node list.
@@ -38,6 +43,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		Index:      make(map[string]int, len(nodes)),
 		Shapes:     make(map[string]TemplateShape),
 		Dependents: make(map[string][]int),
+		Finalizers: make(map[string][]string),
 	}
 
 	for i, node := range nodes {
@@ -46,6 +52,15 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
 		dag.Shapes[node.ID] = node.Shape()
+	}
+
+	// Build finalizer map: target node ID → list of finalizer node IDs.
+	for _, node := range dag.Nodes {
+		if node.Finalizes != "" {
+			if _, exists := dag.Index[node.Finalizes]; exists {
+				dag.Finalizers[node.Finalizes] = append(dag.Finalizers[node.Finalizes], node.ID)
+			}
+		}
 	}
 
 	// Build reverse adjacency list: for each node, record which nodes depend on it.

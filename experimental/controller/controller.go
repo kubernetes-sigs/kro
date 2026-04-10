@@ -573,7 +573,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			allPreviousKeys[k] = true
 		}
 		if len(allPreviousKeys) > 0 {
-			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys); err != nil {
+			if err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, eval, watcher); err != nil {
 				logger.Error(err, "pruning removed resources")
 				pruneOK = false
 				// Classify prune error through the same taxonomy as node errors.
@@ -727,6 +727,30 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		logger.Error(err, "cannot determine deletion order, requeueing")
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
+
+	// Compile the active revision (if available) to get the DAG for
+	// finalizer relationships and an evaluator for template rendering.
+	var teardownDAG *DAG
+	var teardownEval *evaluator
+	if len(revisions) > 0 {
+		if _, state, compileErr := r.compileRevision(revisions[0]); compileErr == nil {
+			teardownDAG = state.compiled.dag
+			teardownEval = newEvaluator(state)
+		}
+	}
+
+	// Build resource-key-to-node-ID map for finalizer lookup during teardown.
+	keyToNodeID := map[string]string{}
+	if teardownDAG != nil {
+		for _, node := range teardownDAG.Nodes {
+			if node.Template != nil {
+				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
+					keyToNodeID[rk] = node.ID
+				}
+			}
+		}
+	}
+
 	teardownBlocked := false
 	for _, key := range deleteOrder {
 		if key == "" {
@@ -760,6 +784,27 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 				"key", key, "blockers", blockers)
 			teardownBlocked = true
 			continue // skip delete — finalizer holds
+		}
+
+		// Finalization: if this target has finalizer nodes, run the
+		// finalization sequence before deleting.
+		if teardownDAG != nil && teardownEval != nil {
+			nodeID := keyToNodeID[key]
+			if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
+				ready, finErr := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, teardownDAG, teardownEval, nil)
+				if finErr != nil {
+					logger.Error(finErr, "teardown finalization failed", "key", key)
+					teardownBlocked = true
+					continue // TeardownBlocked — can't create/check finalizer
+				}
+				if !ready {
+					logger.Info("teardown finalization in progress — deletion deferred",
+						"key", key, "finalizers", finalizerNodeIDs)
+					teardownBlocked = true
+					continue // block deletion until all finalizers ready
+				}
+				logger.Info("teardown finalization complete", "key", key)
+			}
 		}
 
 		deletedKeys[key] = true

@@ -123,6 +123,7 @@ type Node struct {
 	ID            string
 	Template      map[string]any
 	ForEach       map[string]string
+	Finalizes     string // target node ID — resource created only during prune/teardown
 	IncludeWhen   []string
 	ReadyWhen     []string // CEL conditions; all must be true for the node to be "ready"
 	PropagateWhen []string // CEL conditions; all must be true for data to flow to dependents
@@ -275,6 +276,9 @@ func parseNodeList(raw any) ([]Node, error) {
 		node.ID = id
 		if tmpl, ok := m["template"].(map[string]any); ok {
 			node.Template = tmpl
+		}
+		if fin, ok := m["finalizes"].(string); ok {
+			node.Finalizes = fin
 		}
 		if fe, ok := m["forEach"].(map[string]any); ok {
 			node.ForEach = make(map[string]string)

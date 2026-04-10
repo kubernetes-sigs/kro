@@ -160,6 +160,9 @@ func materializeNode(node Node, graphName string, generation string) map[string]
 		}
 		entry["forEach"] = fe
 	}
+	if node.Finalizes != "" {
+		entry["finalizes"] = node.Finalizes
+	}
 	if len(node.IncludeWhen) > 0 {
 		iw := make([]any, len(node.IncludeWhen))
 		for i, s := range node.IncludeWhen {

@@ -727,6 +727,7 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		logger.Error(err, "cannot determine deletion order, requeueing")
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
+	teardownBlocked := false
 	for _, key := range deleteOrder {
 		if key == "" {
 			continue
@@ -748,6 +749,17 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
 			logger.V(1).Info("skipping delete for resource without template hash (never successfully applied)", "key", key)
 			continue
+		}
+
+		// Contributor-aware deletion: check managedFields for other field
+		// managers before deleting. If present, deletion is blocked — the
+		// finalizer holds until the other manager releases.
+		ownManager := string(graphFieldOwner(graph))
+		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
+			logger.Info("teardown blocked: resource has other field managers",
+				"key", key, "blockers", blockers)
+			teardownBlocked = true
+			continue // skip delete — finalizer holds
 		}
 
 		deletedKeys[key] = true
@@ -774,6 +786,13 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			logger.V(1).Info("waiting for managed resource to be deleted", "key", key)
 			return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 		}
+	}
+
+	// If any resource deletion was blocked by third-party field managers,
+	// requeue — the finalizer holds until the other managers release.
+	if teardownBlocked {
+		logger.Info("teardown blocked: waiting for third-party field managers to release")
+		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
 
 	// Pass 3: Delete all GraphRevisions.

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -46,6 +47,50 @@ func isForceApply(obj *unstructured.Unstructured) bool {
 // Per the design (003-ownership): kro.run/<namespace>/<name>
 func graphFieldOwner(graph *unstructured.Unstructured) client.FieldOwner {
 	return client.FieldOwner("kro.run/" + graph.GetNamespace() + "/" + graph.GetName())
+}
+
+// thirdPartyFieldManagers returns field manager names on the resource that are
+// not this Graph's own manager and not the API server's defaulting manager.
+// Only SSA Apply managers are considered — Update managers (from kubectl edit,
+// plain client.Update, etc.) don't declare field ownership and shouldn't block
+// deletion. Per 003-ownership.md: before deleting an Owns resource, check
+// managedFields for other field managers (excluding the API server's own).
+func thirdPartyFieldManagers(obj *unstructured.Unstructured, ownFieldManager string) []string {
+	managedFields := obj.GetManagedFields()
+	if len(managedFields) == 0 {
+		return nil
+	}
+
+	var thirdParty []string
+	for _, mf := range managedFields {
+		manager := mf.Manager
+		// Only Apply managers count — they declare field ownership via SSA.
+		// Update managers (kubectl edit, plain Update) don't declare ownership.
+		if mf.Operation != metav1.ManagedFieldsOperationApply {
+			continue
+		}
+		// Exclude our own field manager
+		if manager == ownFieldManager {
+			continue
+		}
+		// Exclude the API server's defaulting field managers
+		if isAPIServerManager(manager) {
+			continue
+		}
+		thirdParty = append(thirdParty, manager)
+	}
+	return thirdParty
+}
+
+// isAPIServerManager returns true if the field manager name belongs to the
+// Kubernetes API server's internal defaulting/admission logic.
+func isAPIServerManager(manager string) bool {
+	switch manager {
+	case "kube-apiserver", "apiserver":
+		return true
+	default:
+		return false
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +520,16 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		objAnnotations := obj.GetAnnotations()
 		if objAnnotations == nil || objAnnotations[templateHashAnnotation] == "" {
 			continue // never successfully applied by us
+		}
+
+		// Contributor-aware deletion: check managedFields for other field
+		// managers before deleting. If present, deletion is blocked — the
+		// resource stays in the applied set for retry on the next reconcile.
+		ownManager := string(graphFieldOwner(graph))
+		if blockers := thirdPartyFieldManagers(obj, ownManager); len(blockers) > 0 {
+			logger.Info("prune blocked: resource has other field managers",
+				"key", key, "blockers", blockers)
+			continue // resource stays in applied set — retry next reconcile
 		}
 
 		if err := r.Client.Delete(ctx, obj); err != nil {

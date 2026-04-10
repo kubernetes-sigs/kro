@@ -4,23 +4,25 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	ctrl "sigs.k8s.io/controller-runtime"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
-
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
 
 var (
@@ -32,10 +34,21 @@ var (
 
 func TestMain(m *testing.M) {
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
-	// Parse flags before m.Run() so we can read test.timeout below.
 	flag.Parse()
 	ctx, cancel = context.WithCancel(context.Background())
 
+	// -----------------------------------------------------------------------
+	// 1. Build the kro binary once. Go's build cache makes this near-instant
+	//    after the first build.
+	// -----------------------------------------------------------------------
+	binaryPath, err := buildBinary()
+	if err != nil {
+		panic("building binary: " + err.Error())
+	}
+
+	// -----------------------------------------------------------------------
+	// 2. Start envtest (kube-apiserver + etcd).
+	// -----------------------------------------------------------------------
 	testEnv = &envtest.Environment{}
 
 	cfg, err := testEnv.Start()
@@ -89,71 +102,262 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// 3. Write kubeconfig for the binary.
+	// -----------------------------------------------------------------------
+	kubeconfigPath, err := writeKubeconfig(cfg)
+	if err != nil {
+		panic("writing kubeconfig: " + err.Error())
+	}
+	defer os.Remove(kubeconfigPath)
+
+	// -----------------------------------------------------------------------
+	// 4. Install test-specific CRDs (RGD, SimpleApp). The binary's
+	//    --bootstrap installs Graph and GraphRevision from embedded manifests.
+	// -----------------------------------------------------------------------
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		panic("creating client: " + err.Error())
 	}
 
-	// Pre-install all CRDs upfront. This eliminates per-test CRD creation
-	// latency — CRD establishment takes 3-5s each, and several tests need
-	// the same CRDs. Install them once at startup.
-	crds := []struct {
+	testCRDs := []struct {
 		name    string
 		builder func() *apiextensionsv1.CustomResourceDefinition
 	}{
-		{"graphs.experimental.kro.run", buildGraphCRD},
-		{"graphrevisions.experimental.kro.run", buildGraphRevisionCRD},
 		{"resourcegraphdefinitions.test.kro.run", buildRGDCRD},
 		{"simpleapps.test.kro.run", buildSimpleAppCRD},
 	}
-	for _, crd := range crds {
+	for _, crd := range testCRDs {
 		if err := k8sClient.Create(ctx, crd.builder()); err != nil {
 			panic("creating CRD " + crd.name + ": " + err.Error())
 		}
 	}
-	for _, crd := range crds {
+	for _, crd := range testCRDs {
 		if err := waitForCRD(ctx, k8sClient, crd.name); err != nil {
 			panic("waiting for CRD " + crd.name + ": " + err.Error())
 		}
 	}
 
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: scheme.Scheme,
-		Controller: config.Controller{
-			SkipNameValidation: ptr(true),
-		},
-		Metrics: server.Options{BindAddress: "0"},
-	})
+	// -----------------------------------------------------------------------
+	// 5. Start the kro binary as a subprocess. --bootstrap installs Graph
+	//    and GraphRevision CRDs and waits for them to become established.
+	// -----------------------------------------------------------------------
+	healthAddr, cmd, err := startBinary(binaryPath, kubeconfigPath)
 	if err != nil {
-		panic("creating manager: " + err.Error())
+		panic("starting binary: " + err.Error())
 	}
 
-	// Use the same SetupWithManager and default worker count that production uses.
-	shutdown, err := graphcontroller.SetupWithManager(mgr, cfg, graphcontroller.DefaultMaxConcurrentReconciles)
-	if err != nil {
-		panic("setting up controller: " + err.Error())
-	}
-
-	k8sClient = mgr.GetClient()
-
+	// Monitor for unexpected binary exit.
+	binaryDied := make(chan error, 1)
 	go func() {
-		if err := mgr.Start(ctx); err != nil {
-			panic("starting manager: " + err.Error())
-		}
+		binaryDied <- cmd.Wait()
 	}()
 
-	if !mgr.GetCache().WaitForCacheSync(ctx) {
-		panic("waiting for cache sync")
+	// -----------------------------------------------------------------------
+	// 6. Wait for readiness.
+	// -----------------------------------------------------------------------
+	if err := waitForHealthy(ctx, healthAddr, binaryDied); err != nil {
+		// Binary crashed or didn't become healthy — stop it and fail.
+		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
+		panic("waiting for binary readiness: " + err.Error())
 	}
 
+	// -----------------------------------------------------------------------
+	// 7. Run tests.
+	// -----------------------------------------------------------------------
 	code := m.Run()
 
-	// Normal exit: clean up explicitly, then propagate the exit code.
-	// os.Exit skips defers, so we must stop envtest before calling it.
-	shutdown()
+	// -----------------------------------------------------------------------
+	// 8. Teardown: stop binary, then envtest.
+	// -----------------------------------------------------------------------
+	stopBinary(cmd, binaryDied)
 	cancel()
 	if err := testEnv.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "stopping envtest: %v\n", err)
 	}
 	os.Exit(code)
+}
+
+// ---------------------------------------------------------------------------
+// Binary build
+// ---------------------------------------------------------------------------
+
+// buildBinary compiles the experimental controller binary into ./build/ in
+// the repository root. Go's build cache makes repeated builds near-instant.
+func buildBinary() (string, error) {
+	// Find the module root (where go.mod lives) so we can build relative to it.
+	// The test runs from experimental/controller/test/, so walk up.
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	moduleRoot := wd
+	for {
+		if _, err := os.Stat(filepath.Join(moduleRoot, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(moduleRoot)
+		if parent == moduleRoot {
+			return "", fmt.Errorf("cannot find go.mod from %s", wd)
+		}
+		moduleRoot = parent
+	}
+
+	buildDir := filepath.Join(moduleRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating build dir: %w", err)
+	}
+
+	binaryPath := filepath.Join(buildDir, "kro-graph-controller")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./experimental/cmd/")
+	cmd.Dir = moduleRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("go build: %w", err)
+	}
+	return binaryPath, nil
+}
+
+// ---------------------------------------------------------------------------
+// Kubeconfig
+// ---------------------------------------------------------------------------
+
+// writeKubeconfig converts a *rest.Config into a kubeconfig file and returns
+// its path. The caller is responsible for removing the file.
+func writeKubeconfig(cfg *rest.Config) (string, error) {
+	kubeconfig := clientcmdapi.NewConfig()
+	kubeconfig.Clusters["envtest"] = &clientcmdapi.Cluster{
+		Server:                   cfg.Host,
+		CertificateAuthorityData: cfg.CAData,
+		TLSServerName:            cfg.ServerName,
+	}
+	kubeconfig.AuthInfos["envtest"] = &clientcmdapi.AuthInfo{
+		ClientCertificateData: cfg.CertData,
+		ClientKeyData:         cfg.KeyData,
+		Token:                 cfg.BearerToken,
+	}
+	kubeconfig.Contexts["envtest"] = &clientcmdapi.Context{
+		Cluster:  "envtest",
+		AuthInfo: "envtest",
+	}
+	kubeconfig.CurrentContext = "envtest"
+
+	f, err := os.CreateTemp("", "kro-test-kubeconfig-*.yaml")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	data, err := clientcmd.Write(*kubeconfig)
+	if err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Binary lifecycle
+// ---------------------------------------------------------------------------
+
+// startBinary starts the kro binary as a subprocess and returns the health
+// probe address and the exec.Cmd. The binary bootstraps its own CRDs
+// (Graph, GraphRevision) before starting the controller.
+func startBinary(binaryPath, kubeconfigPath string) (healthAddr string, cmd *exec.Cmd, err error) {
+	// Pick a random port for the health probe. We bind a listener, read back
+	// the port, then close it before passing to the binary. There's a small
+	// TOCTOU window, but envtest does the same thing and it's fine in practice.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, fmt.Errorf("picking health port: %w", err)
+	}
+	healthAddr = ln.Addr().String()
+	ln.Close()
+
+	cmd = exec.Command(binaryPath,
+		"--bootstrap",
+		"--health-probe-bind-address="+healthAddr,
+		"--metrics-bind-address=0",
+	)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("starting binary: %w", err)
+	}
+	return healthAddr, cmd, nil
+}
+
+// waitForHealthy polls the binary's health endpoint until it responds 200,
+// or fails if the binary dies or the context is cancelled.
+func waitForHealthy(ctx context.Context, healthAddr string, binaryDied <-chan error) error {
+	healthURL := "http://" + healthAddr + "/healthz"
+	httpClient := &http.Client{Timeout: 500 * time.Millisecond}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(30 * time.Second)
+
+	for {
+		select {
+		case err := <-binaryDied:
+			return fmt.Errorf("binary exited unexpectedly during startup: %v", err)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout:
+			return fmt.Errorf("binary did not become healthy within 30s at %s", healthURL)
+		case <-ticker.C:
+			resp, err := httpClient.Get(healthURL)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+	}
+}
+
+// stopBinary sends SIGTERM to the binary and waits for it to exit. If it
+// doesn't exit within 10 seconds, it sends SIGKILL. A non-zero exit code
+// after SIGTERM is logged as a warning — it may indicate a shutdown bug.
+func stopBinary(cmd *exec.Cmd, binaryDied <-chan error) {
+	// Check if already dead.
+	select {
+	case <-binaryDied:
+		return
+	default:
+	}
+
+	cmd.Process.Signal(syscall.SIGTERM) //nolint:errcheck
+	start := time.Now()
+
+	select {
+	case err := <-binaryDied:
+		elapsed := time.Since(start)
+		if elapsed > 2*time.Second {
+			fmt.Fprintf(os.Stderr, "binary shutdown took %s (>2s) — investigate\n", elapsed.Round(time.Millisecond))
+		}
+		if err != nil {
+			// Non-zero exit after SIGTERM is expected (exit code 1 from
+			// signal handling). Only log truly unexpected errors.
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				if exitErr.ExitCode() > 1 {
+					fmt.Fprintf(os.Stderr, "binary exited with code %d after SIGTERM\n", exitErr.ExitCode())
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "binary exit error: %v\n", err)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		fmt.Fprintln(os.Stderr, "binary did not exit within 10s after SIGTERM, sending SIGKILL")
+		cmd.Process.Signal(syscall.SIGKILL) //nolint:errcheck
+		<-binaryDied
+	}
 }

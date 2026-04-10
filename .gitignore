@@ -6,6 +6,7 @@
 *.so
 *.dylib
 bin/*
+build/
 _artifacts/
 Dockerfile.cross
 

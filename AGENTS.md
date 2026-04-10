@@ -26,33 +26,11 @@ All implementation happens in `.worktrees/`. The main checkout stays on
 
 ## Layout
 
-### Stable code (upstream kro)
+Do not modify stable code (`pkg/`, `cmd/`, `api/`, `docs/`, `test/`)
+unless upstreaming a change to `kubernetes-sigs/kro`.
 
-Standard Kubernetes controller project layout:
-
-- `pkg/` — Core libraries (CEL engine, graph builder, controllers, runtime, etc.)
-- `cmd/` — Binary entrypoints
-- `api/` — CRD type definitions
-- `docs/design/` — Accepted design proposals
-- `examples/` — Stable example manifests
-- `test/` — Integration, E2E, and upgrade tests
-
-Do not modify stable code unless upstreaming a change to `kubernetes-sigs/kro`.
-
-### Experimental code (`experimental/`)
-
-Each experiment is named under `experimental/<name>/`. Designs live at
-`experimental/docs/design/<name>/`.
-
-- `experimental/<name>/controller/` — Go packages
-- `experimental/<name>/examples/` — Example manifests
-- `experimental/docs/design/<name>/` — Design documents
-
-### Active experiments
-
-- **`experimental/graph/`** — POC Graph controller. Runtime reconciliation
-  of Graph CRs via DAG walk, CEL evaluation, and server-side apply.
-  Imports from `pkg/cel`, `pkg/simpleschema`, `pkg/cel/conversion`.
+Experimental work lives under `experimental/`. Read
+`experimental/docs/design/` before implementing changes.
 
 ## Dependency Invariant
 

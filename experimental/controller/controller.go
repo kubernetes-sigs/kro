@@ -199,6 +199,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			return // already processed or excluded
 		}
 
+		// Finalizer nodes are dormant during normal operation — they only
+		// materialize during prune/teardown. Skip them in the walk.
+		if node.Finalizes != "" {
+			plan.SetState(dag, node.ID, NodeReady) // mark as "done" so dependents can proceed
+			return
+		}
+
 		// Scoped walk: if the node is outside the walk scope, retain
 		// previous state. This is equivalent to a change check match —
 		// the node is untouched because the triggering event doesn't
@@ -595,6 +602,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	pruneOK := true
 	if !summary.HasDataPending {
 		allPreviousKeys := map[string]bool{}
+		// Compile superseded revisions to get their DAGs for finalizer lookup.
+		// The compile cost is already paid (DAGs are cached by spec hash).
+		supersededDAGs := map[string]*DAG{} // revision name → DAG
 		for _, rev := range supersededRevisions {
 			revAppliedSet := getAppliedSet(rev)
 			if len(revAppliedSet) > 0 {
@@ -612,11 +622,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				}
 			}
 		}
+		// Compile superseded revisions to access their finalizer relationships.
+		for _, rev := range supersededRevisions {
+			if _, revState, compileErr := r.compileRevision(rev); compileErr == nil {
+				supersededDAGs[rev.GetName()] = revState.compiled.dag
+			}
+		}
 		for _, k := range previousAppliedSet {
 			allPreviousKeys[k] = true
 		}
 		if len(allPreviousKeys) > 0 {
-			fKeys, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, eval, watcher)
+			fKeys, err := r.pruneRemovedResources(ctx, graph, allPreviousKeys, appliedKeys, dag, supersededDAGs, eval, watcher)
 			if len(fKeys) > 0 {
 				if setErr := setAppliedSet(ctx, r.Client, activeRevision, append(appliedKeys, fKeys...)); setErr != nil {
 					logger.V(1).Info("failed to persist applied set after prune", "error", setErr)
@@ -790,11 +806,15 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 
 	// Build resource-key-to-node-ID map for finalizer lookup during teardown.
 	keyToNodeID := map[string]string{}
+	finalizerNodeKeys := map[string]bool{} // keys of finalizer nodes — skip from regular deletion
 	if teardownDAG != nil {
 		for _, node := range teardownDAG.Nodes {
 			if node.Template != nil {
 				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
 					keyToNodeID[rk] = node.ID
+					if node.Finalizes != "" {
+						finalizerNodeKeys[rk] = true
+					}
 				}
 			}
 		}
@@ -803,6 +823,11 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 	teardownBlocked := false
 	for _, key := range deleteOrder {
 		if key == "" {
+			continue
+		}
+		// Skip finalizer node keys — they're created and cleaned up as
+		// part of the finalization sequence, not as regular resources.
+		if finalizerNodeKeys[key] {
 			continue
 		}
 		gvk, nn := parseResourceKey(key)
@@ -863,6 +888,32 @@ func (r *GraphReconciler) reconcileDelete(ctx context.Context, graph *unstructur
 			}
 		} else {
 			logger.V(1).Info("deleted managed resource", "key", key)
+
+			// Clean up finalizer resources after the target is deleted.
+			if teardownDAG != nil {
+				nodeID := keyToNodeID[key]
+				if finalizerNodeIDs, ok := teardownDAG.Finalizers[nodeID]; ok {
+					for _, finNodeID := range finalizerNodeIDs {
+						if finIdx, ok2 := teardownDAG.Index[finNodeID]; ok2 {
+							finNode := &teardownDAG.Nodes[finIdx]
+							if finNode.Template != nil {
+								if fk := resourceKeyFromTemplate(finNode.Template, graph.GetNamespace()); fk != "" {
+									fGVK, fNN := parseResourceKey(fk)
+									finDel := &unstructured.Unstructured{}
+									finDel.SetGroupVersionKind(fGVK)
+									finDel.SetName(fNN.Name)
+									finDel.SetNamespace(fNN.Namespace)
+									if delErr := r.Client.Delete(ctx, finDel); delErr != nil {
+										logger.V(1).Info("finalizer resource cleanup", "key", fk, "error", delErr)
+									} else {
+										logger.V(1).Info("cleaned up finalizer resource", "key", fk)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 

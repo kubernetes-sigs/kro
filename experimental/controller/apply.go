@@ -594,7 +594,11 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 // If a prune candidate has finalizer nodes declared (via `finalizes`), the
 // finalization sequence runs before deletion: create the finalizer resource,
 // wait for readyWhen, then delete the target. See 004-graph-execution.md § Finalization.
-func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, eval *evaluator, watcher *graphWatcher) ([]string, error) {
+//
+// supersededDAGs provides DAGs from superseded revisions for cross-revision
+// finalizer lookups. The old revision's finalizes declarations govern its
+// resources — see 004-graph-execution.md § Prune Ordering.
+func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unstructured.Unstructured, previousKeys map[string]bool, currentKeys []string, dag *DAG, supersededDAGs map[string]*DAG, eval *evaluator, watcher *graphWatcher) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var finalizerKeys []string
 
@@ -604,11 +608,21 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		currentSet[k] = true
 	}
 
-	// Build resource-key-to-node-ID map from the DAG for finalizer lookup.
+	// Collect all DAGs (active + superseded) for finalizer lookups.
+	// The old revision's finalizes declarations govern prune of its resources.
+	allDAGs := []*DAG{}
+	if dag != nil {
+		allDAGs = append(allDAGs, dag)
+	}
+	for _, d := range supersededDAGs {
+		allDAGs = append(allDAGs, d)
+	}
+
+	// Build resource-key-to-node-ID map and reverse from ALL DAGs.
 	keyToNodeID := map[string]string{}
 	nodeIDToKey := map[string]string{}
-	if dag != nil {
-		for _, node := range dag.Nodes {
+	for _, d := range allDAGs {
+		for _, node := range d.Nodes {
 			if node.Template != nil {
 				if rk := resourceKeyFromTemplate(node.Template, graph.GetNamespace()); rk != "" {
 					keyToNodeID[rk] = node.ID
@@ -618,34 +632,43 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 		}
 	}
 
+	// findFinalizers looks up finalizer node IDs for a target across all DAGs.
+	// Returns the first DAG that declares finalizers for this target, plus the IDs.
+	findFinalizers := func(nodeID string) (*DAG, []string) {
+		for _, d := range allDAGs {
+			if fins, ok := d.Finalizers[nodeID]; ok && len(fins) > 0 {
+				return d, fins
+			}
+		}
+		return nil, nil
+	}
+
 	// Build the set of keys that must be deferred because an in-flight
 	// finalizer references them. If a prune target has finalizer nodes,
 	// each finalizer node's direct dependencies (other than the target
 	// itself) are deferred — they must remain alive while the finalizer
 	// is running.
 	deferredKeys := map[string]bool{}
-	if dag != nil {
-		for key := range previousKeys {
-			if currentSet[key] {
+	for key := range previousKeys {
+		if currentSet[key] {
+			continue
+		}
+		nodeID := keyToNodeID[key]
+		finDAG, finalizerNodeIDs := findFinalizers(nodeID)
+		if finDAG == nil {
+			continue
+		}
+		for _, finNodeID := range finalizerNodeIDs {
+			finIdx, exists := finDAG.Index[finNodeID]
+			if !exists {
 				continue
 			}
-			nodeID := keyToNodeID[key]
-			finalizerNodeIDs, ok := dag.Finalizers[nodeID]
-			if !ok || len(finalizerNodeIDs) == 0 {
-				continue
-			}
-			for _, finNodeID := range finalizerNodeIDs {
-				finIdx, exists := dag.Index[finNodeID]
-				if !exists {
-					continue
+			for depID := range finDAG.Nodes[finIdx].Dependencies {
+				if depID == nodeID {
+					continue // skip the target itself
 				}
-				for depID := range dag.Nodes[finIdx].Dependencies {
-					if depID == nodeID {
-						continue // skip the target itself
-					}
-					if dk, ok := nodeIDToKey[depID]; ok {
-						deferredKeys[dk] = true
-					}
+				if dk, ok := nodeIDToKey[depID]; ok {
+					deferredKeys[dk] = true
 				}
 			}
 		}
@@ -714,24 +737,22 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 			continue // resource stays in applied set — retry next reconcile
 		}
 
-		// Finalization: if this target has finalizer nodes, run the
-		// finalization sequence before deleting.
-		if dag != nil && eval != nil {
-			nodeID := keyToNodeID[key]
-			if finalizerNodeIDs, ok := dag.Finalizers[nodeID]; ok && len(finalizerNodeIDs) > 0 {
-				ready, fKeys, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, dag, eval, watcher)
-				finalizerKeys = append(finalizerKeys, fKeys...)
-				if err != nil {
-					logger.Error(err, "finalization failed", "key", key)
-					continue // block deletion — TeardownBlocked
-				}
-				if !ready {
-					logger.Info("finalization in progress — deletion deferred",
-						"key", key, "finalizers", finalizerNodeIDs)
-					continue // block deletion until all finalizers ready
-				}
-				logger.Info("finalization complete", "key", key)
+		// Finalization: if this target has finalizer nodes (from any revision),
+		// run the finalization sequence before deleting.
+		nodeID := keyToNodeID[key]
+		if finDAG, finalizerNodeIDs := findFinalizers(nodeID); finDAG != nil {
+			ready, fKeys, err := r.runFinalization(ctx, graph, obj, finalizerNodeIDs, finDAG, eval, watcher)
+			finalizerKeys = append(finalizerKeys, fKeys...)
+			if err != nil {
+				logger.Error(err, "finalization failed", "key", key)
+				continue // block deletion — TeardownBlocked
 			}
+			if !ready {
+				logger.Info("finalization in progress — deletion deferred",
+					"key", key, "finalizers", finalizerNodeIDs)
+				continue // block deletion until all finalizers ready
+			}
+			logger.Info("finalization complete", "key", key)
 		}
 
 		if err := r.Client.Delete(ctx, obj); err != nil {

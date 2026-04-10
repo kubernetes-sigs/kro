@@ -262,8 +262,20 @@ func (r *GraphReconciler) reconcileContribute(ctx context.Context, graph *unstru
 		return "", err
 	}
 	eval.scope[node.ID] = applied.Object
-	eval.markReady(node.ID, true) // Contribute: applied = ready
 	logger.V(1).Info("contributed to resource", "node", node.ID, "gvk", applied.GroupVersionKind(), "name", applied.GetName())
+
+	// Evaluate readyWhen if present, matching the reconcileOwns pattern.
+	// Without readyWhen, applied = ready.
+	if len(node.ReadyWhen) > 0 {
+		if err := eval.checkReadiness(node.ReadyWhen, eval.scope[node.ID], node.ID); err != nil {
+			eval.markReady(node.ID, false)
+			// Track the contribution in the applied set with a "contribute:" prefix.
+			hasStatus := evalMap["status"] != nil
+			key := contributeKey(applied, hasStatus)
+			return key, err
+		}
+	}
+	eval.markReady(node.ID, true)
 
 	// Track the contribution in the applied set with a "contribute:" prefix.
 	// This lets prune and teardown distinguish Contribute keys (skeleton apply

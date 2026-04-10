@@ -666,3 +666,242 @@ func TestCollectionWatchClusterScopedResource(t *testing.T) {
 	assert.Equal(t, ns+"-watched-b", data["source-ns"])
 	t.Log("New ConfigMap created for cluster-scoped collection member — namespace filter fix verified")
 }
+
+// TestBlockedDependencyRecoveryReconverges proves that when a dependency
+// enters an error state (NodeBlocked), dependent resources survive AND the
+// Graph reconverges after the blocker resolves.
+//
+// Regression: before the NodeExcluded/NodeBlocked split, all blocked
+// dependents were NodeExcluded. Their resources would be prune candidates
+// on the next successful reconcile because the applied set annotation
+// dropped their keys.
+//
+// This test proves the positive behavior: blocked → recovered → Graph Ready.
+//
+// Setup:
+//   - Watch node reads an external ConfigMap
+//   - Dependent Owns node references the watched data
+//   - Delete the external ConfigMap → Watch enters DataPending → dependent is Blocked
+//   - Recreate the external ConfigMap → Watch resolves → dependent reconverges
+//   - Assert: Graph reaches Ready, dependent resource exists with correct data
+func TestBlockedDependencyRecoveryReconverges(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create the watched resource.
+	watched := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "recovery-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{"version": "v1"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, watched))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-blocked-recovery",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "recovery-source"},
+						},
+					},
+					map[string]any{
+						"id": "dependent",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "recovery-dependent"},
+							"data":       map[string]any{"fromSource": "${source.data.version}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for initial convergence.
+	dep := &unstructured.Unstructured{}
+	dep.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "recovery-dependent", Namespace: ns}, dep))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}))
+	t.Log("Phase 1: Graph ready, dependent has fromSource=v1")
+
+	// Delete the watched resource → source enters DataPending → dependent is Blocked.
+	require.NoError(t, k8sClient.Delete(ctx, watched))
+
+	// Wait for Graph to leave Ready state.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			g := &unstructured.Unstructured{}
+			g.SetGroupVersionKind(GraphGVK)
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}, g); err != nil {
+				return false, nil
+			}
+			return !graphReady(g), nil
+		}))
+	t.Log("Phase 2: Graph not ready (source deleted → DataPending)")
+
+	// THE KEY ASSERTION: dependent resource still exists while source is absent.
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "recovery-dependent", Namespace: ns}, check),
+		"dependent resource must survive while source is blocked")
+	t.Log("Phase 2: dependent resource survived blocking")
+
+	// Recreate the watched resource with a new value.
+	restored := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "recovery-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{"version": "v2"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, restored))
+
+	// Wait for reconvergence: Graph should reach Ready with updated data.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-blocked-recovery", Namespace: ns}))
+
+	// Dependent should have the new value.
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "recovery-dependent", Namespace: ns}, dep))
+	depData, _, _ := unstructured.NestedStringMap(dep.Object, "data")
+	assert.Equal(t, "v2", depData["fromSource"],
+		"dependent should reconverge with the recovered source's data")
+	t.Log("Phase 3: Graph reconverged — dependent has fromSource=v2")
+}
+
+// TestContributeReadyWhenGatesGraphReadiness proves that readyWhen on a
+// Contribute node is evaluated and gates the Graph's Ready condition.
+//
+// Regression: reconcileContribute unconditionally called markReady(true),
+// ignoring readyWhen. A user who set readyWhen on a Contribute node would
+// see the Graph report Ready before the target controller actuated the
+// contributed state.
+//
+// This test proves the positive behavior: the Graph reports NotReady until
+// the Contribute node's readyWhen is satisfied.
+//
+// Setup:
+//   - Pre-create target ConfigMap
+//   - Graph watches target, then contributes an annotation
+//   - Contribute node has readyWhen checking a data field
+//   - Initially the field doesn't satisfy readyWhen → Graph NotReady
+//   - External update satisfies the condition → Graph Ready
+func TestContributeReadyWhenGatesGraphReadiness(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create target with ready=false.
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "contrib-ready-target",
+				"namespace": ns,
+			},
+			"data": map[string]any{"ready": "false"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "experimental.kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-contrib-readywhen",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "contrib-ready-target"},
+						},
+					},
+					map[string]any{
+						"id": "contrib",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name":        "contrib-ready-target",
+								"annotations": map[string]any{"contributed": "true"},
+							},
+						},
+						"readyWhen": []any{"${contrib.data.ready == 'true'}"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the contribution to be applied (annotation appears).
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(regressionCMGVK)
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-ready-target", Namespace: ns}, obj); err != nil {
+				return false, nil
+			}
+			ann := obj.GetAnnotations()
+			return ann != nil && ann["contributed"] == "true", nil
+		}))
+	t.Log("Contribution applied")
+
+	// Graph should NOT be Ready yet — readyWhen checks data.ready == 'true' but it's 'false'.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}))
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}, g))
+	assert.False(t, graphReady(g), "Graph should NOT be Ready while contrib readyWhen is unsatisfied")
+	reason := graphReadyReason(g)
+	assert.Equal(t, "NotReady", reason,
+		"Ready reason should be NotReady (readyWhen unsatisfied)")
+	t.Log("Graph is NotReady — readyWhen gates Contribute readiness")
+
+	// Update the target to satisfy readyWhen.
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "contrib-ready-target", Namespace: ns}, latest))
+	unstructured.SetNestedField(latest.Object, "true", "data", "ready")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Updated target: data.ready=true")
+
+	// Graph should now reach Ready.
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-contrib-readywhen", Namespace: ns}))
+	t.Log("Graph is Ready — contribute readyWhen satisfied")
+}

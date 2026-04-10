@@ -40,6 +40,7 @@ type reconcileState struct {
 
 	hasDataPending bool
 	hasNotReady    bool
+	hasBlocked     bool
 	hasConflict    bool
 	hasError       bool     // any node in NodeError (4xx) or prune 4xx
 	hasSystemError bool     // any node in NodeSystemError (5xx) or prune 5xx
@@ -99,6 +100,9 @@ func (s *reconcileState) deriveReadyCondition() (status ConditionStatus, reason 
 	}
 	if s.hasDataPending {
 		return ConditionUnknown, "Pending", "One or more resources waiting for upstream data"
+	}
+	if s.hasBlocked {
+		return ConditionUnknown, "Blocked", "One or more resources blocked by upstream errors"
 	}
 	if s.hasNotReady {
 		return ConditionUnknown, "NotReady", "One or more resources have not satisfied their readyWhen conditions"

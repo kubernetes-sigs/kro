@@ -48,5 +48,13 @@ func classifyAPIError(err error) apiErrorInfo {
 		}
 		return apiErrorInfo{state: NodeError, reason: "BadRequest"}
 	}
-	return apiErrorInfo{state: NodeSystemError, reason: err.Error()}
+	// Server errors (5xx) — positively identified
+	if apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) ||
+		apierrors.IsTooManyRequests(err) {
+		return apiErrorInfo{state: NodeSystemError, reason: "ServerError"}
+	}
+	// Default: unrecognized errors are client errors (NodeError).
+	// Server errors are positively identified above.
+	return apiErrorInfo{state: NodeError, reason: err.Error()}
 }

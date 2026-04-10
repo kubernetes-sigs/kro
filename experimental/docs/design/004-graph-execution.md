@@ -75,7 +75,8 @@ Each node in the walk scope lands in exactly one state per reconcile:
 | Ready       | Applied, readyWhen satisfied   | Proceed    | —                                   |
 | NotReady    | Applied, readyWhen unsatisfied | Proceed    | Converges via watch                 |
 | Pending     | Data not yet available         | Blocked    | Upstream resolves                   |
-| Excluded    | includeWhen false              | Blocked    | includeWhen inputs change           |
+| Excluded    | includeWhen false              | Excluded   | includeWhen inputs change           |
+| Blocked     | Dependency in error state      | Blocked    | Dependency resolves                 |
 | Conflict    | Field ownership contested      | Blocked    | Retries next reconcile              |
 | Error       | Client request failed (4xx)    | Blocked    | Retries next reconcile              |
 | SystemError | Server/infra failure (5xx)     | Blocked    | Retries next reconcile              |
@@ -84,9 +85,12 @@ Ready and NotReady are both "applied and in scope." readyWhen is a health signal
 Graph's aggregated status — it does not gate dependents. Dependents proceed as soon as the node's
 data is in scope.
 
-Blocked states propagate through the DAG. If A is Pending, B depends on A, B's CEL expressions
-cannot resolve — B is also Pending. No explicit propagation mechanism is needed; CEL evaluation
-failure IS the propagation. Independent branches are unaffected.
+Blocked states (Pending, Conflict, Error, SystemError) propagate as Blocked — dependents of a
+blocked node are also blocked, and their previous applied keys are retained. Excluded propagates
+as Excluded — dependents of an excluded node are also excluded, and their resources are prune
+candidates. The distinction matters: Excluded is definitive absence (includeWhen evaluated to
+false), Blocked is uncertain absence (the resource might appear once the upstream error resolves).
+Pruning a blocked node's resources would be data loss. Independent branches are unaffected.
 
 ### Wind
 
@@ -132,7 +136,7 @@ Not all absent resources should be pruned:
 
 - **Definitive absence** — excluded by includeWhen, or removed from the active revision. Safe to
   prune.
-- **Uncertain absence** — a dependency is Pending, Conflict, or Error. The resource might appear
+- **Uncertain absence** — a dependency is Pending, Error, or SystemError. The resource might appear
   once the blocker resolves. Not safe to prune.
 
 Prune candidates are removed in reverse dependency order. Owns nodes delete the resource. Contribute

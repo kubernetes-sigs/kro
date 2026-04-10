@@ -677,11 +677,19 @@ func (r *GraphReconciler) pruneRemovedResources(ctx context.Context, graph *unst
 
 	fieldOwner := graphFieldOwner(graph)
 
+	// Collect prune candidates: keys in previous but not current.
+	var pruneCandidates []string
 	for key := range previousKeys {
-		if currentSet[key] {
-			continue // still exists in current cycle
+		if !currentSet[key] {
+			pruneCandidates = append(pruneCandidates, key)
 		}
+	}
 
+	// Sort prune candidates in reverse dependency order so dependents are
+	// removed before their dependencies.
+	pruneCandidates = pruneOrder(pruneCandidates, allDAGs, graph.GetNamespace())
+
+	for _, key := range pruneCandidates {
 		// Defer deletion of resources that are dependencies of in-flight
 		// finalizer nodes — they must remain alive while the finalizer runs.
 		if deferredKeys[key] {
@@ -830,6 +838,72 @@ func (r *GraphReconciler) findManagedResourceKeys(ctx context.Context, graph *un
 	}
 
 	return keys, nil
+}
+
+// pruneOrder sorts resource keys in reverse dependency order using all
+// available DAGs (active + superseded). Dependents are deleted before
+// their dependencies. Keys that don't match any DAG node are placed first
+// (highest position — deleted first).
+func pruneOrder(keys []string, dags []*DAG, defaultNS string) []string {
+	// Build a map from resource key → topological position across all DAGs.
+	// Use the highest position found across all DAGs for each key.
+	keyPosition := map[string]int{}
+	maxPosition := 0
+
+	for _, d := range dags {
+		// Build position map for this DAG.
+		topoPosition := make(map[int]int, len(d.TopologicalOrder))
+		for pos, nodeIdx := range d.TopologicalOrder {
+			topoPosition[nodeIdx] = pos
+		}
+
+		for i, node := range d.Nodes {
+			if node.Template == nil {
+				continue
+			}
+			rk := resourceKeyFromTemplate(node.Template, defaultNS)
+			if rk == "" {
+				continue
+			}
+			pos := topoPosition[i]
+			if pos > maxPosition {
+				maxPosition = pos
+			}
+			if existing, ok := keyPosition[rk]; !ok || pos > existing {
+				keyPosition[rk] = pos
+			}
+		}
+	}
+
+	type scored struct {
+		key      string
+		position int
+	}
+	scoredKeys := make([]scored, 0, len(keys))
+	for _, key := range keys {
+		pos, ok := keyPosition[key]
+		if !ok {
+			// Also check contribute keys against their underlying resource key.
+			if resKey, _ := parseContributeKey(key); resKey != "" {
+				pos, ok = keyPosition[resKey]
+			}
+		}
+		if !ok {
+			pos = maxPosition + 1 // unmatched → deleted first
+		}
+		scoredKeys = append(scoredKeys, scored{key: key, position: pos})
+	}
+
+	// Reverse topological: highest position first.
+	sort.Slice(scoredKeys, func(i, j int) bool {
+		return scoredKeys[i].position > scoredKeys[j].position
+	})
+
+	result := make([]string, len(scoredKeys))
+	for i, s := range scoredKeys {
+		result[i] = s.key
+	}
+	return result
 }
 
 // deletionOrder returns resource keys ordered for deletion: reverse

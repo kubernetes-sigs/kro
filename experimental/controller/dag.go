@@ -213,7 +213,8 @@ const (
 	NodePending     NodeState = iota // Not yet processed
 	NodeReady                        // Applied and readyWhen satisfied
 	NodeNotReady                     // Applied but readyWhen not satisfied
-	NodeExcluded                     // Excluded by includeWhen or contagious exclusion
+	NodeExcluded                     // Definitive absence: excluded by includeWhen evaluating to false
+	NodeBlocked                      // Uncertain absence: dependency in Error/Conflict/SystemError/DataPending
 	NodeDataPending                  // CEL expression couldn't resolve (retryable)
 	NodeError                        // Client request failed (4xx)
 	NodeConflict                     // SSA 409 — field ownership taken by another actor
@@ -259,28 +260,32 @@ func (ps *PlanState) DependencyPropagateBlocked(node *Node) string {
 	return ""
 }
 
-// SetState updates a node's state and propagates contagious exclusion.
-// When a node is excluded, all nodes that depend on it are also excluded.
-// NotReady does NOT propagate exclusion — data is in scope regardless.
+// SetState updates a node's state and propagates to dependents.
+// NodeExcluded propagates as NodeExcluded (definitive absence).
+// NodeBlocked, NodeDataPending, NodeError, NodeConflict, NodeSystemError
+// propagate as NodeBlocked (uncertain absence).
+// NotReady does NOT propagate — data is in scope regardless.
 func (ps *PlanState) SetState(dag *DAG, id string, state NodeState) {
 	ps.States[id] = state
 
-	// Propagate contagious exclusion
-	if state == NodeExcluded || state == NodeDataPending || state == NodeError || state == NodeConflict || state == NodeSystemError {
-		ps.propagateExclusion(dag, id)
+	switch state {
+	case NodeExcluded:
+		ps.propagateState(dag, id, NodeExcluded)
+	case NodeBlocked, NodeDataPending, NodeError, NodeConflict, NodeSystemError:
+		ps.propagateState(dag, id, NodeBlocked)
 	}
 }
 
-// propagateExclusion marks all downstream dependents of a node as excluded.
-func (ps *PlanState) propagateExclusion(dag *DAG, excludedID string) {
+// propagateState marks all downstream dependents of a node with the target state.
+func (ps *PlanState) propagateState(dag *DAG, sourceID string, targetState NodeState) {
 	for _, node := range dag.Nodes {
 		if ps.States[node.ID] != NodePending {
 			continue // already processed
 		}
-		if node.Dependencies[excludedID] {
-			ps.States[node.ID] = NodeExcluded
-			// Recurse: this node's dependents are also excluded
-			ps.propagateExclusion(dag, node.ID)
+		if node.Dependencies[sourceID] {
+			ps.States[node.ID] = targetState
+			// Recurse: this node's dependents are also propagated
+			ps.propagateState(dag, node.ID, targetState)
 		}
 	}
 }
@@ -289,6 +294,7 @@ func (ps *PlanState) propagateExclusion(dag *DAG, excludedID string) {
 type PlanSummary struct {
 	HasDataPending bool
 	HasNotReady    bool
+	HasBlocked     bool
 	HasConflict    bool
 	HasError       bool
 	HasSystemError bool
@@ -306,6 +312,8 @@ func (ps *PlanState) Summary() PlanSummary {
 			s.HasNotReady = true
 		case NodeDataPending:
 			s.HasDataPending = true
+		case NodeBlocked:
+			s.HasBlocked = true
 		case NodeExcluded:
 			// Counted but not surfaced — excluded nodes propagate through
 			// the DAG via contagious exclusion and are observable in

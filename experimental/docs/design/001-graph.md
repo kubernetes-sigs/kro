@@ -361,12 +361,13 @@ or `Unknown` for too long.
 | Reason        | Status    | Node State  | Meaning                                        |
 | ------------- | --------- | ----------- | ---------------------------------------------- |
 | `Ready`       | `True`    | Ready       | All resources reconciled                       |
-| `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
 | `NotReady`    | `Unknown` | NotReady    | Applied but readyWhen conditions not met       |
+| `Pending`     | `Unknown` | Pending     | Waiting for upstream data                      |
+| `Blocked`     | `Unknown` | Blocked     | Dependency in error state, waiting for resolve |
 | `NotAccepted` | `False`   | —           | Spec invalid; rollup of Accepted=False         |
+| `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 | `Error`       | `False`   | Error       | Client request failed (4xx)                    |
 | `SystemError` | `False`   | SystemError | Server or infrastructure failure (5xx)         |
-| `Conflict`    | `False`   | Conflict    | SSA field ownership contested by another actor |
 
 ```yaml
 status:

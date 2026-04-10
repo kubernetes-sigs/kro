@@ -265,9 +265,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 				continue // resolved, good
 			case NodePending:
 				return // dependency still inflight — don't dispatch yet, don't exclude
-			default:
-				// Excluded, DataPending, Error, SystemError, Conflict — blocked
+			case NodeExcluded:
+				// Definitive absence — propagate as Excluded
 				plan.SetState(dag, node.ID, NodeExcluded)
+				return
+			default:
+				// Blocked, DataPending, Error, SystemError, Conflict — uncertain absence
+				plan.SetState(dag, node.ID, NodeBlocked)
 				return
 			}
 		}
@@ -531,8 +535,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			nodeErrors = append(nodeErrors, fmt.Sprintf("%s: %s", node.ID, info.reason))
 			logger.V(0).Info("error on node", "node", node.ID,
 				"state", info.state, "reason", info.reason, "error", res.err)
-			// Dispatch dependents — tryDispatch will see NodeError
-			// and exclude them via the dependency check.
+			// Retain previous keys — the resource may still exist in the cluster.
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+			// Dispatch dependents — tryDispatch will see the error state
+			// and mark them as Blocked via the dependency check.
 			for _, depIdx := range dag.Dependents[node.ID] {
 				tryDispatch(depIdx)
 			}
@@ -559,6 +567,12 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		plan.SetState(dag, node.ID, res.state)
 		if res.state == NodeReady || res.state == NodeNotReady {
 			appliedKeys = append(appliedKeys, res.keys...)
+		} else {
+			// Non-success states (DataPending, Conflict, SystemError) —
+			// retain previous keys since the resource may still exist.
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
 		}
 
 		// Reset Contribute shape when a conflicted target disappears.
@@ -604,6 +618,17 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 	}
 
+	// Retain previous keys for blocked nodes. Blocked nodes were never
+	// dispatched to workers, so their keys aren't in appliedKeys yet.
+	// Without this, blocked resources would appear as prune candidates.
+	for _, node := range dag.Nodes {
+		if plan.States[node.ID] == NodeBlocked {
+			if prevKeys, ok := state.previousKeys[node.ID]; ok {
+				appliedKeys = append(appliedKeys, prevKeys...)
+			}
+		}
+	}
+
 	// Derive aggregate state from the DAG plan
 	summary := plan.Summary()
 
@@ -635,7 +660,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	//
 	// The prune candidate set is: union(all previous keys) - current keys.
 	pruneOK := true
-	if !summary.HasDataPending {
+	// Prune is safe only when all blocking states that represent uncertain
+	// absence are clear. Conflict is NOT in the gate — conflicted resources
+	// are known to exist and prune is the recovery mechanism.
+	pruneSafe := !summary.HasDataPending && !summary.HasError && !summary.HasSystemError
+	if pruneSafe {
 		allPreviousKeys := map[string]bool{}
 		// Compile superseded revisions to get their DAGs for finalizer lookup.
 		// The compile cost is already paid (DAGs are cached by spec hash).
@@ -700,6 +729,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		appliedCount:   summary.ReadyCount,
 		hasDataPending: summary.HasDataPending,
 		hasNotReady:    summary.HasNotReady,
+		hasBlocked:     summary.HasBlocked,
 		hasConflict:    summary.HasConflict,
 		hasError:       summary.HasError,
 		hasSystemError: summary.HasSystemError,
@@ -714,7 +744,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 	// — retries. The environment can change independently of the controller's
 	// inputs, so we always retry.
 	allReady := rstate.accepted && !summary.HasDataPending && !summary.HasNotReady &&
-		!summary.HasConflict && !summary.HasError && !summary.HasSystemError
+		!summary.HasBlocked && !summary.HasConflict && !summary.HasError && !summary.HasSystemError
 	r.updateRevisionStatus(ctx, activeRevision, supersededRevisions, allReady, pruneOK)
 
 	if !allReady {

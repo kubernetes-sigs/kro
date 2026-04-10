@@ -47,6 +47,7 @@ spec:
             internal.kro.run/graph-generation: "3"
             internal.kro.run/graph-name: my-app
             internal.kro.run/node-id: deployment
+          annotations:
             internal.kro.run/template-hash: f7e8d9c0b1a2
         spec:
           replicas: 3
@@ -71,6 +72,7 @@ spec:
             internal.kro.run/graph-generation: "3"
             internal.kro.run/graph-name: my-app
             internal.kro.run/node-id: service
+          annotations:
             internal.kro.run/template-hash: 1a2b3c4d5e6f
         spec:
           selector: ${deployment.spec.selector.matchLabels}

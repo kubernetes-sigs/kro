@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kubernetes-sigs/kro/experimental/crds"
+	"github.com/kubernetes-sigs/kro/experimental/deploy"
 )
 
 // bootstrap applies the embedded CRD manifests via server-side apply and waits
@@ -31,7 +31,7 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 		return fmt.Errorf("creating apiextensions client: %w", err)
 	}
 
-	entries, err := fs.ReadDir(crds.YAMLs, ".")
+	entries, err := fs.ReadDir(deploy.CRDs, ".")
 	if err != nil {
 		return fmt.Errorf("reading embedded CRDs: %w", err)
 	}
@@ -41,7 +41,7 @@ func bootstrap(ctx context.Context, cfg *rest.Config) error {
 		if entry.IsDir() {
 			continue
 		}
-		data, err := fs.ReadFile(crds.YAMLs, entry.Name())
+		data, err := fs.ReadFile(deploy.CRDs, entry.Name())
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", entry.Name(), err)
 		}

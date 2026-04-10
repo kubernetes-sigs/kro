@@ -434,7 +434,7 @@ krocodile-run: ## Run the graph controller locally (bootstraps CRDs automaticall
 
 .PHONY: krocodile-apply
 krocodile-apply: ko ## Build and deploy the graph controller to the current cluster
-	$(KO) apply -f experimental/crds/ -f experimental/deploy/
+	$(KO) apply -f experimental/deploy/
 
 .PHONY: krocodile-test
 krocodile-test: ## Run experimental graph controller tests

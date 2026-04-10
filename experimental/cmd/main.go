@@ -4,9 +4,9 @@
 //
 //	go run ./experimental/cmd/ --bootstrap
 //
-// Or install CRDs manually first:
+// Or install manifests manually first:
 //
-//	kubectl apply -f experimental/crds/
+//	kubectl apply -f experimental/deploy/
 //	go run ./experimental/cmd/
 package main
 

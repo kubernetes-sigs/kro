@@ -1,5 +1,4 @@
 # Deployment for the experimental Graph controller.
-# CRDs are applied separately via `ko apply -f experimental/crds/`.
 # --bootstrap is not passed here; it's for `go run` local dev only.
 apiVersion: apps/v1
 kind: Deployment

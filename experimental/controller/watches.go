@@ -4,10 +4,22 @@
 // but simplified for the Graph controller's needs:
 //
 //   - WatchManager: one metadata-only informer per GVR, ref-counted.
+//     Per-graph owner IDs ("graph/ns/name") prevent one graph's
+//     releaseWatch from killing an informer another graph still needs.
+//
 //   - WatchCoordinator: routes events from informers to the correct Graph(s)
 //     using scalar (name-based) and collection (selector-based) reverse indexes.
+//     routeEvent holds RLock; index mutations hold Lock (write-preferring).
+//
 //   - Reconcile-time registration: watches are declared during each reconcile.
 //     The double-buffer (current/previous) pattern auto-cleans stale watches.
+//
+//   - Batched index updates: DAG node goroutines buffer watch requests on
+//     the per-graph graphWatcher (no coordinator lock). doneGraph flushes
+//     all requests under a single Lock acquisition. This keeps Lock
+//     acquisitions at 1 per reconcile regardless of node count, preventing
+//     write-preferring RWMutex starvation of routeEvent's RLock under
+//     high concurrency (many parallel reconciles with multiple workers).
 package graphcontroller
 
 import (
@@ -307,33 +319,50 @@ func newWatchCoordinator(watches *WatchManager, enqueue func(graphKey), log logr
 }
 
 // graphWatcher is a scoped handle for a single Graph's reconcile cycle.
+//
+// Watch requests are buffered locally during the reconcile. The coordinator's
+// write lock (mu.Lock) is taken once at done(true) to flush the buffer,
+// instead of once per addWatch call. This reduces Lock acquisitions per
+// reconcile from N (node count) to 1, eliminating write-preferring RWMutex
+// starvation of routeEvent's RLock under high concurrency.
+//
+// The per-graphWatcher mutex protects concurrent writes from DAG node
+// goroutines. It's per-graph (not global), so contention is minimal.
 type graphWatcher struct {
-	coord *WatchCoordinator
-	graph graphKey
+	coord   *WatchCoordinator
+	graph   graphKey
+	mu      sync.Mutex
+	pending []watchRequest
 }
 
 func (c *WatchCoordinator) forGraph(graph graphKey) *graphWatcher {
 	return &graphWatcher{coord: c, graph: graph}
 }
 
-// watchScalar registers a scalar watch (specific name).
+// watchScalar buffers a scalar watch request (specific name).
+// The request is flushed to the coordinator's indexes in done(true).
 func (gw *graphWatcher) watchScalar(nodeID string, gvr schema.GroupVersionResource, name, namespace string) {
-	gw.coord.addWatch(gw.graph, watchRequest{
+	gw.mu.Lock()
+	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
 		gvr:       gvr,
 		name:      name,
 		namespace: namespace,
 	})
+	gw.mu.Unlock()
 }
 
-// watchCollection registers a collection watch (label selector).
+// watchCollection buffers a collection watch request (label selector).
+// The request is flushed to the coordinator's indexes in done(true).
 func (gw *graphWatcher) watchCollection(nodeID string, gvr schema.GroupVersionResource, namespace string, sel labels.Selector) {
-	gw.coord.addWatch(gw.graph, watchRequest{
+	gw.mu.Lock()
+	gw.pending = append(gw.pending, watchRequest{
 		nodeID:    nodeID,
 		gvr:       gvr,
 		namespace: namespace,
 		selector:  sel,
 	})
+	gw.mu.Unlock()
 }
 
 // getResourceVersion returns the resourceVersion from the metadata informer
@@ -356,15 +385,31 @@ func (gw *graphWatcher) drainTriggers() map[string]bool {
 }
 
 // done finalizes the watch set for this reconcile cycle.
+//
+// On commit, the buffered requests are flushed to the coordinator's
+// indexes under a single Lock acquisition, then ensureWatch is called
+// for each GVR outside the lock.
+//
+// On abort (reconcile error), the buffer is discarded. This is safe
+// because buffered requests were never applied to the coordinator's
+// indexes — the previous cycle's index entries remain intact and
+// continue routing events correctly. Failed reconciles don't start
+// new informers; the retry will call doneGraph on success.
 func (gw *graphWatcher) done(commit bool) {
+	// Lock is defense-in-depth: all DAG node goroutines have returned
+	// by the time done is called (the coordinator drains the results
+	// channel before returning). No concurrent appends are possible.
+	gw.mu.Lock()
+	pending := gw.pending
+	gw.pending = nil
+	gw.mu.Unlock()
+
 	if commit {
-		gw.coord.doneGraph(gw.graph)
-	} else {
-		gw.coord.abortGraph(gw.graph)
+		gw.coord.doneGraph(gw.graph, pending)
 	}
 }
 
-func (c *WatchCoordinator) addWatch(graph graphKey, req watchRequest) {
+func (c *WatchCoordinator) doneGraph(graph graphKey, pending []watchRequest) {
 	c.mu.Lock()
 
 	state, ok := c.graphs[graph]
@@ -376,46 +421,40 @@ func (c *WatchCoordinator) addWatch(graph graphKey, req watchRequest) {
 		c.graphs[graph] = state
 	}
 
-	// Handle nodeID reuse with different target
-	if old, exists := state.current[req.nodeID]; exists {
-		if !sameTarget(old, &req) {
-			if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, old) {
-				c.removeFromIndexesLocked(graph, old)
+	// Flush all buffered watch requests into state.current and indexes.
+	// This is the sole write-lock acquisition for the entire reconcile cycle.
+	//
+	// Lifetime note: state.current stores pointers into the pending slice.
+	// The backing array is pinned by these pointers until the next doneGraph
+	// swaps current→previous and reallocates current. This is correct but
+	// means the entire pending array stays live, not individual elements.
+	newGVRs := make(map[schema.GroupVersionResource]bool)
+	for i := range pending {
+		req := &pending[i]
+
+		// Handle nodeID reuse with different target
+		if old, exists := state.current[req.nodeID]; exists {
+			if !sameTarget(old, req) {
+				if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, old) {
+					c.removeFromIndexesLocked(graph, old)
+				}
 			}
 		}
-	}
 
-	state.current[req.nodeID] = &req
+		state.current[req.nodeID] = req
 
-	// Only add to index if not already covered by previous cycle
-	if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, &req) {
-		if req.isCollection() {
-			c.addCollectionLocked(graph, req)
-		} else {
-			c.addScalarLocked(graph, req)
+		// Only add to index if not already covered by previous cycle
+		if prev, shared := state.previous[req.nodeID]; !shared || !sameTarget(prev, req) {
+			if req.isCollection() {
+				c.addCollectionLocked(graph, *req)
+			} else {
+				c.addScalarLocked(graph, *req)
+			}
 		}
+		newGVRs[req.gvr] = true
 	}
 
-	gvr := req.gvr
-	c.mu.Unlock()
-
-	// Ensure informer running (outside lock). Per-graph ownerID enables
-	// correct ref-counting: releaseWatch for one graph can't kill an
-	// informer another graph still needs.
-	if err := c.watches.ensureWatch(gvr, graphOwnerID(graph)); err != nil {
-		c.log.Error(err, "failed to ensure watch", "gvr", gvr)
-	}
-}
-
-func (c *WatchCoordinator) doneGraph(graph graphKey) {
-	c.mu.Lock()
-
-	state, ok := c.graphs[graph]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-
+	// Clean stale entries from previous cycle.
 	var affectedGVRs []schema.GroupVersionResource
 	for nodeID, oldReq := range state.previous {
 		if newReq, active := state.current[nodeID]; active && sameTarget(newReq, oldReq) {
@@ -434,36 +473,22 @@ func (c *WatchCoordinator) doneGraph(graph graphKey) {
 	toRelease := c.gvrsToReleaseLocked(state.previous, affectedGVRs)
 	c.mu.Unlock()
 
+	// Ensure informers running for watched GVRs (outside lock).
+	// ensureWatch is idempotent and ref-counted — calling it for
+	// GVRs already running just bumps the owner set.
+	//
+	// Timing: ensureWatch runs here (post-reconcile) rather than
+	// during watchScalar/watchCollection. For a brand-new GVR, the
+	// informer won't be running during its first reconcile cycle.
+	// This is safe: getResourceVersion returns "" which triggers a
+	// fallback GET in applyResource/applyContribution. On subsequent
+	// reconciles the informer is already running from this call.
 	ownerID := graphOwnerID(graph)
-	for _, gvr := range toRelease {
-		c.watches.releaseWatch(gvr, ownerID)
-	}
-}
-
-func (c *WatchCoordinator) abortGraph(graph graphKey) {
-	c.mu.Lock()
-
-	state, ok := c.graphs[graph]
-	if !ok {
-		c.mu.Unlock()
-		return
-	}
-
-	var affectedGVRs []schema.GroupVersionResource
-	for nodeID, req := range state.current {
-		if prev, shared := state.previous[nodeID]; shared && sameTarget(prev, req) {
-			continue
+	for gvr := range newGVRs {
+		if err := c.watches.ensureWatch(gvr, ownerID); err != nil {
+			c.log.Error(err, "failed to ensure watch", "gvr", gvr)
 		}
-		c.removeFromIndexesLocked(graph, req)
-		affectedGVRs = append(affectedGVRs, req.gvr)
 	}
-	state.current = make(map[string]*watchRequest)
-
-	// After abort, active watches are in state.previous (unchanged).
-	toRelease := c.gvrsToReleaseLocked(state.previous, affectedGVRs)
-	c.mu.Unlock()
-
-	ownerID := graphOwnerID(graph)
 	for _, gvr := range toRelease {
 		c.watches.releaseWatch(gvr, ownerID)
 	}
@@ -643,7 +668,7 @@ func (c *WatchCoordinator) removeCollectionLocked(graph graphKey, req *watchRequ
 
 // gvrsToReleaseLocked returns the subset of affectedGVRs that the graph no
 // longer actively watches. activeWatches is the graph's committed watch set
-// (state.previous after doneGraph's swap, or state.previous in abortGraph).
+// (state.previous after doneGraph's buffer-swap).
 // Must be called with c.mu held.
 func (c *WatchCoordinator) gvrsToReleaseLocked(activeWatches map[string]*watchRequest, affectedGVRs []schema.GroupVersionResource) []schema.GroupVersionResource {
 	activeGVRs := make(map[schema.GroupVersionResource]bool, len(activeWatches))

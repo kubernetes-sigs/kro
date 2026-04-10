@@ -190,8 +190,14 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	results := make(chan nodeResult, len(dag.Nodes))
 	inflight := 0
-	dispatched := make(map[int]bool, len(dag.Nodes)) // guards against double-dispatch
-	var nodeErrors []string                          // "nodeID: reason" for status reporting
+	// dispatched guards against double-dispatch: when a node has multiple
+	// parents that complete, each parent's completion calls tryDispatch on
+	// shared dependents. Without this guard the second call sees NodePending
+	// (state hasn't changed yet) and spawns a duplicate goroutine — two
+	// goroutines writing to the same maps causes concurrent-map-writes panic.
+	// Coordinator-local (single-threaded), no synchronization needed.
+	dispatched := make(map[int]bool, len(dag.Nodes))
+	var nodeErrors []string // "nodeID: reason" for status reporting
 
 	// tryDispatch checks if a node can be dispatched. Three outcomes:
 	// 1. All dependencies resolved → dispatch to worker

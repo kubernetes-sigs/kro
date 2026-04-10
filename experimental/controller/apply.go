@@ -318,9 +318,10 @@ func (r *GraphReconciler) applyResource(ctx context.Context, graph *unstructured
 	lbls[LabelGraphNamespace] = graph.GetNamespace()
 	obj.SetLabels(lbls)
 
-	// Watch before apply — ensures the metadata informer is running.
-	// Use the DAG node ID for the watch registration so that scoped walks
-	// can map watch events back to DAG nodes.
+	// Buffer a watch for this resource. The request is flushed to the
+	// coordinator's indexes at done(true), not immediately — this avoids
+	// per-node Lock acquisitions on the coordinator. Use the DAG node ID
+	// so that scoped walks can map watch events back to DAG nodes.
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {
 		watcher.watchScalar(nodeID, gvr, obj.GetName(), obj.GetNamespace())
@@ -450,7 +451,7 @@ func (r *GraphReconciler) applyContribution(ctx context.Context, graph *unstruct
 		obj.SetNamespace(graph.GetNamespace())
 	}
 
-	// Watch the target resource for reactive updates.
+	// Buffer a watch for the target resource (flushed at done(true)).
 	// Use the DAG node ID for scoped walk trigger resolution.
 	gvr := gvkToGVR(obj.GroupVersionKind())
 	if watcher != nil {

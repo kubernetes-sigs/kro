@@ -363,23 +363,28 @@ func extractReferencedIDs(node Node) map[string]bool {
 }
 
 // extractReferencedSections scans a Node for all ${...} expressions and returns
-// two maps:
+// three maps:
 //   - depSections: for each dependency, which top-level sections are referenced
 //     (e.g., "deploy" → {"spec": true, "metadata": true})
 //   - selfSections: which top-level sections of the node's own observed resource
 //     are referenced by readyWhen and propagateWhen
+//   - readinessDeps: upstream node IDs referenced via .ready() in gate
+//     expressions. These reference runtime readiness state not captured
+//     by section-scoped hashing.
 //
 // Section scoping is the correct mechanism for input hashing — metadata.resourceVersion
 // changes on every update, so full-object hashing would always differ. By hashing only
 // the sections a node's expressions actually reference, the input hash is stable when
 // unrelated fields change.
-func extractReferencedSections(node Node) (depSections map[string]map[string]bool, selfSections map[string]bool) {
+func extractReferencedSections(node Node) (depSections map[string]map[string]bool, selfSections map[string]bool, readinessDeps map[string]bool) {
 	depSections = map[string]map[string]bool{}
 	selfSections = map[string]bool{}
+	readinessDeps = map[string]bool{}
 
 	// Helper: extract (identifier, section) from a CEL expression.
 	// For "deploy.spec.replicas" → ("deploy", "spec")
 	// For "deploy.metadata.name" → ("deploy", "metadata")
+	// For "deploy.ready()" → ("deploy", "") — function call, not a section
 	// For "size(items)" → ("", "") — builtins filtered out
 	extractIDAndSection := func(expr string) (string, string) {
 		id := extractFirstIdentifier(expr)
@@ -398,6 +403,11 @@ func extractReferencedSections(node Node) (depSections map[string]map[string]boo
 		}
 		if end == 0 {
 			return id, ""
+		}
+		// Check if this is a function call (followed by '(').
+		// dep.ready() is a CEL function, not a section access.
+		if end < len(rest) && rest[end] == '(' {
+			return id, "" // function call, not a section
 		}
 		return id, rest[:end]
 	}
@@ -461,7 +471,16 @@ func extractReferencedSections(node Node) (depSections map[string]map[string]boo
 				continue
 			}
 			id, section := extractIDAndSection(expr)
-			if id == "" || section == "" {
+			if id == "" {
+				continue
+			}
+			if section == "" {
+				// Function call on upstream node (e.g., dep.ready()).
+				// This references runtime state that isn't captured by
+				// section-scoped hashing — track it separately.
+				if id != node.ID {
+					readinessDeps[id] = true
+				}
 				continue
 			}
 			if id == node.ID {
@@ -475,7 +494,7 @@ func extractReferencedSections(node Node) (depSections map[string]map[string]boo
 		}
 	}
 
-	return depSections, selfSections
+	return depSections, selfSections, readinessDeps
 }
 
 // collectStrings recursively collects all string values from a value tree.

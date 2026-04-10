@@ -48,7 +48,7 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 
 	for i, node := range nodes {
 		node.Dependencies = extractReferencedIDs(node)
-		node.DepSections, node.SelfSections = extractReferencedSections(node)
+		node.DepSections, node.SelfSections, node.ReadinessDeps = extractReferencedSections(node)
 		dag.Nodes[i] = node
 		dag.Index[node.ID] = i
 		dag.Shapes[node.ID] = node.Shape()

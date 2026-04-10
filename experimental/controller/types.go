@@ -151,6 +151,15 @@ type Node struct {
 	// re-evaluate only the gate conditions.
 	// Populated by BuildDAG; nil before that.
 	SelfSections map[string]bool
+
+	// ReadinessDeps is the set of upstream node IDs whose readiness state
+	// must be checked even when the section-scoped input hash matches. These
+	// are nodes referenced via .ready() in readyWhen or propagateWhen — a
+	// runtime property that doesn't map to any object section. When any
+	// ReadinessDep's plan state changes between reconcile cycles, the node
+	// re-evaluates its gate conditions instead of skipping entirely.
+	// Populated by BuildDAG; nil before that.
+	ReadinessDeps map[string]bool
 }
 
 // Shape returns the TemplateShape of this node's template.

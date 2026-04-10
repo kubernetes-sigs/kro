@@ -102,20 +102,8 @@ Forward topological walk through the scoped nodes. For each node:
 3. **Change check** — hash the node's inputs and compare against the previous reconcile's hash. If
    the hash matches, the node's inputs haven't changed — evaluation would produce the same result.
    The node retains its previous state, data in scope, and applied set entries. Skip to the next
-   node.
-
-   The hash is scoped to the sections of each dependency that the node's CEL expressions actually
-   reference. At compile time, the referenced top-level sections are identified from CEL field access
-   paths (`.spec`, `.status`, `.data`, `.metadata`). At runtime, only those sections are hashed.
-   `metadata.resourceVersion` changes on every update, so full-object hashing would always differ and
-   the check would never fire. Section scoping is the correct mechanism, not an optimization.
-
-   For Watch nodes, the input is the observed object itself — GET (or informer cache read), then hash
-   the referenced sections. For all other nodes, the inputs are the dependency data already in scope.
-   For Owns and Contribute nodes, the inputs also include sections of the node's own observed resource
-   that readyWhen and propagateWhen reference — these change independently of upstream dependencies.
-   When only self inputs changed (e.g., a Deployment's status updated but config didn't), the template
-   is unchanged — skip template evaluation and apply, re-evaluate only the gate conditions.
+   node. When only gate-relevant inputs changed, skip template evaluation and apply, re-evaluate
+   only the gate conditions.
 
 4. **includeWhen** — evaluate. If false, mark Excluded.
 5. **Dispatch by shape:**

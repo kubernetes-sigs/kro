@@ -130,8 +130,10 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 	t.Log("Simulated rollout: replicas=5, updatedReplicas=3, image=nginx:1.26")
 
-	// Wait a bit for the reconcile to process the change.
-	time.Sleep(2 * time.Second)
+	// Wait for the reconcile to process the change — observe completion
+	// via resourceVersion stability rather than guessing duration.
+	require.NoError(t, waitForSettle(ctx, k8sClient, GraphGVK,
+		types.NamespacedName{Name: "test-propagate-when", Namespace: ns}))
 
 	// Service should still have the OLD image because propagateWhen is
 	// unsatisfied — the transitional state should not flow to dependents.

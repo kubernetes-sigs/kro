@@ -237,17 +237,24 @@ func waitForSettle(ctx context.Context, c client.Client, gvk schema.GroupVersion
 
 // waitForAbsence polls to confirm a resource does NOT exist. It checks several
 // times over the duration to be confident the resource won't appear.
+// Uses a context-based ticker instead of time.Sleep to honor cancellation.
 func waitForAbsence(ctx context.Context, c client.Client, gvk schema.GroupVersionKind, key types.NamespacedName, duration time.Duration) error {
-	deadline := time.Now().Add(duration)
-	for time.Now().Before(deadline) {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
-		if err := c.Get(ctx, key, obj); err == nil {
-			return fmt.Errorf("resource %s/%s exists but should be absent", key.Namespace, key.Name)
+	ctx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil // success: resource stayed absent for the full duration
+		case <-ticker.C:
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(gvk)
+			if err := c.Get(ctx, key, obj); err == nil {
+				return fmt.Errorf("resource %s/%s exists but should be absent", key.Namespace, key.Name)
+			}
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
-	return nil
 }
 
 // assertManagedBy checks that a resource has labels indicating it's managed by the named Graph.

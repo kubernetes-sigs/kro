@@ -270,9 +270,11 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		// Hash the node's dependency inputs (only referenced sections) and
 		// compare against the previous reconcile's hash. Three outcomes:
 		//
-		// 1. Dependency hash match + self-state unchanged → skip everything
-		// 2. Dependency hash match + self-state changed   → skip template/apply,
-		//    re-evaluate readyWhen/propagateWhen only
+		// 1. Dependency hash match + self-state unchanged + no upstream
+		//    readiness change → skip everything
+		// 2. Dependency hash match + (self-state changed OR upstream
+		//    readiness changed) → skip template/apply, re-evaluate
+		//    readyWhen/propagateWhen only
 		// 3. Dependency hash mismatch → full evaluation (dispatch to worker)
 		//
 		// Watch and CollectionWatch nodes are excluded from input hashing
@@ -285,7 +287,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 			if _, hasPrevHash := state.previousInputHashes[node.ID]; hasPrevHash {
 				inputHash, hashErr := hashNodeInputs(node, eval.scope)
 				if hashErr == nil && inputHash != "" && inputHash == state.previousInputHashes[node.ID] {
-					// Dependency inputs unchanged. Check self-state.
+					// Dependency inputs unchanged. Check self-state and
+					// gate function deps (e.g., dep.ready()).
 					prevScope := state.previousScope[node.ID]
 					selfHash, selfErr := hashSelfSections(node, prevScope)
 					selfChanged := false
@@ -294,7 +297,20 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						selfChanged = selfHash != prevSelfHash
 					}
 
-					if !selfChanged {
+					// Check if any upstream node referenced via .ready()
+					// changed plan state. Readiness is a runtime property
+					// outside section scope — compare plan states directly.
+					readinessDepChanged := false
+					for depID := range node.ReadinessDeps {
+						prevState, hasPrev := state.previousPlanStates[depID]
+						currState, hasCurr := plan.States[depID]
+						if !hasPrev || !hasCurr || prevState != currState {
+							readinessDepChanged = true
+							break
+						}
+					}
+
+					if !selfChanged && !readinessDepChanged {
 						// Path 1: dependency hash match + self unchanged → skip everything.
 						logger.V(1).Info("input hash match — skipping evaluation",
 							"node", node.ID)
@@ -321,11 +337,13 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						return
 					}
 
-					// Path 2: dependency hash match + self-state changed → re-evaluate
-					// gates only (readyWhen/propagateWhen). Template hasn't changed so
-					// skip template evaluation and apply.
-					logger.V(1).Info("self-state changed — re-evaluating gates only",
-						"node", node.ID)
+					// Path 2: dependency hash match + (self-state changed OR
+					// upstream readiness dep state changed) → re-evaluate
+					// gates only (readyWhen/propagateWhen). Template hasn't
+					// changed so skip template evaluation and apply.
+					logger.V(1).Info("gate re-evaluation triggered",
+						"node", node.ID, "selfChanged", selfChanged,
+						"readinessDepChanged", readinessDepChanged)
 					if prev, ok := state.previousScope[node.ID]; ok {
 						eval.scope[node.ID] = prev
 					}

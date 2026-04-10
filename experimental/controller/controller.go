@@ -290,11 +290,25 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 					// Dependency inputs unchanged. Check self-state and
 					// gate function deps (e.g., dep.ready()).
 					prevScope := state.previousScope[node.ID]
-					selfHash, selfErr := hashSelfSections(node, prevScope)
 					selfChanged := false
-					if selfErr == nil && selfHash != "" {
-						prevSelfHash := state.previousSelfHashes[node.ID]
-						selfChanged = selfHash != prevSelfHash
+					if len(node.SelfSections) > 0 && watcher != nil && prevScope != nil {
+						// Extract identity from previousScope to query the informer.
+						if prevMap, ok := prevScope.(map[string]any); ok {
+							prevMD, _ := prevMap["metadata"].(map[string]any)
+							prevRV, _ := prevMD["resourceVersion"].(string)
+							prevAPIVersion, _ := prevMap["apiVersion"].(string)
+							prevKind, _ := prevMap["kind"].(string)
+							prevNS, _ := prevMD["namespace"].(string)
+							prevName, _ := prevMD["name"].(string)
+							if prevRV != "" && prevAPIVersion != "" && prevKind != "" {
+								gv, _ := schema.ParseGroupVersion(prevAPIVersion)
+								gvr := gvkToGVR(gv.WithKind(prevKind))
+								liveRV := watcher.getResourceVersion(gvr, prevNS, prevName)
+								if liveRV != "" && liveRV != prevRV {
+									selfChanged = true
+								}
+							}
+						}
 					}
 
 					// Check if any upstream node referenced via .ready()
@@ -337,15 +351,30 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						return
 					}
 
-					// Path 2: dependency hash match + (self-state changed OR
-					// upstream readiness dep state changed) → re-evaluate
-					// gates only (readyWhen/propagateWhen). Template hasn't
-					// changed so skip template evaluation and apply.
-					logger.V(1).Info("gate re-evaluation triggered",
-						"node", node.ID, "selfChanged", selfChanged,
-						"readinessDepChanged", readinessDepChanged)
-					if prev, ok := state.previousScope[node.ID]; ok {
-						eval.scope[node.ID] = prev
+					// Path 2: dependency hash match + self-state changed → skip
+					// template evaluation and apply (template inputs unchanged),
+					// but GET the live object to refresh scope for downstream
+					// consumers and re-evaluate readyWhen/propagateWhen gates.
+					logger.V(1).Info("self-state changed — refreshing scope",
+						"node", node.ID)
+					if prevMap, ok := prevScope.(map[string]any); ok {
+						prevMD, _ := prevMap["metadata"].(map[string]any)
+						prevAPIVersion, _ := prevMap["apiVersion"].(string)
+						prevKind, _ := prevMap["kind"].(string)
+						prevNS, _ := prevMD["namespace"].(string)
+						prevName, _ := prevMD["name"].(string)
+						gv, _ := schema.ParseGroupVersion(prevAPIVersion)
+						gvk := gv.WithKind(prevKind)
+						readBack := &unstructured.Unstructured{}
+						readBack.SetGroupVersionKind(gvk)
+						if err := r.Client.Get(ctx, types.NamespacedName{Namespace: prevNS, Name: prevName}, readBack); err == nil {
+							eval.scope[node.ID] = readBack.Object
+						} else {
+							// GET failed — retain previous scope.
+							eval.scope[node.ID] = prevScope
+						}
+					} else if prevScope != nil {
+						eval.scope[node.ID] = prevScope
 					}
 					if prevKeys, ok := state.previousKeys[node.ID]; ok {
 						appliedKeys = append(appliedKeys, prevKeys...)
@@ -362,10 +391,6 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 						len(node.PropagateWhen) > 0 && observed != nil {
 						plan.PropagateReady[node.ID] = eval.checkPropagateWhen(
 							node.PropagateWhen, observed, node.ID)
-					}
-					// Update self hash for next reconcile.
-					if newSelfHash, err := hashSelfSections(node, observed); err == nil {
-						state.previousSelfHashes[node.ID] = newSelfHash
 					}
 					state.previousPlanStates[node.ID] = nodeState
 					// Dispatch dependents — this node is done with gate re-evaluation.

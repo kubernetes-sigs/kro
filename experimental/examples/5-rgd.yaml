@@ -3,7 +3,7 @@
 # What a platform engineer creates to define the WebApp abstraction.
 # Example 3's RGD system watches these and creates a controller Graph per RGD.
 # The per-instance controller evaluates the expressions in spec.resources.
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: ResourceGraphDefinition
 metadata:
   name: webapp-rgd
@@ -11,14 +11,13 @@ spec:
   schema:
     kind: WebApp
     apiVersion: v1alpha1
-    group: kro.run
+    group: experimental.kro.run
     spec:
       image: string | default=nginx
       replicas: integer | default=1
       port: integer | default=80
     status:
       deploymentReady: ${deployment.status.availableReplicas == deployment.spec.replicas}
-      address: ${service.status.loadBalancer.ingress[0].hostname}
   resources:
     - id: deployment
       template:

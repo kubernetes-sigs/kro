@@ -510,7 +510,9 @@ func (c *WatchCoordinator) routeEvent(event watchEvent) {
 
 	// Collection matches: selector scan
 	for _, entry := range c.collectionIndex[event.gvr] {
-		if entry.namespace != "" && event.namespace != entry.namespace {
+		// Skip if both sides are namespace-scoped and don't match.
+		// Cluster-scoped events (namespace "") match any entry.
+		if entry.namespace != "" && event.namespace != "" && event.namespace != entry.namespace {
 			continue
 		}
 		if entry.selector.Matches(labels.Set(event.labels)) {

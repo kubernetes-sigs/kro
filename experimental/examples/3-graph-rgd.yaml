@@ -35,9 +35,9 @@ spec:
         apiVersion: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
         metadata:
-          name: resourcegraphdefinitions.kro.run
+          name: resourcegraphdefinitions.experimental.kro.run
         spec:
-          group: kro.run
+          group: experimental.kro.run
           names:
             kind: ResourceGraphDefinition
             listKind: ResourceGraphDefinitionList
@@ -61,7 +61,7 @@ spec:
                       "schemaDefinition": {
                         "kind": "string | required=true",
                         "apiVersion": "string | required=true",
-                        "group": "string | default=kro.run",
+                        "group": "string | default=experimental.kro.run",
                         "spec": "object",
                         "types": "object",
                         "status": "object",
@@ -100,7 +100,7 @@ spec:
     # Watch all RGDs
     - id: watchRgds
       template:
-        apiVersion: kro.run/v1alpha1
+        apiVersion: experimental.kro.run/v1alpha1
         kind: ResourceGraphDefinition
         metadata:
           selector: {}
@@ -120,7 +120,7 @@ spec:
             # L1 reads it fresh to stay reactive to spec changes.
             - id: rgd
               template:
-                apiVersion: kro.run/v1alpha1
+                apiVersion: experimental.kro.run/v1alpha1
                 kind: ResourceGraphDefinition
                 metadata:
                   name: ${rgd.metadata.name}
@@ -196,7 +196,7 @@ spec:
             # Contribute status back to the RGD
             - id: rgdStatus
               template:
-                apiVersion: kro.run/v1alpha1
+                apiVersion: experimental.kro.run/v1alpha1
                 kind: ResourceGraphDefinition
                 metadata:
                   name: $${rgd.metadata.name}

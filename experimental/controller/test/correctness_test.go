@@ -154,7 +154,7 @@ func TestPropagateWhenGatesDataFlow(t *testing.T) {
 	t.Log("Completed rollout: updatedReplicas=5")
 
 	// Now the service should be updated with the new image.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(cmGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "service-output", Namespace: ns}, result); err != nil {

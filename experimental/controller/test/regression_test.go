@@ -431,3 +431,238 @@ func TestContributeCleanupOnTeardown(t *testing.T) {
 		"target's original data must survive Graph teardown — skeleton apply must not disturb other managers' fields")
 	t.Log("Teardown proved: Contribute target survived Graph deletion with data intact")
 }
+
+// TestContributionUpdatesWhenDependencyChanges proves that a Contribute node
+// re-evaluates when its upstream dependency's status changes, even when the
+// dependency has no readyWhen/propagateWhen gates.
+//
+// Regression: SelfSections was only populated from the node's own
+// readyWhen/propagateWhen. A bare Owns node (no gates) whose .data was
+// referenced by a downstream Contribute would have empty SelfSections. The
+// change-check optimization would retain stale scope, and the Contribute
+// would never re-evaluate. The fix pushes downstream dependency sections
+// into upstream SelfSections during DAG compilation.
+func TestContributionUpdatesWhenDependencyChanges(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Pre-create the target that the Graph will contribute to.
+	target := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "contrib-target",
+				"namespace": ns,
+			},
+			"data": map[string]any{"owner": "external"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, target))
+
+	// Pre-create the source that the Graph reads and whose data will
+	// be forwarded to the contribution target.
+	source := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "contrib-source",
+				"namespace": ns,
+			},
+			"data": map[string]any{"version": "v1"},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, source))
+
+	// Graph: watches source, creates an owned resource referencing source,
+	// then contributes the owned resource's data back to the target.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-contrib-updates",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					// Watch the source — changes here trigger reconciliation.
+					map[string]any{
+						"id": "source",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "contrib-source"},
+						},
+					},
+					// Owned resource that references the source. This is a bare
+					// Owns node with NO readyWhen/propagateWhen gates.
+					map[string]any{
+						"id": "owned",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "contrib-owned"},
+							"data": map[string]any{
+								"version": "${source.data.version}",
+							},
+						},
+					},
+					// Contribute: write the owned resource's data to the target.
+					// References owned.data — this is the downstream reference
+					// that should push .data into owned's SelfSections.
+					map[string]any{
+						"id": "contrib",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "contrib-target",
+								"annotations": map[string]any{
+									"contributed-version": "${owned.data.version}",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for initial contribution: target should have version=v1
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+		updated := &unstructured.Unstructured{}
+		updated.SetGroupVersionKind(regressionCMGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, updated); err != nil {
+			return false, nil
+		}
+		ann := updated.GetAnnotations()
+		return ann["contributed-version"] == "v1", nil
+	}), "initial contribution should write version=v1 to target")
+	t.Log("Initial contribution: version=v1")
+
+	// Now update the source — this triggers re-evaluation of the owned
+	// resource (new template inputs), which should then trigger
+	// re-evaluation of the contribute node (owned.data changed).
+	latestSource := &unstructured.Unstructured{}
+	latestSource.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-source", Namespace: ns}, latestSource))
+	require.NoError(t, unstructured.SetNestedField(latestSource.Object, "v2", "data", "version"))
+	require.NoError(t, k8sClient.Update(ctx, latestSource))
+	t.Log("Updated source to version=v2")
+
+	// THE PROOF: the contribution should update to version=v2.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		updated := &unstructured.Unstructured{}
+		updated.SetGroupVersionKind(regressionCMGVK)
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "contrib-target", Namespace: ns}, updated); err != nil {
+			return false, nil
+		}
+		ann := updated.GetAnnotations()
+		return ann["contributed-version"] == "v2", nil
+	}), "contribution should update to version=v2 when upstream source changes")
+	t.Log("Contribution updated to version=v2 — downstream status propagation works")
+}
+
+// TestCollectionWatchClusterScopedResource proves that a CollectionWatch on
+// cluster-scoped resources (e.g., Namespaces) triggers reconciliation when
+// new resources are created, even when the Graph is in a specific namespace.
+//
+// Regression: routeEvent's namespace filter rejected events for cluster-scoped
+// resources (namespace="") because the entry's namespace was the Graph's
+// namespace (non-empty), and "" != "default" caused the event to be skipped.
+func TestCollectionWatchClusterScopedResource(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	// Use Namespaces as the cluster-scoped resource type.
+	// Create a labelled namespace as an initial collection member.
+	initialNS := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]any{
+				"name":   ns + "-watched-a",
+				"labels": map[string]any{"test-collection": ns},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, initialNS))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), initialNS)
+	})
+
+	// Graph: watches Namespaces by label, forEach stamps a ConfigMap per NS.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-cluster-scope",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "namespaces",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "Namespace",
+							"selector":   map[string]any{"test-collection": ns},
+						},
+					},
+					map[string]any{
+						"id": "copies",
+						"forEach": map[string]any{
+							"ns": "${namespaces}",
+						},
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "${ns.metadata.name}-marker"},
+							"data":       map[string]any{"source-ns": "${ns.metadata.name}"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for initial copy.
+	cm := &unstructured.Unstructured{}
+	cm.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: ns + "-watched-a-marker", Namespace: ns}, cm),
+		"initial collection member should produce a ConfigMap")
+	t.Log("Initial cluster-scoped collection member detected")
+
+	// Add a new cluster-scoped Namespace — do NOT touch the Graph.
+	newNS := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]any{
+				"name":   ns + "-watched-b",
+				"labels": map[string]any{"test-collection": ns},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, newNS))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(context.Background(), newNS)
+	})
+	t.Log("Added new cluster-scoped Namespace (Graph NOT touched)")
+
+	// THE PROOF: a new ConfigMap should appear for the new Namespace,
+	// triggered by the collection watch on the cluster-scoped resource.
+	newCM := &unstructured.Unstructured{}
+	newCM.SetGroupVersionKind(regressionCMGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: ns + "-watched-b-marker", Namespace: ns}, newCM),
+		"new cluster-scoped collection member should trigger reconciliation via dynamic watch")
+
+	data, _, _ := unstructured.NestedStringMap(newCM.Object, "data")
+	assert.Equal(t, ns+"-watched-b", data["source-ns"])
+	t.Log("New ConfigMap created for cluster-scoped collection member — namespace filter fix verified")
+}

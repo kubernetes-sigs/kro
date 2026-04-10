@@ -63,6 +63,27 @@ func BuildDAG(nodes []Node) (*DAG, error) {
 		}
 	}
 
+	// Push downstream dependency sections into upstream SelfSections.
+	// If node B references deployment.status, the deployment node needs
+	// .status in its SelfSections so self-state changes are detected and
+	// the updated scope propagates to B. Without this, a bare Owns node
+	// with no readyWhen/propagateWhen would have empty SelfSections —
+	// status changes would be invisible to downstream consumers.
+	for _, node := range dag.Nodes {
+		for depID, sections := range node.DepSections {
+			depIdx, exists := dag.Index[depID]
+			if !exists {
+				continue
+			}
+			if dag.Nodes[depIdx].SelfSections == nil {
+				dag.Nodes[depIdx].SelfSections = map[string]bool{}
+			}
+			for section := range sections {
+				dag.Nodes[depIdx].SelfSections[section] = true
+			}
+		}
+	}
+
 	// Build reverse adjacency list: for each node, record which nodes depend on it.
 	for i, node := range dag.Nodes {
 		for depID := range node.Dependencies {

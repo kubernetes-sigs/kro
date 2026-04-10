@@ -309,7 +309,9 @@ func deleteRevision(ctx context.Context, c client.Client, revision *unstructured
 			return fmt.Errorf("removing finalizer from revision %s: %w", revision.GetName(), err)
 		}
 	}
-	return c.Delete(ctx, revision)
+	// Ignore NotFound: GC may have already deleted the revision after the
+	// finalizer was removed (ownerReference to the Graph being deleted).
+	return client.IgnoreNotFound(c.Delete(ctx, revision))
 }
 
 // ---------------------------------------------------------------------------

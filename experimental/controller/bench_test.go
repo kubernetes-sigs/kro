@@ -664,3 +664,75 @@ func TestInstanceStateIsolation(t *testing.T) {
 		t.Fatal("instances should share the same compiledGraph pointer")
 	}
 }
+
+// TestSelfSectionsIncludesDownstreamRefs verifies that BuildDAG pushes
+// downstream dependency sections into upstream SelfSections. Without this,
+// a bare Owns node (no readyWhen/propagateWhen) whose .status is referenced
+// by a downstream Contribute node would have empty SelfSections, causing
+// status changes to be invisible to the change-check optimization.
+//
+// Regression: SelfSections was only populated from the node's own
+// readyWhen/propagateWhen. Downstream references were not considered.
+func TestSelfSectionsIncludesDownstreamRefs(t *testing.T) {
+	nodes := []Node{
+		{
+			ID: "schema",
+			Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "my-app"},
+			},
+		},
+		{
+			ID: "deployment",
+			Template: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata":   map[string]any{"name": "${schema.metadata.name}"},
+				"spec": map[string]any{
+					"replicas": "3",
+				},
+			},
+		},
+		{
+			ID: "status",
+			Template: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": "${schema.metadata.name}"},
+				"data": map[string]any{
+					// References deployment.status — this should push .status
+					// into the deployment node's SelfSections.
+					"ready": "${deployment.status.availableReplicas == deployment.spec.replicas}",
+				},
+			},
+		},
+	}
+
+	dag, err := BuildDAG(nodes)
+	if err != nil {
+		t.Fatalf("BuildDAG failed: %v", err)
+	}
+
+	// The deployment node should have .status in SelfSections because the
+	// "status" node references deployment.status.
+	deplIdx := dag.Index["deployment"]
+	deplNode := dag.Nodes[deplIdx]
+
+	if !deplNode.SelfSections["status"] {
+		t.Errorf("deployment.SelfSections should include 'status' (referenced by downstream 'status' node), got %v", deplNode.SelfSections)
+	}
+	// Note: deployment.spec is also referenced by the downstream expression
+	// (deployment.spec.replicas), but extractReferencedSections currently
+	// only extracts the first identifier.section per CEL expression. The
+	// .status section is sufficient for the self-state change detection fix.
+
+	// The schema node should have .metadata in SelfSections because both
+	// deployment and status reference schema.metadata.
+	schemaIdx := dag.Index["schema"]
+	schemaNode := dag.Nodes[schemaIdx]
+
+	if !schemaNode.SelfSections["metadata"] {
+		t.Errorf("schema.SelfSections should include 'metadata' (referenced by downstream nodes), got %v", schemaNode.SelfSections)
+	}
+}

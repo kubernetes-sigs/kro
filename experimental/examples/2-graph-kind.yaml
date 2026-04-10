@@ -13,7 +13,7 @@ spec:
   nodes:
     - id: watchWebapps
       template:
-        apiVersion: kro.run/v1alpha1
+        apiVersion: experimental.kro.run/v1alpha1
         kind: WebApp
         metadata:
           selector: {}
@@ -34,7 +34,7 @@ spec:
             # L1 reads it fresh to stay reactive to spec changes.
             - id: schema
               template:
-                apiVersion: kro.run/v1alpha1
+                apiVersion: experimental.kro.run/v1alpha1
                 kind: WebApp
                 metadata:
                   name: ${webapp.metadata.name}
@@ -77,11 +77,10 @@ spec:
             # the WebApp, it just writes the status fields it computes.
             - id: status
               template:
-                apiVersion: kro.run/v1alpha1
+                apiVersion: experimental.kro.run/v1alpha1
                 kind: WebApp
                 metadata:
                   name: $${schema.metadata.name}
                   namespace: $${schema.metadata.namespace}
                 status:
                   deploymentReady: $${deployment.status.availableReplicas == deployment.spec.replicas}
-                  address: $${service.status.loadBalancer.ingress[0].hostname}

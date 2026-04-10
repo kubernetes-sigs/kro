@@ -16,12 +16,12 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/kubernetes-sigs/kro/experimental/graph/crds"
+	"github.com/kubernetes-sigs/kro/experimental/crds"
 )
 
 // bootstrap applies the embedded CRD manifests via server-side apply and waits
 // for them to become established. This makes the binary self-provisioning — a
-// single `go run ./experimental/graph/cmd/ --bootstrap` sets up everything the
+// single `go run ./experimental/cmd/ --bootstrap` sets up everything the
 // controller needs to run.
 func bootstrap(ctx context.Context, cfg *rest.Config) error {
 	log := ctrl.Log.WithName("bootstrap")

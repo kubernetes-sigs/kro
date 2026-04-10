@@ -1,5 +1,5 @@
 # Deployment for the experimental Graph controller.
-# CRDs are applied separately via `ko apply -f experimental/graph/crds/`.
+# CRDs are applied separately via `ko apply -f experimental/crds/`.
 # --bootstrap is not passed here; it's for `go run` local dev only.
 apiVersion: apps/v1
 kind: Deployment
@@ -21,7 +21,7 @@ spec:
       serviceAccountName: graph-controller
       containers:
         - name: controller
-          image: ko://github.com/kubernetes-sigs/kro/experimental/graph/cmd
+          image: ko://github.com/kubernetes-sigs/kro/experimental/cmd
           resources:
             requests:
               cpu: 100m

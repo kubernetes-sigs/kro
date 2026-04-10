@@ -62,7 +62,7 @@ func TestGVKToGVR(t *testing.T) {
 // here capture the CPU-bound work that scales with DAG size and expression
 // count.
 //
-// Run: go test ./experimental/graph/controller -bench=. -benchmem
+// Run: go test ./experimental/controller -bench=. -benchmem
 // ---------------------------------------------------------------------------
 
 // BenchmarkCompileGraph measures CEL environment creation + expression

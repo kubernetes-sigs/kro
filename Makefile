@@ -430,8 +430,8 @@ upgrade-kro: ko ## Build current kro and upgrade the running deployment (no clus
 
 .PHONY: krocodile-run
 krocodile-run: ## Run the graph controller locally (bootstraps CRDs automatically)
-	go run ./experimental/graph/cmd/ --bootstrap
+	go run ./experimental/cmd/ --bootstrap
 
 .PHONY: krocodile-apply
 krocodile-apply: ko ## Build and deploy the graph controller to the current cluster
-	$(KO) apply -f experimental/graph/crds/ -f experimental/graph/deploy/
+	$(KO) apply -f experimental/crds/ -f experimental/deploy/

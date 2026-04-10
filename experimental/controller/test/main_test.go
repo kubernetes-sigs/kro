@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/graph/controller"
+	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
 
 var (

@@ -245,7 +245,7 @@ func extractRevisionSpec(revision *unstructured.Unstructured) (*GraphSpec, error
 
 // createRevision creates a GraphRevision in the cluster with a finalizer.
 // The spec is immutable — enforced by CEL validation (self == oldSelf) on
-// the GraphRevision CRD. See: experimental/docs/design/graph/002-revisions.md
+// the GraphRevision CRD. See: experimental/docs/design/002-revisions.md
 func createRevision(ctx context.Context, c client.Client, revision *unstructured.Unstructured) error {
 	controllerutil.AddFinalizer(revision, finalizer)
 	return c.Create(ctx, revision)
@@ -580,7 +580,7 @@ func (r *GraphReconciler) compileRevision(revision *unstructured.Unstructured) (
 // is a subset of the active revision's applied set. If it has resources not
 // in the active set, those resources are still being pruned and the old
 // revision provides ordering metadata for the prune walk.
-// See: experimental/docs/design/graph/002-revisions.md § Lifecycle
+// See: experimental/docs/design/002-revisions.md § Lifecycle
 func (r *GraphReconciler) updateRevisionStatus(ctx context.Context, active *unstructured.Unstructured, superseded []*unstructured.Unstructured, allReady bool, pruneClean bool) {
 	logger := log.FromContext(ctx)
 

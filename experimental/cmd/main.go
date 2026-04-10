@@ -2,12 +2,12 @@
 //
 // Run with --bootstrap to automatically install CRDs:
 //
-//	go run ./experimental/graph/cmd/ --bootstrap
+//	go run ./experimental/cmd/ --bootstrap
 //
 // Or install CRDs manually first:
 //
-//	kubectl apply -f experimental/graph/crds/
-//	go run ./experimental/graph/cmd/
+//	kubectl apply -f experimental/crds/
+//	go run ./experimental/cmd/
 package main
 
 import (
@@ -19,7 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	graphcontroller "github.com/kubernetes-sigs/kro/experimental/graph/controller"
+	graphcontroller "github.com/kubernetes-sigs/kro/experimental/controller"
 )
 
 func main() {

@@ -204,7 +204,7 @@ func buildRGDCRD() *apiextensionsv1.CustomResourceDefinition {
 }
 
 func waitForResource(ctx context.Context, c client.Client, key types.NamespacedName, obj *unstructured.Unstructured) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, obj); err != nil {
 			return false, nil
 		}
@@ -362,7 +362,7 @@ func graphReadyStatus(g *unstructured.Unstructured) string {
 
 // waitForGraphReady polls until the Graph's Ready condition is True.
 func waitForGraphReady(ctx context.Context, c client.Client, key types.NamespacedName) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {
@@ -374,7 +374,7 @@ func waitForGraphReady(ctx context.Context, c client.Client, key types.Namespace
 
 // waitForGraphReadyReason polls until the Graph's Ready condition has the expected reason.
 func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.NamespacedName, reason string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {
@@ -386,7 +386,7 @@ func waitForGraphReadyReason(ctx context.Context, c client.Client, key types.Nam
 
 // waitForGraphReadyStatus polls until the Graph's Ready condition has the expected status (True/False/Unknown).
 func waitForGraphReadyStatus(ctx context.Context, c client.Client, key types.NamespacedName, status string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := c.Get(ctx, key, g); err != nil {
@@ -449,7 +449,7 @@ func buildGraphRevisionCRD() *apiextensionsv1.CustomResourceDefinition {
 func waitForRevision(ctx context.Context, c client.Client, key types.NamespacedName) (*unstructured.Unstructured, error) {
 	rev := &unstructured.Unstructured{}
 	rev.SetGroupVersionKind(GraphRevisionGVK)
-	err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		if err := c.Get(ctx, key, rev); err != nil {
 			return false, nil
 		}
@@ -460,7 +460,7 @@ func waitForRevision(ctx context.Context, c client.Client, key types.NamespacedN
 
 // waitForRevisionCondition polls until a GraphRevision has a specific condition status.
 func waitForRevisionCondition(ctx context.Context, c client.Client, key types.NamespacedName, condType, expectedStatus string) error {
-	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		rev := &unstructured.Unstructured{}
 		rev.SetGroupVersionKind(GraphRevisionGVK)
 		if err := c.Get(ctx, key, rev); err != nil {

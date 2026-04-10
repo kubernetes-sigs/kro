@@ -13,6 +13,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
+// TestStatusActiveOnSuccess proves that a successfully reconciled Graph
+// reports Ready=True with reason=Ready and Accepted=True with reason=Accepted
+// (design 001-graph § Status, § Conditions). Verifies exactly 2 conditions.
 func TestStatusActiveOnSuccess(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)

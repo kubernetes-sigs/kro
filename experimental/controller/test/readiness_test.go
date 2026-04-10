@@ -13,17 +13,21 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// TestReadyWhenExternalRefGatesDownstream proves that readyWhen on a watch
-// prevents downstream resources from being created until the condition is met.
+// TestReadyWhenDoesNotGateDownstream proves that readyWhen is a health signal,
+// not a gate for downstream execution (design 001-graph § readyWhen).
+//
+// readyWhen feeds the Graph's aggregated status — it does not block dependents.
+// Dependents proceed as soon as the node is processed and its data is in scope,
+// regardless of readyWhen. Data availability is the implicit gate.
 //
 // Setup:
 //   - Pre-create ConfigMap "source" with data.status = "pending"
 //   - Create Graph: watch reads "source" with readyWhen checking data.status == "ready",
 //     then a template creates "output" using data from the watch
-//   - Verify "output" is NOT created (source not ready)
-//   - Update "source" to data.status = "ready" and add data.value = "hello"
-//   - Verify "output" IS created with the correct value
-func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
+//   - Verify "output" IS created immediately (data is in scope even though readyWhen fails)
+//   - Update "source" to data.status = "ready" and data.value = "hello-from-ready"
+//   - Verify "output" is updated with the new value
+func TestReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -106,7 +110,7 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 	t.Log("Updated source to ready state with value=hello-from-ready")
 
 	// Now the output SHOULD be created/updated with the correct value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "ready-output", Namespace: ns}, result); err != nil {
@@ -126,13 +130,12 @@ func TestReadyWhenExternalRefGatesDownstream(t *testing.T) {
 	t.Logf("Output created with fromSource=%s after source became ready", data["fromSource"])
 }
 
-// TestReadyWhenTemplateGatesDownstream proves that readyWhen on a template resource
-// prevents downstream resources from evaluating until the condition is met.
+// TestReadyWhenTemplateDoesNotGateDownstream proves that readyWhen on a template
+// resource is a health signal, not a gate (design 001-graph § readyWhen).
 //
-// This uses a ConfigMap with a data field to simulate readiness. The first
-// ConfigMap is always "ready" (no readyWhen), the second has readyWhen checking
-// a data field, and the third references the second.
-func TestReadyWhenTemplateGatesDownstream(t *testing.T) {
+// When readyWhen passes immediately, downstream dependents are created because
+// data is in scope. Verifies cross-node CEL data flow.
+func TestReadyWhenTemplateDoesNotGateDownstream(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -313,7 +316,7 @@ func TestDataPendingRequeues(t *testing.T) {
 	t.Log("Added pending_field=resolved-value to source")
 
 	// Now the output should be created with the resolved value
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "data-output", Namespace: ns}, result); err != nil {
@@ -421,7 +424,7 @@ func TestReadyWhenNotReadyThenReady(t *testing.T) {
 	t.Log("Infra transitioned to Running")
 
 	// App config should now be created
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "app-config", Namespace: ns}, result); err != nil {

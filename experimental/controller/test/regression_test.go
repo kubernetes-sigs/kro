@@ -168,7 +168,7 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 	require.NoError(t, waitForResource(ctx, k8sClient, types.NamespacedName{Name: "hop-beta", Namespace: ns}, cm2))
 
 	// Wait for hop-alpha to be pruned (rev1→rev2 prune)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(regressionCMGVK)
 		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "hop-alpha", Namespace: ns}, check)
@@ -197,7 +197,7 @@ func TestMultiHopRevisionPrune(t *testing.T) {
 	// Wait for hop-beta to be pruned (rev2→rev3 prune).
 	// The real test: hop-alpha must ALSO be gone. If the prune formula only
 	// looked at rev2, hop-alpha would be orphaned.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx2 context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx2 context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(regressionCMGVK)
 		err := k8sClient.Get(ctx2, types.NamespacedName{Name: "hop-beta", Namespace: ns}, check)

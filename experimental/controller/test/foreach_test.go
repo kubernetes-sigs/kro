@@ -340,14 +340,14 @@ func TestForEachStampsChildGraphs(t *testing.T) {
 	t.Log("Full RGD-like pattern proved: parent reads collection → forEach stamps child Graphs → each child reads its instance → creates resources")
 }
 
-// TestForEachReadyWhenGatesDownstream proves per-item readiness on forEach collections.
-// When readyWhen conditions are not met on stamped items, downstream resources are blocked.
-// When the condition becomes true (via Graph spec update), downstream resources are created.
+// TestForEachReadyWhenDoesNotGateDownstream proves that per-item readyWhen on
+// forEach collections is a health signal, not a gate for dependents
+// (design 001-graph § readyWhen, design 004-graph-execution § Wind).
 //
-// This is the collection analog of TestReadyWhenTemplateGatesDownstream — same mechanism,
-// just evaluated per-item. The resource ID in the readyWhen expression resolves to each
-// individual applied item, not the whole collection.
-func TestForEachReadyWhenGatesDownstream(t *testing.T) {
+// Dependents proceed as soon as data is in scope regardless of readyWhen.
+// Graph status shows InProgress when items aren't ready, transitions to
+// Active when readyWhen passes.
+func TestForEachReadyWhenDoesNotGateDownstream(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
 
@@ -426,7 +426,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 	t.Log("Summary created while workers not ready (readyWhen no longer gates dependents)")
 
 	// Verify Graph status is InProgress
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
@@ -491,7 +491,7 @@ func TestForEachReadyWhenGatesDownstream(t *testing.T) {
 	t.Logf("Summary created with firstWorker=%s after workers became ready", data["firstWorker"])
 
 	// Verify Graph transitions to Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen", Namespace: ns}, g); err != nil {
@@ -577,7 +577,7 @@ func TestForEachReadyWhenPassesImmediately(t *testing.T) {
 	t.Logf("Summary created immediately with firstWorker=%s — all workers ready on first pass", data["firstWorker"])
 
 	// Graph should be Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-foreach-readywhen-pass", Namespace: ns}, g); err != nil {

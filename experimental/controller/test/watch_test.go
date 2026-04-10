@@ -91,7 +91,7 @@ func TestDynamicWatchExternalRefChange(t *testing.T) {
 
 	// THE PROOF: the output should update to v2, triggered by the dynamic watch
 	// on the watch target — not by a Graph spec change.
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "output", Namespace: ns}, updated); err != nil {

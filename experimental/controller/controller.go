@@ -184,7 +184,8 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 	results := make(chan nodeResult, len(dag.Nodes))
 	inflight := 0
-	var nodeErrors []string // "nodeID: reason" for status reporting
+	dispatched := make(map[int]bool, len(dag.Nodes)) // guards against double-dispatch
+	var nodeErrors []string                          // "nodeID: reason" for status reporting
 
 	// tryDispatch checks if a node can be dispatched. Three outcomes:
 	// 1. All dependencies resolved → dispatch to worker
@@ -197,6 +198,9 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 
 		if plan.States[node.ID] != NodePending {
 			return // already processed or excluded
+		}
+		if dispatched[idx] {
+			return // goroutine already running for this node
 		}
 
 		// Finalizer nodes are dormant during normal operation — they only
@@ -455,6 +459,7 @@ func (r *GraphReconciler) Reconcile(ctx context.Context, req ctrl.Request) (resu
 		}
 
 		// Dispatch to worker goroutine.
+		dispatched[idx] = true
 		go func(n Node, we *evaluator, shape TemplateShape) {
 			keys, err := r.reconcileNode(ctx, graph, n, shape, we, watcher)
 			state := NodeReady

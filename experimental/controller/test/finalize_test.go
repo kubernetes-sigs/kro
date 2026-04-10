@@ -203,12 +203,9 @@ func TestFinalizesTargetAbsentSkips(t *testing.T) {
 	t.Log("Updated spec: removed all nodes")
 
 	// The finalizer resource should NOT be created — target was already gone.
-	// Wait briefly and verify absence.
-	time.Sleep(2 * time.Second)
-	snapCM := &unstructured.Unstructured{}
-	snapCM.SetGroupVersionKind(cmGVK)
-	snapErr := k8sClient.Get(ctx, types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, snapCM)
-	assert.Error(t, snapErr, "finalizer resource should not be created when target is already absent")
+	// Use observation-based polling instead of time.Sleep to verify absence.
+	require.NoError(t, waitForAbsence(ctx, k8sClient, cmGVK,
+		types.NamespacedName{Name: "absent-fin-snapshot", Namespace: ns}, 2*time.Second))
 	t.Log("Finalization correctly skipped — target was already absent")
 }
 

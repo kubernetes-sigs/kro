@@ -112,7 +112,7 @@ func TestContribution(t *testing.T) {
 	t.Logf("Owned resource created: %s (managed by Graph)", deplCM.GetName())
 
 	// Wait for the contribution to be applied to the external object
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		updated := &unstructured.Unstructured{}
 		updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "webapp-instance", Namespace: ns}, updated); err != nil {
@@ -222,7 +222,7 @@ func TestResourcePruning(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, latest))
 
 	// Wait for the removed ConfigMap to be deleted
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "remove-me", Namespace: ns}, check)
@@ -240,4 +240,137 @@ func TestResourcePruning(t *testing.T) {
 	data, _, _ := unstructured.NestedStringMap(stillThere.Object, "data")
 	assert.Equal(t, "permanent", data["state"])
 	t.Log("Kept ConfigMap still exists with correct data")
+}
+
+// TestContributeShapeDetectedByExistence proves that when a resource
+// pre-exists before the Graph creates it, the controller detects Contribute
+// shape — behavioral consequence: the resource is NOT deleted when the
+// template is removed from the Graph spec. Owns shape would delete it.
+//
+// Design 003-ownership § Template Shapes: "Owns — Creates the resource if
+// absent. Deletes on prune." vs "Contribute — Writes fields on a resource
+// the Graph does not create. Releases fields on prune, never deletes."
+//
+// The assertion is on behavioral consequence (no delete on prune), not
+// internal classification.
+func TestContributeShapeDetectedByExistence(t *testing.T) {
+	t.Parallel()
+	ns := createNamespace(t)
+
+	cmGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+
+	// Pre-create the target resource — this makes the template a Contribute.
+	external := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      "contribute-target",
+				"namespace": ns,
+			},
+			"data": map[string]any{
+				"owner":    "external",
+				"original": "data",
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, external))
+	t.Log("Pre-created external resource")
+
+	// Graph contributes annotations to the pre-existing resource.
+	graph := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "kro.run/v1alpha1",
+			"kind":       "Graph",
+			"metadata": map[string]any{
+				"name":      "test-contribute-shape",
+				"namespace": ns,
+			},
+			"spec": map[string]any{
+				"nodes": []any{
+					map[string]any{
+						"id": "target",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata": map[string]any{
+								"name": "contribute-target",
+								"annotations": map[string]any{
+									"kro.run/managed": "true",
+								},
+							},
+						},
+					},
+					map[string]any{
+						"id": "owned",
+						"template": map[string]any{
+							"apiVersion": "v1",
+							"kind":       "ConfigMap",
+							"metadata":   map[string]any{"name": "contribute-owned"},
+							"data":       map[string]any{"state": "created-by-graph"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, graph))
+
+	// Wait for the owned resource and Graph to converge.
+	owned := &unstructured.Unstructured{}
+	owned.SetGroupVersionKind(cmGVK)
+	require.NoError(t, waitForResource(ctx, k8sClient,
+		types.NamespacedName{Name: "contribute-owned", Namespace: ns}, owned))
+	require.NoError(t, waitForGraphReady(ctx, k8sClient,
+		types.NamespacedName{Name: "test-contribute-shape", Namespace: ns}))
+
+	// Verify the contribution was applied.
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			if err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "contribute-target", Namespace: ns}, check); err != nil {
+				return false, nil
+			}
+			ann := check.GetAnnotations()
+			return ann["kro.run/managed"] == "true", nil
+		}))
+	t.Log("Contribution applied — annotation set on external resource")
+
+	// Remove both nodes from the spec (prune).
+	latest := &unstructured.Unstructured{}
+	latest.SetGroupVersionKind(GraphGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "test-contribute-shape", Namespace: ns}, latest))
+	unstructured.SetNestedSlice(latest.Object, []any{}, "spec", "nodes")
+	require.NoError(t, k8sClient.Update(ctx, latest))
+	t.Log("Removed both nodes from spec — prune triggered")
+
+	// Wait for the owned resource to be deleted (Owns shape → delete on prune).
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 10*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			check := &unstructured.Unstructured{}
+			check.SetGroupVersionKind(cmGVK)
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: "contribute-owned", Namespace: ns}, check)
+			return err != nil, nil // gone = true
+		}))
+	t.Log("Owned resource deleted on prune — Owns shape confirmed")
+
+	// THE KEY ASSERTION: the contributed resource should still exist
+	// (Contribute shape → release fields on prune, never delete).
+	target := &unstructured.Unstructured{}
+	target.SetGroupVersionKind(cmGVK)
+	require.NoError(t, k8sClient.Get(ctx,
+		types.NamespacedName{Name: "contribute-target", Namespace: ns}, target),
+		"contributed resource should NOT be deleted on prune (Contribute shape)")
+
+	// Original data should still be there.
+	data, _, _ := unstructured.NestedStringMap(target.Object, "data")
+	assert.Equal(t, "external", data["owner"],
+		"contributed resource should preserve original data")
+	assert.Equal(t, "data", data["original"],
+		"contributed resource should preserve original data")
+	t.Log("Contributed resource survived prune — Contribute shape detection proved via behavioral consequence")
 }

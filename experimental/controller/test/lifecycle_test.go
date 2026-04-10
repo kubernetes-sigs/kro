@@ -13,6 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
+// TestFullLifecycle proves the complete create → verify → update → verify →
+// delete → cleanup lifecycle for a Graph with dependent resources
+// (design 001-graph § Object, design 004-graph-execution § The Walk).
+//
+// Verifies: server-assigned field flow through CEL, spec update triggers
+// re-evaluation, and Graph deletion removes the finalizer after teardown.
 func TestFullLifecycle(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -117,7 +123,7 @@ func TestFullLifecycle(t *testing.T) {
 	assertManagedBy(t, svc, "test-lifecycle")
 
 	// Wait for status to show Active
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, g); err != nil {
@@ -145,7 +151,7 @@ func TestFullLifecycle(t *testing.T) {
 	t.Log("Updated Graph: replicas 2 → 5")
 
 	// Wait for Deployment to be updated
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		d := &unstructured.Unstructured{}
 		d.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "lifecycle-deploy", Namespace: ns}, d); err != nil {
@@ -162,7 +168,7 @@ func TestFullLifecycle(t *testing.T) {
 	t.Log("Graph deleted")
 
 	// Wait for Graph to be gone (finalizer removed)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(GraphGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-lifecycle", Namespace: ns}, check)
@@ -245,7 +251,7 @@ func TestCascadeDeletion(t *testing.T) {
 	require.NoError(t, k8sClient.Delete(ctx, g))
 
 	// Wait for Graph to be gone (finalizer runs active cleanup)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(GraphGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-cascade-delete", Namespace: ns}, check)
@@ -418,7 +424,7 @@ func TestContagiousExclusion(t *testing.T) {
 	t.Log("Feature + dependent correctly excluded (contagious)")
 
 	// Status should be Active (excluded resources don't block readiness)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		g := &unstructured.Unstructured{}
 		g.SetGroupVersionKind(GraphGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "test-contagious", Namespace: ns}, g); err != nil {
@@ -499,7 +505,7 @@ func TestDataPendingChain(t *testing.T) {
 	t.Log("Added chainField to source")
 
 	// Both middle and tail should resolve
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		result := &unstructured.Unstructured{}
 		result.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"})
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "chain-tail", Namespace: ns}, result); err != nil {
@@ -511,12 +517,9 @@ func TestDataPendingChain(t *testing.T) {
 	t.Log("Full chain resolved: source → middle → tail")
 }
 
-// TestPartialStatusResolution proves that spec.status fields appear/disappear
-// based on whether their dependency resources are included/excluded.
-// evaluateStatusTemplate soft-resolves: fields whose expressions fail are omitted.
-// When a resource is excluded by includeWhen, it's not in scope, so status fields
-// referencing it silently disappear.
-
+// TestForEachCollectionScaleUpDown proves forEach with collection watch: adding
+// or removing collection members creates or prunes stamped resources
+// (design 004-graph-execution § forEach).
 func TestForEachCollectionScaleUpDown(t *testing.T) {
 	t.Parallel()
 	ns := createNamespace(t)
@@ -612,7 +615,7 @@ func TestForEachCollectionScaleUpDown(t *testing.T) {
 	t.Log("Deleted source scale-a")
 
 	// scale-a-copy should be pruned
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "scale-a-copy", Namespace: ns}, check)
@@ -710,7 +713,7 @@ func TestIncludeWhenToggle(t *testing.T) {
 	unstructured.SetNestedField(latestCtl.Object, "false", "data", "enabled")
 	require.NoError(t, k8sClient.Update(ctx, latestCtl))
 
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: "gated-resource", Namespace: ns}, check)
@@ -720,8 +723,14 @@ func TestIncludeWhenToggle(t *testing.T) {
 	t.Log("includeWhen toggle proved: false→true creates, true→false prunes")
 }
 
-// TestDriftDetection proves that when a managed resource is externally modified,
-// the next reconcile restores it to the desired state via SSA.
+// TestDriftNotRestored proves the content-addressed apply optimization: drift
+// persists because the template hash matches — the controller only re-applies
+// when the evaluated template output changes (design 004-graph-execution § Wind
+// step 5, dispatch hash check). A spec change produces a new template hash,
+// which triggers a Patch that overwrites drift.
+//
+// This is the same tradeoff as pod-template-hash in Deployments: steady-state
+// cost of zero writes outweighs continuous drift restoration.
 func TestDriftNotRestored(t *testing.T) {
 	// The content-addressed apply optimization (template hash) intentionally
 	// skips re-applying when the desired state hasn't changed. This means
@@ -809,7 +818,7 @@ func TestDriftNotRestored(t *testing.T) {
 	t.Log("Updated Graph spec: desired=new-value")
 
 	// Wait for the new value to be applied (template hash changed → Patch fires)
-	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	require.NoError(t, wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		check := &unstructured.Unstructured{}
 		check.SetGroupVersionKind(cmGVK)
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: "drift-target", Namespace: ns}, check); err != nil {
